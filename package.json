@@ -1,0 +1,20 @@
+{
+  "name": "tentex",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Корневые скрипты монорепо. Код лежит в backend/ и frontend/.",
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "cd backend && python -m uvicorn app.main:app --reload --port 8000",
+    "dev:web": "cd frontend && npm run dev",
+    "test": "concurrently -n api,web -c cyan,magenta \"npm:test:api\" \"npm:test:web\"",
+    "test:api": "cd backend && python -m pytest -q",
+    "test:web": "cd frontend && npm test",
+    "typecheck": "cd frontend && npm run typecheck",
+    "lint": "cd backend && python -m ruff check .",
+    "build": "cd frontend && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.0"
+  }
+}

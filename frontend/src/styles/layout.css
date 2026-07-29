@@ -1,0 +1,194 @@
+/* Оболочка приложения: боковая навигация слева, экран справа. */
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.app-nav {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 26px 18px;
+  border-right: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.app-brand {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.app-brand strong {
+  font-family: var(--font-serif);
+  font-size: 26px;
+  font-weight: 560;
+  letter-spacing: -0.03em;
+}
+
+.app-brand small {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 780;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.app-nav-group {
+  display: grid;
+  gap: 2px;
+}
+
+.app-nav-group h2 {
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 9px;
+  font-weight: 780;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.app-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  transition: color var(--ease), background-color var(--ease);
+}
+
+.app-nav-link svg {
+  flex: none;
+  opacity: 0.75;
+}
+
+.app-nav-link:hover {
+  color: var(--ink);
+  background: var(--paper-strong);
+}
+
+.app-nav-link.is-active {
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.app-nav-link.is-active svg {
+  opacity: 1;
+}
+
+.app-nav-footer {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.app-nav-footer span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.app-main {
+  min-width: 0;
+  padding: 46px 40px 80px;
+}
+
+/* --- Заглушка экрана --- */
+
+.screen-stub {
+  max-width: 760px;
+  animation: surface-in var(--motion-slow) var(--motion-ease-out) both;
+}
+
+.screen-stub h1 {
+  margin-bottom: 16px;
+  font-size: clamp(38px, 5vw, 58px);
+  line-height: 1;
+}
+
+.screen-stub-meta {
+  margin-top: 32px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.screen-stub-meta code {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+/* --- Витрина кита --- */
+
+.kit-page {
+  max-width: 940px;
+  animation: surface-in var(--motion-slow) var(--motion-ease-out) both;
+}
+
+.kit-section {
+  margin-top: 34px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+
+.kit-section > h2 {
+  margin-bottom: 16px;
+  font-size: 24px;
+}
+
+.kit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.kit-panel-demo {
+  display: grid;
+  grid-template-columns: var(--left) auto minmax(0, 1fr);
+  min-height: 160px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.kit-panel-demo > div {
+  padding: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .app-nav {
+    position: static;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .app-main {
+    padding: 28px 20px 60px;
+  }
+}

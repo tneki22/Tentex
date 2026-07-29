@@ -1,0 +1,48 @@
+# --- Справочные материалы, не часть репозитория ---
+# virtex — прошлый проект, откуда взят UI-кит. Лежит рядом для чтения,
+# у него свой .git. В историю Tentex не попадает.
+virtex/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Node ---
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+
+# --- Данные приложения ---
+# База и файловое хранилище живут рядом с приложением и в git не едут
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# --- Секреты ---
+.env
+.env.local
+*.key
+
+# --- Тесты и артефакты ---
+test-results/
+playwright-report/
+.coverage
+htmlcov/
+
+# --- Среда ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+!.vscode/extensions.json
+
+# --- Claude Code ---
+.claude/settings.local.json

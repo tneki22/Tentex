@@ -1,0 +1,70 @@
+/*
+ * Палитра и ритм. Перенесено из virtex, но переписано на light-dark():
+ * один набор токенов вместо двух блоков, тема переключается через color-scheme.
+ *
+ * По умолчанию тема идёт за системой. Атрибут data-theme на <html> её фиксирует:
+ *   <html data-theme="light">  — всегда светлая
+ *   <html data-theme="dark">   — всегда тёмная
+ *   без атрибута               — как в системе
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Поверхности */
+  --canvas: light-dark(#f0eee6, #14191c);
+  --paper: light-dark(#f5f2ea, #1a2023);
+  --paper-strong: light-dark(#fffdf7, #20272a);
+
+  /* Текст */
+  --ink: light-dark(#172127, #e7e6df);
+  --muted: light-dark(#687278, #9fa8aa);
+
+  /* Линии */
+  --line: light-dark(#d9d6cc, #343c3f);
+  --line-strong: light-dark(#b9b7af, #4c5659);
+
+  /* Акценты */
+  --accent: light-dark(#8a302f, #d27a75);
+  --accent-dark: light-dark(#642221, #b65e5b);
+  --on-accent: light-dark(#fffdf7, #14191c);
+  --navy: light-dark(#183449, #93b6ca);
+  --sage: light-dark(#5f7568, #a0b0a5);
+
+  /* Тона состояний */
+  --tone-success: light-dark(#49785e, #7fb094);
+  --tone-warning: light-dark(#a28137, #d0aa62);
+  --tone-danger: var(--accent);
+  --tone-info: var(--navy);
+
+  /* Производные от акцента — сами едут за темой */
+  --accent-wash: color-mix(in srgb, var(--accent) 8%, transparent);
+  --accent-edge: color-mix(in srgb, var(--accent) 34%, transparent);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+
+  --shadow: light-dark(0 20px 60px rgba(33, 40, 42, 0.09), 0 20px 60px rgba(0, 0, 0, 0.3));
+
+  /* Движение */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 320ms;
+  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease: var(--motion-base) var(--motion-ease);
+
+  /* Шрифты.
+     В virtex засечковым был Newsreader — у него нет кириллицы, и на русском
+     интерфейсе все заголовки молча уезжали в Georgia. Literata того же
+     редакционного склада, но с кириллицей. */
+  --font-sans: "Manrope Variable", system-ui, sans-serif;
+  --font-serif: "Literata Variable", Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
