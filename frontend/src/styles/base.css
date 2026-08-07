@@ -1,4 +1,4 @@
-/* Сброс, типографика и общие состояния ввода. Перенесено из virtex. */
+/* Сброс, типографика и общие состояния ввода. */
 
 * {
   box-sizing: border-box;
@@ -16,8 +16,12 @@ body {
   background: var(--canvas);
   color: var(--ink);
   font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  font-weight: var(--weight-normal);
   font-synthesis: none;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -45,18 +49,47 @@ a {
   text-decoration: none;
 }
 
+/* --- Заголовки. Один гротеск на весь интерфейс: засечки ушли к длинному
+       чтению, из-за них экран выглядел статьёй, а не приложением. --- */
+
 h1,
 h2,
 h3,
+h4,
 p {
   margin-top: 0;
 }
 
 h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+h1 {
+  font-size: var(--text-3xl);
+  letter-spacing: -0.03em;
+}
+
 h2 {
-  font-family: var(--font-serif);
-  font-weight: 560;
-  letter-spacing: -0.025em;
+  font-size: var(--text-xl);
+}
+
+h3 {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+}
+
+h4 {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0;
 }
 
 code,
@@ -64,14 +97,16 @@ pre {
   font-family: var(--font-mono);
 }
 
+/* --- Фокус. Видно всегда и одинаково --- */
+
 :focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 3px;
-  box-shadow: var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: var(--accent-wash-strong);
 }
 
 button,
@@ -80,42 +115,53 @@ summary {
   touch-action: manipulation;
 }
 
+/* --- Поля ввода --- */
+
 input,
 textarea,
 select {
   border: 1px solid var(--line);
+  border-radius: var(--radius-md);
   background: var(--paper);
   color: var(--ink);
-  padding: 9px 11px;
+  font-size: var(--text-base);
+  padding: 10px 13px;
   transition:
-    border-color var(--ease),
-    background-color var(--ease),
-    color var(--ease),
-    box-shadow var(--ease);
+    border-color var(--ease-fast),
+    background-color var(--ease-fast),
+    box-shadow var(--ease-fast);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+}
+
+input:hover:not(:disabled),
+textarea:hover:not(:disabled),
+select:hover:not(:disabled) {
+  border-color: var(--line-strong);
 }
 
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
+  outline: none;
   border-color: var(--accent);
   background: var(--paper-strong);
+  box-shadow: var(--focus-ring);
 }
 
 input:disabled,
 textarea:disabled,
 select:disabled {
   cursor: not-allowed;
-  opacity: 0.58;
+  color: var(--faint);
+  background: var(--surface-sunken);
 }
 
 button:disabled {
   cursor: not-allowed;
-}
-
-/* Пока тянут разделитель панелей, курсор не должен прыгать по всей странице. */
-body.is-resizing-panels {
-  cursor: col-resize;
-  user-select: none;
 }
 
 /* Ставится на <html> на один кадр при смене темы, см. useTheme. */
@@ -140,36 +186,60 @@ body.is-resizing-panels {
   }
 }
 
-@keyframes content-reveal {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
+@keyframes loading-sweep {
+  to {
+    transform: translateX(300%);
   }
 }
 
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Всплывашка и меню приезжают от своего триггера: Radix отдаёт направление
+   в --radix-popper-transform-origin, и масштаб считается от него, а не от центра */
 @keyframes popover-in {
   from {
     opacity: 0;
-    transform: translateY(-5px) scale(0.985);
-  }
-}
-
-@keyframes backdrop-in {
-  from {
-    opacity: 0;
+    transform: scale(0.96);
   }
 }
 
 @keyframes dialog-in {
   from {
     opacity: 0;
-    transform: translateY(10px) scale(0.985);
+    transform: translate(-50%, calc(-50% + 8px)) scale(0.98);
   }
 }
 
-@keyframes loading {
+@keyframes radio-pop {
+  from {
+    transform: scale(0.4);
+  }
+}
+
+/* Высоту содержимого отдаёт Radix Collapsible — своими силами её не измерить */
+@keyframes disclosure-down {
+  from {
+    height: 0;
+    opacity: 0;
+  }
   to {
-    background-position: -200% 0;
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+}
+
+@keyframes disclosure-up {
+  from {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
   }
 }
 

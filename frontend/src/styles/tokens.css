@@ -1,64 +1,158 @@
 /*
- * Палитра и ритм. Перенесено из virtex, но переписано на light-dark():
- * один набор токенов вместо двух блоков, тема переключается через color-scheme.
+ * Единственное место, где в проекте задаются цвет, размер, ритм и движение.
+ * Компоненты и экраны берут только отсюда: `var(--accent)`, а не `#2d4edb`.
  *
- * По умолчанию тема идёт за системой. Атрибут data-theme на <html> её фиксирует:
+ * Обе темы описаны одним набором значений через light-dark(). Тему переключает
+ * атрибут data-theme на <html>, который меняет color-scheme:
  *   <html data-theme="light">  — всегда светлая
  *   <html data-theme="dark">   — всегда тёмная
  *   без атрибута               — как в системе
+ *
+ * Ориентир — Brilliant и LeetCode: нейтральная холодная база, один насыщенный
+ * акцент, скруглённые поверхности, читаемый кегль. Тёплая «журнальная» палитра
+ * из virtex не подошла: тренажёр — плотный интерфейс с данными, а не лонгрид.
  */
 
 :root {
   color-scheme: light dark;
 
-  /* Поверхности */
-  --canvas: light-dark(#f0eee6, #14191c);
-  --paper: light-dark(#f5f2ea, #1a2023);
-  --paper-strong: light-dark(#fffdf7, #20272a);
+  /* --- Поверхности. Снизу вверх: фон приложения → карточка → приподнятое --- */
+  --canvas: light-dark(#f4f5f7, #0d1016);
+  --paper: light-dark(#ffffff, #141920);
+  --paper-strong: light-dark(#ffffff, #1a2029);
+  /* Заливка под курсором: строка списка, карточка, пункт меню */
+  --surface-hover: light-dark(#eef0f4, #1e2530);
+  /* Вдавленное: поле ввода, блок кода, трек прогресса */
+  --surface-sunken: light-dark(#f0f2f5, #0f141a);
 
-  /* Текст */
-  --ink: light-dark(#172127, #e7e6df);
-  --muted: light-dark(#687278, #9fa8aa);
+  /* --- Текст. Четыре ступени: чем ниже, тем тише --- */
+  --ink: light-dark(#141a23, #e8ecf2);
+  --ink-soft: light-dark(#3d4757, #b4bdca);
+  /* Значения светлой темы подобраны так, чтобы подписи держали 4.5:1 к --canvas */
+  --muted: light-dark(#5f6a7a, #8792a3);
+  --faint: light-dark(#8a94a3, #5d6879);
 
-  /* Линии */
-  --line: light-dark(#d9d6cc, #343c3f);
-  --line-strong: light-dark(#b9b7af, #4c5659);
+  /* --- Линии --- */
+  --line: light-dark(#e3e6eb, #232a34);
+  --line-strong: light-dark(#cbd1da, #38414e);
 
-  /* Акценты */
-  --accent: light-dark(#8a302f, #d27a75);
-  --accent-dark: light-dark(#642221, #b65e5b);
-  --on-accent: light-dark(#fffdf7, #14191c);
-  --navy: light-dark(#183449, #93b6ca);
-  --sage: light-dark(#5f7568, #a0b0a5);
+  /* --- Акцент. Кобальт: не зелёный и не красный, чтобы не спорить
+         с тонами «подтверждено» и «пробел» --- */
+  --accent: light-dark(#2d4edb, #7b95ff);
+  /* Наведение: в светлой теме темнее, в тёмной светлее — так работает контраст */
+  --accent-hover: light-dark(#2440be, #93a9ff);
+  --accent-active: light-dark(#1d349e, #a8b9ff);
+  --on-accent: light-dark(#ffffff, #0d1016);
 
-  /* Тона состояний */
-  --tone-success: light-dark(#49785e, #7fb094);
-  --tone-warning: light-dark(#a28137, #d0aa62);
-  --tone-danger: var(--accent);
-  --tone-info: var(--navy);
+  /* --- Тона состояний. Четыре различимых оттенка --- */
+  --tone-success: light-dark(#25793a, #57ce79);
+  --tone-warning: light-dark(#96650a, #e9b23c);
+  --tone-danger: light-dark(#c02a38, #f87b87);
+  --tone-info: light-dark(#0b6e7d, #4cc5d8);
 
-  /* Производные от акцента — сами едут за темой */
-  --accent-wash: color-mix(in srgb, var(--accent) 8%, transparent);
-  --accent-edge: color-mix(in srgb, var(--accent) 34%, transparent);
-  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  /* Текст на красной кнопке: --on-accent сюда не годится, он рассчитан на кобальт */
+  --on-danger: light-dark(#ffffff, #1a0d10);
 
-  --shadow: light-dark(0 20px 60px rgba(33, 40, 42, 0.09), 0 20px 60px rgba(0, 0, 0, 0.3));
+  /* Подсказка — единственная инвертированная поверхность: она лежит поверх
+     любого фона, и своя пара «фон + текст» ей нужна, чтобы читаться на обоих */
+  --tooltip-surface: light-dark(#1c232e, #e8ecf2);
+  --tooltip-ink: light-dark(#f4f5f7, #141a23);
 
-  /* Движение */
+  /* --- Производные от акцента: сами едут за темой --- */
+  --accent-wash: color-mix(in srgb, var(--accent) 10%, transparent);
+  --accent-wash-strong: color-mix(in srgb, var(--accent) 18%, transparent);
+  --accent-edge: color-mix(in srgb, var(--accent) 40%, transparent);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 32%, transparent);
+
+  /* --- Тени. Три ступени вместо одной на всё.
+         light-dark() — цветовая функция, целую тень в неё завернуть нельзя:
+         по теме едет только цвет, а геометрия у обеих тем общая. В тёмной
+         теме тень должна быть заметно плотнее, поэтому альфа тоже в цвете. --- */
+  --shadow-tint-sm: light-dark(rgb(20 26 35 / 0.07), rgb(0 0 0 / 0.45));
+  --shadow-tint-md: light-dark(rgb(20 26 35 / 0.1), rgb(0 0 0 / 0.55));
+  --shadow-tint-lg: light-dark(rgb(20 26 35 / 0.16), rgb(0 0 0 / 0.65));
+
+  --shadow-sm: 0 1px 2px var(--shadow-tint-sm);
+  --shadow-md: 0 4px 14px var(--shadow-tint-md);
+  --shadow-lg: 0 18px 44px var(--shadow-tint-lg);
+  --shadow-accent: 0 4px 14px color-mix(in srgb, var(--accent) 30%, transparent);
+
+  /* --- Скругления. Ноль остался только для «во всю ширину» --- */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  /* --- Шаг сетки: 4px. Отступы берутся отсюда, а не на глаз --- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* --- Кегль. Базовый — 15px: мельче на плотных таблицах читать нечем --- */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-md: 16px;
+  --text-lg: 19px;
+  --text-xl: 23px;
+  --text-2xl: 28px;
+  --text-3xl: 36px;
+
+  --leading-tight: 1.2;
+  --leading-snug: 1.4;
+  --leading-normal: 1.6;
+  --leading-relaxed: 1.75;
+
+  /* Насыщенности: четыре, а не произвольные 650/760/780 */
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* --- Цвета проектов. Восемь пресетов, разнесены между кобальтовым
+         акцентом и тонами статусов; применяются только как подложка-чип
+         проекта, в статусных элементах не появляются --- */
+  --project-color-1: light-dark(#5b6472, #97a1b1);
+  --project-color-2: light-dark(#4f5bd5, #93a9ff);
+  --project-color-3: light-dark(#7a4fd5, #b39af0);
+  --project-color-4: light-dark(#b0399f, #e08ad2);
+  --project-color-5: light-dark(#d54f6e, #f099ac);
+  --project-color-6: light-dark(#c05f31, #eda173);
+  --project-color-7: light-dark(#148f9c, #6fd3dd);
+  --project-color-8: light-dark(#6d7f2a, #b4c86a);
+
+  /* --- Движение --- */
   --motion-fast: 120ms;
   --motion-base: 180ms;
   --motion-slow: 320ms;
   --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease: var(--motion-base) var(--motion-ease);
+  --ease-fast: var(--motion-fast) var(--motion-ease);
 
-  /* Шрифты.
-     В virtex засечковым был Newsreader — у него нет кириллицы, и на русском
-     интерфейсе все заголовки молча уезжали в Georgia. Literata того же
-     редакционного склада, но с кириллицей. */
-  --font-sans: "Manrope Variable", system-ui, sans-serif;
-  --font-serif: "Literata Variable", Georgia, serif;
-  --font-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  /* --- Слои по глубине. Нужны, чтобы всплывашка не оказалась под панелью:
+         номера задаются один раз здесь, а не подбираются по месту --- */
+  --z-topbar: 10;
+  --z-popover: 40;
+  --z-overlay: 50;
+  --z-dialog: 60;
+
+  /* --- Шрифты ---
+     Onest — интерфейсный гротеск, нарисованный сразу с кириллицей, а не
+     дополненный ею потом. Системная Georgia используется только для длинного
+     чтения: эталонного ответа и фрагментов материала. */
+  --font-sans: "Onest Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: Georgia, "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
 }
 
 :root[data-theme="light"] {

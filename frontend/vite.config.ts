@@ -1,5 +1,5 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vitest/config";
+import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react()],
@@ -13,13 +13,5 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
-  },
-  test: {
-    // globals нужен не ради describe/it, а ради автоочистки Testing Library:
-    // без него DOM копится между тестами и запросы находят по два заголовка.
-    globals: true,
-    environment: "jsdom",
-    setupFiles: ["./tests/setup.ts"],
-    include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
   },
 });

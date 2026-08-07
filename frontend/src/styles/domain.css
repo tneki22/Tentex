@@ -1,0 +1,356 @@
+/*
+ * Доменные виджеты Tentex: сущности продукта, показанные одинаково всюду.
+ * Порядок блоков — как в src/components/domain.
+ *
+ * Правило тона здесь строже, чем в ките: цвет закреплён за смыслом. Зелёный —
+ * только «подтверждено», красный — только необратимое и упавшее, жёлтый —
+ * только «верь осторожно». Метрика цветом не красится вообще (FR-D17).
+ */
+
+/* --- Оценка стоимости до запуска --- */
+
+.cost-estimate {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.cost-estimate svg {
+  flex: none;
+  color: var(--muted);
+  transform: translateY(2px);
+}
+
+.cost-estimate small {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+/* --- Уровень цели --- */
+
+.goal-level {
+  max-width: 520px;
+  gap: var(--space-2);
+}
+
+.goal-level .radio-card {
+  min-height: 0;
+  padding: var(--space-2) var(--space-3);
+}
+
+.goal-level .radio-card-text b,
+.goal-level .radio-card-text small {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.goal-level .radio-card-text b {
+  font-size: var(--text-sm);
+}
+
+.goal-level .radio-card-text small {
+  font-size: var(--text-xs);
+}
+
+.goal-effect {
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/* --- Метка машинного происхождения --- */
+
+.machine-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 1px var(--space-2);
+  border: 1px solid var(--accent-edge);
+  border-radius: var(--radius-pill);
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.machine-undo {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background-color var(--ease-fast);
+}
+
+.machine-undo:hover {
+  background: var(--accent-wash-strong);
+}
+
+/* --- Метрики. Ни баров, ни окраски: числа текстом --- */
+
+.metric-row {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.metric-row i {
+  color: var(--faint);
+  font-style: normal;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.metric-grid dt {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.metric-grid dd {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+/* --- Работа без внешних моделей --- */
+
+.offline-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+/* Выключены пользователем — законный режим, поэтому нейтрально */
+.offline-notice.is-neutral {
+  background: var(--surface-sunken);
+  color: var(--ink-soft);
+}
+
+.offline-notice.is-neutral svg {
+  color: var(--muted);
+}
+
+/* Провайдер молчит — предупреждение, но всё ещё штатное состояние */
+.offline-notice.is-warning {
+  background: color-mix(in srgb, var(--tone-warning) 12%, transparent);
+  color: var(--ink-soft);
+}
+
+.offline-notice.is-warning svg {
+  color: var(--tone-warning);
+}
+
+.offline-notice svg {
+  flex: none;
+  transform: translateY(2px);
+}
+
+.offline-notice a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* --- Опознавательный знак проекта --- */
+
+.project-chip {
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--proj);
+  background: color-mix(in srgb, var(--proj) 14%, transparent);
+}
+
+.project-chip.is-sm {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-xs);
+}
+
+.project-chip.is-md {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+}
+
+.project-chip.is-lg {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+}
+
+/* --- Источник происхождения узла программы --- */
+
+.source-chip {
+  display: inline-block;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+/* Источника нет — единственный случай, когда чип окрашен: модель говорит,
+   что ничем не подтверждена, и это должно быть видно, а не спрятано */
+.source-chip.is-unverified {
+  border-color: color-mix(in srgb, var(--tone-warning) 30%, transparent);
+  background: color-mix(in srgb, var(--tone-warning) 12%, transparent);
+  color: var(--tone-warning);
+}
+
+/* --- Следующий шаг --- */
+
+.step-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition:
+    background-color var(--ease-fast),
+    border-color var(--ease-fast),
+    transform var(--ease-fast);
+}
+
+.step-chip svg {
+  flex: none;
+}
+
+.step-chip.is-accent {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.step-chip.is-accent:hover {
+  background: var(--accent-wash-strong);
+  transform: translateY(-1px);
+}
+
+.step-chip.is-danger {
+  background: color-mix(in srgb, var(--tone-danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--tone-danger) 28%, transparent);
+  color: var(--tone-danger);
+}
+
+.step-chip.is-danger:hover {
+  background: color-mix(in srgb, var(--tone-danger) 18%, transparent);
+  transform: translateY(-1px);
+}
+
+/* «На сегодня всё» — не кнопка: работа сделана, торопить некуда */
+.step-chip.is-quiet {
+  padding-left: 0;
+  background: none;
+  color: var(--muted);
+  font-weight: var(--weight-normal);
+}
+
+.step-chip.is-large {
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.step-chip.is-large:hover {
+  background: var(--accent-hover);
+  box-shadow: var(--shadow-accent);
+}
+
+.step-chip.is-large.is-quiet {
+  background: var(--surface-sunken);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+/* --- Строка фоновой задачи --- */
+
+.task-row {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--line);
+}
+
+.task-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.task-row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.task-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.task-row-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+/* Кнопки внутри всплывашки мельче: 36px там занимают половину высоты */
+.task-row-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+}
+
+.task-row-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.task-row-error {
+  color: var(--tone-danger);
+}

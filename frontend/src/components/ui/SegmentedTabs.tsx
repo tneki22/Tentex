@@ -1,4 +1,5 @@
 import { useId } from "react";
+import type { CSSProperties } from "react";
 
 interface SegmentedTab<T extends string> {
   value: T;
@@ -35,7 +36,13 @@ export function SegmentedTabs<T extends string>({
   }
 
   return (
-    <div className={`segmented-tabs ${className}`.trim()} role="tablist" aria-label={label}>
+    <div
+      className={`segmented-tabs ${className}`.trim()}
+      role="tablist"
+      aria-label={label}
+      /* Ширину и сдвиг бегунка считает CSS: только он знает про поля трека. */
+      style={{ "--tab-count": tabs.length, "--tab-index": currentIndex } as CSSProperties}
+    >
       {tabs.map((tab, index) => (
         <button
           id={`${tabId}-${tab.value}-tab`}
@@ -68,14 +75,7 @@ export function SegmentedTabs<T extends string>({
           {tab.label}
         </button>
       ))}
-      <span
-        className="segmented-tabs-indicator"
-        aria-hidden="true"
-        style={{
-          width: `${100 / tabs.length}%`,
-          transform: `translateX(${currentIndex * 100}%)`,
-        }}
-      />
+      <span className="segmented-tabs-indicator" aria-hidden="true" />
     </div>
   );
 }

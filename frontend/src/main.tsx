@@ -1,12 +1,15 @@
-import "@fontsource-variable/manrope";
-import "@fontsource-variable/literata";
+﻿import "@fontsource-variable/onest";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { App } from "./App";
+/* Порядок важен: значения → сброс → примитивы кита → доменные виджеты → оболочка */
 import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/ui-kit.css";
+import "./styles/domain.css";
+import "./styles/lessons.css";
+import "./styles/cards.css";
 import "./styles/layout.css";
 
 const container = document.getElementById("root");

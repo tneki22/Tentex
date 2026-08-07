@@ -1,5 +1,4 @@
 import {
-  BookOpen,
   CalendarDays,
   Files,
   FileSearch,
@@ -7,23 +6,26 @@ import {
   GraduationCap,
   Inbox,
   Layers,
+  Library,
   ListChecks,
   ListTree,
-  Map,
+  PanelsTopLeft,
   Palette,
   Settings,
+  SlidersHorizontal,
   Sparkles,
   Target,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 /**
- * Четырнадцать экранов из §21 требований плюс служебная витрина UI-кита.
+ * Пятнадцать проектных и два глобальных экрана из §21 требований
+ * плюс служебная витрина UI-кита.
  * Это единственный список экранов в проекте: навигация, роутинг и заглушки
  * строятся отсюда. Добавляешь экран — добавляешь строку здесь.
  *
- * `depth` — из PLAN.md, этап 1: девять экранов сквозного сценария проектируются
- * до состояния «по ним можно кодить», остальные пять — эскизом.
+ * `depth` — требуемая глубина перед реализацией. Оставшийся экран сначала
+ * описывается в SCREENS.md и верстается, затем получает настоящий вертикальный срез.
  */
 
 export type ScreenGroup = "Проект" | "Материал" | "Занятия" | "Служебное";
@@ -44,8 +46,8 @@ export interface ScreenMeta {
 
 /** Пока проектов нет, все ссылки ведут на этот идентификатор. */
 export const DEMO_PROJECT_ID = "demo";
+export const DEMO_TEXTBOOK_PROJECT_ID = "vector-indexes";
 const DEMO_MATERIAL_ID = "demo-material";
-const DEMO_TOPIC_ID = "demo-topic";
 
 export const SCREENS: ScreenMeta[] = [
   {
@@ -69,14 +71,24 @@ export const SCREENS: ScreenMeta[] = [
     depth: "полностью",
   },
   {
-    id: "coverage-map",
+    id: "workspace",
     path: "/projects/:projectId",
     navPath: `/projects/${DEMO_PROJECT_ID}`,
-    title: "Карта покрытия",
+    title: "Рабочая область",
     summary:
-      "Главный экран проекта: таблица программы со статусами и фильтрами, вкладка статистики.",
+      "Дерево программы и изменяемые панели источника, ответа, конспекта и инструментов темы.",
     group: "Проект",
-    icon: Map,
+    icon: PanelsTopLeft,
+    depth: "полностью",
+  },
+  {
+    id: "coverage-map",
+    path: "/projects/:projectId/coverage-map",
+    navPath: `/projects/${DEMO_PROJECT_ID}/coverage-map`,
+    title: "Карта покрытия",
+    summary: "Аналитическая таблица программы со статусами, источниками и фильтрами.",
+    group: "Проект",
+    icon: Target,
     depth: "полностью",
   },
   {
@@ -93,9 +105,9 @@ export const SCREENS: ScreenMeta[] = [
     id: "program",
     path: "/projects/:projectId/program",
     navPath: `/projects/${DEMO_PROJECT_ID}/program`,
-    title: "Программа",
+    title: "Программа / вопросы экзамена",
     summary:
-      "Редактор дерева, массовый ввод, импорт, уровни цели пачкой, экран пересборки с дифом.",
+      "Общий редактор программы: дерево, ручные правки, источники и подтверждаемый диф изменений.",
     group: "Проект",
     icon: ListTree,
     depth: "полностью",
@@ -131,13 +143,13 @@ export const SCREENS: ScreenMeta[] = [
     depth: "эскизом",
   },
   {
-    id: "topic",
-    path: "/projects/:projectId/topics/:topicId",
-    navPath: `/projects/${DEMO_PROJECT_ID}/topics/${DEMO_TOPIC_ID}`,
-    title: "Среда темы",
-    summary: "Материал, эталон, карточки, конспект, история, свободный вопрос.",
+    id: "lessons",
+    path: "/projects/:projectId/lessons",
+    navPath: `/projects/${DEMO_TEXTBOOK_PROJECT_ID}/lessons`,
+    title: "Уроки",
+    summary: "Одиночное и массовое создание Уроков по Темам Программы.",
     group: "Занятия",
-    icon: BookOpen,
+    icon: GraduationCap,
     depth: "полностью",
   },
   {
@@ -165,7 +177,7 @@ export const SCREENS: ScreenMeta[] = [
     path: "/projects/:projectId/plan",
     navPath: `/projects/${DEMO_PROJECT_ID}/plan`,
     title: "План подготовки",
-    summary: "Календарь до дедлайна, прогноз готовности.",
+    summary: "Календарь до дедлайна: первичный проход, повторения, резерв и прогноз готовности.",
     group: "Занятия",
     icon: CalendarDays,
     depth: "эскизом",
@@ -185,17 +197,37 @@ export const SCREENS: ScreenMeta[] = [
     path: "/projects/:projectId/settings",
     navPath: `/projects/${DEMO_PROJECT_ID}/settings`,
     title: "Настройки",
-    summary: "Модули проекта, паспорт цели, модели и лимиты, напоминания, бот, экспорт.",
+    summary: "Параметры проекта, паспорт цели и включённые учебные модули.",
     group: "Служебное",
     icon: Settings,
+    depth: "полностью",
+  },
+  {
+    id: "library",
+    path: "/library",
+    navPath: "/library",
+    title: "Материалы",
+    summary: "Файлы установки: качество, какие проекты используют, последствия удаления.",
+    group: "Служебное",
+    icon: Library,
+    depth: "эскизом",
+  },
+  {
+    id: "setup",
+    path: "/setup",
+    navPath: "/setup",
+    title: "Параметры",
+    summary: "Внешние модели и лимиты, бот, резервные копии, хранилище.",
+    group: "Служебное",
+    icon: SlidersHorizontal,
     depth: "эскизом",
   },
   {
     id: "ui-kit",
     path: "/ui-kit",
     navPath: "/ui-kit",
-    title: "UI-кит",
-    summary: "Витрина перенесённых из virtex компонентов. В продукт не входит.",
+    title: "Дизайн-система",
+    summary: "Витрина токенов, примитивов кита и доменных виджетов. В продукт не входит.",
     group: "Служебное",
     icon: Palette,
     depth: "служебный",

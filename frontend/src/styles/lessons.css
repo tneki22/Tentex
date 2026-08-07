@@ -1,0 +1,75 @@
+.lessons-screen { min-height: 100dvh; display: grid; grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(250px, 300px); background: var(--canvas); color: var(--ink); }
+.lessons-tree { min-width: 260px; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; border-right: 1px solid var(--line); background: var(--paper); }
+.lessons-tree > header { display: flex; align-items: center; gap: var(--space-3); min-height: 60px; padding: 0 var(--space-4); border-bottom: 1px solid var(--line); }
+.lessons-tree > header a { color: var(--muted); }
+.lessons-search { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-3); padding: 0 var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper-strong); color: var(--muted); }
+.lessons-search input { width: 100%; height: 34px; border: 0; background: transparent; box-shadow: none; }
+.lessons-tree nav { overflow: auto; padding: 0 var(--space-2) var(--space-4); }
+.lessons-tree-row { min-height: 38px; display: grid; grid-template-columns: 22px 22px minmax(0, 1fr) auto; align-items: center; gap: var(--space-1); border-radius: var(--radius-xs); }
+.lessons-tree-row.is-selected { background: var(--accent-wash); }
+.lessons-tree-row > button:not(.lessons-tree-chevron) { min-width: 0; padding: var(--space-1); border: 0; background: transparent; color: var(--ink-soft); cursor: pointer; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.lessons-tree-row > button:not(.lessons-tree-chevron):hover { color: var(--accent); }
+.lessons-tree-row small { padding-right: var(--space-1); color: var(--muted); font-size: var(--text-xs); white-space: nowrap; }
+.lessons-tree-chevron { width: 22px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--muted); cursor: pointer; }
+.lessons-tree-children { padding-left: var(--space-4); }
+.lessons-tree footer { display: grid; padding: var(--space-2); border-top: 1px solid var(--line); }
+.lessons-tree footer > * { display: flex; align-items: center; justify-content: space-between; min-height: 34px; padding: 0 var(--space-2); border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-sm); text-align: left; }
+.lessons-tree footer .is-active { background: var(--accent-wash); color: var(--accent); font-weight: var(--weight-semibold); }
+.lessons-main { min-width: 0; overflow: auto; padding: clamp(var(--space-5), 5vw, var(--space-10)); }
+.lessons-message { width: min(900px, 100%); margin: 0 auto var(--space-4); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink-soft); }
+.lessons-overview, .lessons-single, .lessons-batch { width: min(1040px, 100%); margin: 0 auto; }
+.lessons-overview { padding: clamp(var(--space-6), 8vw, var(--space-16)); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); }
+.lessons-overview > p:first-child, .lessons-batch header p, .lessons-editor-head p { margin: 0; color: var(--muted); font-size: var(--text-sm); }
+.lessons-overview h1, .lessons-batch h1 { margin: var(--space-2) 0 var(--space-4); font-size: var(--text-2xl); }
+.lessons-overview > div, .empty-state > div { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-6); }
+.lessons-editor-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: var(--space-4); margin-bottom: var(--space-4); }
+.lessons-editor-head > div:last-child { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); color: var(--muted); font-size: var(--text-xs); }
+.lessons-editor-head select { width: min(360px, 100%); margin-top: var(--space-2); }
+.lessons-editor-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: var(--space-3); margin-bottom: var(--space-3); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); }
+.lessons-block-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: var(--space-3) 0; }
+.lessons-document { display: grid; gap: var(--space-8); }
+.lessons-document-section { display: grid; gap: var(--space-4); }
+.lessons-document-section > header h2 { margin: 0; font-size: var(--text-xl); }
+.lessons-document-section > header p { margin: var(--space-1) 0 0; color: var(--muted); }
+.lessons-row { display: grid; gap: var(--space-4); }
+.lessons-row.is-media-left { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
+.lessons-row.is-media-right { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+.lessons-row.is-two-equal { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.lessons-block { position: relative; padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); }
+.lessons-document.is-editor .lessons-block { cursor: pointer; }
+.lessons-document.is-editor .lessons-block.is-selected { border-color: var(--accent); box-shadow: var(--focus-ring); }
+.lessons-block-select { position: absolute; top: var(--space-2); right: var(--space-2); display: flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-2); border: 0; border-radius: var(--radius-xs); background: var(--surface-sunken); color: var(--muted); cursor: pointer; font-size: var(--text-xs); }
+.lessons-block-select[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.lessons-block p { color: var(--ink-soft); font-family: var(--font-serif); line-height: var(--leading-relaxed); }
+.lessons-block p:first-child { margin-top: 0; }
+.lessons-block p:last-child { margin-bottom: 0; }
+.lessons-block-sources { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); padding-top: var(--space-3); border-top: 1px solid var(--line); color: var(--muted); font-size: var(--text-xs); }
+.lessons-block-source { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); }
+.lessons-callout { padding: var(--space-4); border-left: 3px solid var(--tone-info); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--surface-sunken); }
+.lessons-callout.is-warning { border-left-color: var(--tone-warning); }
+.lessons-callout p { margin: var(--space-2) 0 0; }
+.lessons-image-placeholder { display: grid; gap: var(--space-3); margin: 0; }
+.lessons-image-placeholder > div { min-height: 160px; display: grid; place-content: center; justify-items: center; gap: var(--space-2); padding: var(--space-4); border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--muted); text-align: center; }
+.lessons-image-placeholder figcaption, .lessons-diagram figcaption { color: var(--muted); font-size: var(--text-xs); }
+.lessons-diagram > div { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--space-2); min-height: 90px; margin-top: var(--space-3); padding: var(--space-4); border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--accent); }
+.lessons-diagram > div span { padding: var(--space-2); border: 1px solid var(--accent-edge); border-radius: var(--radius-xs); background: var(--paper); color: var(--ink-soft); font-size: var(--text-sm); }
+.lessons-sql { display: grid; gap: var(--space-3); }
+.lessons-sql textarea { min-height: 96px; resize: vertical; font-family: var(--font-mono); }
+.lessons-sql > div:last-child { display: flex; gap: var(--space-2); }
+.lessons-inspector { display: grid; align-content: start; gap: var(--space-3); padding: var(--space-5); border-left: 1px solid var(--line); background: var(--paper); overflow: auto; }
+.lessons-inspector h2 { margin: var(--space-3) 0 0; font-size: var(--text-lg); }
+.lessons-inspector p { margin: 0; color: var(--ink-soft); font-size: var(--text-sm); }
+.lessons-inspector label { display: grid; gap: var(--space-1); color: var(--muted); font-size: var(--text-xs); }
+.lessons-open-inspector { position: fixed; right: var(--space-4); bottom: var(--space-4); display: flex; align-items: center; gap: var(--space-1); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink-soft); }
+.lessons-batch header { display: flex; align-items: end; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-4); }
+.lessons-batch-table { display: grid; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); overflow: hidden; }
+.lessons-batch-table > div { display: grid; grid-template-columns: 28px minmax(180px, 1fr) minmax(130px, .7fr) 110px 74px; align-items: center; gap: var(--space-3); padding: var(--space-3); border-bottom: 1px solid var(--line); }
+.lessons-batch-table > div:last-child { border-bottom: 0; }
+.lessons-batch-table small { color: var(--muted); }
+.lessons-ai-form, .lessons-storyboard { display: grid; gap: var(--space-3); }
+.lessons-ai-form p, .lessons-storyboard p { margin: 0; color: var(--ink-soft); }
+.lessons-workspace { width: min(900px, 100%); margin: 0 auto; padding: var(--space-6); }
+.lessons-workspace-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-5); }
+.lessons-workspace-head select { min-width: min(300px, 100%); }
+@media (max-width: 1120px) { .lessons-screen { grid-template-columns: minmax(260px, 280px) minmax(0, 1fr); } .lessons-inspector, .lessons-open-inspector { display: none; } }
+@media (max-width: 760px) { .lessons-screen { grid-template-columns: minmax(260px, 38vw) minmax(0, 1fr); } .lessons-main { padding: var(--space-4); } .lessons-row.is-media-left, .lessons-row.is-media-right, .lessons-row.is-two-equal, .lessons-editor-fields, .lessons-batch-table > div { grid-template-columns: minmax(0, 1fr); } .lessons-tree-row { grid-template-columns: 18px 20px minmax(0, 1fr); } .lessons-tree-row small { display: none; } .lessons-editor-head > div:last-child { justify-content: flex-start; } }
