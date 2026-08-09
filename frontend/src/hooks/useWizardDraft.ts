@@ -22,6 +22,8 @@ type DraftStatus = "idle" | "loading" | "ready" | "saving" | "error";
 
 export interface WizardDraftController {
   detail: WizardDraftDetail | null;
+  /** Меняется только после гидратации с сервера, не после локального сохранения. */
+  hydrationVersion: number;
   status: DraftStatus;
   error: Error | null;
   conflict: ProjectApiError | null;
@@ -44,6 +46,7 @@ export function useWizardDraft({
   projectId?: string | null;
 }): WizardDraftController {
   const [detail, setDetail] = useState<WizardDraftDetail | null>(null);
+  const [hydrationVersion, setHydrationVersion] = useState(0);
   const [status, setStatus] = useState<DraftStatus>(projectId ? "loading" : "idle");
   const [error, setError] = useState<Error | null>(null);
   const [conflict, setConflict] = useState<ProjectApiError | null>(null);
@@ -52,9 +55,10 @@ export function useWizardDraft({
   const blockedRef = useRef(false);
   const loadRequestRef = useRef(0);
 
-  const accept = useCallback((next: WizardDraftDetail) => {
+  const accept = useCallback((next: WizardDraftDetail, { hydrated = false }: { hydrated?: boolean } = {}) => {
     detailRef.current = next;
     setDetail(next);
+    if (hydrated) setHydrationVersion((current) => current + 1);
     setStatus("ready");
     setError(null);
   }, []);
@@ -79,7 +83,7 @@ export function useWizardDraft({
       const next = await getWizardDraft(id);
       blockedRef.current = false;
       setConflict(null);
-      accept(next);
+      accept(next, { hydrated: true });
     } catch (caught) {
       return fail(caught) as never;
     }
@@ -99,7 +103,7 @@ export function useWizardDraft({
     const controller = new AbortController();
     setStatus("loading");
     void getWizardDraft(projectId, controller.signal)
-      .then((next) => { if (!controller.signal.aborted && loadRequestRef.current === requestId) accept(next); })
+      .then((next) => { if (!controller.signal.aborted && loadRequestRef.current === requestId) accept(next, { hydrated: true }); })
       .catch((caught) => {
         if (!controller.signal.aborted && loadRequestRef.current === requestId) {
           try { fail(caught); } catch { /* state already contains the error */ }
@@ -232,5 +236,5 @@ export function useWizardDraft({
     }
   }), [enqueue, fail]);
 
-  return { detail, status, error, conflict, ensureDraft, queueSave, enqueueProgramCommand, undo, importExam, activate, discard, flush, reload };
+  return { detail, hydrationVersion, status, error, conflict, ensureDraft, queueSave, enqueueProgramCommand, undo, importExam, activate, discard, flush, reload };
 }

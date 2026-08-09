@@ -10,7 +10,8 @@ import { TextbookWizard } from "./TextbookWizard";
 
 type Track = "exam" | "textbook";
 
-const STEP_LABELS = ["Формат", "Материалы", "Загрузка", "Паспорт", "Проверка"];
+const EXAM_STEP_LABELS = ["Формат", "Материалы", "Загрузка", "Паспорт", "Проверка"];
+const TEXTBOOK_STEP_LABELS = ["Источники", "Профиль", "Перед построением", "Редактор", "Итог"];
 
 const TRACKS = [
   {
@@ -51,6 +52,10 @@ function draftBranch(draft: WizardDraftSummary): string {
 
 function draftName(draft: WizardDraftSummary): string {
   return draft.name || (draft.template_key === "textbook" ? "Учебниковый черновик" : "Экзаменационный черновик");
+}
+
+function stepLabelsFor(templateKey: TemplateKey): readonly string[] {
+  return templateKey === "textbook" ? TEXTBOOK_STEP_LABELS : EXAM_STEP_LABELS;
 }
 
 export function ProjectWizard() {
@@ -128,6 +133,7 @@ export function ProjectWizard() {
   const currentStep = track ? requestedStep ?? controller.detail?.draft.current_step ?? 1 : 0;
   const maxStep = track ? controller.detail?.draft.max_completed_step ?? 1 : 0;
   const trackLabel = track === "exam" ? "Экзамен" : track === "textbook" ? "Учебник" : null;
+  const stepLabels = track === "textbook" ? TEXTBOOK_STEP_LABELS : EXAM_STEP_LABELS;
 
   if (activatedProject) {
     const first = activatedProject.program.nodes.find((node) => ["topic", "subpoint"].includes(node.node_type) && node.is_in_current_program && !node.is_archived);
@@ -153,7 +159,7 @@ export function ProjectWizard() {
         trackLabel={null}
         step={0}
         maxStep={0}
-        stepLabels={STEP_LABELS}
+        stepLabels={EXAM_STEP_LABELS}
         onStepChange={setRequestedStep}
       >
         <div className="wizard-hero">
@@ -169,7 +175,7 @@ export function ProjectWizard() {
             {drafts.map((draft) => (
               <Card key={draft.project_id}>
                 <h3>{draftName(draft)}</h3>
-                <p>{draftBranch(draft)} · шаг {draft.current_step} из {STEP_LABELS.length}</p>
+                <p>{draftBranch(draft)} · шаг {draft.current_step} из {stepLabelsFor(draft.template_key).length}</p>
                 <time dateTime={draft.updated_at}>Обновлён {new Date(draft.updated_at).toLocaleString("ru-RU")}</time>
                 <Button onClick={() => resume(draft)}>Продолжить</Button>
               </Card>
@@ -217,7 +223,7 @@ export function ProjectWizard() {
         trackLabel={trackLabel}
         step={currentStep}
         maxStep={maxStep}
-        stepLabels={STEP_LABELS}
+        stepLabels={stepLabels}
         onStepChange={setRequestedStep}
         onBack={controller.detail ? undefined : backToTracks}
         onSaveAndExit={controller.detail ? () => void saveAndExit() : undefined}

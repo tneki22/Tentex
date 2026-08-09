@@ -158,12 +158,13 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
   const [warnings, setWarnings] = useState<string[]>([]);
   const [counts, setCounts] = useState({ tickets: 0, questions: 0, tasks: 0 });
   const [actionError, setActionError] = useState("");
-  const initializedId = useRef<string | null>(null);
+  const initializedKey = useRef<string | null>(null);
 
   useEffect(() => {
     const detail = controller.detail;
-    if (!detail || initializedId.current === detail.project.id) return;
-    initializedId.current = detail.project.id;
+    const key = detail ? `${detail.project.id}:${controller.hydrationVersion}` : null;
+    if (!detail || initializedKey.current === key) return;
+    initializedKey.current = key;
     const state = detail.draft.state;
     const goal = detail.goal_passport;
     const restoredWarnings = Array.isArray(state.warnings)
@@ -192,7 +193,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
       daysPerWeek: goal?.days_per_week ? String(goal.days_per_week) : "4",
       sessionMinutes: goal?.session_minutes ? String(goal.session_minutes) : "45",
     });
-  }, [controller.detail]);
+  }, [controller.detail, controller.hydrationVersion]);
 
   useEffect(() => {
     if (requestedStep !== undefined && requestedStep !== step) setStep(requestedStep);
@@ -246,7 +247,8 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
   }
 
   useEffect(() => {
-    if (!controller.detail || initializedId.current !== controller.detail.project.id || controller.conflict) return;
+    const key = controller.detail ? `${controller.detail.project.id}:${controller.hydrationVersion}` : null;
+    if (!controller.detail || initializedKey.current !== key || controller.conflict) return;
     const timer = window.setTimeout(() => {
       void controller.queueSave(command(step)).catch(() => undefined);
     }, 400);
