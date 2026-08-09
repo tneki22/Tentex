@@ -3,11 +3,9 @@ import {
   BadgeQuestionMark,
   ChartNoAxesColumnIncreasing,
   ChevronRight,
-  EllipsisVertical,
   FileChartColumn,
   GalleryHorizontalEnd,
   Network,
-  NotebookPen,
   PanelRightClose,
   PanelRightOpen,
   Plus,
@@ -24,7 +22,7 @@ interface StudioPanelProps {
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   modelsEnabled: boolean;
-  sourceCount: number;
+  sourceCount: number | null;
   topicTitle: string;
 }
 
@@ -33,13 +31,6 @@ interface StudioTool {
   label: string;
   settings: string;
   tone: number;
-  icon: ComponentType<{ size?: number; "aria-hidden"?: "true" }>;
-}
-
-interface StudioArtifact {
-  id: string;
-  label: string;
-  meta: string;
   icon: ComponentType<{ size?: number; "aria-hidden"?: "true" }>;
 }
 
@@ -54,14 +45,8 @@ const STUDIO_TOOLS: StudioTool[] = [
   { id: "data-table", label: "Таблица данных", settings: "Язык, описание строк и колонок, источники", tone: 3, icon: TableProperties },
 ];
 
-const DEMO_ARTIFACTS: StudioArtifact[] = [
-  { id: "exam-map", label: "Экзаменационный тренажёр", meta: "8 источников · 11 ч. назад", icon: Network },
-  { id: "transaction-note", label: "Заметка о транзакциях", meta: "Текущая тема · вчера", icon: NotebookPen },
-];
-
 export function StudioPanel({ expanded, onExpandedChange, modelsEnabled, sourceCount, topicTitle }: StudioPanelProps) {
   const [selectedTool, setSelectedTool] = useState<StudioTool | null>(null);
-  const [selectedArtifact, setSelectedArtifact] = useState<StudioArtifact | null>(null);
   const [noteOpen, setNoteOpen] = useState(false);
 
   function renderTool(tool: StudioTool) {
@@ -83,24 +68,6 @@ export function StudioPanel({ expanded, onExpandedChange, modelsEnabled, sourceC
     );
 
     return expanded ? button : <Tooltip key={tool.id} label={tool.label} side="left">{button}</Tooltip>;
-  }
-
-  function renderArtifact(artifact: StudioArtifact) {
-    const ArtifactIcon = artifact.icon;
-    const button = (
-      <button
-        key={artifact.id}
-        type="button"
-        className="studio-artifact"
-        aria-label={`${artifact.label}, ${artifact.meta}`}
-        onClick={() => setSelectedArtifact(artifact)}
-      >
-        <ArtifactIcon size={expanded ? 20 : 18} aria-hidden="true" />
-        {expanded && <><span><strong>{artifact.label}</strong><small>{artifact.meta}</small></span><EllipsisVertical size={16} aria-hidden="true" /></>}
-      </button>
-    );
-
-    return expanded ? button : <Tooltip key={artifact.id} label={artifact.label} side="left">{button}</Tooltip>;
   }
 
   const noteButton = (
@@ -133,7 +100,7 @@ export function StudioPanel({ expanded, onExpandedChange, modelsEnabled, sourceC
         <div className="studio-divider" />
 
         <div className="studio-history" aria-label="Недавние артефакты">
-          {DEMO_ARTIFACTS.map(renderArtifact)}
+          <p className="studio-history-empty">История появится после первых учебных активностей.</p>
         </div>
       </div>
 
@@ -151,23 +118,10 @@ export function StudioPanel({ expanded, onExpandedChange, modelsEnabled, sourceC
           <StatusBadge tone="neutral">Прототип</StatusBadge>
           <dl>
             <div><dt>Тема</dt><dd>{topicTitle}</dd></div>
-            <div><dt>Источники</dt><dd>{sourceCount > 0 ? `${sourceCount} доступно` : "Нет доступных источников"}</dd></div>
+            <div><dt>Источники</dt><dd>{sourceCount === null ? "Появятся после разбора материалов" : sourceCount > 0 ? `${sourceCount} доступно` : "Нет доступных источников"}</dd></div>
             <div><dt>Будущие настройки</dt><dd>{selectedTool?.settings}</dd></div>
           </dl>
           {!modelsEnabled && <OfflineNotice reason="disabled" alternative="Пока доступен только просмотр интерфейса будущей генерации." />}
-        </div>
-      </Dialog>
-
-      <Dialog
-        open={Boolean(selectedArtifact)}
-        onOpenChange={(open) => { if (!open) setSelectedArtifact(null); }}
-        title={selectedArtifact?.label ?? "Артефакт Студии"}
-        description="История показана на демонстрационных данных и пока не сохраняется."
-      >
-        <div className="studio-placeholder-dialog">
-          <StatusBadge tone="neutral">Демонстрационный артефакт</StatusBadge>
-          <p>{selectedArtifact?.meta}</p>
-          <p>Позднее здесь появятся просмотр, использованный запрос, источники, версии и экспорт.</p>
         </div>
       </Dialog>
 

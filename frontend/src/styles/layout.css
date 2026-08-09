@@ -3306,6 +3306,14 @@ button.wizard-back-projects {
   font-size: var(--text-xs);
 }
 
+.workspace-reference-answer h2 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-normal);
+  line-height: var(--leading-tight);
+}
+
 .workspace-reference-text {
   color: var(--ink);
   font-family: var(--font-serif);
@@ -3623,7 +3631,7 @@ button.wizard-back-projects {
   height: 100vh;
   min-width: 720px;
   display: grid;
-  grid-template-columns: var(--workspace-tree-width, 320px) 10px minmax(0, 1fr);
+  grid-template-columns: var(--workspace-tree-width, 320px) 10px minmax(0, 1fr) var(--studio-width, 72px);
   overflow: hidden;
   background: var(--canvas);
 }
@@ -5476,10 +5484,24 @@ button.wizard-back-projects {
   padding: var(--space-4);
 }
 
+.studio-history-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
 .workspace-studio.is-collapsed .studio-history {
   justify-items: center;
   gap: var(--space-1);
   padding: var(--space-2) var(--space-3);
+}
+
+.workspace-studio.is-collapsed .studio-history-empty {
+  max-height: 8lh;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  text-align: center;
 }
 
 .studio-artifact {
@@ -6402,7 +6424,7 @@ button.wizard-back-projects {
 
 @media (max-width: 900px) {
   .project-workspace {
-    grid-template-columns: min(42vw, 320px) 0 minmax(0, 1fr);
+    grid-template-columns: min(42vw, 320px) 0 minmax(0, 1fr) var(--studio-width, 72px);
   }
 
   .workspace-tree-resize,
