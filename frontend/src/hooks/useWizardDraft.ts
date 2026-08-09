@@ -50,6 +50,7 @@ export function useWizardDraft({
   const detailRef = useRef<WizardDraftDetail | null>(null);
   const queueRef = useRef<Promise<unknown>>(Promise.resolve());
   const blockedRef = useRef(false);
+  const loadRequestRef = useRef(0);
 
   const accept = useCallback((next: WizardDraftDetail) => {
     detailRef.current = next;
@@ -85,12 +86,25 @@ export function useWizardDraft({
   }, [accept, fail, projectId]);
 
   useEffect(() => {
+    // После первого сохранения родитель добавляет id только что созданного черновика в URL.
+    // Его уже актуальная версия лежит в detailRef; повторный GET может вернуть revision 0
+    // после первого PUT и затереть revision 1, создавая ложный конфликт autosave.
+    const requestId = ++loadRequestRef.current;
     if (!projectId) return;
+    if (detailRef.current?.project.id === projectId) {
+      setError(null);
+      setStatus("ready");
+      return;
+    }
     const controller = new AbortController();
     setStatus("loading");
     void getWizardDraft(projectId, controller.signal)
-      .then(accept)
-      .catch((caught) => { if (!controller.signal.aborted) { try { fail(caught); } catch { /* state already contains the error */ } } });
+      .then((next) => { if (!controller.signal.aborted && loadRequestRef.current === requestId) accept(next); })
+      .catch((caught) => {
+        if (!controller.signal.aborted && loadRequestRef.current === requestId) {
+          try { fail(caught); } catch { /* state already contains the error */ }
+        }
+      });
     return () => controller.abort();
   }, [accept, fail, projectId]);
 

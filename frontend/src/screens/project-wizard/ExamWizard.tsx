@@ -1,17 +1,19 @@
-import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
-import { CalendarDays, Check, FileText, Pencil, Upload } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Brain, CalendarDays, Check, FileCheck2, FileText, Files, ListChecks, Pencil, TicketCheck, Upload } from "lucide-react";
 import {
   updateProgramNode,
   type ExamFormat,
   type GoalPassportWrite,
   type ModuleKey,
+  type ProgramNodeRead,
+  type ProjectDetail,
   type StartingLevel,
   type StudyFormat,
   type TargetOutcome,
 } from "../../api/projects";
 import type { WizardDraftController } from "../../hooks/useWizardDraft";
-import { Button, Card, EmptyState, Field, LoadingState, PageHead, SegmentedTabs } from "../../components/ui";
+import { Button, Card, Checkbox, Field, IconButton, LoadingState, PageHead, RadioCards, SegmentedTabs } from "../../components/ui";
+import type { RadioCardOption } from "../../components/ui";
 
 interface ExamForm {
   format: Exclude<ExamFormat, "unknown">;
@@ -47,6 +49,44 @@ const EMPTY_FORM: ExamForm = {
   sessionMinutes: "45",
 };
 
+const FORMAT_OPTIONS: Array<RadioCardOption<ExamForm["format"]>> = [
+  { value: "questions", title: "Отдельные вопросы", description: "Общий список теоретических вопросов без заранее собранных билетов.", icon: <ListChecks size={18} aria-hidden="true" /> },
+  { value: "questions_tasks", title: "Вопросы и задачи", description: "Теория и практические задания перечислены отдельно, без группировки.", icon: <FileCheck2 size={18} aria-hidden="true" /> },
+  { value: "tickets", title: "Готовые билеты", description: "Состав каждого билета известен: вопросы, задачи или их комбинация.", icon: <TicketCheck size={18} aria-hidden="true" /> },
+];
+
+const STARTING_OPTIONS: Array<RadioCardOption<StartingLevel>> = [
+  { value: "beginner", title: "Начинаю с нуля", description: "Тема почти незнакома" },
+  { value: "familiar", title: "Что-то знаю", description: "Есть отдельные знакомые темы" },
+  { value: "refreshing", title: "Повторяю забытое", description: "Раньше изучал, нужно восстановить" },
+];
+
+const OUTCOME_TABS: Array<{ value: TargetOutcome; label: string }> = [
+  { value: "awareness", label: "Ориентироваться" },
+  { value: "understanding", label: "Понимать" },
+  { value: "application", label: "Уверенно отвечать" },
+  { value: "mastery", label: "Владеть свободно" },
+];
+
+const STUDY_TABS: Array<{ value: StudyFormat; label: string }> = [
+  { value: "theory", label: "Только теория" },
+  { value: "theory_and_practice", label: "Теория и задачи" },
+  { value: "practice", label: "Больше практики" },
+];
+
+const OUTCOME_SUMMARIES: Record<TargetOutcome, string> = {
+  awareness: "Вы хотите ориентироваться в предмете.",
+  understanding: "Вы хотите понимать предмет.",
+  application: "Вы хотите уверенно отвечать.",
+  mastery: "Вы хотите владеть материалом свободно.",
+};
+
+const STARTING_SUMMARIES: Record<StartingLevel, string> = {
+  beginner: "начинаете с нуля.",
+  familiar: "уже знаете отдельные темы.",
+  refreshing: "повторяете забытое.",
+};
+
 const nullable = (value: string): string | null => value.trim() || null;
 const positive = (value: string): number | null => {
   const number = Number(value);
@@ -61,14 +101,58 @@ const plural = (count: number, one: string, few: string, many: string): string =
   return many;
 };
 
+function formatStudyMinutes(minutes: number) {
+  if (minutes < 60) return `${minutes} мин`;
+  const hours = minutes / 60;
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1).replace(".", ",")} ч`;
+}
+
+function getDailyLoad(deadlineValue: string) {
+  const deadline = deadlineValue ? new Date(`${deadlineValue}T00:00:00`) : null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const daysLeft = deadline ? Math.ceil((deadline.getTime() - today.getTime()) / 86_400_000) : null;
+
+  if (!daysLeft || daysLeft <= 0) return { options: [120, 180, 240, 300, 360], hint: "Выберите реальный объём работы — дату экзамена можно добавить позже." };
+  if (daysLeft <= 4) return { options: [240, 300, 360, 420, 480], hint: `До экзамена ${daysLeft} дн. Ориентир: 6 ч в день.` };
+  if (daysLeft <= 7) return { options: [120, 180, 240, 300, 360], hint: `До экзамена ${daysLeft} дн. Ориентир: 4 ч в день.` };
+  if (daysLeft <= 21) return { options: [90, 120, 180, 240, 300], hint: `До экзамена ${daysLeft} дн. Ориентир: 3 ч в день.` };
+  return { options: [60, 90, 120, 150, 180], hint: `До экзамена ${daysLeft} дн. Ориентир: 2 ч в день.` };
+}
+
+function getExamCountdown(deadlineValue: string) {
+  if (!deadlineValue) return null;
+  const totalHours = Math.ceil((new Date(`${deadlineValue}T00:00:00`).getTime() - Date.now()) / 3_600_000);
+  if (totalHours <= 0) return "Экзамен уже сегодня.";
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  return `До экзамена ${days > 0 ? `${days} ${plural(days, "день", "дня", "дней")} ` : ""}${hours} ${plural(hours, "час", "часа", "часов")}.`;
+}
+
+function getPreparationForecast(form: ExamForm, itemCount: number) {
+  const deadline = form.deadline ? new Date(`${form.deadline}T00:00:00`) : null;
+  const daysLeft = deadline ? Math.max(1, Math.ceil((deadline.getTime() - Date.now()) / 86_400_000)) : 14;
+  const minutes = positive(form.minutesPerDay) ?? 0;
+  const minutesPerItem = form.format === "tickets" ? 50 : form.format === "questions_tasks" ? 36 : 30;
+  const startMultiplier: Record<StartingLevel, number> = { beginner: 1.35, familiar: 1, refreshing: 0.75 };
+  const goalMultiplier: Record<TargetOutcome, number> = { awareness: 0.6, understanding: 0.8, application: 1, mastery: 1.25 };
+  const practiceMultiplier = form.studyFormat === "practice" ? 1.1 : 1;
+  const ratio = (daysLeft * minutes) / (Math.max(1, itemCount) * minutesPerItem * startMultiplier[form.startingLevel] * goalMultiplier[form.targetOutcome] * practiceMultiplier);
+
+  if (ratio < 0.35) return { title: "будет очень тяжело", text: "времени заметно меньше, чем требует выбранная цель." };
+  if (ratio < 0.7) return { title: "план напряжённый", text: "подготовиться можно, но пропуски быстро съедят запас времени." };
+  if (ratio < 1.1) return { title: "шансы хорошие", text: "темп реалистичный, если заниматься регулярно." };
+  return { title: "запаса достаточно", text: "времени хватает и на спокойное повторение перед экзаменом." };
+}
+
 interface ExamWizardProps {
   controller: WizardDraftController;
   requestedStep?: number;
   onStepChange?: (step: number) => void;
+  onActivated?: (project: ProjectDetail) => void;
 }
 
-export function ExamWizard({ controller, requestedStep, onStepChange }: ExamWizardProps) {
-  const navigate = useNavigate();
+export function ExamWizard({ controller, requestedStep, onStepChange, onActivated }: ExamWizardProps) {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<ExamForm>(EMPTY_FORM);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -183,12 +267,12 @@ export function ExamWizard({ controller, requestedStep, onStepChange }: ExamWiza
     if (!form.rawText.trim()) return;
     setActionError("");
     try {
-      await controller.queueSave(command(2));
+      await controller.queueSave(command(3));
       const result = await controller.importExam(form.rawText, form.format);
       setWarnings(result.warnings);
       setCounts(result.counts);
-      await controller.queueSave(command(3, result.warnings));
-      changeStep(3);
+      await controller.queueSave(command(4, result.warnings));
+      changeStep(4);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Не удалось импортировать список");
     }
@@ -199,8 +283,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange }: ExamWiza
     try {
       await controller.queueSave(command(5));
       const project = await controller.activate();
-      const first = project.program.nodes.find((node) => ["topic", "subpoint"].includes(node.node_type) && node.is_in_current_program && !node.is_archived);
-      navigate(`/projects/${project.project.id}${first ? `?topic=${first.id}` : ""}`);
+      onActivated?.(project);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Не удалось создать проект");
     }
@@ -209,27 +292,406 @@ export function ExamWizard({ controller, requestedStep, onStepChange }: ExamWiza
   if (controller.status === "loading") return <LoadingState label="Загружаем экзаменационный черновик" />;
 
   const busy = controller.status === "saving";
-  const nodes = controller.detail?.program.nodes ?? [];
-  const studyCount = nodes.filter((node) => node.node_type !== "section").length;
+  const studyCount = (controller.detail?.program.nodes ?? []).filter((node) => node.node_type !== "section").length;
   const expectedCount = positive(form.expectedCount);
   const countMismatch = expectedCount !== null && expectedCount !== studyCount;
-  const calendarDays = form.deadline ? Math.max(0, Math.ceil((new Date(`${form.deadline}T00:00:00`).getTime() - Date.now()) / 86_400_000)) : null;
+  const dailyLoad = getDailyLoad(form.deadline);
+  const examCountdown = getExamCountdown(form.deadline);
+  const preparationForecast = getPreparationForecast(form, expectedCount ?? studyCount);
 
   return (
     <div className="wizard-flow">
-      <PageHead eyebrow={`Экзамен · шаг ${step} из 5`} title={step === 1 ? "Как устроен экзамен?" : step === 2 ? "Вставьте список" : step === 3 ? "Настроим подготовку" : step === 4 ? "Проверьте программу" : "Всё готово к созданию"} />
       {(actionError || controller.error) && <p className="inline-error" role="alert">{actionError || controller.error?.message}</p>}
       {controller.conflict && <Card><h2>Черновик изменился в другой вкладке</h2><p>Загрузите серверную версию, чтобы не затереть изменения.</p><Button onClick={() => void controller.reload()}>Загрузить серверную версию</Button></Card>}
 
-      {step === 1 && <section className="wizard-step"><SegmentedTabs label="Формат экзамена" value={form.format} onChange={(format) => setForm((current) => ({ ...current, format }))} tabs={[{ value: "questions", label: "Вопросы" }, { value: "questions_tasks", label: "Вопросы и задачи" }, { value: "tickets", label: "Билеты" }]} /><Card><h2>Точного списка пока нет</h2><p>Этот путь станет доступен после загрузки материалов на этапе 5.</p><Button disabled variant="secondary">Выбрать материалы · этап 5</Button></Card><Button disabled={busy} onClick={() => void go(2)}>Продолжить</Button></section>}
+      {step === 1 && <section className="wizard-step"><PageHead eyebrow="Сначала — структура" title="Как устроен ваш экзамен?" /><p>Это определит, как Tentex сохранит формулировки и соберёт из них программу.</p><RadioCards label="Формат экзамена" value={form.format} options={FORMAT_OPTIONS} onChange={(format) => setForm((current) => ({ ...current, format }))} className="wizard-format-options" /><div className="wizard-actions"><Button disabled={busy} onClick={() => void go(2)}>Продолжить</Button></div></section>}
 
-      {step === 2 && <section className="wizard-step"><EmptyState title="Сейчас доступен вставленный текст" icon={<FileText size={28} />}><p>Файлы вопросов появятся на этапе 5. Эталоны можно добавить после создания проекта.</p></EmptyState><Field label={form.format === "tickets" ? "Билеты" : form.format === "questions" ? "Вопросы" : "Вопросы и задачи"} required><textarea rows={14} value={form.rawText} onChange={(event) => setForm((current) => ({ ...current, rawText: event.target.value }))} placeholder={form.format === "tickets" ? "Билет 1\n1. Реляционная модель\n2. Задача: нормализовать отношение" : "1. Архитектура СУБД\n2. Реляционная модель данных"} /></Field><div className="wizard-actions"><Button variant="ghost" onClick={() => changeStep(1)}>Назад</Button><Button disabled={busy || !form.rawText.trim()} onClick={() => void importText()}><Upload size={15} />Импортировать список</Button></div></section>}
+      {step === 2 && (
+        <section className="wizard-step">
+          <PageHead eyebrow="Что уже есть" title="Материалы для подготовки" />
+          <div className="wizard-material-grid">
+            <SelectableMaterial
+              selected
+              onChange={() => changeStep(3)}
+              icon={<ListChecks size={22} aria-hidden="true" />}
+              title="Список вопросов"
+              description="Вставьте формулировки на следующем шаге."
+              action="Добавить список"
+            />
+            <SelectableMaterial
+              selected={false}
+              locked
+              icon={<FileCheck2 size={22} aria-hidden="true" />}
+              title="Эталонные ответы"
+              description="Добавить после создания проекта"
+              action="Добавить после создания проекта"
+            />
+            <SelectableMaterial
+              selected={false}
+              locked
+              icon={<Files size={22} aria-hidden="true" />}
+              title="Учебные материалы"
+              description="Добавить после создания проекта"
+              action="Добавить после создания проекта"
+            />
+          </div>
+          <p className="wizard-quiet-note">Загрузка файлов появится на этапе 5. Сейчас вставьте текст на следующем шаге.</p>
+          <div className="wizard-actions"><Button variant="ghost" onClick={() => changeStep(1)}>Назад</Button></div>
+        </section>
+      )}
 
-      {step === 3 && <section className="wizard-step"><div className="wizard-form-grid"><Field label="Предмет" required><input value={form.subject} onChange={(event) => setForm((current) => ({ ...current, subject: event.target.value }))} /></Field><Field label="Дата экзамена"><input type="date" value={form.deadline} onChange={(event) => setForm((current) => ({ ...current, deadline: event.target.value }))} /></Field><Field label="Ожидаемое число элементов"><input type="number" min="1" value={form.expectedCount} onChange={(event) => setForm((current) => ({ ...current, expectedCount: event.target.value }))} /></Field><Field label="Стартовый уровень"><select value={form.startingLevel} onChange={(event) => setForm((current) => ({ ...current, startingLevel: event.target.value as StartingLevel }))}><option value="beginner">Начинаю с нуля</option><option value="familiar">Знаком с основами</option><option value="refreshing">Нужно освежить</option></select></Field><Field label="Целевой уровень"><select value={form.targetOutcome} onChange={(event) => setForm((current) => ({ ...current, targetOutcome: event.target.value as TargetOutcome }))}><option value="awareness">Знать о существовании</option><option value="understanding">Понимать</option><option value="application">Уметь применять</option><option value="mastery">Владеть свободно</option></select></Field><Field label="Формат подготовки"><select value={form.studyFormat} onChange={(event) => setForm((current) => ({ ...current, studyFormat: event.target.value as StudyFormat }))}><option value="theory">Только теория</option><option value="theory_and_practice">Теория и практика</option><option value="practice">Упор на практику</option></select></Field><Field label="Минут в день"><input type="number" min="1" value={form.minutesPerDay} onChange={(event) => setForm((current) => ({ ...current, minutesPerDay: event.target.value }))} /></Field><Field label="Дней в неделю"><input type="number" min="1" max="7" value={form.daysPerWeek} onChange={(event) => setForm((current) => ({ ...current, daysPerWeek: event.target.value }))} /></Field><Field label="Длительность занятия"><input type="number" min="1" value={form.sessionMinutes} onChange={(event) => setForm((current) => ({ ...current, sessionMinutes: event.target.value }))} /></Field></div><Field label="Что уже знаете"><textarea value={form.currentKnowledge} onChange={(event) => setForm((current) => ({ ...current, currentKnowledge: event.target.value }))} /></Field><Field label="Что особенно важно"><textarea value={form.important} onChange={(event) => setForm((current) => ({ ...current, important: event.target.value }))} /></Field><Field label="Требования преподавателя"><textarea value={form.instructorRequirements} onChange={(event) => setForm((current) => ({ ...current, instructorRequirements: event.target.value }))} /></Field><div className="wizard-actions"><Button variant="ghost" onClick={() => changeStep(2)}>Назад</Button><Button disabled={busy || !form.subject.trim()} onClick={() => void go(4)}>Продолжить</Button></div></section>}
+      {step === 3 && (
+        <section className="wizard-step">
+          <PageHead
+            eyebrow="Загрузка"
+            title="Добавьте то, что у вас есть"
+          />
+          <p>Формат и нумерация могут быть любыми. Сейчас Tentex выполнит быстрый предварительный разбор списка.</p>
+          <Card className="wizard-upload-panel">
+            <div className="wizard-upload-head">
+              <span className="wizard-upload-icon"><Upload size={20} aria-hidden="true" /></span>
+              <span>
+                <strong>{form.format === "tickets" ? "Билеты" : "Вопросы и задачи"}</strong>
+                <small>Главная структура экзамена</small>
+              </span>
+              <SegmentedTabs
+                label="Способ добавления списка"
+                value="text"
+                onChange={() => undefined}
+                tabs={[
+                  { value: "files", label: "Файлы", disabled: true },
+                  { value: "text", label: "Вставить текст" },
+                ]}
+              />
+            </div>
 
-      {step === 4 && <section className="wizard-step"><Card><h2>Импортировано: {studyCount}</h2><p>{counts.tickets ? `${counts.tickets} ${plural(counts.tickets, "билет", "билета", "билетов")} · ` : ""}{counts.questions} {plural(counts.questions, "вопрос", "вопроса", "вопросов")} · {counts.tasks} {plural(counts.tasks, "задача", "задачи", "задач")}</p>{countMismatch && <p className="inline-warning">Ожидалось {expectedCount}, распознано {studyCount}. Проверьте список перед созданием проекта.</p>}{warnings.map((warning) => <p className="inline-warning" key={warning}>{warning}</p>)}</Card><div className="wizard-review-list">{nodes.map((node) => <label key={node.id} style={{ paddingInlineStart: `calc(${node.parent_id ? 1 : 0} * var(--space-5))` }}><span className="sr-only">Формулировка</span><input defaultValue={node.title} onBlur={(event) => { const title = event.target.value.trim(); if (title && title !== node.title && controller.detail) void controller.enqueueProgramCommand((current) => updateProgramNode(current.project.id, node.id, { expected_program_revision: current.program.revision, title })); }} /><Pencil size={14} /></label>)}</div><div className="wizard-actions"><Button variant="ghost" onClick={() => changeStep(3)}>Назад</Button><Button disabled={busy || studyCount === 0} onClick={() => void go(5)}>Подтвердить программу</Button></div></section>}
+            <div className="wizard-dropzone is-disabled" aria-disabled="true">
+              <Upload size={24} aria-hidden="true" />
+              <span>
+                <b>Загрузка файлов появится на этапе 5</b>
+                <small>PDF, DOCX, TXT, MD или изображения пока нельзя добавить в мастер.</small>
+              </span>
+              <Button disabled variant="secondary">Выбрать файлы</Button>
+            </div>
 
-      {step === 5 && <section className="wizard-step"><Card><h2>{form.subject || "Экзаменационный проект"}</h2><p><Check size={15} /> Паспорт цели и {studyCount} {plural(studyCount, "элемент", "элемента", "элементов")} программы сохранены.</p>{calendarDays !== null && <p><CalendarDays size={15} /> До даты экзамена: {calendarDays} {plural(calendarDays, "календарный день", "календарных дня", "календарных дней")}.</p>}<p>Ритм: {form.minutesPerDay || "—"} минут, {form.daysPerWeek || "—"} {plural(Number(form.daysPerWeek), "день", "дня", "дней")} в неделю.</p></Card><p>После создания добавьте эталонные ответы в Карте эталонов. Материалы появятся на этапе 5.</p><div className="wizard-actions"><Button variant="ghost" onClick={() => changeStep(4)}>Назад</Button><Button disabled={busy} onClick={() => void activate()}>Создать проект</Button></div></section>}
+            <div className="wizard-paste-area">
+              <Field
+                label={form.format === "tickets" ? "Вставьте билеты" : "Вставьте вопросы и задачи"}
+                hint="Каждая формулировка или билет может начинаться с новой строки."
+                required
+              >
+                <textarea
+                  rows={8}
+                  value={form.rawText}
+                  onChange={(event) => setForm((current) => ({ ...current, rawText: event.target.value }))}
+                  placeholder={form.format === "tickets"
+                    ? "Билет 1\n1. Реляционная модель\n2. Задача: нормализовать отношение"
+                    : "1. Архитектура СУБД\n2. Реляционная модель данных"}
+                />
+              </Field>
+            </div>
+          </Card>
+
+          {(counts.tickets > 0 || counts.questions > 0 || counts.tasks > 0 || warnings.length > 0) && (
+            <Card className="wizard-import-result" aria-live="polite">
+              <h2>Предварительный разбор</h2>
+              <p>
+                {counts.tickets > 0 && `${counts.tickets} ${plural(counts.tickets, "билет", "билета", "билетов")} · `}
+                {counts.questions} {plural(counts.questions, "вопрос", "вопроса", "вопросов")} · {counts.tasks} {plural(counts.tasks, "задача", "задачи", "задач")}
+              </p>
+              {warnings.map((warning) => <p className="inline-warning" key={warning}>{warning}</p>)}
+            </Card>
+          )}
+
+          <div className="wizard-actions">
+            <Button variant="ghost" onClick={() => changeStep(2)}>Назад</Button>
+            <Button disabled={busy || !form.rawText.trim()} onClick={() => void importText()}>
+              <Upload size={15} aria-hidden="true" />Импортировать список
+            </Button>
+          </div>
+        </section>
+      )}
+
+      {step === 4 && (
+        <section className="wizard-step">
+          <PageHead
+            eyebrow="Паспорт цели"
+            title="Настроим подготовку под вас"
+          />
+          <p>Эти ответы зададут глубину программы и реальный темп. Их можно будет изменить после создания проекта.</p>
+          <div className="wizard-passport-grid">
+            <Card className="wizard-form-card">
+              <div className="wizard-form-card-head">
+                <span><CalendarDays size={19} aria-hidden="true" /></span>
+                <div><h2>Об экзамене</h2><p>Что именно предстоит и когда</p></div>
+              </div>
+              <div className="wizard-form-fields">
+                <Field label="Название предмета" required>
+                  <input value={form.subject} onChange={(event) => setForm((current) => ({ ...current, subject: event.target.value }))} placeholder="Например, Базы данных" />
+                </Field>
+                <div className="wizard-field-pair">
+                  <Field label="Дата экзамена" hint={examCountdown ?? "Если уже известна"}>
+                    <input type="date" value={form.deadline} onChange={(event) => setForm((current) => ({ ...current, deadline: event.target.value }))} />
+                  </Field>
+                  <Field label={form.format === "tickets" ? "Ожидается билетов" : "Ожидается элементов"} hint={`Предварительно найдено: ${studyCount}`}>
+                    <input min="1" type="number" value={form.expectedCount} onChange={(event) => setForm((current) => ({ ...current, expectedCount: event.target.value }))} />
+                  </Field>
+                </div>
+                <Field label="Особый фокус" hint="Необязательно: напишите, что особенно важно или можно пропустить.">
+                  <textarea rows={3} value={form.important} onChange={(event) => setForm((current) => ({ ...current, important: event.target.value }))} placeholder="Например: больше практики по SQL, обзорно пройти историю СУБД" />
+                </Field>
+                <Field label="О преподавателе" hint="Необязательно: строгость, любимые темы или типичные требования.">
+                  <textarea rows={4} value={form.instructorRequirements} onChange={(event) => setForm((current) => ({ ...current, instructorRequirements: event.target.value }))} placeholder="Например: просит точные определения, любит уточняющие вопросы…" />
+                </Field>
+              </div>
+            </Card>
+
+            <Card className="wizard-form-card">
+              <div className="wizard-form-card-head">
+                <span><Brain size={19} aria-hidden="true" /></span>
+                <div><h2>О подготовке</h2><p>Откуда начинаем и куда хотим прийти</p></div>
+              </div>
+              <div className="wizard-form-fields">
+                <div className="wizard-control-group">
+                  <b>Стартовый уровень</b>
+                  <RadioCards label="Стартовый уровень" value={form.startingLevel} options={STARTING_OPTIONS} onChange={(startingLevel) => setForm((current) => ({ ...current, startingLevel }))} className="wizard-starting-levels" />
+                </div>
+                <Field label="Что вы уже знаете" hint="Можно писать свободно: темы, навыки и пробелы.">
+                  <textarea rows={5} value={form.currentKnowledge} onChange={(event) => setForm((current) => ({ ...current, currentKnowledge: event.target.value }))} placeholder="Например: помню основы SQL, но почти не знаю индексы и транзакции…" />
+                </Field>
+                <div className="wizard-control-group">
+                  <b>Желаемый результат</b>
+                  <SegmentedTabs label="Желаемый результат" value={form.targetOutcome} tabs={OUTCOME_TABS} onChange={(targetOutcome) => setForm((current) => ({ ...current, targetOutcome }))} />
+                  <small>Чем выше уровень, тем больше практики и проверок понимания войдёт в программу.</small>
+                </div>
+                <div className="wizard-control-group">
+                  <b>Формат подготовки</b>
+                  <SegmentedTabs label="Формат подготовки" value={form.studyFormat} tabs={STUDY_TABS} onChange={(studyFormat) => setForm((current) => ({ ...current, studyFormat }))} />
+                </div>
+                <div className="wizard-control-group">
+                  <b>Сколько времени в день уделять</b>
+                  <small>{dailyLoad.hint}</small>
+                  <div className="wizard-minutes">
+                    {dailyLoad.options.map((value) => (
+                      <button type="button" key={value} className={positive(form.minutesPerDay) === value ? "is-selected" : ""} onClick={() => setForm((current) => ({ ...current, minutesPerDay: String(value) }))}>
+                        {formatStudyMinutes(value)}
+                      </button>
+                    ))}
+                    <label>
+                      <span className="wizard-visually-hidden">Своё время в минутах</span>
+                      <input min="30" max="720" type="number" value={form.minutesPerDay} onChange={(event) => setForm((current) => ({ ...current, minutesPerDay: event.target.value }))} />
+                      <small>мин</small>
+                    </label>
+                  </div>
+                  <small>Системе кажется, что <b>{preparationForecast.title}</b>: {preparationForecast.text}</small>
+                </div>
+              </div>
+            </Card>
+          </div>
+          <div className="wizard-actions">
+            <Button variant="ghost" onClick={() => changeStep(3)}>Назад</Button>
+            <Button disabled={busy || !form.subject.trim()} onClick={() => void go(5)}>Продолжить</Button>
+          </div>
+        </section>
+      )}
+
+      {step === 5 && (
+        <section className="wizard-step">
+          <PageHead eyebrow="Проверка" title="Всё готово к созданию" />
+          <p>Проверьте вопросы или билеты и заполненную информацию об экзамене, затем проект можно будет создать.</p>
+          <section className="wizard-review-summary">
+            <h2>
+              <span>Вы готовитесь к экзамену по предмету:</span>
+              <strong>{form.subject || "Без названия"}</strong>
+            </h2>
+            <p className={`wizard-review-countdown${examCountdown ? "" : " is-muted"}`}>
+              {examCountdown ?? "Дата экзамена пока не указана."}
+            </p>
+            <div className="wizard-review-story">
+              <p className="wizard-review-goal">{OUTCOME_SUMMARIES[form.targetOutcome]}</p>
+              <p>На подготовку — <b>{form.minutesPerDay || "—"} минут в день</b>.</p>
+              <p className="wizard-review-personal"><b>Текущий уровень:</b> {form.currentKnowledge.trim() || STARTING_SUMMARIES[form.startingLevel]}</p>
+              {form.important.trim() && <p className="wizard-review-personal"><b>Особый фокус:</b> {form.important}</p>}
+              {form.instructorRequirements.trim() && <p className="wizard-review-personal"><b>О преподавателе:</b> {form.instructorRequirements}</p>}
+              <p className="wizard-review-personal">Системе кажется, что <b>{preparationForecast.title}</b>: {preparationForecast.text}</p>
+            </div>
+          </section>
+
+          <Card className="wizard-review-card wizard-structure-card">
+            <div className="wizard-review-block-head">
+              <div>
+                <h3>{form.format === "tickets" ? "Билеты" : "Вопросы и задачи"}</h3>
+                <p>{counts.tickets > 0 && `${counts.tickets} ${plural(counts.tickets, "билет", "билета", "билетов")} · `}{counts.questions} {plural(counts.questions, "вопрос", "вопроса", "вопросов")} · {counts.tasks} {plural(counts.tasks, "задача", "задачи", "задач")}</p>
+              </div>
+            </div>
+            <ReviewProgramTree
+              nodes={(controller.detail?.program.nodes ?? []).filter((node) => node.is_in_current_program && !node.is_archived)}
+              onRename={(node, title) => {
+                if (title === node.title) return;
+                void controller.enqueueProgramCommand((current) => updateProgramNode(current.project.id, node.id, {
+                  expected_program_revision: current.program.revision,
+                  title,
+                }));
+              }}
+            />
+            {countMismatch && (
+              <div className="wizard-warning-card">
+                <span>!</span>
+                <div><b>Количество отличается</b><p>Вы указали {expectedCount}, а предварительно найдено {studyCount}. Создать проект всё равно можно.</p></div>
+                <button type="button" onClick={() => changeStep(4)}>Проверить</button>
+              </div>
+            )}
+          </Card>
+
+          <Card className="wizard-review-card wizard-sources-card">
+            <h3>Источники</h3>
+            <div className="wizard-source-list">
+              <ReviewSource value="Ответы не добавлены" />
+              <ReviewSource value="Материалы не добавлены" />
+            </div>
+          </Card>
+
+          <section className="wizard-after-create">
+            <h3>Что произойдёт после создания</h3>
+            <p>Структура экзамена импортируется в проект, и всё будет готово к подготовке.</p>
+          </section>
+          <div className="wizard-actions">
+            <Button variant="ghost" onClick={() => changeStep(4)}>Назад</Button>
+            <Button disabled={busy || studyCount === 0} onClick={() => void activate()}>Создать проект</Button>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function SelectableMaterial({
+  selected,
+  locked = false,
+  onChange,
+  icon,
+  title,
+  description,
+  action,
+}: {
+  selected: boolean;
+  locked?: boolean;
+  onChange?: (value: boolean) => void;
+  icon: ReactNode;
+  title: string;
+  description: string;
+  action: string;
+}) {
+  return (
+    <div className={`wizard-material-card ${selected ? "is-selected" : ""}`.trim()}>
+      <button
+        type="button"
+        disabled={locked}
+        aria-pressed={selected}
+        onClick={() => onChange?.(!selected)}
+      >
+        <span className="wizard-material-icon">{icon}</span>
+        <span>
+          <b>{title}</b>
+          <small>{description}</small>
+        </span>
+      </button>
+      <Checkbox
+        checked={selected}
+        disabled={locked}
+        onCheckedChange={(value) => onChange?.(value)}
+        label={action}
+      />
+    </div>
+  );
+}
+
+function ReviewProgramTree({
+  nodes,
+  onRename,
+}: {
+  nodes: ProgramNodeRead[];
+  onRename: (node: ProgramNodeRead, title: string) => void;
+}) {
+  const ids = new Set(nodes.map((node) => node.id));
+  const childrenByParent = new Map<string | null, ProgramNodeRead[]>();
+  for (const node of nodes) {
+    const parentId = node.parent_id && ids.has(node.parent_id) ? node.parent_id : null;
+    const siblings = childrenByParent.get(parentId) ?? [];
+    siblings.push(node);
+    childrenByParent.set(parentId, siblings);
+  }
+  for (const siblings of childrenByParent.values()) siblings.sort((left, right) => left.sort_order - right.sort_order);
+
+  function renderNodes(parentId: string | null) {
+    return (childrenByParent.get(parentId) ?? []).map((node, index) => {
+      const children = childrenByParent.get(node.id) ?? [];
+      return (
+        <li key={node.id} className={node.exam_kind === "ticket" ? "is-ticket" : ""}>
+          <div className="wizard-review-row">
+            <span className="wizard-review-number">{index + 1}</span>
+            {node.exam_kind && <span className="wizard-review-kind">{node.exam_kind === "task" ? "задача" : node.exam_kind === "question" ? "вопрос" : "билет"}</span>}
+            <EditableProgramNodeText node={node} onSave={onRename} />
+          </div>
+          {children.length > 0 && <ol>{renderNodes(node.id)}</ol>}
+        </li>
+      );
+    });
+  }
+
+  return <ol className="wizard-review-list">{renderNodes(null)}</ol>;
+}
+
+function EditableProgramNodeText({ node, onSave }: { node: ProgramNodeRead; onSave: (node: ProgramNodeRead, title: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(node.title);
+
+  function save() {
+    const title = draft.trim();
+    if (title) onSave(node, title);
+    else setDraft(node.title);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <div className="wizard-review-edit">
+        <input
+          autoFocus
+          value={draft}
+          aria-label="Формулировка"
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={save}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") save();
+            if (event.key === "Escape") {
+              setDraft(node.title);
+              setEditing(false);
+            }
+          }}
+        />
+        <IconButton label="Сохранить формулировку" onMouseDown={(event) => event.preventDefault()} onClick={save}>
+          <Check size={15} aria-hidden="true" />
+        </IconButton>
+      </div>
+    );
+  }
+
+  return (
+    <div className="wizard-review-text">
+      <span>{node.title}</span>
+      <IconButton label="Редактировать формулировку" onClick={() => { setDraft(node.title); setEditing(true); }}>
+        <Pencil size={15} aria-hidden="true" />
+      </IconButton>
+    </div>
+  );
+}
+
+function ReviewSource({ value }: { value: string }) {
+  return (
+    <div className="wizard-source-row">
+      <FileText size={16} aria-hidden="true" />
+      <span>{value}</span>
     </div>
   );
 }

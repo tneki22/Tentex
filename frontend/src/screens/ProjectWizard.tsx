@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { ArrowRight, BookOpen, GraduationCap, Sparkles } from "lucide-react";
-import { listWizardDrafts, type TemplateKey, type WizardDraftSummary } from "../api/projects";
+import { listWizardDrafts, type ProjectDetail, type TemplateKey, type WizardDraftSummary } from "../api/projects";
 import { useWizardDraft } from "../hooks/useWizardDraft";
 import { Button, Card, ConfirmDialog, ErrorState, LoadingState, StatusBadge } from "../components/ui";
 import { ExamWizard } from "./project-wizard/ExamWizard";
@@ -64,6 +64,7 @@ export function ProjectWizard() {
   const [draftError, setDraftError] = useState("");
   const [discardOpen, setDiscardOpen] = useState(false);
   const [requestedStep, setRequestedStep] = useState<number | null>(null);
+  const [activatedProject, setActivatedProject] = useState<ProjectDetail | null>(null);
   const templateKey: TemplateKey = track ?? "exam";
   const controller = useWizardDraft({ templateKey, projectId: resumeId });
 
@@ -127,6 +128,24 @@ export function ProjectWizard() {
   const currentStep = track ? requestedStep ?? controller.detail?.draft.current_step ?? 1 : 0;
   const maxStep = track ? controller.detail?.draft.max_completed_step ?? 1 : 0;
   const trackLabel = track === "exam" ? "Экзамен" : track === "textbook" ? "Учебник" : null;
+
+  if (activatedProject) {
+    const first = activatedProject.program.nodes.find((node) => ["topic", "subpoint"].includes(node.node_type) && node.is_in_current_program && !node.is_archived);
+    const workspacePath = `/projects/${activatedProject.project.id}${first ? `?topic=${first.id}` : ""}`;
+    return (
+      <div className="project-wizard is-success">
+        <Card className="wizard-success-card">
+          <h1>Создан проект: {activatedProject.project.name || "Экзаменационный проект"}</h1>
+          <p>Паспорт цели и программа сохранены.</p>
+          <p className="wizard-success-next">Следующий шаг — открыть проект, проверить программу и начать готовиться.</p>
+          <div className="wizard-success-actions">
+            <Button onClick={() => navigate(workspacePath)}>Открыть проект</Button>
+            <Button variant="ghost" onClick={() => setActivatedProject(null)}>Вернуться к проверке</Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   if (!track) {
     return (
@@ -204,7 +223,7 @@ export function ProjectWizard() {
         onSaveAndExit={controller.detail ? () => void saveAndExit() : undefined}
         onDiscard={controller.detail ? () => setDiscardOpen(true) : undefined}
       >
-        {track === "exam" ? <ExamWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} /> : <TextbookWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} />}
+        {track === "exam" ? <ExamWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} /> : <TextbookWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} />}
       </WizardChrome>
       <ConfirmDialog open={discardOpen} onOpenChange={setDiscardOpen} title="Удалить черновик?" confirmLabel="Удалить черновик" destructive onConfirm={() => void discard()}><p>Паспорт и ручная программа этого черновика будут удалены. Общие материалы других проектов не затрагиваются.</p></ConfirmDialog>
     </>
