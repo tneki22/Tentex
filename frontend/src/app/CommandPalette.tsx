@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Dialog as RadixDialog } from "radix-ui";
-import { FileText, FolderOpen, Search, SquareDashed } from "lucide-react";
+import { FolderOpen, Search, SquareDashed } from "lucide-react";
+import { listProjects, type ProjectSummary } from "../api/projects";
 import { Kbd } from "../components/ui";
 import { SCREENS } from "./screens";
 import { SCREEN_VIEWS } from "./views";
@@ -11,48 +12,38 @@ import { SCREEN_VIEWS } from "./views";
  * лезет в текст материалов: полнотекстовый поиск по фрагментам проектный, у него
  * своё место внутри проекта.
  *
- * Данные проектов и файлов пока выдуманные: API появится на этапе 3.
+ * Файлы появятся здесь после подключения Материалов на этапе 5.
  */
 
 interface PaletteItem {
   id: string;
-  group: "Проекты" | "Экраны" | "Файлы";
+  group: "Проекты" | "Экраны";
   label: string;
   hint?: string;
   to: string;
   icon: typeof Search;
 }
 
-const DEMO_PROJECTS: PaletteItem[] = [
-  { id: "p1", group: "Проекты", label: "Базы данных — экзамен", hint: "34 дня до дедлайна", to: "/projects", icon: FolderOpen },
-  { id: "p2", group: "Проекты", label: "Матанализ — учебник", hint: "идёт проход 1", to: "/projects", icon: FolderOpen },
-  { id: "p3", group: "Проекты", label: "ТРПС — курсовая", hint: "настройка не завершена", to: "/projects", icon: FolderOpen },
-];
-
-const DEMO_FILES: PaletteItem[] = [
-  { id: "f1", group: "Файлы", label: "lections.pdf", hint: "320 страниц", to: "/library", icon: FileText },
-  { id: "f2", group: "Файлы", label: "konspekt-scan.pdf", hint: "46 страниц, ocr", to: "/library", icon: FileText },
-  { id: "f3", group: "Файлы", label: "voprosy.docx", hint: "список билетов", to: "/library", icon: FileText },
-];
-
 /** ё=е: иначе «Пробелы» не найдутся по «проб», а «Учёбник» — по «уче». */
 function normalize(text: string): string {
   return text.toLowerCase().replaceAll("ё", "е");
 }
 
-const GROUP_ORDER: PaletteItem["group"][] = ["Проекты", "Экраны", "Файлы"];
+const GROUP_ORDER: PaletteItem["group"][] = ["Проекты", "Экраны"];
 const PER_GROUP = 7;
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const navigate = useNavigate();
   const listRef = useRef<HTMLDivElement>(null);
 
   const screens: PaletteItem[] = useMemo(
     () =>
-      SCREENS.filter((screen) => screen.id in SCREEN_VIEWS).map((screen) => ({
+      SCREENS.filter((screen) => screen.id in SCREEN_VIEWS && !screen.path.includes(":"))
+        .map((screen) => ({
         id: `s-${screen.id}`,
         group: "Экраны" as const,
         label: screen.title,
@@ -63,13 +54,29 @@ export function CommandPalette() {
     [],
   );
 
+  const projectItems: PaletteItem[] = useMemo(() => projects.map((project) => ({
+    id: `p-${project.id}`,
+    group: "Проекты" as const,
+    label: project.name,
+    hint: project.status === "active" ? "активный проект" : project.status === "archived" ? "в архиве" : "завершён",
+    to: `/projects/${project.id}`,
+    icon: FolderOpen,
+  })), [projects]);
+
   const results = useMemo(() => {
-    const all = [...DEMO_PROJECTS, ...screens, ...DEMO_FILES];
+    const all = [...projectItems, ...screens];
     const needle = normalize(query.trim());
     const matched = needle ? all.filter((item) => normalize(item.label).includes(needle)) : screens;
 
     return GROUP_ORDER.flatMap((group) => matched.filter((item) => item.group === group).slice(0, PER_GROUP));
-  }, [query, screens]);
+  }, [projectItems, query, screens]);
+
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    void listProjects(controller.signal).then(setProjects).catch(() => undefined);
+    return () => controller.abort();
+  }, [open]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -113,7 +120,7 @@ export function CommandPalette() {
         type="button"
         className="topbar-search"
         onClick={() => setOpen(true)}
-        aria-label="Поиск по проектам, экранам и файлам"
+        aria-label="Поиск по проектам и экранам"
       >
         <Search size={15} aria-hidden="true" />
         Поиск
@@ -126,7 +133,7 @@ export function CommandPalette() {
           <RadixDialog.Content className="palette" aria-label="Поиск">
             <RadixDialog.Title hidden>Поиск</RadixDialog.Title>
             <RadixDialog.Description hidden>
-              Поиск по названиям проектов, экранов и файлов
+              Поиск по названиям проектов и экранов
             </RadixDialog.Description>
 
             <div className="palette-input">
@@ -136,7 +143,7 @@ export function CommandPalette() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={onInputKeyDown}
-                placeholder="Проект, экран или файл"
+                placeholder="Проект или экран"
                 aria-label="Что искать"
               />
               <Kbd>Esc</Kbd>

@@ -23,9 +23,10 @@ def free_port() -> int:
 
 
 class ApiServer:
-    def __init__(self, data_dir: Path, port: int) -> None:
+    def __init__(self, data_dir: Path, port: int, *, seed_demo_project: bool = False) -> None:
         self.data_dir = data_dir
         self.port = port
+        self.seed_demo_project = seed_demo_project
         self.process: subprocess.Popen[str] | None = None
         self.stderr_output = ""
 
@@ -36,6 +37,7 @@ class ApiServer:
     def start(self) -> None:
         environment = os.environ.copy()
         environment["TENTEX_DATA_DIR"] = str(self.data_dir)
+        environment["TENTEX_SEED_DEMO_PROJECT"] = "true" if self.seed_demo_project else "false"
         self.process = subprocess.Popen(
             [
                 sys.executable,
@@ -103,7 +105,8 @@ def request(
     )
     try:
         with urlopen(http_request, timeout=5) as response:
-            return response.status, json.loads(response.read())
+            response_body = response.read()
+            return response.status, json.loads(response_body) if response_body else None
     except HTTPError as error:
         return error.code, json.loads(error.read())
 
@@ -118,7 +121,7 @@ def run() -> None:
                 server,
                 "POST",
                 "/api/wizard-drafts",
-                {"template_key": "exam", "workspace_variant": "exam"},
+                {"template_key": "exam"},
             )
             assert status == 201
             project_id = draft["project"]["id"]
@@ -133,7 +136,6 @@ def run() -> None:
                     "description": None,
                     "icon": "database",
                     "color": 2,
-                    "sort_order": 0,
                     "deadline": "2026-12-15",
                     "enabled_modules": ["plan", "cards", "repetitions"],
                 },
@@ -174,21 +176,28 @@ def run() -> None:
                 server,
                 "POST",
                 f"/api/projects/{project_id}/program-nodes",
-                {"node_type": "section", "title": "Основы СУБД"},
+                {
+                    "expected_program_revision": 0,
+                    "node_type": "section",
+                    "title": "Основы СУБД",
+                },
             )
             assert status == 201
+            section_node = section["changed_node"]
             status, topic = request(
                 server,
                 "POST",
                 f"/api/projects/{project_id}/program-nodes",
                 {
-                    "parent_id": section["id"],
+                    "expected_program_revision": 1,
+                    "parent_id": section_node["id"],
                     "node_type": "topic",
                     "exam_kind": "question",
                     "title": "Архитектура СУБД",
                 },
             )
             assert status == 201
+            topic_node = topic["changed_node"]
             status, _ = request(
                 server,
                 "PUT",
@@ -196,8 +205,8 @@ def run() -> None:
                 {
                     "schema_version": 1,
                     "layout": {
-                        "selected_node_id": topic["id"],
-                        "expanded_node_ids": [section["id"], section["id"]],
+                        "selected_node_id": topic_node["id"],
+                        "expanded_node_ids": [section_node["id"], section_node["id"]],
                         "tree_width": 320,
                         "groups": [
                             {
@@ -215,21 +224,21 @@ def run() -> None:
             server.stop()
             server.start()
             status, resumed = request(server, "GET", f"/api/wizard-drafts/{project_id}")
-            assert status == 200 and resumed["draft"]["revision"] == 1
+            assert status == 200 and resumed["draft"]["revision"] == 3
             assert resumed["draft"]["state"] == draft_payload["state"]
 
             status, activated = request(
                 server,
                 "POST",
                 f"/api/wizard-drafts/{project_id}/activate",
-                {"expected_revision": 1},
+                {"expected_revision": 3},
             )
             assert status == 200 and activated["project"]["status"] == "active"
             status, activated_again = request(
                 server,
                 "POST",
                 f"/api/wizard-drafts/{project_id}/activate",
-                {"expected_revision": 1},
+                {"expected_revision": 3},
             )
             assert status == 200 and activated_again["project"]["id"] == project_id
             status, drafts = request(server, "GET", "/api/wizard-drafts")
@@ -311,7 +320,7 @@ def run() -> None:
                 server,
                 "POST",
                 "/api/wizard-drafts",
-                {"template_key": "exam", "workspace_variant": "exam"},
+                {"template_key": "exam"},
             )
             assert status == 201
             status, _ = request(
@@ -338,13 +347,16 @@ def run() -> None:
             } == protected_project_fields
             for field, expected in settings_payload["goal_passport"].items():
                 assert project["goal_passport"][field] == expected
-            assert [node["title"] for node in project["program_nodes"]] == [
+            assert [node["title"] for node in project["program"]["nodes"]] == [
                 "Основы СУБД",
                 "Архитектура СУБД",
             ]
-            assert project["workspace_state"]["layout"]["selected_node_id"] == topic["id"]
+            assert (
+                project["workspace_state"]["layout"]["selected_node_id"]
+                == topic_node["id"]
+            )
             assert project["workspace_state"]["layout"]["expanded_node_ids"] == [
-                section["id"]
+                section_node["id"]
             ]
 
             server.stop()

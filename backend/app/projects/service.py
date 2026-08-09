@@ -9,17 +9,28 @@ from app.models import (
     ProgramNode,
     Project,
     ProjectStatus,
+    TemplateKey,
     WizardDraft,
     WorkspaceState,
+    WorkspaceVariant,
     utc_now,
 )
+from app.projects import program
+from app.projects.errors import (
+    ProjectConflictError,
+    ProjectInvariantError,
+    ProjectNotFoundError,
+)
+from app.projects.importer import ExamImportError, parse_exam_program
 from app.projects.schemas import (
+    ExamImportCounts,
+    ExamImportResult,
+    ExamImportWrite,
     GoalPassportRead,
-    ProgramNodeCreate,
-    ProgramNodeRead,
-    ProgramNodeUpdate,
     ProjectDetail,
+    ProjectOrderWrite,
     ProjectRead,
+    ProjectSettingsResult,
     ProjectSettingsWrite,
     ProjectSummary,
     WizardDraftCreate,
@@ -30,33 +41,6 @@ from app.projects.schemas import (
     WorkspaceStateRead,
     WorkspaceStateWrite,
 )
-
-
-class ProjectNotFoundError(Exception):
-    pass
-
-
-class ProjectConflictError(Exception):
-    pass
-
-
-class ProjectInvariantError(Exception):
-    pass
-
-
-def _nodes(session: Session, project_id: UUID) -> list[ProgramNode]:
-    return list(
-        session.scalars(
-            select(ProgramNode)
-            .where(ProgramNode.project_id == project_id)
-            .order_by(
-                ProgramNode.parent_id.is_not(None),
-                ProgramNode.parent_id,
-                ProgramNode.sort_order,
-                ProgramNode.id,
-            )
-        )
-    )
 
 
 def _wizard_detail(session: Session, project_id: UUID) -> WizardDraftDetail:
@@ -71,16 +55,17 @@ def _wizard_detail(session: Session, project_id: UUID) -> WizardDraftDetail:
         goal_passport=(
             GoalPassportRead.model_validate(goal_passport) if goal_passport is not None else None
         ),
-        program_nodes=[
-            ProgramNodeRead.model_validate(node) for node in _nodes(session, project_id)
-        ],
+        program=program.read_program(session, project_id),
+        latest_undoable_action=program.latest_undoable_action(
+            session, project_id, "draft"
+        ),
     )
 
 
 def _project_detail(session: Session, project_id: UUID) -> ProjectDetail:
     project = session.get(Project, project_id)
     if project is None or project.status == ProjectStatus.DRAFT:
-        raise ProjectNotFoundError("Проект не найден")
+        raise ProjectNotFoundError()
     goal_passport = session.get(GoalPassport, project_id)
     workspace_state = session.get(WorkspaceState, project_id)
     return ProjectDetail(
@@ -88,22 +73,32 @@ def _project_detail(session: Session, project_id: UUID) -> ProjectDetail:
         goal_passport=(
             GoalPassportRead.model_validate(goal_passport) if goal_passport is not None else None
         ),
-        program_nodes=[
-            ProgramNodeRead.model_validate(node) for node in _nodes(session, project_id)
-        ],
+        program=program.read_program(session, project_id),
         workspace_state=(
             WorkspaceStateRead.model_validate(workspace_state)
             if workspace_state is not None
             else None
         ),
+        latest_undoable_action=program.latest_undoable_action(
+            session, project_id, "active"
+        ),
     )
 
 
 def create_wizard_draft(session: Session, command: WizardDraftCreate) -> WizardDraftDetail:
+    if command.template_key == TemplateKey.FREE:
+        raise ProjectConflictError(
+            "Свободное изучение появится на этапе 7", code="unsupported_template"
+        )
+    variant = (
+        WorkspaceVariant.EXAM
+        if command.template_key == TemplateKey.EXAM
+        else WorkspaceVariant.TEXTBOOK
+    )
     with session.begin():
         project = Project(
             template_key=command.template_key,
-            workspace_variant=command.workspace_variant,
+            workspace_variant=variant,
             status=ProjectStatus.DRAFT,
         )
         session.add(project)
@@ -122,16 +117,16 @@ def list_wizard_drafts(session: Session) -> list[WizardDraftSummary]:
     )
     return [
         WizardDraftSummary(
-            project_id=project.id,
-            template_key=project.template_key,
-            workspace_variant=project.workspace_variant,
-            name=project.name,
+            project_id=project_row.id,
+            template_key=project_row.template_key,
+            workspace_variant=project_row.workspace_variant,
+            name=project_row.name,
             current_step=draft.current_step,
             max_completed_step=draft.max_completed_step,
             revision=draft.revision,
             updated_at=draft.updated_at,
         )
-        for project, draft in rows
+        for project_row, draft in rows
     ]
 
 
@@ -145,10 +140,12 @@ def save_wizard_draft(
     with session.begin():
         project = session.get(Project, project_id)
         if project is None:
-            raise ProjectNotFoundError("Проект не найден")
+            raise ProjectNotFoundError()
         if project.status != ProjectStatus.DRAFT:
-            raise ProjectConflictError("Активный проект нельзя сохранить как черновик")
-
+            raise ProjectConflictError(
+                "Активный проект нельзя сохранить как черновик",
+                context={"current_status": project.status.value},
+            )
         now = utc_now()
         result = session.execute(
             update(WizardDraft)
@@ -164,14 +161,21 @@ def save_wizard_draft(
                 state=command.state,
                 updated_at=now,
             )
+            .execution_options(synchronize_session=False)
         )
         if result.rowcount != 1:
-            raise ProjectConflictError("Черновик уже изменён в другой вкладке")
-
-        project_data = command.project.model_dump(mode="python")
-        project_data["enabled_modules"] = [item.value for item in command.project.enabled_modules]
+            current = session.scalar(
+                select(WizardDraft.revision).where(WizardDraft.project_id == project_id)
+            )
+            raise ProjectConflictError(
+                "Черновик уже изменён в другой вкладке",
+                code="stale_draft_revision",
+                context={"current_draft_revision": current},
+            )
+        project_data = command.project.model_dump(mode="python", exclude={"enabled_modules"})
         for field, value in project_data.items():
-            setattr(project, field, value)
+            setattr(project, field, value.value if hasattr(value, "value") else value)
+        project.enabled_modules = [item.value for item in command.project.enabled_modules]
         project.updated_at = now
 
         if command.goal_passport is not None:
@@ -182,70 +186,70 @@ def save_wizard_draft(
             for field, value in command.goal_passport.model_dump(mode="python").items():
                 setattr(goal_passport, field, value)
             goal_passport.updated_at = now
-
         session.flush()
         return _wizard_detail(session, project_id)
 
 
-def _validate_tree(parent_by_id: dict[UUID, UUID | None]) -> None:
-    depths: dict[UUID, int] = {}
-    for node_id in parent_by_id:
-        path: list[UUID] = []
-        seen: set[UUID] = set()
-        current = node_id
-        while current not in depths:
-            if current in seen:
-                raise ProjectInvariantError("В программе обнаружен цикл")
-            seen.add(current)
-            path.append(current)
-            parent_id = parent_by_id.get(current)
-            if parent_id is None:
-                base_depth = 0
-                break
-            if parent_id not in parent_by_id:
-                raise ProjectInvariantError("Родитель узла отсутствует в этом проекте")
-            current = parent_id
-        else:
-            base_depth = depths[current]
-
-        for path_node_id in reversed(path):
-            base_depth += 1
-            if base_depth > 4:
-                raise ProjectInvariantError("Глубина программы не может превышать четыре уровня")
-            depths[path_node_id] = base_depth
+def delete_wizard_draft(session: Session, project_id: UUID, expected_revision: int) -> None:
+    with session.begin():
+        project = session.get(Project, project_id)
+        if project is None:
+            raise ProjectNotFoundError("Черновик проекта не найден")
+        if project.status != ProjectStatus.DRAFT:
+            raise ProjectConflictError(
+                "Удалить можно только черновик",
+                context={"current_status": project.status.value},
+            )
+        draft = session.get(WizardDraft, project_id)
+        if draft is None:
+            raise ProjectNotFoundError("Черновик проекта не найден")
+        if draft.revision != expected_revision:
+            raise ProjectConflictError(
+                "Черновик уже изменён в другой вкладке",
+                code="stale_draft_revision",
+                context={"current_draft_revision": draft.revision},
+            )
+        program.delete_program_tree(session, project_id)
+        session.delete(project)
 
 
-def _validate_parent(
-    session: Session,
-    project_id: UUID,
-    node_id: UUID | None,
-    parent_id: UUID | None,
-) -> None:
-    if parent_id is None:
-        return
-    current_id = parent_id
-    depth = 1
-    visited: set[UUID] = set()
-    while current_id is not None:
-        if current_id == node_id or current_id in visited:
-            raise ProjectInvariantError("Узел программы не может быть родителем самому себе")
-        visited.add(current_id)
-        parent = session.get(ProgramNode, current_id)
-        if parent is None or parent.project_id != project_id:
-            raise ProjectInvariantError("Родитель узла должен находиться в этом проекте")
-        depth += 1
-        if depth > 4:
-            raise ProjectInvariantError("Глубина программы не может превышать четыре уровня")
-        current_id = parent.parent_id
+def import_exam_program(
+    session: Session, project_id: UUID, command: ExamImportWrite
+) -> ExamImportResult:
+    try:
+        parsed = parse_exam_program(command.raw_text, command.exam_format)
+    except ExamImportError as error:
+        raise ProjectInvariantError(str(error)) from error
+    result = program.replace_draft_program(
+        session,
+        project_id,
+        expected_draft_revision=command.expected_revision,
+        expected_program_revision=command.expected_program_revision,
+        parsed=parsed,
+    )
+    assert result.draft_revision is not None
+    return ExamImportResult(
+        revision=result.draft_revision,
+        counts=ExamImportCounts(
+            tickets=parsed.tickets, questions=parsed.questions, tasks=parsed.tasks
+        ),
+        warnings=parsed.warnings,
+        program=result.program,
+        latest_undoable_action=result.latest_undoable_action,
+    )
 
 
-def _require_writable_project(session: Session, project_id: UUID) -> Project:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise ProjectNotFoundError("Проект не найден")
-    if project.status not in {ProjectStatus.DRAFT, ProjectStatus.ACTIVE}:
-        raise ProjectConflictError("Архивный или завершённый проект нельзя изменять")
-    return project
+def _normalize_active_order(session: Session) -> int:
+    active = list(
+        session.scalars(
+            select(Project)
+            .where(Project.status == ProjectStatus.ACTIVE)
+            .order_by(Project.sort_order, Project.created_at, Project.id)
+        )
+    )
+    for index, project in enumerate(active):
+        project.sort_order = index
+    return len(active)
 
 
 def activate_wizard_draft(
@@ -254,23 +258,23 @@ def activate_wizard_draft(
     with session.begin():
         project = session.get(Project, project_id)
         if project is None:
-            raise ProjectNotFoundError("Проект не найден")
+            raise ProjectNotFoundError()
         if project.status == ProjectStatus.ACTIVE:
             return _project_detail(session, project_id)
         if project.status != ProjectStatus.DRAFT:
-            raise ProjectConflictError("Архивный или завершённый проект нельзя активировать")
-
-        result = session.execute(
-            update(WizardDraft)
-            .where(
-                WizardDraft.project_id == project_id,
-                WizardDraft.revision == expected_revision,
+            raise ProjectConflictError(
+                "Архивный или завершённый проект нельзя активировать",
+                context={"current_status": project.status.value},
             )
-            .values(revision=WizardDraft.revision + 1)
-        )
-        if result.rowcount != 1:
-            raise ProjectConflictError("Черновик уже изменён в другой вкладке")
-
+        draft = session.get(WizardDraft, project_id)
+        if draft is None:
+            raise ProjectNotFoundError("Черновик проекта не найден")
+        if draft.revision != expected_revision:
+            raise ProjectConflictError(
+                "Черновик уже изменён в другой вкладке",
+                code="stale_draft_revision",
+                context={"current_draft_revision": draft.revision},
+            )
         goal_passport = session.get(GoalPassport, project_id)
         required_goal_fields = (
             "subject",
@@ -285,18 +289,18 @@ def activate_wizard_draft(
             getattr(goal_passport, field) in {None, ""} for field in required_goal_fields
         ):
             raise ProjectConflictError("Перед активацией заполните паспорт цели")
-
-        nodes = _nodes(session, project_id)
+        state = program.read_program(session, project_id)
         if not any(
             node.node_type in {NodeType.TOPIC, NodeType.SUBPOINT}
             and node.is_in_current_program
             and not node.is_archived
-            for node in nodes
+            for node in state.nodes
         ):
             raise ProjectConflictError("Перед активацией добавьте хотя бы одну тему программы")
-        _validate_tree({node.id: node.parent_id for node in nodes})
-
+        assert goal_passport.target_outcome is not None
+        program.prepare_for_activation(session, project_id, goal_passport.target_outcome)
         now = utc_now()
+        project.sort_order = _normalize_active_order(session)
         project.status = ProjectStatus.ACTIVE
         project.status_changed_at = now
         project.updated_at = now
@@ -309,7 +313,7 @@ def list_projects(session: Session) -> list[ProjectSummary]:
     projects = session.scalars(
         select(Project)
         .where(Project.status != ProjectStatus.DRAFT)
-        .order_by(Project.sort_order, Project.name, Project.id)
+        .order_by(Project.status, Project.sort_order, Project.name, Project.id)
     )
     return [ProjectSummary.model_validate(project) for project in projects]
 
@@ -320,21 +324,23 @@ def get_project(session: Session, project_id: UUID) -> ProjectDetail:
 
 def update_project_settings(
     session: Session, project_id: UUID, command: ProjectSettingsWrite
-) -> ProjectDetail:
+) -> ProjectSettingsResult:
     with session.begin():
         project = session.get(Project, project_id)
         if project is None or project.status == ProjectStatus.DRAFT:
-            raise ProjectNotFoundError("Проект не найден")
+            raise ProjectNotFoundError()
         if project.status != ProjectStatus.ACTIVE:
-            raise ProjectConflictError("Архивный или завершённый проект нельзя изменять")
-
+            raise ProjectConflictError(
+                "Архивный или завершённый проект нельзя изменять",
+                code="project_read_only",
+                context={"current_status": project.status.value},
+            )
         now = utc_now()
         project_data = command.project.model_dump(mode="python", exclude={"enabled_modules"})
         for field, value in project_data.items():
-            setattr(project, field, value)
+            setattr(project, field, value.value if hasattr(value, "value") else value)
         project.enabled_modules = [module.value for module in command.project.enabled_modules]
         project.updated_at = now
-
         goal_passport = session.get(GoalPassport, project_id)
         if goal_passport is None:
             goal_passport = GoalPassport(project_id=project_id)
@@ -342,85 +348,131 @@ def update_project_settings(
         for field, value in command.goal_passport.model_dump(mode="python").items():
             setattr(goal_passport, field, value)
         goal_passport.updated_at = now
-
         session.flush()
-        return _project_detail(session, project_id)
-
-
-def create_program_node(
-    session: Session, project_id: UUID, command: ProgramNodeCreate
-) -> ProgramNodeRead:
-    with session.begin():
-        project = _require_writable_project(session, project_id)
-        _validate_parent(session, project_id, None, command.parent_id)
-        node = ProgramNode(project_id=project_id, **command.model_dump(mode="python"))
-        session.add(node)
-        project.updated_at = utc_now()
-        session.flush()
-        return ProgramNodeRead.model_validate(node)
-
-
-def update_program_node(
-    session: Session,
-    project_id: UUID,
-    node_id: UUID,
-    command: ProgramNodeUpdate,
-) -> ProgramNodeRead:
-    with session.begin():
-        project = _require_writable_project(session, project_id)
-        node = session.scalar(
-            select(ProgramNode).where(
-                ProgramNode.id == node_id, ProgramNode.project_id == project_id
-            )
+        return ProjectSettingsResult(
+            project=ProjectRead.model_validate(project),
+            goal_passport=GoalPassportRead.model_validate(goal_passport),
         )
-        if node is None:
-            raise ProjectNotFoundError("Узел программы не найден")
 
-        data = command.model_dump(mode="python", exclude_unset=True)
-        nonnullable = {
-            "node_type",
-            "sort_order",
-            "title",
-            "is_in_current_program",
-            "needs_material",
-            "is_archived",
-            "origin_kind",
-        }
-        if any(data.get(field) is None for field in nonnullable & command.model_fields_set):
-            raise ProjectInvariantError("Обязательное поле узла нельзя очистить")
-        if "parent_id" in command.model_fields_set:
-            _validate_parent(session, project_id, node_id, command.parent_id)
-        for field, value in data.items():
-            setattr(node, field, value)
+
+def save_project_order(
+    session: Session, command: ProjectOrderWrite
+) -> list[ProjectSummary]:
+    with session.begin():
+        active = list(
+            session.scalars(select(Project).where(Project.status == ProjectStatus.ACTIVE))
+        )
+        active_ids = {project.id for project in active}
+        if len(command.project_ids) != len(set(command.project_ids)):
+            raise ProjectInvariantError("Порядок проектов не должен содержать дубли")
+        if set(command.project_ids) != active_ids:
+            raise ProjectInvariantError("Порядок должен содержать каждый активный проект один раз")
+        by_id = {project.id: project for project in active}
+        for index, project_id in enumerate(command.project_ids):
+            by_id[project_id].sort_order = index
+            by_id[project_id].updated_at = utc_now()
+        session.flush()
+        return [ProjectSummary.model_validate(by_id[item]) for item in command.project_ids]
+
+
+def archive_project(session: Session, project_id: UUID) -> ProjectSummary:
+    with session.begin():
+        project = session.get(Project, project_id)
+        if project is None or project.status == ProjectStatus.DRAFT:
+            raise ProjectNotFoundError()
+        if project.status == ProjectStatus.ARCHIVED:
+            return ProjectSummary.model_validate(project)
+        if project.status != ProjectStatus.ACTIVE:
+            raise ProjectConflictError(
+                "Завершённый проект нельзя архивировать",
+                context={"current_status": project.status.value},
+            )
         now = utc_now()
-        node.updated_at = now
+        project.status = ProjectStatus.ARCHIVED
+        project.status_changed_at = now
         project.updated_at = now
         session.flush()
-        return ProgramNodeRead.model_validate(node)
+        _normalize_active_order(session)
+        session.flush()
+        return ProjectSummary.model_validate(project)
+
+
+def restore_project(session: Session, project_id: UUID) -> ProjectSummary:
+    with session.begin():
+        project = session.get(Project, project_id)
+        if project is None or project.status == ProjectStatus.DRAFT:
+            raise ProjectNotFoundError()
+        if project.status == ProjectStatus.ACTIVE:
+            return ProjectSummary.model_validate(project)
+        if project.status != ProjectStatus.ARCHIVED:
+            raise ProjectConflictError(
+                "Завершённый проект нельзя вернуть в работу",
+                context={"current_status": project.status.value},
+            )
+        now = utc_now()
+        project.sort_order = _normalize_active_order(session)
+        project.status = ProjectStatus.ACTIVE
+        project.status_changed_at = now
+        project.updated_at = now
+        session.flush()
+        return ProjectSummary.model_validate(project)
+
+
+def delete_project(session: Session, project_id: UUID) -> None:
+    """Безвозвратно удаляет живой проект, но не общие файлы библиотеки."""
+    with session.begin():
+        project = session.get(Project, project_id)
+        if project is None or project.status == ProjectStatus.DRAFT:
+            raise ProjectNotFoundError()
+        was_active = project.status == ProjectStatus.ACTIVE
+        # Самоссылка дерева использует RESTRICT, поэтому одного CASCADE от
+        # projects недостаточно: сначала удаляем листья, затем сам проект.
+        program.delete_program_tree(session, project_id)
+        session.delete(project)
+        session.flush()
+        if was_active:
+            _normalize_active_order(session)
+            session.flush()
 
 
 def save_workspace_state(
     session: Session, project_id: UUID, command: WorkspaceStateWrite
 ) -> WorkspaceStateRead:
     with session.begin():
-        project = _require_writable_project(session, project_id)
-        node_ids = list(
+        project = session.get(Project, project_id)
+        if project is None:
+            raise ProjectNotFoundError()
+        if project.status not in {ProjectStatus.DRAFT, ProjectStatus.ACTIVE}:
+            raise ProjectConflictError(
+                "Раскладку архивного или завершённого проекта нельзя изменять",
+                code="project_read_only",
+                context={"current_status": project.status.value},
+            )
+        referenced_ids = list(
             dict.fromkeys(
                 [command.layout.selected_node_id, *command.layout.expanded_node_ids]
             )
         )
-        node_ids = [node_id for node_id in node_ids if node_id is not None]
-        if node_ids:
-            found_ids = set(
-                session.scalars(
-                    select(ProgramNode.id).where(
-                        ProgramNode.project_id == project_id, ProgramNode.id.in_(node_ids)
-                    )
+        referenced_ids = [node_id for node_id in referenced_ids if node_id is not None]
+        found = {
+            node.id: node
+            for node in session.scalars(
+                select(ProgramNode).where(
+                    ProgramNode.project_id == project_id,
+                    ProgramNode.id.in_(referenced_ids),
                 )
             )
-            if found_ids != set(node_ids):
-                raise ProjectInvariantError("Раскладка ссылается на узел другого проекта")
-
+        } if referenced_ids else {}
+        if set(found) != set(referenced_ids):
+            raise ProjectInvariantError("Раскладка ссылается на узел другого проекта")
+        if command.layout.selected_node_id is not None:
+            selected = found[command.layout.selected_node_id]
+            if (
+                selected.node_type not in {NodeType.TOPIC, NodeType.SUBPOINT}
+                or not selected.is_in_current_program
+                or selected.is_archived
+            ):
+                raise ProjectInvariantError("Выбранным может быть только текущий изучаемый узел")
         layout = command.layout.model_dump(mode="json")
         layout["expanded_node_ids"] = [
             str(node_id) for node_id in dict.fromkeys(command.layout.expanded_node_ids)
@@ -429,10 +481,8 @@ def save_workspace_state(
         if workspace_state is None:
             workspace_state = WorkspaceState(project_id=project_id)
             session.add(workspace_state)
-        now = utc_now()
         workspace_state.schema_version = command.schema_version
         workspace_state.layout = layout
-        workspace_state.updated_at = now
-        project.updated_at = now
+        workspace_state.updated_at = utc_now()
         session.flush()
         return WorkspaceStateRead.model_validate(workspace_state)

@@ -7,11 +7,8 @@ import {
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
-  PieChart,
 } from "lucide-react";
-import { Disclosure, Popover, Tooltip, TooltipProvider } from "../components/ui";
-import { TaskRow } from "../components/domain";
-import type { BackgroundTask } from "../components/domain";
+import { Popover, Tooltip, TooltipProvider } from "../components/ui";
 import { CommandPalette } from "./CommandPalette";
 import { screenById } from "./screens";
 import { SCREEN_VIEWS } from "./views";
@@ -32,43 +29,6 @@ const COLLAPSE_KEY = "tentex-panel-collapsed";
 
 /** В навигацию попадают только сверстанные экраны: ссылка в никуда бесполезна. */
 const NAV_SCREENS = GLOBAL_NAV_IDS.filter((id) => id in SCREEN_VIEWS).map(screenById);
-
-const DEMO_COVERAGE = [
-  { project: "ТРПС — курсовая", progress: "8 из 12 тем" },
-  { project: "Базы данных — экзамен", progress: "18 из 25 тем" },
-  { project: "Матанализ — учебник", progress: "2 из 9 тем" },
-  { project: "Астрономия", progress: "4 из 10 тем" },
-];
-
-const DEMO_RECENT_TOPICS = [
-  { id: "normal-forms", project: "Базы данных", topic: "Нормальные формы", progress: "2 из 5 шагов" },
-  { id: "transactions", project: "Базы данных", topic: "Транзакции", progress: "повторить завтра" },
-  { id: "limits", project: "Матанализ", topic: "Пределы последовательностей", progress: "1 из 3 шагов" },
-];
-
-/** Выдуманное состояние установки: API появится на этапе 3. */
-const DEMO_TASKS: BackgroundTask[] = [
-  {
-    id: "t1",
-    kind: "pass1",
-    subject: "Матанализ — учебник",
-    unit: "глава",
-    done: 4,
-    total: 12,
-    etaMinutes: 3,
-    state: "running",
-  },
-  {
-    id: "t2",
-    kind: "ocr",
-    subject: "konspekt-scan.pdf",
-    unit: "страница",
-    done: 0,
-    total: 46,
-    etaMinutes: null,
-    state: "queued",
-  },
-];
 
 export function AppLayout() {
   const location = useLocation();
@@ -123,7 +83,7 @@ export function AppLayout() {
         <nav className="app-nav" aria-label="Навигация">
           <div className="app-brand">
             <strong>{collapsed ? "T" : "Tentex"}</strong>
-            <small>этап 1</small>
+            <small>локально</small>
           </div>
 
           <div className="app-nav-group">
@@ -138,12 +98,6 @@ export function AppLayout() {
                   <span className="nav-text">
                     <span className="nav-label">{screen.title}</span>
                   </span>
-                  {screen.id === "library" && (
-                    <span className="nav-meta" aria-label="14 файлов, 1,8 гигабайта">
-                      <span>14 файлов</span>
-                      <span>1,8 ГБ</span>
-                    </span>
-                  )}
                 </NavLink>
               );
 
@@ -158,36 +112,6 @@ export function AppLayout() {
             })}
           </div>
 
-          <Popover
-            title="Покрытие материалов"
-            trigger={
-              <button type="button" className="app-nav-link app-coverage-button">
-                <PieChart size={15} aria-hidden="true" />
-                <span className="nav-text">Покрытие материалов</span>
-              </button>
-            }
-          >
-            <div className="sidebar-coverage-list">
-              {DEMO_COVERAGE.map((item) => (
-                <Link className="sidebar-coverage-row" key={item.project} to="/projects">
-                  <span>{item.project}</span>
-                  <small>{item.progress}</small>
-                </Link>
-              ))}
-            </div>
-          </Popover>
-
-          <Disclosure className="sidebar-recent" summary="Последние темы">
-            <div className="sidebar-recent-list">
-              {DEMO_RECENT_TOPICS.map((topic) => (
-                <Link className="sidebar-recent-row" key={topic.id} to="/projects">
-                  <span>{topic.topic}</span>
-                  <small>{topic.project} · {topic.progress}</small>
-                </Link>
-              ))}
-            </div>
-          </Disclosure>
-
           <div className="app-widgets" aria-label="Состояние установки">
             <Popover
               title="Фоновые задачи"
@@ -198,14 +122,7 @@ export function AppLayout() {
                 </button>
               }
             >
-              {DEMO_TASKS.length === 0 ? (
-                <p className="popover-note">Фон свободен.</p>
-              ) : (
-                DEMO_TASKS.map((task) => <TaskRow key={task.id} task={task} />)
-              )}
-              <Link className="popover-link" to="/library">
-                К материалам
-              </Link>
+              <p className="popover-note">Фон свободен.</p>
             </Popover>
 
             <Popover
@@ -217,9 +134,7 @@ export function AppLayout() {
                 </button>
               }
             >
-              <p className="popover-note" style={{ marginTop: 0 }}>Текст · mock-text-model</p>
-              <p className="popover-note">Аудио · mock-audio-model</p>
-              <p className="popover-note">Фото · mock-vision-model</p>
+              <p className="popover-note" style={{ marginTop: 0 }}>Внешние модели не настроены.</p>
             </Popover>
 
             <Popover
@@ -232,15 +147,8 @@ export function AppLayout() {
                 </button>
               }
             >
-              <Link className="popover-link" to="/library">
-                Библиотека: 14 файлов · 3 120 страниц · 1,8 ГБ · 2 не используются
-              </Link>
-              <Link className="popover-link" to="/setup">
-                Бот: привязан · сообщений сегодня 4 из 20
-              </Link>
-              <Link className="popover-link" to="/setup">
-                Копия: вчера, 23:40
-              </Link>
+              <p className="popover-note">API работает локально.</p>
+              <Link className="popover-link" to="/setup">Бот и резервные копии не настроены</Link>
             </Popover>
           </div>
 

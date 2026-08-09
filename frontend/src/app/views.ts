@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import { Cards } from "../screens/cards/Cards";
+import { CoverageMap } from "../screens/CoverageMap";
 import { Library } from "../screens/Library";
 import { Lessons } from "../screens/lessons/Lessons";
 import { Materials } from "../screens/Materials";
@@ -29,6 +30,7 @@ export const SCREEN_VIEWS: Record<string, ComponentType> = {
   program: Program,
   plan: Plan,
   cards: Cards,
+  "coverage-map": CoverageMap,
   settings: ProjectSettings,
   library: Library,
   setup: Setup,

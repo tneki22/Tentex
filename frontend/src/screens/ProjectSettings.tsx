@@ -304,8 +304,13 @@ export function ProjectSettings() {
     setSaved(false);
     try {
       const updated = await updateProjectSettings(projectId, commandFromForm(form));
-      const nextForm = formFromDetail(updated);
-      setDetail(updated);
+      const nextDetail = {
+        ...detail,
+        project: updated.project,
+        goal_passport: updated.goal_passport,
+      };
+      const nextForm = formFromDetail(nextDetail);
+      setDetail(nextDetail);
       setForm(nextForm);
       setBaseline(nextForm);
       setSaved(true);

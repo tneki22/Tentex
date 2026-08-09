@@ -18,6 +18,7 @@ export { ProjectChip, PROJECT_ICONS } from "./ProjectChip";
 export type { ProjectColor, ProjectIconName } from "./ProjectChip";
 export { QualityBadge, PAGE_QUALITIES } from "./QualityBadge";
 export type { PageQuality } from "./QualityBadge";
+export { ReferenceAnswerBadge, REFERENCE_ANSWER_STATUSES, referenceAnswerStatusLabel } from "./ReferenceAnswerBadge";
 export { SourceChip } from "./SourceChip";
 export type { ProgramSource } from "./SourceChip";
 export { StepChip } from "./StepChip";

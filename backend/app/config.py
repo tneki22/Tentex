@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     # Откуда ходит фронтенд в режиме разработки.
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    seed_demo_project: bool = True
 
     @property
     def database_path(self) -> Path:

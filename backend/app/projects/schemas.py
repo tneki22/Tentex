@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
 from pydantic import (
@@ -23,6 +23,8 @@ from app.models import (
     NodeType,
     OriginKind,
     ProjectStatus,
+    ReferenceAnswerMatchMethod,
+    ReferenceAnswerOrigin,
     StartingLevel,
     StudyFormat,
     TargetOutcome,
@@ -37,14 +39,35 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
 
+class ProjectIcon(StrEnum):
+    GRADUATION_CAP = "graduation-cap"
+    BOOK_OPEN = "book-open"
+    DATABASE = "database"
+    SIGMA = "sigma"
+    ATOM = "atom"
+    CODE = "code"
+    GLOBE = "globe"
+    SCALE = "scale"
+    FLASK = "flask"
+
+
+def normalize_modules(modules: list[ModuleKey]) -> list[ModuleKey]:
+    selected = set(modules)
+    return [module for module in ModuleKey if module in selected]
+
+
 class ProjectDraftWrite(ApiModel):
     name: NonBlank | None = None
     description: str | None = None
-    icon: str | None = None
+    icon: ProjectIcon | None = None
     color: int | None = Field(default=None, ge=1, le=8)
-    sort_order: int = Field(default=0, ge=0)
     deadline: date | None = None
     enabled_modules: list[ModuleKey] = Field(default_factory=list)
+
+    @field_validator("enabled_modules")
+    @classmethod
+    def normalize_enabled_modules(cls, modules: list[ModuleKey]) -> list[ModuleKey]:
+        return normalize_modules(modules)
 
 
 class GoalPassportWrite(ApiModel):
@@ -67,18 +90,6 @@ class GoalPassportWrite(ApiModel):
     instructor_requirements: str | None = None
 
 
-class ProjectIcon(StrEnum):
-    GRADUATION_CAP = "graduation-cap"
-    BOOK_OPEN = "book-open"
-    DATABASE = "database"
-    SIGMA = "sigma"
-    ATOM = "atom"
-    CODE = "code"
-    GLOBE = "globe"
-    SCALE = "scale"
-    FLASK = "flask"
-
-
 class ProjectSettingsProjectWrite(ApiModel):
     name: NonBlank
     description: str | None = None
@@ -89,9 +100,8 @@ class ProjectSettingsProjectWrite(ApiModel):
 
     @field_validator("enabled_modules")
     @classmethod
-    def normalize_modules(cls, modules: list[ModuleKey]) -> list[ModuleKey]:
-        selected = set(modules)
-        return [module for module in ModuleKey if module in selected]
+    def normalize_enabled_modules(cls, modules: list[ModuleKey]) -> list[ModuleKey]:
+        return normalize_modules(modules)
 
 
 class ProjectSettingsWrite(ApiModel):
@@ -101,7 +111,6 @@ class ProjectSettingsWrite(ApiModel):
 
 class WizardDraftCreate(ApiModel):
     template_key: TemplateKey
-    workspace_variant: WorkspaceVariant
 
 
 class WizardDraftWrite(ApiModel):
@@ -119,35 +128,63 @@ class ActivateWizardDraft(ApiModel):
 
 
 class ProgramNodeCreate(ApiModel):
+    expected_program_revision: int = Field(ge=0)
     parent_id: UUID | None = None
+    position: int | None = Field(default=None, ge=0)
     node_type: NodeType
     exam_kind: ExamKind | None = None
-    sort_order: int = Field(default=0, ge=0)
     title: NonBlank
     section_purpose: str | None = None
     goal_role: GoalRole | None = None
     target_level: TargetOutcome | None = None
-    is_in_current_program: bool = True
     needs_material: bool = False
-    is_archived: bool = False
-    origin_kind: OriginKind = OriginKind.MANUAL
-    origin_note: str | None = None
 
 
 class ProgramNodeUpdate(ApiModel):
-    parent_id: UUID | None = None
+    expected_program_revision: int = Field(ge=0)
+    title: NonBlank | None = None
     node_type: NodeType | None = None
     exam_kind: ExamKind | None = None
-    sort_order: int | None = Field(default=None, ge=0)
-    title: NonBlank | None = None
     section_purpose: str | None = None
     goal_role: GoalRole | None = None
-    target_level: TargetOutcome | None = None
-    is_in_current_program: bool | None = None
     needs_material: bool | None = None
-    is_archived: bool | None = None
-    origin_kind: OriginKind | None = None
-    origin_note: str | None = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> Self:
+        if self.model_fields_set == {"expected_program_revision"}:
+            raise ValueError("Нужно передать хотя бы одно изменяемое поле")
+        return self
+
+
+class ProgramMove(ApiModel):
+    expected_program_revision: int = Field(ge=0)
+    parent_id: UUID | None = None
+    position: int | None = Field(default=None, ge=0)
+
+
+class ProgramTargetLevel(ApiModel):
+    expected_program_revision: int = Field(ge=0)
+    target_level: TargetOutcome
+    include_descendants: bool = False
+
+
+class ProgramRevisionCommand(ApiModel):
+    expected_program_revision: int = Field(ge=0)
+
+
+class UndoProjectAction(ApiModel):
+    expected_action_sequence: int = Field(ge=1)
+
+
+class ProjectOrderWrite(ApiModel):
+    project_ids: list[UUID]
+
+
+class ExamImportWrite(ApiModel):
+    expected_revision: int = Field(ge=0)
+    expected_program_revision: int = Field(ge=0)
+    exam_format: Literal[ExamFormat.QUESTIONS, ExamFormat.QUESTIONS_TASKS, ExamFormat.TICKETS]
+    raw_text: str = Field(min_length=1, max_length=1_000_000)
 
 
 class WorkspaceTab(StrEnum):
@@ -205,7 +242,7 @@ class ProjectRead(ApiModel):
     status: ProjectStatus
     name: str | None
     description: str | None
-    icon: str | None
+    icon: ProjectIcon | None
     color: int | None
     sort_order: int
     deadline: date | None
@@ -230,11 +267,152 @@ class GoalPassportRead(GoalPassportWrite):
     updated_at: datetime
 
 
-class ProgramNodeRead(ProgramNodeCreate):
+class ProgramNodeRead(ApiModel):
     id: UUID
     project_id: UUID
+    parent_id: UUID | None
+    node_type: NodeType
+    exam_kind: ExamKind | None
+    sort_order: int
+    title: str
+    section_purpose: str | None
+    goal_role: GoalRole | None
+    target_level: TargetOutcome | None
+    is_in_current_program: bool
+    needs_material: bool
+    is_archived: bool
+    origin_kind: OriginKind
+    origin_note: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class ProgramState(ApiModel):
+    nodes: list[ProgramNodeRead]
+    revision: int
+
+
+class ReferenceAnswerStatus(StrEnum):
+    MISSING = "missing"
+    AUTO_MATCHED = "auto_matched"
+    CONFIRMED = "confirmed"
+    NEEDS_REVIEW = "needs_review"
+    MANUAL = "manual"
+
+
+class ReferenceAnswerRead(ApiModel):
+    project_id: UUID
+    program_node_id: UUID
+    text: str
+    origin_kind: ReferenceAnswerOrigin
+    match_method: ReferenceAnswerMatchMethod
+    matched_title: str | None
+    is_confirmed: bool
+    is_active: bool
+    revision: int
+    source_label: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReferenceAnswerSlot(ApiModel):
+    project_id: UUID
+    node_id: UUID
+    node_title: str
+    status: ReferenceAnswerStatus
+    answer: ReferenceAnswerRead | None
+
+
+class ReferenceAnswerWrite(ApiModel):
+    expected_revision: int | None = Field(default=None, ge=0)
+    text: str = Field(min_length=1, max_length=1_000_000)
+    source_label: str | None = Field(default=None, max_length=200)
+
+    @field_validator("text")
+    @classmethod
+    def strip_answer_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Эталонный ответ не может быть пустым")
+        return stripped
+
+    @field_validator("source_label")
+    @classmethod
+    def strip_source_label(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+
+class ReferenceAnswerConfirm(ApiModel):
+    expected_revision: int = Field(ge=0)
+
+
+class ReferenceAnswerImportWrite(ApiModel):
+    raw_text: str = Field(min_length=1, max_length=1_000_000)
+    source_label: str | None = Field(default=None, max_length=200)
+
+    @field_validator("raw_text")
+    @classmethod
+    def strip_import_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Вставьте текст эталонных ответов")
+        return stripped
+
+    @field_validator("source_label")
+    @classmethod
+    def strip_import_source_label(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+
+class ReferenceAnswerImportIssue(ApiModel):
+    heading: str
+    preview: str | None = None
+    candidate_node_ids: list[UUID] = Field(default_factory=list)
+
+
+class CoverageMapRow(ApiModel):
+    node_id: UUID
+    parent_id: UUID | None
+    node_type: NodeType
+    exam_kind: ExamKind | None
+    title: str
+    sort_order: int
+    is_in_current_program: bool
+    target_level: TargetOutcome | None
+    answer_status: ReferenceAnswerStatus | None
+    answer_preview: str | None
+    answer_revision: int | None
+
+
+class CoverageMapTotals(ApiModel):
+    study_nodes: int
+    with_answer: int
+    confirmed: int
+    needs_review: int
+    missing: int
+
+
+class CoverageMapRead(ApiModel):
+    project_id: UUID
+    program_revision: int
+    rows: list[CoverageMapRow]
+    totals: CoverageMapTotals
+
+
+class ReferenceAnswerImportResult(ApiModel):
+    created: int
+    skipped_existing: list[UUID]
+    ambiguous: list[ReferenceAnswerImportIssue]
+    unmatched_sections: list[ReferenceAnswerImportIssue]
+    empty_sections: list[str]
+    coverage_map: CoverageMapRead
+
+
+class LatestUndoableAction(ApiModel):
+    sequence: int
+    action_type: str
+    target_title: str
+    created_at: datetime
 
 
 class WorkspaceStateRead(WorkspaceStateWrite):
@@ -257,7 +435,8 @@ class WizardDraftDetail(ApiModel):
     project: ProjectRead
     draft: WizardDraftRead
     goal_passport: GoalPassportRead | None
-    program_nodes: list[ProgramNodeRead]
+    program: ProgramState
+    latest_undoable_action: LatestUndoableAction | None
 
 
 class ProjectSummary(ApiModel):
@@ -267,15 +446,50 @@ class ProjectSummary(ApiModel):
     status: ProjectStatus
     name: str
     description: str | None
-    icon: str | None
+    icon: ProjectIcon | None
     color: int | None
     sort_order: int
     deadline: date | None
+    status_changed_at: datetime | None
     updated_at: datetime
 
 
 class ProjectDetail(ApiModel):
     project: ProjectRead
     goal_passport: GoalPassportRead | None
-    program_nodes: list[ProgramNodeRead]
+    program: ProgramState
     workspace_state: WorkspaceStateRead | None
+    latest_undoable_action: LatestUndoableAction | None
+
+
+class ProjectSettingsResult(ApiModel):
+    project: ProjectRead
+    goal_passport: GoalPassportRead
+
+
+class ProgramChangeResult(ApiModel):
+    changed_node: ProgramNodeRead | None
+    program: ProgramState
+    latest_undoable_action: LatestUndoableAction | None
+    draft_revision: int | None
+
+
+class ActionUndoResult(ApiModel):
+    undone_action_type: str
+    program: ProgramState | None
+    draft_revision: int | None
+    latest_undoable_action: LatestUndoableAction | None
+
+
+class ExamImportCounts(ApiModel):
+    tickets: int = 0
+    questions: int = 0
+    tasks: int = 0
+
+
+class ExamImportResult(ApiModel):
+    revision: int
+    counts: ExamImportCounts
+    warnings: list[str]
+    program: ProgramState
+    latest_undoable_action: LatestUndoableAction | None

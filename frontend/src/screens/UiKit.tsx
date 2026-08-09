@@ -34,6 +34,8 @@ import {
   PAGE_QUALITIES,
   ProjectChip,
   QualityBadge,
+  REFERENCE_ANSWER_STATUSES,
+  ReferenceAnswerBadge,
   SourceChip,
   StepChip,
   TaskRow,
@@ -382,6 +384,11 @@ export function UiKit() {
         <div className="kit-row">
           {TOPIC_STATUSES.map((status) => (
             <TopicStatusBadge key={status} status={status} />
+          ))}
+        </div>
+        <div className="kit-row" style={{ marginTop: "var(--space-3)" }}>
+          {REFERENCE_ANSWER_STATUSES.map((status) => (
+            <ReferenceAnswerBadge key={status} status={status} />
           ))}
         </div>
         <div className="kit-row" style={{ marginTop: "var(--space-3)" }}>

@@ -34,7 +34,7 @@ export interface ScreenMeta {
   id: string;
   /** Шаблон пути для роутера. */
   path: string;
-  /** Путь для ссылки в навигации: параметры подставлены демонстрационными значениями. */
+  /** Путь для глобальной ссылки; проектные шаблоны не открываются без настоящего project id. */
   navPath: string;
   title: string;
   /** Формулировка из §21 требований. */
@@ -43,11 +43,6 @@ export interface ScreenMeta {
   icon: LucideIcon;
   depth: "полностью" | "эскизом" | "служебный";
 }
-
-/** Пока проектов нет, все ссылки ведут на этот идентификатор. */
-export const DEMO_PROJECT_ID = "demo";
-export const DEMO_TEXTBOOK_PROJECT_ID = "vector-indexes";
-const DEMO_MATERIAL_ID = "demo-material";
 
 export const SCREENS: ScreenMeta[] = [
   {
@@ -73,7 +68,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "workspace",
     path: "/projects/:projectId",
-    navPath: `/projects/${DEMO_PROJECT_ID}`,
+    navPath: "/projects/:projectId",
     title: "Рабочая область",
     summary:
       "Дерево программы и изменяемые панели источника, ответа, конспекта и инструментов темы.",
@@ -84,7 +79,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "coverage-map",
     path: "/projects/:projectId/coverage-map",
-    navPath: `/projects/${DEMO_PROJECT_ID}/coverage-map`,
+    navPath: "/projects/:projectId/coverage-map",
     title: "Карта покрытия",
     summary: "Аналитическая таблица программы со статусами, источниками и фильтрами.",
     group: "Проект",
@@ -94,7 +89,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "coverage",
     path: "/projects/:projectId/coverage",
-    navPath: `/projects/${DEMO_PROJECT_ID}/coverage`,
+    navPath: "/projects/:projectId/coverage",
     title: "Покрытие",
     summary: "Два таба: «Пробелы» и «Неразобранное».",
     group: "Проект",
@@ -104,7 +99,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "program",
     path: "/projects/:projectId/program",
-    navPath: `/projects/${DEMO_PROJECT_ID}/program`,
+    navPath: "/projects/:projectId/program",
     title: "Программа / вопросы экзамена",
     summary:
       "Общий редактор программы: дерево, ручные правки, источники и подтверждаемый диф изменений.",
@@ -115,7 +110,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "materials",
     path: "/projects/:projectId/materials",
-    navPath: `/projects/${DEMO_PROJECT_ID}/materials`,
+    navPath: "/projects/:projectId/materials",
     title: "Материалы",
     summary: "Список файлов, прогресс разбора, качество распознавания, дельта.",
     group: "Материал",
@@ -125,7 +120,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "source-viewer",
     path: "/projects/:projectId/materials/:materialId",
-    navPath: `/projects/${DEMO_PROJECT_ID}/materials/${DEMO_MATERIAL_ID}`,
+    navPath: "/projects/:projectId/materials/:materialId",
     title: "Просмотрщик источника",
     summary: "Страница с подсветкой фрагментов и привязок, ручная привязка выделением.",
     group: "Материал",
@@ -135,7 +130,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "suggestions",
     path: "/projects/:projectId/suggestions",
-    navPath: `/projects/${DEMO_PROJECT_ID}/suggestions`,
+    navPath: "/projects/:projectId/suggestions",
     title: "Очередь предложений",
     summary: "Быстрый разбор неоднозначных привязок клавиатурой.",
     group: "Материал",
@@ -145,7 +140,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "lessons",
     path: "/projects/:projectId/lessons",
-    navPath: `/projects/${DEMO_TEXTBOOK_PROJECT_ID}/lessons`,
+    navPath: "/projects/:projectId/lessons",
     title: "Уроки",
     summary: "Одиночное и массовое создание Уроков по Темам Программы.",
     group: "Занятия",
@@ -155,7 +150,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "session",
     path: "/projects/:projectId/session",
-    navPath: `/projects/${DEMO_PROJECT_ID}/session`,
+    navPath: "/projects/:projectId/session",
     title: "Сессия занятия",
     summary: "Единый каркас под все виды активностей, включая редактор SQL и разбор ответа.",
     group: "Занятия",
@@ -165,7 +160,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "cards",
     path: "/projects/:projectId/cards",
-    navPath: `/projects/${DEMO_PROJECT_ID}/cards`,
+    navPath: "/projects/:projectId/cards",
     title: "Карточки",
     summary: "Банк, фильтры, редактор, режим повторения.",
     group: "Занятия",
@@ -175,7 +170,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "plan",
     path: "/projects/:projectId/plan",
-    navPath: `/projects/${DEMO_PROJECT_ID}/plan`,
+    navPath: "/projects/:projectId/plan",
     title: "План подготовки",
     summary: "Календарь до дедлайна: первичный проход, повторения, резерв и прогноз готовности.",
     group: "Занятия",
@@ -185,7 +180,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "inbox",
     path: "/projects/:projectId/inbox",
-    navPath: `/projects/${DEMO_PROJECT_ID}/inbox`,
+    navPath: "/projects/:projectId/inbox",
     title: "Инбокс",
     summary: "Что прислали через бота.",
     group: "Занятия",
@@ -195,7 +190,7 @@ export const SCREENS: ScreenMeta[] = [
   {
     id: "settings",
     path: "/projects/:projectId/settings",
-    navPath: `/projects/${DEMO_PROJECT_ID}/settings`,
+    navPath: "/projects/:projectId/settings",
     title: "Настройки",
     summary: "Параметры проекта, паспорт цели и включённые учебные модули.",
     group: "Служебное",
