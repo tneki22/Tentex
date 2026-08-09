@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
   ArrowLeft,
@@ -6,7 +6,10 @@ import {
   ArrowRight,
   ArrowUp,
   BookOpen,
+  ChevronDown,
+  ChevronRight,
   Copy,
+  Files,
   ListTree,
   PanelsTopLeft,
   Plus,
@@ -16,6 +19,7 @@ import {
   Target,
   Trash2,
   Undo2,
+  WandSparkles,
 } from "lucide-react";
 import {
   createProgramNode,
@@ -42,12 +46,22 @@ import {
   EmptyState,
   ErrorState,
   Field,
+  IconButton,
   LoadingState,
   PageHead,
+  SegmentedTabs,
+  Tooltip,
 } from "../components/ui";
-import { buildProgramTree, filterProgramTree, flattenProgramTree, visibleHiddenRoots } from "./programTree";
+import {
+  buildProgramTree,
+  filterProgramTree,
+  flattenProgramTree,
+  visibleHiddenRoots,
+  type ProgramTreeNode,
+} from "./programTree";
 
 type AddKind = "section" | "ticket" | "question" | "task" | "topic" | "subpoint";
+type OutlineFilter = "all" | "sections" | "ungrouped";
 
 function apiKind(kind: AddKind): { node_type: ProgramNodeRead["node_type"]; exam_kind: ExamKind | null } {
   switch (kind) {
@@ -77,6 +91,7 @@ export function Program() {
   const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<OutlineFilter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [addOpen, setAddOpen] = useState(false);
@@ -282,18 +297,117 @@ export function Program() {
   if (treeResult.error) return <div className="screen"><ErrorState title="Программа повреждена" message={treeResult.error} /></div>;
 
   const currentFlat = flat.filter((node) => node.is_in_current_program && !node.is_archived);
-  const shown = flattenProgramTree(filterProgramTree(treeResult.tree, query))
+  const filteredTree = filterProgramTree(treeResult.tree, query);
+  const shown = flattenProgramTree(filteredTree)
     .filter((node) => node.is_in_current_program && !node.is_archived);
   const hiddenRoots = visibleHiddenRoots(detail.program.nodes);
   const parentOptions = currentFlat.filter((node) => node.node_type === "section" || textbook);
+  const sectionCount = currentFlat.filter((node) => node.node_type === "section").length;
+  const ungroupedCount = currentFlat.filter((node) => node.parent_id === null && node.node_type !== "section").length;
+  const filteredNodes = shown.filter((node) => {
+    if (filter === "sections") return node.node_type === "section";
+    if (filter === "ungrouped") return node.parent_id === null && node.node_type !== "section";
+    return true;
+  });
+  const usesTreeRenderer = filter === "all" || Boolean(query.trim());
+  const visibleNodes = usesTreeRenderer ? shown : filteredNodes;
+
+  function nodeActions(node: ProgramNodeRead) {
+    const info = siblingInfo(node);
+    return (
+      <div className="program-row-actions">
+        <Button variant="ghost" aria-label="Вверх" disabled={busy || info.index <= 0} onClick={() => move(node, -1)}><ArrowUp size={14} /></Button>
+        <Button variant="ghost" aria-label="Вниз" disabled={busy || info.index >= info.siblings.length - 1} onClick={() => move(node, 1)}><ArrowDown size={14} /></Button>
+        <Button variant="ghost" aria-label="Сделать дочерним" disabled={busy || info.index <= 0} onClick={() => indent(node)}><ArrowRight size={14} /></Button>
+        <Button variant="ghost" aria-label="Поднять на уровень" disabled={busy || !node.parent_id} onClick={() => outdent(node)}><ArrowLeft size={14} /></Button>
+      </div>
+    );
+  }
+
+  function questionRow(node: ProgramTreeNode, includeChildren = true) {
+    const children = node.children.filter((child) => child.is_in_current_program && !child.is_archived);
+    return (
+      <Fragment key={node.id}>
+        <div
+          className={`program-question-row ${selectedId === node.id ? "is-selected" : ""}`.trim()}
+          style={{ paddingInlineStart: `calc(${node.depth} * var(--space-5))` }}
+        >
+          <span className="program-review-placeholder" />
+          <button type="button" className="program-question-main" onClick={() => setSelectedId(node.id)}>
+            <span className="program-question-number">{node.number}</span>
+            <span className="program-question-copy"><strong>{node.title}</strong><small>{nodeKind(node, textbook)}</small></span>
+          </button>
+          <span className="program-goal-label"><Target size={14} />{GOAL_LEVELS.find((level) => level.value === node.target_level)?.label ?? "уровень не задан"}</span>
+          {nodeActions(node)}
+        </div>
+        {includeChildren && children.map(renderNode)}
+      </Fragment>
+    );
+  }
+
+  function sectionCard(node: ProgramTreeNode) {
+    const children = node.children.filter((child) => child.is_in_current_program && !child.is_archived);
+    const open = expanded.has(node.id) || Boolean(query.trim());
+    return (
+      <article className="program-section-card" key={node.id}>
+        <div className={`program-section-row ${selectedId === node.id ? "is-selected" : ""}`.trim()}>
+          <IconButton label={open ? "Свернуть раздел" : "Раскрыть раздел"} onClick={() => toggle(node.id)}>
+            {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          </IconButton>
+          <button type="button" className="program-section-main" onClick={() => setSelectedId(node.id)}>
+            <span className="program-section-index">{node.number}</span>
+            <span><strong>{node.title}</strong><small>{children.length} элементов</small></span>
+          </button>
+          <span className="program-goal-label"><Target size={14} />{GOAL_LEVELS.find((level) => level.value === node.target_level)?.label ?? "уровень не задан"}</span>
+          {nodeActions(node)}
+        </div>
+        {open && children.length > 0 && <div className="program-section-children">{children.map(renderNode)}</div>}
+      </article>
+    );
+  }
+
+  function renderNode(node: ProgramTreeNode) {
+    return node.node_type === "section" ? sectionCard(node) : questionRow(node);
+  }
+
+  function renderFlatNode(node: ProgramTreeNode) {
+    return questionRow(node, false);
+  }
+
+  function hiddenRootsDisclosure() {
+    if (!detail || hiddenRoots.length === 0) return null;
+    return (
+      <Disclosure summary={`Убрано из списка (${hiddenRoots.length})`}>
+        {hiddenRoots.map((node) => (
+          <div className="dash-archive-row" key={node.id}>
+            <span>{node.title}</span>
+            <Button variant="ghost" disabled={busy} onClick={() => void runCommand(restoreProgramNode(projectId, node.id, detail.program.revision))}><RotateCcw size={14} />Вернуть</Button>
+          </div>
+        ))}
+      </Disclosure>
+    );
+  }
 
   return (
     <div className="program-screen">
       <aside className="program-project-panel">
         <header className="program-project-title">
-          <Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link>
+          <Tooltip label="Вернуться в рабочую область">
+            <Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link>
+          </Tooltip>
           <strong>{detail.project.name}</strong>
         </header>
+        <nav className="program-quick-filters" aria-label="Быстрые выборки программы">
+          {[
+            ["all", textbook ? "Все узлы" : "Все вопросы", currentFlat.length],
+            ["sections", "Разделы", sectionCount],
+            ["ungrouped", "Без раздела", ungroupedCount],
+          ].map(([value, label, amount]) => (
+            <button type="button" className={filter === value ? "is-active" : ""} key={value} onClick={() => setFilter(value as OutlineFilter)}>
+              <span>{label}</span><small>{amount}</small>
+            </button>
+          ))}
+        </nav>
         <nav className="workspace-project-nav program-project-nav" aria-label="Разделы проекта">
           <Link className="workspace-project-link" to={`/projects/${projectId}`}><ListTree size={15} /><span>Рабочая область</span></Link>
           <span className="workspace-project-link is-active"><ListTree size={15} /><span>{textbook ? "Программа" : "Вопросы экзамена"}</span><small>{currentFlat.filter((node) => node.node_type !== "section").length}</small></span>
@@ -308,50 +422,49 @@ export function Program() {
         <PageHead
           eyebrow={textbook ? "Ручная структура" : "Структура экзамена"}
           title={textbook ? "Программа" : "Вопросы экзамена"}
-          actions={<><Button variant="secondary" disabled={busy || !detail.latest_undoable_action} onClick={() => void undo()}><Undo2 size={15} />Отменить</Button><Button disabled={busy} onClick={() => { setNewKind(textbook ? "topic" : "question"); setNewParentId(""); setAddOpen(true); }}><Plus size={15} />Добавить</Button></>}
+          actions={<>
+            <Button variant="secondary" disabled title="Повторный импорт появится на этапе 5"><Files size={15} />Повторный импорт · этап 5</Button>
+            <Button variant="secondary" disabled title="Автоматическая раскладка появится на этапе 7"><WandSparkles size={15} />Разложить · этап 7</Button>
+            <Button variant="secondary" disabled={busy || !detail.latest_undoable_action} onClick={() => void undo()}><Undo2 size={15} />Отменить</Button>
+            <Button disabled={busy} onClick={() => { setNewKind(textbook ? "topic" : "question"); setNewParentId(""); setAddOpen(true); }}><Plus size={15} />Добавить</Button>
+          </>}
         />
         {conflict && <section className="program-plan-notice" role="alert"><span>Программа изменилась в другой вкладке.</span><Button onClick={() => void load()}>Загрузить серверную версию</Button></section>}
         {commandError && <p className="inline-error" role="alert">{commandError}</p>}
-        <div className="program-toolbar"><label className="program-search"><Search size={16} /><span className="sr-only">Найти в программе</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Название темы" /></label></div>
+        <section className="program-metrics is-three-columns" aria-label="Состояние программы">
+          <button type="button" onClick={() => setFilter("all")}><strong>{currentFlat.length}</strong><span>{textbook ? "узлов программы" : "вопросов и задач"}</span></button>
+          <button type="button" onClick={() => setFilter("sections")}><strong>{sectionCount}</strong><span>разделов</span></button>
+          <button type="button" onClick={() => setFilter("ungrouped")}><strong>{ungroupedCount}</strong><span>без раздела</span></button>
+        </section>
+        <div className="program-toolbar"><label className="program-search"><Search size={16} /><span className="sr-only">Найти в программе</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={textbook ? "Найти тему" : "Найти вопрос"} /></label></div>
 
         {currentFlat.length === 0 ? (
-          <EmptyState title="Программа пока пуста">
-            <p>{textbook ? "Добавьте первую тему вручную." : "Вернитесь в мастер и импортируйте список или добавьте вопрос вручную."}</p>
-            <Button onClick={() => setAddOpen(true)}>Добавить первый узел</Button>
-          </EmptyState>
+          <>
+            <EmptyState title="Программа пока пуста">
+              <p>{textbook ? "Добавьте первую тему вручную." : "Вернитесь в мастер и импортируйте список или добавьте вопрос вручную."}</p>
+              <Button onClick={() => setAddOpen(true)}>Добавить первый узел</Button>
+            </EmptyState>
+            {hiddenRootsDisclosure()}
+          </>
         ) : (
           <div className="program-editor-grid">
-            <section className="program-outline" aria-label="Дерево программы">
-              {shown.map((node) => {
-                const info = siblingInfo(node);
-                const hasChildren = node.children.length > 0;
-                const visibleByParent = !node.parent_id || expanded.has(node.parent_id) || Boolean(query.trim());
-                if (!visibleByParent) return null;
-                return (
-                  <div className={`program-question-row ${selectedId === node.id ? "is-selected" : ""}`.trim()} style={{ paddingInlineStart: `calc(${node.depth - 1} * var(--space-5))` }} key={node.id}>
-                    {hasChildren ? <button type="button" className="text-button" aria-label={expanded.has(node.id) ? "Свернуть" : "Раскрыть"} onClick={() => toggle(node.id)}>{expanded.has(node.id) ? "−" : "+"}</button> : <span className="program-review-placeholder" />}
-                    <button type="button" className="program-question-main" onClick={() => setSelectedId(node.id)}><span className="program-question-number">{node.number}</span><span className="program-question-copy"><strong>{node.title}</strong><small>{nodeKind(node, textbook)}</small></span></button>
-                    <span className="program-goal-label"><Target size={14} />{GOAL_LEVELS.find((level) => level.value === node.target_level)?.label ?? "уровень не задан"}</span>
-                    <div className="program-row-actions">
-                      <Button variant="ghost" aria-label="Вверх" disabled={busy || info.index <= 0} onClick={() => move(node, -1)}><ArrowUp size={14} /></Button>
-                      <Button variant="ghost" aria-label="Вниз" disabled={busy || info.index >= info.siblings.length - 1} onClick={() => move(node, 1)}><ArrowDown size={14} /></Button>
-                      <Button variant="ghost" aria-label="Сделать дочерним" disabled={busy || info.index <= 0} onClick={() => indent(node)}><ArrowRight size={14} /></Button>
-                      <Button variant="ghost" aria-label="Поднять на уровень" disabled={busy || !node.parent_id} onClick={() => outdent(node)}><ArrowLeft size={14} /></Button>
-                    </div>
-                  </div>
-                );
-              })}
-              {shown.length === 0 && <EmptyState title={`Нет результатов для «${query}»`}><Button variant="secondary" onClick={() => setQuery("")}>Очистить поиск</Button></EmptyState>}
-              {hiddenRoots.length > 0 && <Disclosure summary={`Убрано из списка (${hiddenRoots.length})`}>{hiddenRoots.map((node) => <div className="dash-archive-row" key={node.id}><span>{node.title}</span><Button variant="ghost" disabled={busy} onClick={() => void runCommand(restoreProgramNode(projectId, node.id, detail.program.revision))}><RotateCcw size={14} />Вернуть</Button></div>)}</Disclosure>}
+            <section className="program-outline" aria-label={textbook ? "Структура программы" : "Структура вопросов экзамена"}>
+              {usesTreeRenderer
+                ? filteredTree.filter((node) => node.is_in_current_program && !node.is_archived).map(renderNode)
+                : filteredNodes.map(renderFlatNode)}
+              {visibleNodes.length === 0 && <EmptyState title={query ? `Нет результатов для «${query}»` : "В этой выборке пока нет узлов"}><Button variant="secondary" onClick={() => { setQuery(""); setFilter("all"); }}>Очистить фильтр</Button></EmptyState>}
+              {hiddenRootsDisclosure()}
             </section>
 
             <aside className="program-inspector" aria-label="Свойства выбранного узла">
               {selected ? <>
                 <p className="eyebrow">Свойства</p>
+                <h2>{selected.title}</h2>
                 <Field label="Формулировка"><input value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} onBlur={() => { const title = titleDraft.trim(); if (title && title !== selected.title) void runCommand(updateProgramNode(projectId, selected.id, { expected_program_revision: detail.program.revision, title })); }} /></Field>
-                <Field label="Тип узла"><select value={nodeKind(selected, textbook)} onChange={(event) => changeKind(selected, event.target.value as AddKind)}>{(textbook ? [["section", "Раздел"], ["topic", "Тема"], ["subpoint", "Подпункт"]] : [["section", "Раздел"], ["ticket", "Билет"], ["question", "Вопрос"], ["task", "Задача"]]).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
+                <SegmentedTabs label="Тип узла" value={nodeKind(selected, textbook)} onChange={(value) => changeKind(selected, value as AddKind)} tabs={(textbook ? [["section", "Раздел"], ["topic", "Тема"], ["subpoint", "Подпункт"]] : [["section", "Раздел"], ["ticket", "Билет"], ["question", "Вопрос"], ["task", "Задача"]]).map(([value, label]) => ({ value, label }))} />
                 <GoalLevelPicker label="узла" value={(selected.target_level ?? "understanding") as GoalLevelValue} onChange={(target) => void runCommand(setProgramTargetLevel(projectId, selected.id, { expected_program_revision: detail.program.revision, target_level: target as TargetOutcome, include_descendants: true }))} />
-                <div className="program-inspector-links"><Link to={`/projects/${projectId}?topic=${selected.id}`}>Открыть в рабочей области</Link></div>
+                <section className="program-impact"><h3>Что связано</h3><dl><div><dt>Эталон</dt><dd>Статус доступен на Карте эталонов</dd></div><div><dt>Материалы и привязки</dt><dd>Появятся после привязок на этапе 8</dd></div><div><dt>План</dt><dd>Появится на этапе 9</dd></div></dl></section>
+                <div className="program-inspector-links"><Link to={`/projects/${projectId}?topic=${selected.id}`}>Открыть в рабочей области</Link><Button variant="ghost" disabled title="Источники появятся на этапе 5">Источники · этап 5</Button><Button variant="ghost" disabled title="Привязки появятся на этапе 8">Привязки · этап 8</Button></div>
                 <div className="program-row-actions"><Button variant="secondary" disabled={busy} onClick={() => duplicate(selected)}><Copy size={15} />Продублировать</Button><Button variant="ghost" disabled={busy} onClick={() => void runCommand(removeProgramNode(projectId, selected.id, detail.program.revision))}><Trash2 size={15} />Убрать из списка</Button></div>
               </> : <p>Выберите узел программы.</p>}
             </aside>

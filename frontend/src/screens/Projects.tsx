@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { Archive, ArrowDown, ArrowUp, GripVertical, RotateCcw, Trash2 } from "lucide-react";
 import {
   archiveProject,
@@ -14,9 +14,9 @@ import { ProjectChip } from "../components/domain";
 import type { ProjectColor, ProjectIconName } from "../components/domain";
 import {
   Button,
+  Card,
   ConfirmDialog,
   Disclosure,
-  EmptyState,
   ErrorState,
   LoadingState,
   PageHead,
@@ -25,7 +25,50 @@ import {
 const icon = (value: ProjectSummary["icon"]): ProjectIconName => value ?? "graduation-cap";
 const color = (value: number | null): ProjectColor => (value && value >= 1 && value <= 8 ? value : 1) as ProjectColor;
 
+type ProjectTemplate = {
+  id: "exam" | "textbook";
+  title: string;
+  description: string;
+  path: string;
+  disabled: false;
+} | {
+  id: "free";
+  title: string;
+  description: string;
+  disabled: true;
+};
+
+const TEMPLATES: ProjectTemplate[] = [
+  {
+    id: "exam",
+    title: "Экзамен по билетам",
+    description: "Дедлайн, вопросы и ответы, план до даты. Работает без внешних моделей.",
+    path: "/projects/new?track=exam",
+    disabled: false,
+  },
+  {
+    id: "textbook",
+    title: "Учебник",
+    description: "Один большой файл, программа по оглавлению или проходом по материалу.",
+    path: "/projects/new?track=textbook",
+    disabled: false,
+  },
+  {
+    id: "free",
+    title: "Свободное изучение",
+    description: "Без дедлайна, программа из каталога, материалы добавляются позже.",
+    disabled: true,
+  },
+];
+
+const statusLabel: Record<ProjectSummary["status"], string> = {
+  active: "В работе",
+  archived: "В архиве",
+  completed: "Завершён",
+};
+
 export function Projects() {
+  const navigate = useNavigate();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -159,13 +202,22 @@ export function Projects() {
       {operationError && <p className="inline-error" role="alert">{operationError}</p>}
 
       {active.length === 0 ? (
-        <EmptyState title="Активных проектов пока нет">
-          <p>Создайте экзаменационный проект или сохраните программу учебника как черновик.</p>
-          <div>
-            <Link className="primary-button" to="/projects/new?track=exam">Создать экзаменационный проект</Link>
-            <Link className="secondary-button" to="/projects/new?track=textbook">Начать по учебнику</Link>
+        <>
+          <p className="lead dash-empty-lead">Первый проект начинается с шаблона.</p>
+          <div className="dash-templates">
+            {TEMPLATES.map((template) => (
+              <Card
+                className={`dash-template ${template.disabled ? "is-disabled" : ""}`.trim()}
+                key={template.id}
+                onClick={template.disabled ? undefined : () => navigate(template.path)}
+              >
+                <h3>{template.title}</h3>
+                <p>{template.description}</p>
+                {template.disabled && <small>После этапа 7</small>}
+              </Card>
+            ))}
           </div>
-        </EmptyState>
+        </>
       ) : (
         <div className="dash-grid">
           {active.map((project, index) => (
@@ -180,15 +232,15 @@ export function Projects() {
                 <ProjectChip icon={icon(project.icon)} color={color(project.color)} />
                 <h2 className="dash-card-name">{project.name}</h2>
               </div>
-              <div className="dash-card-actions" aria-label={`Действия для проекта «${project.name}»`}>
-                <Link className="dash-card-action" to={`/projects/${project.id}`}>Продолжить изучение</Link>
-                <button className="dash-card-action" disabled title="Повторения появятся на этапе 9">Повторить</button>
+              <div className="dash-card-details">
+                <span>{statusLabel[project.status]}</span>
+                <p>Показатели появятся после материалов и занятий</p>
               </div>
-              <div className="dash-card-order" aria-label="Порядок и архив">
+              <div className="dash-card-actions" aria-label={`Действия для проекта «${project.name}»`}>
                 <span
-                  className="dash-drag-handle"
+                  className="dash-card-action dash-drag-handle"
                   draggable
-                  title="Перетащить проект"
+                  title="Перетащить проект мышью"
                   aria-hidden="true"
                   onDragEnd={() => setDraggedId(null)}
                   onDragStart={(event) => {
@@ -197,10 +249,11 @@ export function Projects() {
                     setDraggedId(project.id);
                   }}
                 ><GripVertical size={15} /></span>
-                <Button variant="ghost" aria-label="Поднять проект" disabled={index === 0} onClick={() => moveProject(project.id, index - 1)}><ArrowUp size={15} /></Button>
-                <Button variant="ghost" aria-label="Опустить проект" disabled={index === active.length - 1} onClick={() => moveProject(project.id, index + 1)}><ArrowDown size={15} /></Button>
-                <Button variant="ghost" onClick={() => setArchiveCandidate(project)}><Archive size={15} />В архив</Button>
-                <Button variant="ghost" aria-label={`Удалить проект «${project.name}»`} onClick={() => setDeleteCandidate(project)}><Trash2 size={15} />Удалить</Button>
+                <Link className="dash-card-action" to={`/projects/${project.id}`}>Открыть</Link>
+                <button className="dash-card-action" disabled={index === 0} onClick={() => moveProject(project.id, index - 1)}><ArrowUp size={15} />Вверх</button>
+                <button className="dash-card-action" disabled={index === active.length - 1} onClick={() => moveProject(project.id, index + 1)}><ArrowDown size={15} />Вниз</button>
+                <button className="dash-card-action" onClick={() => setArchiveCandidate(project)}><Archive size={15} />Архивировать</button>
+                <button className="dash-card-action" onClick={() => setDeleteCandidate(project)}><Trash2 size={15} />Удалить навсегда</button>
               </div>
             </article>
           ))}
@@ -218,7 +271,7 @@ export function Projects() {
                 <RotateCcw size={15} />Вернуть в работу
               </Button>
               <Button variant="ghost" disabled={busyId === project.id} onClick={() => setDeleteCandidate(project)}>
-                <Trash2 size={15} />Удалить
+                <Trash2 size={15} />Удалить навсегда
               </Button>
             </div>
           ))}

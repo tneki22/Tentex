@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Dialog as RadixDialog } from "radix-ui";
-import { FolderOpen, Search, SquareDashed } from "lucide-react";
+import { FileText, FolderOpen, Search, SquareDashed } from "lucide-react";
 import { listProjects, type ProjectSummary } from "../api/projects";
 import { Kbd } from "../components/ui";
 import { SCREENS } from "./screens";
@@ -120,7 +120,7 @@ export function CommandPalette() {
         type="button"
         className="topbar-search"
         onClick={() => setOpen(true)}
-        aria-label="Поиск по проектам и экранам"
+        aria-label="Поиск по проектам, экранам и файлам"
       >
         <Search size={15} aria-hidden="true" />
         Поиск
@@ -133,7 +133,7 @@ export function CommandPalette() {
           <RadixDialog.Content className="palette" aria-label="Поиск">
             <RadixDialog.Title hidden>Поиск</RadixDialog.Title>
             <RadixDialog.Description hidden>
-              Поиск по названиям проектов и экранов
+              Поиск по названиям проектов, экранов и файлов
             </RadixDialog.Description>
 
             <div className="palette-input">
@@ -143,7 +143,7 @@ export function CommandPalette() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={onInputKeyDown}
-                placeholder="Проект или экран"
+                placeholder="Проект, экран или файл"
                 aria-label="Что искать"
               />
               <Kbd>Esc</Kbd>
@@ -172,6 +172,13 @@ export function CommandPalette() {
                   </div>
                 );
               })}
+              <div className="palette-files-placeholder" aria-disabled="true">
+                <p className="palette-group">Файлы</p>
+                <div className="palette-static-row">
+                  <FileText size={15} aria-hidden="true" />
+                  <span>Файлы появятся после подключения Библиотеки к API</span>
+                </div>
+              </div>
             </div>
           </RadixDialog.Content>
         </RadixDialog.Portal>

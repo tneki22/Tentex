@@ -7,8 +7,9 @@ import {
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
+  PieChart,
 } from "lucide-react";
-import { Popover, Tooltip, TooltipProvider } from "../components/ui";
+import { Disclosure, Popover, Tooltip, TooltipProvider } from "../components/ui";
 import { CommandPalette } from "./CommandPalette";
 import { screenById } from "./screens";
 import { SCREEN_VIEWS } from "./views";
@@ -111,6 +112,22 @@ export function AppLayout() {
               );
             })}
           </div>
+
+          <Popover
+            title="Покрытие материалов"
+            trigger={
+              <button type="button" className="app-nav-link app-coverage-button">
+                <PieChart size={15} aria-hidden="true" />
+                <span className="nav-text">Покрытие материалов</span>
+              </button>
+            }
+          >
+            <p className="sidebar-empty">Покрытие появится после привязок на этапе 8</p>
+          </Popover>
+
+          <Disclosure className="sidebar-recent" summary="Последние темы">
+            <p className="sidebar-empty">Здесь появятся последние изученные темы</p>
+          </Disclosure>
 
           <div className="app-widgets" aria-label="Состояние установки">
             <Popover
