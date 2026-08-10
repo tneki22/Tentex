@@ -211,8 +211,8 @@ def run() -> None:
                         "groups": [
                             {
                                 "id": "main",
-                                "tabs": ["answer", "source"],
-                                "active_tab": "answer",
+                                "tabs": [],
+                                "active_tab": None,
                             }
                         ],
                         "group_weights": [1],
@@ -355,6 +355,9 @@ def run() -> None:
                 project["workspace_state"]["layout"]["selected_node_id"]
                 == topic_node["id"]
             )
+            assert project["workspace_state"]["layout"]["groups"] == [
+                {"id": "main", "tabs": [], "active_tab": None}
+            ]
             assert project["workspace_state"]["layout"]["expanded_node_ids"] == [
                 section_node["id"]
             ]

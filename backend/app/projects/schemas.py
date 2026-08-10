@@ -199,7 +199,7 @@ class WorkspaceTab(StrEnum):
 
 class WorkspaceGroup(ApiModel):
     id: NonBlank
-    tabs: list[WorkspaceTab] = Field(min_length=1)
+    tabs: list[WorkspaceTab] = Field(default_factory=list)
     active_tab: WorkspaceTab | None = None
 
     @model_validator(mode="after")

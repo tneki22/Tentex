@@ -1684,9 +1684,13 @@
 .program-inspector {
   position: sticky;
   top: var(--space-5);
+  max-block-size: calc(100dvh - var(--space-10));
   display: grid;
   gap: var(--space-4);
   padding: var(--space-5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .program-inspector h2,
@@ -2246,6 +2250,8 @@
   .program-inspector,
   .plan-side-panel {
     position: static;
+    max-block-size: none;
+    overflow-y: visible;
   }
 
 }
@@ -5311,9 +5317,17 @@ button.wizard-back-projects {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
   background: var(--canvas);
+}
+
+.workspace-save-status:empty {
+  display: none;
+}
+
+.workspace-save-status .inline-error {
+  margin: var(--space-2);
 }
 
 .workspace-studio {

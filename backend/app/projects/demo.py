@@ -208,8 +208,8 @@ def seed_demo_project(session: Session, *, create_if_missing: bool = True) -> UU
                     "groups": [
                         {
                             "id": "main",
-                            "tabs": ["answer", "source"],
-                            "active_tab": "answer",
+                            "tabs": [],
+                            "active_tab": None,
                         }
                     ],
                     "group_weights": [1],
