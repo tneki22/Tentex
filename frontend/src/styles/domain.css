@@ -35,6 +35,14 @@
   white-space: nowrap;
 }
 
+.cost-estimate.is-actual {
+  align-items: center;
+}
+
+.cost-estimate.is-actual span {
+  overflow-wrap: anywhere;
+}
+
 /* --- Уровень цели --- */
 
 .goal-level {

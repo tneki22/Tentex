@@ -43,6 +43,7 @@ class JudgeResult:
     wrong: list[RubricPoint]
     summary: str
     ai_run_id: UUID
+    actual_model_id: str
     usage: AiUsage
     cached: bool
 
@@ -125,6 +126,7 @@ async def judge_attempt(gateway: ModelGateway, attempt: Attempt) -> JudgeResult:
         wrong=_rubric_points(attempt.text, result.value.wrong),
         summary=result.value.summary,
         ai_run_id=result.run_id,
+        actual_model_id=result.actual_model_id,
         usage=result.usage,
         cached=result.cached,
     )

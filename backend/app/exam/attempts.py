@@ -108,6 +108,7 @@ def _verdict_payload(
     summary: str,
     usage: AiUsage | None,
     cached: bool,
+    actual_model_id: str | None,
 ) -> dict[str, Any]:
     return {
         "outcome": outcome.value,
@@ -116,8 +117,21 @@ def _verdict_payload(
         "missed": _point_payload(missed),
         "wrong": _point_payload(wrong),
         "summary": summary,
-        "usage": usage.model_dump(mode="json") if usage is not None else {},
+        "usage": (
+            usage.model_dump(mode="json")
+            if usage is not None
+            else {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "reasoning_tokens": 0,
+                "provider_cached_tokens": 0,
+                "actual_cost_usd": "0",
+                "actual_cost_rub": "0",
+            }
+        ),
         "cached": cached,
+        "actual_model_id": actual_model_id,
+        "self_assessment": None,
     }
 
 
@@ -149,6 +163,7 @@ def _save_grade(
     ai_run_id: UUID | None = None,
     usage: AiUsage | None = None,
     cached: bool = False,
+    actual_model_id: str | None = None,
 ) -> Grade:
     payload = _verdict_payload(
         outcome=outcome,
@@ -159,6 +174,7 @@ def _save_grade(
         summary=summary,
         usage=usage,
         cached=cached,
+        actual_model_id=actual_model_id,
     )
     with session.begin():
         grade = Grade(
@@ -323,6 +339,7 @@ def _save_judged_grade(
         ai_run_id=result.ai_run_id,
         usage=result.usage,
         cached=result.cached,
+        actual_model_id=result.actual_model_id,
     )
 
 
@@ -351,6 +368,15 @@ def set_self_assessment(
         grade.self_assessment = outcome
         if grade.outcome is AttemptOutcome.UNSCORED:
             grade.method = GradeMethod.SELF_ASSESSMENT
+        verdict_message = session.scalar(
+            select(ChatMessage).where(ChatMessage.grade_attempt_id == attempt.id).limit(1)
+        )
+        if verdict_message is not None:
+            verdict_message.payload = {
+                **verdict_message.payload,
+                "method": grade.method.value if grade.method is not None else None,
+                "self_assessment": outcome.value,
+            }
         grade.updated_at = utc_now()
         session.flush()
         session.refresh(grade)
@@ -372,3 +398,11 @@ def list_attempts(
         .order_by(Attempt.created_at.desc())
     )
     return [AttemptWithGrade(attempt, grade) for attempt, grade in rows]
+
+
+def get_attempt(
+    session: Session, project_id: UUID, attempt_id: UUID
+) -> AttemptWithGrade:
+    chat_service._require_exam_project(session, project_id)
+    attempt = _require_attempt(session, project_id, attempt_id)
+    return AttemptWithGrade(attempt, session.get(Grade, attempt.id))

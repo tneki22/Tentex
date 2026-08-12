@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
@@ -14,10 +15,14 @@ from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import AiTextRequest, ModelGateway
 from app.ai.schemas import AiMessage
 from app.db import SessionLocal, get_session
+from app.exam import attempts as attempt_service
 from app.exam import chat as chat_service
 from app.exam.context import ChatContext
 from app.exam.prompts import CHAT_REPLY_SYSTEM_PROMPT
 from app.exam.schemas import (
+    AttemptDetailRead,
+    AttemptRead,
+    AttemptSummaryRead,
     ChatAnswerResult,
     ChatAnswerWrite,
     ChatContextRead,
@@ -28,8 +33,11 @@ from app.exam.schemas import (
     ChatSessionCreateWrite,
     ChatSessionDetail,
     ChatSessionSummary,
+    GradeRead,
+    GradeUsageRead,
+    SelfAssessmentWrite,
 )
-from app.models import ChatMessage, ChatMessageRole, ChatSession, ChatStreamState
+from app.models import AiRun, ChatMessage, ChatMessageRole, ChatSession, ChatStreamState, Grade
 from app.projects.errors import ProjectDomainError
 
 SessionDependency = Annotated[Session, Depends(get_session)]
@@ -182,11 +190,117 @@ async def _events(project_id: UUID, chat_id: UUID, request: AiTextRequest) -> As
 @router.post(
     "/projects/{project_id}/chat/sessions/{session_id}/answer", response_model=ChatAnswerResult
 )
-def post_chat_answer(
+async def post_chat_answer(
     project_id: UUID,
     session_id: UUID,
     command: ChatAnswerWrite,
     session: SessionDependency,
+    gateway: GatewayDependency,
 ) -> ChatAnswerResult:
-    messages = chat_service.submit_answer_stub(session, project_id, session_id, command.text)
-    return ChatAnswerResult(messages=[ChatMessageRead.model_validate(item) for item in messages])
+    result = await attempt_service.submit_answer(
+        session, gateway, project_id, session_id, command.text
+    )
+    return ChatAnswerResult(
+        messages=[ChatMessageRead.model_validate(item) for item in result.messages],
+        attempt=AttemptRead.model_validate(result.attempt),
+        grade=_grade_read(session, result.grade),
+    )
+
+
+def _grade_read(session: Session, grade: Grade) -> GradeRead:
+    run = session.get(AiRun, grade.ai_run_id) if grade.ai_run_id is not None else None
+    usage = GradeUsageRead(
+        input_tokens=run.input_tokens or 0 if run is not None else 0,
+        output_tokens=run.output_tokens or 0 if run is not None else 0,
+        reasoning_tokens=run.reasoning_tokens or 0 if run is not None else 0,
+        provider_cached_tokens=run.provider_cached_tokens or 0 if run is not None else 0,
+        actual_cost_usd=(
+            run.actual_cost_usd if run is not None else Decimal("0")
+        ),
+        actual_cost_rub=(
+            run.actual_cost_rub if run is not None else Decimal("0")
+        ),
+    )
+    return GradeRead(
+        attempt_id=grade.attempt_id,
+        outcome=grade.outcome,
+        method=grade.method,
+        credited_points=grade.credited_points,
+        missed_points=grade.missed_points,
+        wrong_points=grade.wrong_points,
+        summary=grade.summary,
+        self_assessment=grade.self_assessment,
+        ai_run_id=grade.ai_run_id,
+        actual_model_id=run.actual_model_id if run is not None else None,
+        usage=usage,
+        cached=run.status == "cached" if run is not None else False,
+        created_at=grade.created_at,
+        updated_at=grade.updated_at,
+    )
+
+
+def _attempt_detail(session: Session, item: attempt_service.AttemptWithGrade) -> AttemptDetailRead:
+    return AttemptDetailRead(
+        attempt=AttemptRead.model_validate(item.attempt),
+        grade=_grade_read(session, item.grade) if item.grade is not None else None,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/attempts/{attempt_id}/check", response_model=GradeRead
+)
+async def post_attempt_check(
+    project_id: UUID,
+    attempt_id: UUID,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> GradeRead:
+    grade = await attempt_service.check_attempt(session, gateway, project_id, attempt_id)
+    return _grade_read(session, grade)
+
+
+@router.put(
+    "/projects/{project_id}/attempts/{attempt_id}/self-assessment",
+    response_model=GradeRead,
+)
+def put_attempt_self_assessment(
+    project_id: UUID,
+    attempt_id: UUID,
+    command: SelfAssessmentWrite,
+    session: SessionDependency,
+) -> GradeRead:
+    grade = attempt_service.set_self_assessment(
+        session, project_id, attempt_id, command.outcome
+    )
+    return _grade_read(session, grade)
+
+
+@router.get("/projects/{project_id}/attempts", response_model=list[AttemptSummaryRead])
+def get_attempts(
+    project_id: UUID, node_id: UUID, session: SessionDependency
+) -> list[AttemptSummaryRead]:
+    return [
+        AttemptSummaryRead(
+            id=item.attempt.id,
+            ordinal=item.attempt.ordinal,
+            created_at=item.attempt.created_at,
+            outcome=item.grade.outcome if item.grade is not None else None,
+            method=item.grade.method if item.grade is not None else None,
+            self_assessment=(
+                item.grade.self_assessment if item.grade is not None else None
+            ),
+            text_preview=item.attempt.text[:180],
+        )
+        for item in attempt_service.list_attempts(session, project_id, node_id)
+    ]
+
+
+@router.get(
+    "/projects/{project_id}/attempts/{attempt_id}", response_model=AttemptDetailRead
+)
+def get_attempt_detail(
+    project_id: UUID, attempt_id: UUID, session: SessionDependency
+) -> AttemptDetailRead:
+    return _attempt_detail(
+        session, attempt_service.get_attempt(session, project_id, attempt_id)
+    )

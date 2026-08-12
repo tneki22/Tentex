@@ -12,6 +12,8 @@ from app.ai.gateway import ModelGateway
 from app.ai.provider import FakeTransport, ProviderCompletion, ProviderUsage
 from app.exam import attempts as attempt_service
 from app.exam import chat as chat_service
+from app.exam import router as chat_router
+from app.exam.schemas import ChatAnswerWrite, SelfAssessmentWrite
 from app.models import (
     AiSettings,
     Attempt,
@@ -253,3 +255,49 @@ async def test_attempt_ordinals_and_history_are_per_node(
     assert (first.attempt.ordinal, second.attempt.ordinal) == (1, 2)
     assert [item.attempt.ordinal for item in history] == [2, 1]
     assert all(item.grade is not None for item in history)
+
+
+@pytest.mark.asyncio
+async def test_attempt_http_contract_returns_summary_detail_and_self_assessment(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    project = make_exam_project(session)
+    topic = make_topic_node(session, project, title="HTTP вопрос")
+    _add_reference(session, project.id, topic.id, "Ключ определяет строку.")
+    chat = chat_service.create_session(session, project.id, topic.id)
+
+    submitted = await chat_router.post_chat_answer(
+        project_id=project.id,
+        session_id=chat.id,
+        command=ChatAnswerWrite(text="Ключ определяет строку."),
+        session=session,
+        gateway=ModelGateway(session, FakeTransport()),
+    )
+    assert submitted.attempt.ordinal == 1
+    assert submitted.grade.method == "exact_match"
+    assert submitted.messages[0].attempt_id == submitted.attempt.id
+    assert submitted.messages[1].grade_attempt_id == submitted.attempt.id
+
+    summaries = chat_router.get_attempts(project.id, topic.id, session)
+    assert summaries[0].text_preview == "Ключ определяет строку."
+    assert summaries[0].outcome == "passed"
+    session.commit()
+
+    detail = chat_router.get_attempt_detail(project.id, submitted.attempt.id, session)
+    assert detail.attempt.text == "Ключ определяет строку."
+    assert detail.grade is not None
+    assert detail.grade.usage.actual_cost_usd == Decimal("0")
+    session.commit()
+
+    assessed = chat_router.put_attempt_self_assessment(
+        project.id,
+        submitted.attempt.id,
+        SelfAssessmentWrite(outcome=AttemptOutcome.PARTIAL),
+        session,
+    )
+    assert assessed.self_assessment == "partial"
+    session.commit()
+    chat_detail = chat_service.get_session_detail(session, project.id, chat.id)
+    verdict = next(message for message in chat_detail.messages if message.grade_attempt_id)
+    assert verdict.payload["self_assessment"] == "partial"

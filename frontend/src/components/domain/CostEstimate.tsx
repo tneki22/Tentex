@@ -1,6 +1,7 @@
 import { Coins } from "lucide-react";
 
-interface CostEstimateProps {
+interface EstimatedCostProps {
+  variant?: "estimate";
   /** Число вызовов модели. Точное, а не диапазон: цикл фиксированный (§25.2). */
   calls: number;
   /** Стоимость в долларах. */
@@ -12,6 +13,19 @@ interface CostEstimateProps {
   units?: string;
 }
 
+interface ActualCostProps {
+  variant: "actual";
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  costRub: number | null;
+  cached: boolean;
+  className?: string;
+}
+
+type CostEstimateProps = EstimatedCostProps | ActualCostProps;
+
 /**
  * Оценка до запуска платной операции: сколько вызовов, сколько денег, сколько
  * ждать. Показывается ПЕРЕД подтверждением — проход 1, проход 2, генерация
@@ -21,7 +35,22 @@ interface CostEstimateProps {
  * единиц ÷ размер батча × цена вызова. Это аргумент в пользу фиксированного
  * прохода против агента, и на экране он должен быть виден числом.
  */
-export function CostEstimate({ calls, cost, minutes, pricesFrom, units }: CostEstimateProps) {
+export function CostEstimate(props: CostEstimateProps) {
+  if (props.variant === "actual") {
+    const tokens = props.inputTokens + props.outputTokens;
+    const usd = props.costUsd === null ? "$ —" : `$${props.costUsd.toFixed(4)}`;
+    const rub = props.costRub === null ? "≈ — ₽" : `≈ ${props.costRub.toFixed(2)} ₽`;
+    return (
+      <p className={`cost-estimate is-actual ${props.className ?? ""}`.trim()}>
+        <Coins size={14} aria-hidden="true" />
+        <span>
+          {props.model ?? "без внешней модели"} · {tokens} {plural(tokens, "токен", "токена", "токенов")} · {usd} · {rub}
+        </span>
+        {props.cached && <small>кэш · новая стоимость 0</small>}
+      </p>
+    );
+  }
+  const { calls, cost, minutes, pricesFrom, units } = props;
   return (
     <p className="cost-estimate">
       <Coins size={14} aria-hidden="true" />

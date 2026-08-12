@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
-import type { ChatMessageRead } from "../../../api/chat";
+import type { AttemptOutcome, ChatMessageRead } from "../../../api/chat";
 import { OfflineNotice } from "../../../components/domain";
 import { Button } from "../../../components/ui";
 import { AnswerFormCard } from "./AnswerFormCard";
 import { Markdown } from "./Markdown";
 import { parsePayload } from "./payload";
+import { VerdictCard } from "./VerdictCard";
 
 export interface PendingTurn {
   userText: string;
@@ -26,17 +27,33 @@ interface ChatTimelineProps {
   messages: ChatMessageRead[];
   pending: PendingTurn | null;
   onAnswerAgain: () => void;
+  onCheckAgain: (attemptId: string) => Promise<void>;
+  onSelfAssessment: (
+    attemptId: string,
+    outcome: Exclude<AttemptOutcome, "unscored">,
+  ) => Promise<void>;
   onRetry: () => void;
   failure: StreamFailure | null;
 }
 
 function MessageBubble({
   message,
+  answerText,
+  needsCheck,
   onAnswerAgain,
+  onCheckAgain,
+  onSelfAssessment,
   headingRef,
 }: {
   message: ChatMessageRead;
+  answerText: string;
+  needsCheck: boolean;
   onAnswerAgain: () => void;
+  onCheckAgain: (attemptId: string) => Promise<void>;
+  onSelfAssessment: (
+    attemptId: string,
+    outcome: Exclude<AttemptOutcome, "unscored">,
+  ) => Promise<void>;
   headingRef: (node: HTMLHeadingElement | null) => void;
 }) {
   const payload = parsePayload(message);
@@ -47,6 +64,20 @@ function MessageBubble({
         payload={payload.data}
         createdAt={message.created_at}
         onAnswerAgain={onAnswerAgain}
+        onCheckAgain={needsCheck && message.attempt_id
+          ? () => { void onCheckAgain(message.attempt_id as string); }
+          : undefined}
+        headingRef={headingRef}
+      />
+    );
+  }
+  if (payload.kind === "verdict" && message.grade_attempt_id) {
+    return (
+      <VerdictCard
+        verdict={payload.data}
+        answer={answerText}
+        attemptId={message.grade_attempt_id}
+        onSelfAssessment={onSelfAssessment}
         headingRef={headingRef}
       />
     );
@@ -65,7 +96,15 @@ function MessageBubble({
   );
 }
 
-export function ChatTimeline({ messages, pending, onAnswerAgain, onRetry, failure }: ChatTimelineProps) {
+export function ChatTimeline({
+  messages,
+  pending,
+  onAnswerAgain,
+  onCheckAgain,
+  onSelfAssessment,
+  onRetry,
+  failure,
+}: ChatTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
   const headingRefs = useRef(new Map<string, HTMLHeadingElement>());
@@ -73,6 +112,17 @@ export function ChatTimeline({ messages, pending, onAnswerAgain, onRetry, failur
   const wasStreaming = useRef(false);
   const [showJump, setShowJump] = useState(false);
   const [streamAnnouncement, setStreamAnnouncement] = useState("");
+  const verdictAttemptIds = new Set(
+    messages.flatMap((message) => message.grade_attempt_id ? [message.grade_attempt_id] : []),
+  );
+  const answerTextByAttempt = new Map(
+    messages.flatMap((message) => {
+      const payload = parsePayload(message);
+      return payload.kind === "answer_form" && message.attempt_id
+        ? [[message.attempt_id, payload.data.text] as const]
+        : [];
+    }),
+  );
 
   function distanceFromBottom(): number {
     const node = scrollRef.current;
@@ -151,7 +201,15 @@ export function ChatTimeline({ messages, pending, onAnswerAgain, onRetry, failur
             <div className="chat-timeline-item" key={message.id}>
               <MessageBubble
                 message={message}
+                answerText={message.grade_attempt_id
+                  ? answerTextByAttempt.get(message.grade_attempt_id) ?? ""
+                  : ""}
+                needsCheck={Boolean(
+                  message.attempt_id && !verdictAttemptIds.has(message.attempt_id),
+                )}
                 onAnswerAgain={onAnswerAgain}
+                onCheckAgain={onCheckAgain}
+                onSelfAssessment={onSelfAssessment}
                 headingRef={(heading) => {
                   if (heading) headingRefs.current.set(message.id, heading);
                   else headingRefs.current.delete(message.id);

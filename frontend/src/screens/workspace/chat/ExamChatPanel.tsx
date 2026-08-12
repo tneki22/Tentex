@@ -2,16 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import { History, MessageSquare, Plus } from "lucide-react";
 import {
   createChatSession,
+  checkAttempt,
   getChatContext,
   getChatSession,
   listChatSessions,
   saveChatDraft,
+  setAttemptSelfAssessment,
   streamMessage,
   submitChatAnswer,
   type ChatContextRead,
   type ChatMessageRead,
   type ChatSessionDetail,
   type ChatSessionSummary,
+  type AttemptOutcome,
 } from "../../../api/chat";
 import { ProjectApiError, type ProgramNodeRead } from "../../../api/projects";
 import { Button, EmptyState, ErrorState, IconButton, LoadingState, Popover } from "../../../components/ui";
@@ -24,6 +27,7 @@ const DRAFT_DEBOUNCE_MS = 800;
 interface ExamChatPanelProps {
   projectId: string;
   node: ProgramNodeRead | null;
+  onAttemptsChanged?: () => void;
 }
 
 function sessionTime(iso: string): string {
@@ -34,7 +38,7 @@ function nextOrdinal(messages: ChatMessageRead[]): number {
   return messages.filter((message) => message.payload_kind === "answer_form").length + 1;
 }
 
-export function ExamChatPanel({ projectId, node }: ExamChatPanelProps) {
+export function ExamChatPanel({ projectId, node, onAttemptsChanged }: ExamChatPanelProps) {
   const [sessions, setSessions] = useState<ChatSessionSummary[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -197,13 +201,48 @@ export function ExamChatPanel({ projectId, node }: ExamChatPanelProps) {
       await saveChatDraft(projectId, activeSessionId, "");
       setAnswering(false);
       await refreshDetail();
+      onAttemptsChanged?.();
     } catch (error) {
       setFailure({
         code: error instanceof ProjectApiError ? error.code ?? "unknown" : "unknown",
         detail: error instanceof Error ? error.message : "Ответ не сохранён",
       });
+      // Дорогая ступень может упасть уже после фиксации Attempt. Перечитываем
+      // ленту, чтобы сохранённая форма сразу предложила «Проверить ещё раз».
+      await refreshDetail();
+      onAttemptsChanged?.();
     } finally {
       setSubmittingAnswer(false);
+    }
+  }
+
+  async function retryAttempt(attemptId: string) {
+    setFailure(null);
+    try {
+      await checkAttempt(projectId, attemptId);
+      await refreshDetail();
+      onAttemptsChanged?.();
+    } catch (error) {
+      setFailure({
+        code: error instanceof ProjectApiError ? error.code ?? "unknown" : "unknown",
+        detail: error instanceof Error ? error.message : "Проверка не завершена",
+      });
+    }
+  }
+
+  async function assessAttempt(
+    attemptId: string,
+    outcome: Exclude<AttemptOutcome, "unscored">,
+  ) {
+    try {
+      await setAttemptSelfAssessment(projectId, attemptId, outcome);
+      await refreshDetail();
+      onAttemptsChanged?.();
+    } catch (error) {
+      setFailure({
+        code: error instanceof ProjectApiError ? error.code ?? "unknown" : "unknown",
+        detail: error instanceof Error ? error.message : "Самооценка не сохранилась",
+      });
     }
   }
 
@@ -293,6 +332,8 @@ export function ExamChatPanel({ projectId, node }: ExamChatPanelProps) {
                 if (failure?.retryText) void sendMessage(failure.retryText);
               }}
               onAnswerAgain={() => { setDraft(""); setAnswering(true); }}
+              onCheckAgain={retryAttempt}
+              onSelfAssessment={assessAttempt}
             />
           )}
 

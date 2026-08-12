@@ -72,6 +72,7 @@ import {
 import { StudioPanel } from "./StudioPanel";
 import { usePersonalMarks } from "../hooks/usePersonalMarks";
 import { ExamChatPanel } from "./workspace/chat/ExamChatPanel";
+import { AttemptHistory } from "./workspace/AttemptHistory";
 
 const DEFAULT_LAYOUT: WorkspaceLayout = {
   selected_node_id: null,
@@ -200,6 +201,7 @@ export function ProjectWorkspace() {
   const [answerSlot, setAnswerSlot] = useState<ReferenceAnswerSlot | null>(null);
   const [answerLoading, setAnswerLoading] = useState(false);
   const [answerError, setAnswerError] = useState("");
+  const [attemptsReloadKey, setAttemptsReloadKey] = useState(0);
   const [coverage, setCoverage] = useState<CoverageMapRead | null>(null);
   const [query, setQuery] = useState("");
   const [studioExpanded, setStudioExpanded] = useState(false);
@@ -511,7 +513,15 @@ export function ProjectWorkspace() {
   function renderTabContent(tab: WorkspaceTab) {
     if (tab === "answer") return answerPanel();
     if (tab === "source") return sourcePanel();
-    if (tab === "chat" && !textbook && projectId) return <ExamChatPanel projectId={projectId} node={selected} />;
+    if (tab === "chat" && !textbook && projectId) {
+      return (
+        <ExamChatPanel
+          projectId={projectId}
+          node={selected}
+          onAttemptsChanged={() => setAttemptsReloadKey((value) => value + 1)}
+        />
+      );
+    }
     return renderTabStub(tab);
   }
 
@@ -526,24 +536,46 @@ export function ProjectWorkspace() {
     if (textbook) {
       return <div className="workspace-empty-panel"><FileText size={28} /><h2>Ответ пока не создан</h2><p>Учебные ответы появятся вместе со сценариями занятий.</p></div>;
     }
-    if (answerLoading) return <LoadingState label="Загружаем эталон" />;
-    if (answerError) return <ErrorState title="Эталон не загрузился" message={answerError} />;
-    if (answerSlot?.answer?.is_active) {
+    if (!selected) {
+      return <div className="workspace-empty-copy"><BookOpen size={26} /><h2>Выберите вопрос</h2><p>Эталон и история попыток появятся после выбора вопроса слева.</p></div>;
+    }
+    let referenceContent: ReactNode;
+    if (answerLoading) referenceContent = <LoadingState label="Загружаем эталон" />;
+    else if (answerError) referenceContent = <ErrorState title="Эталон не загрузился" message={answerError} />;
+    else if (answerSlot?.answer?.is_active) {
       const answer = answerSlot.answer;
       const source = answer.source_label ? `Источник: ${answer.source_label}` : answer.origin_kind === "manual" ? "Добавлен вручную" : "Импортирован";
       const match = answer.match_method === "exact_title"
         ? `Сопоставлен по заголовку${answer.matched_title ? `: ${answer.matched_title}` : ""}`
         : "Сопоставлен вручную";
-      return (
+      referenceContent = (
         <article className="workspace-reference-answer">
           <header><ReferenceAnswerBadge status={answerSlot.status} /><span>{source} · {match}</span></header>
-          <h2>{selected?.title}</h2>
+          <h2>{selected.title}</h2>
           <div className="workspace-reference-text">{answer.text}</div>
-          <Link to={`/projects/${projectId}/coverage-map?topic=${selected?.id ?? ""}`}>Открыть и изменить эталон</Link>
+          <Link to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть и изменить эталон</Link>
         </article>
       );
+    } else {
+      referenceContent = (
+        <div className="workspace-empty-copy is-answer-reference">
+          <BookOpen size={26} />
+          <h2>Ответ пока не найден</h2>
+          <p>Добавьте эталон вручную или импортируйте общий текст с ответами.</p>
+          <Link className="secondary-button" to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть эталоны</Link>
+        </div>
+      );
     }
-    return <div className="workspace-empty-copy"><BookOpen size={26} /><h2>Ответ пока не найден</h2><p>Добавьте эталон вручную или импортируйте общий текст с ответами.</p><Link className="secondary-button" to={`/projects/${projectId}/coverage-map?topic=${selected?.id ?? ""}`}>Открыть эталоны</Link></div>;
+    return (
+      <div className="workspace-answer-tab">
+        {referenceContent}
+        <AttemptHistory
+          projectId={projectId}
+          nodeId={selected.id}
+          refreshKey={attemptsReloadKey}
+        />
+      </div>
+    );
   }
 
   function sourcePanel() {

@@ -23,6 +23,7 @@ interface SubmittedAnswerCardProps {
   payload: AnswerFormPayload;
   createdAt: string;
   onAnswerAgain: () => void;
+  onCheckAgain?: () => void;
   headingRef?: (node: HTMLHeadingElement | null) => void;
 }
 
@@ -44,7 +45,7 @@ export function AnswerFormCard(props: AnswerFormCardProps) {
   const growRef = useAutoGrow(props.mode === "composing" ? props.value : "");
 
   if (props.mode === "submitted") {
-    const { payload, createdAt, onAnswerAgain, headingRef } = props;
+    const { payload, createdAt, onAnswerAgain, onCheckAgain, headingRef } = props;
     return (
       <article className="chat-answer-card is-submitted">
         <header>
@@ -55,9 +56,12 @@ export function AnswerFormCard(props: AnswerFormCardProps) {
         </header>
         <p className="chat-answer-question">{payload.question}</p>
         <div className="chat-answer-text" aria-readonly="true">{payload.text}</div>
-        <Button variant="secondary" onClick={onAnswerAgain}>
-          <RotateCcw size={14} />Ответить заново
-        </Button>
+        <div className="chat-answer-actions is-submitted">
+          {onCheckAgain && <Button onClick={onCheckAgain}>Проверить ещё раз</Button>}
+          <Button variant="secondary" onClick={onAnswerAgain}>
+            <RotateCcw size={14} />Ответить заново
+          </Button>
+        </div>
       </article>
     );
   }

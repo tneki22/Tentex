@@ -5,12 +5,88 @@ export type ChatStreamState = "complete" | "stopped" | "failed";
 export type ChatPayloadKind = "none" | "answer_form" | "verdict" | "task" | "interactive";
 export type ExaminerPersona = "calm_teacher" | "neutral_examiner" | "strict_reviewer";
 export type ExaminerStrictness = "soft" | "normal" | "strict";
+export type AttemptOutcome = "passed" | "partial" | "failed" | "unscored";
+export type GradeMethod = "exact_match" | "key_terms" | "sql" | "semantic" | "ai_judge" | "self_assessment";
 
 export interface AnswerFormPayload {
   question: string;
   ordinal: number;
   submitted_at: string;
   text: string;
+}
+
+export interface RubricPointRead {
+  point: string;
+  quote: string | null;
+  quote_start: number | null;
+  quote_end: number | null;
+}
+
+export interface GradeUsageRead {
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  provider_cached_tokens: number;
+  actual_cost_usd: string | number | null;
+  actual_cost_rub: string | number | null;
+}
+
+export interface VerdictPayload {
+  outcome: AttemptOutcome;
+  method: GradeMethod | null;
+  credited: RubricPointRead[];
+  missed: RubricPointRead[];
+  wrong: RubricPointRead[];
+  summary: string;
+  usage: GradeUsageRead;
+  cached: boolean;
+  actual_model_id: string | null;
+  self_assessment: AttemptOutcome | null;
+}
+
+export interface AttemptRead {
+  id: string;
+  project_id: string;
+  program_node_id: string;
+  parent_attempt_id: string | null;
+  ordinal: number;
+  text: string;
+  persona: ExaminerPersona;
+  strictness: ExaminerStrictness;
+  context_snapshot: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface GradeRead {
+  attempt_id: string;
+  outcome: AttemptOutcome;
+  method: GradeMethod | null;
+  credited_points: RubricPointRead[];
+  missed_points: RubricPointRead[];
+  wrong_points: RubricPointRead[];
+  summary: string;
+  self_assessment: AttemptOutcome | null;
+  ai_run_id: string | null;
+  actual_model_id: string | null;
+  usage: GradeUsageRead;
+  cached: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AttemptSummaryRead {
+  id: string;
+  ordinal: number;
+  created_at: string;
+  outcome: AttemptOutcome | null;
+  method: GradeMethod | null;
+  self_assessment: AttemptOutcome | null;
+  text_preview: string;
+}
+
+export interface AttemptDetailRead {
+  attempt: AttemptRead;
+  grade: GradeRead | null;
 }
 
 export interface ChatMessageRead {
@@ -24,6 +100,8 @@ export interface ChatMessageRead {
   payload: Record<string, unknown>;
   context_snapshot: Record<string, unknown>;
   ai_run_id: string | null;
+  attempt_id: string | null;
+  grade_attempt_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -67,6 +145,8 @@ export interface ChatContextRead {
 
 export interface ChatAnswerResult {
   messages: ChatMessageRead[];
+  attempt: AttemptRead;
+  grade: GradeRead;
 }
 
 export type ChatStreamEvent =
@@ -77,6 +157,8 @@ export type ChatStreamEvent =
 
 const chatPath = (projectId: string): string =>
   `/api/projects/${encodeURIComponent(projectId)}/chat`;
+const attemptsPath = (projectId: string): string =>
+  `/api/projects/${encodeURIComponent(projectId)}/attempts`;
 
 export const listChatSessions = (
   projectId: string,
@@ -123,6 +205,41 @@ export const submitChatAnswer = (
 ): Promise<ChatAnswerResult> => request(
   `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/answer`,
   { method: "POST", body: JSON.stringify({ text }) },
+);
+
+export const listAttempts = (
+  projectId: string,
+  nodeId: string,
+  signal?: AbortSignal,
+): Promise<AttemptSummaryRead[]> => request(
+  `${attemptsPath(projectId)}?node_id=${encodeURIComponent(nodeId)}`,
+  { signal },
+);
+
+export const getAttempt = (
+  projectId: string,
+  attemptId: string,
+  signal?: AbortSignal,
+): Promise<AttemptDetailRead> => request(
+  `${attemptsPath(projectId)}/${encodeURIComponent(attemptId)}`,
+  { signal },
+);
+
+export const checkAttempt = (
+  projectId: string,
+  attemptId: string,
+): Promise<GradeRead> => request(
+  `${attemptsPath(projectId)}/${encodeURIComponent(attemptId)}/check`,
+  { method: "POST" },
+);
+
+export const setAttemptSelfAssessment = (
+  projectId: string,
+  attemptId: string,
+  outcome: Exclude<AttemptOutcome, "unscored">,
+): Promise<GradeRead> => request(
+  `${attemptsPath(projectId)}/${encodeURIComponent(attemptId)}/self-assessment`,
+  { method: "PUT", body: JSON.stringify({ outcome }) },
 );
 
 function parseFrame(raw: string): ChatStreamEvent | null {

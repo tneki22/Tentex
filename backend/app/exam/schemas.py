@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.models import (
+    AttemptOutcome,
     ChatMessageRole,
     ChatPayloadKind,
     ChatStreamState,
     ExaminerPersona,
     ExaminerStrictness,
+    GradeMethod,
 )
 
 NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -48,6 +51,8 @@ class ChatMessageRead(ApiModel):
     payload: dict[str, Any]
     context_snapshot: dict[str, Any]
     ai_run_id: UUID | None
+    attempt_id: UUID | None
+    grade_attempt_id: UUID | None
     created_at: datetime
     updated_at: datetime
 
@@ -91,5 +96,72 @@ class ChatAnswerWrite(ApiModel):
     text: NonBlank = Field(max_length=50_000)
 
 
+class RubricPointRead(ApiModel):
+    point: str
+    quote: str | None = None
+    quote_start: int | None = None
+    quote_end: int | None = None
+
+
+class AttemptRead(ApiModel):
+    id: UUID
+    project_id: UUID
+    program_node_id: UUID
+    parent_attempt_id: UUID | None
+    ordinal: int
+    text: str
+    persona: ExaminerPersona
+    strictness: ExaminerStrictness
+    context_snapshot: dict[str, Any]
+    created_at: datetime
+
+
+class GradeUsageRead(ApiModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    provider_cached_tokens: int = 0
+    actual_cost_usd: Decimal | None = Decimal("0")
+    actual_cost_rub: Decimal | None = Decimal("0")
+
+
+class GradeRead(ApiModel):
+    attempt_id: UUID
+    outcome: AttemptOutcome
+    method: GradeMethod | None
+    credited_points: list[RubricPointRead]
+    missed_points: list[RubricPointRead]
+    wrong_points: list[RubricPointRead]
+    summary: str
+    self_assessment: AttemptOutcome | None
+    ai_run_id: UUID | None
+    actual_model_id: str | None
+    usage: GradeUsageRead
+    cached: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class AttemptSummaryRead(ApiModel):
+    id: UUID
+    ordinal: int
+    created_at: datetime
+    outcome: AttemptOutcome | None
+    method: GradeMethod | None
+    self_assessment: AttemptOutcome | None
+    text_preview: str
+
+
+class AttemptDetailRead(ApiModel):
+    attempt: AttemptRead
+    grade: GradeRead | None
+
+
+class SelfAssessmentWrite(ApiModel):
+    outcome: AttemptOutcome
+
+
 class ChatAnswerResult(ApiModel):
     messages: list[ChatMessageRead]
+    attempt: AttemptRead
+    grade: GradeRead

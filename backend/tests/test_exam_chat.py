@@ -191,14 +191,20 @@ async def test_offline_blocks_message_but_answer_still_saves(
     # подряд. rollback() закрывает зависшую автотранзакцию после чтения, но
     # заодно истекает загруженные объекты — id взяты заранее как простые
     # значения, чтобы их чтение после rollback не открыло новую автотранзакцию
-    # раньше собственного session.begin() внутри submit_answer_stub.
+    # раньше собственной транзакции сохранения попытки.
     session.rollback()
 
-    result = chat_router.post_chat_answer(
+    result = await chat_router.post_chat_answer(
         project_id=project_id,
         session_id=chat_id,
         command=ChatAnswerWrite(text="мой ответ на вопрос билета"),
         session=session,
+        gateway=ModelGateway(session),
     )
-    assert [message.payload_kind for message in result.messages] == ["answer_form", "none"]
+    assert [message.payload_kind for message in result.messages] == [
+        "answer_form",
+        "verdict",
+    ]
     assert result.messages[0].payload["ordinal"] == 1
+    assert result.attempt.ordinal == 1
+    assert result.grade.outcome == "unscored"
