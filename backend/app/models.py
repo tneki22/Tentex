@@ -255,6 +255,22 @@ class ExaminerStrictness(StrEnum):
     STRICT = "strict"
 
 
+class AttemptOutcome(StrEnum):
+    PASSED = "passed"
+    PARTIAL = "partial"
+    FAILED = "failed"
+    UNSCORED = "unscored"
+
+
+class GradeMethod(StrEnum):
+    EXACT_MATCH = "exact_match"
+    KEY_TERMS = "key_terms"
+    SQL = "sql"
+    SEMANTIC = "semantic"
+    AI_JUDGE = "ai_judge"
+    SELF_ASSESSMENT = "self_assessment"
+
+
 class Project(Base):
     __tablename__ = "projects"
     __table_args__ = (
@@ -860,6 +876,70 @@ class AiCacheEntry(Base):
     hit_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class Attempt(Base):
+    __tablename__ = "attempts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "program_node_id"],
+            ["program_nodes.project_id", "program_nodes.id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("ordinal >= 1", name="ordinal_positive"),
+        Index("ix_attempts_node_created", "project_id", "program_node_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    program_node_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    parent_attempt_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("attempts.id", ondelete="SET NULL"), nullable=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    persona: Mapped[ExaminerPersona] = mapped_column(
+        enum_type(ExaminerPersona, "examiner_persona")
+    )
+    strictness: Mapped[ExaminerStrictness] = mapped_column(
+        enum_type(ExaminerStrictness, "examiner_strictness")
+    )
+    context_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class Grade(Base):
+    """Итог системы. Решение пользователя хранится рядом и не переписывает его."""
+
+    __tablename__ = "grades"
+    __table_args__ = (
+        CheckConstraint(
+            "self_assessment IS NULL OR self_assessment <> 'unscored'",
+            name="self_assessment_scored",
+        ),
+    )
+
+    attempt_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("attempts.id", ondelete="CASCADE"), primary_key=True
+    )
+    outcome: Mapped[AttemptOutcome] = mapped_column(
+        enum_type(AttemptOutcome, "attempt_outcome")
+    )
+    method: Mapped[GradeMethod | None] = mapped_column(
+        enum_type(GradeMethod, "grade_method"), nullable=True
+    )
+    credited_points: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    missed_points: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    wrong_points: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    self_assessment: Mapped[AttemptOutcome | None] = mapped_column(
+        enum_type(AttemptOutcome, "attempt_outcome"), nullable=True
+    )
+    ai_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
 class ChatSession(Base):
     """Один чат по одному вопросу. Новый чат не стирает старые."""
 
@@ -921,6 +1001,12 @@ class ChatMessage(Base):
     context_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     ai_run_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    attempt_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("attempts.id", ondelete="SET NULL"), nullable=True
+    )
+    grade_attempt_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("grades.attempt_id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
