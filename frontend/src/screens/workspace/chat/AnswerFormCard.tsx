@@ -23,6 +23,7 @@ interface SubmittedAnswerCardProps {
   payload: AnswerFormPayload;
   createdAt: string;
   onAnswerAgain: () => void;
+  headingRef?: (node: HTMLHeadingElement | null) => void;
 }
 
 interface ComposingAnswerCardProps {
@@ -43,11 +44,13 @@ export function AnswerFormCard(props: AnswerFormCardProps) {
   const growRef = useAutoGrow(props.mode === "composing" ? props.value : "");
 
   if (props.mode === "submitted") {
-    const { payload, createdAt, onAnswerAgain } = props;
+    const { payload, createdAt, onAnswerAgain, headingRef } = props;
     return (
       <article className="chat-answer-card is-submitted">
         <header>
-          <span className="chat-answer-ordinal">Попытка {payload.ordinal}</span>
+          <h3 ref={headingRef} tabIndex={-1} className="chat-answer-ordinal">
+            Попытка {payload.ordinal}
+          </h3>
           <span className="chat-answer-time">{timeLabel(createdAt)}</span>
         </header>
         <p className="chat-answer-question">{payload.question}</p>

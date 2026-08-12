@@ -150,8 +150,8 @@ export function ExamChatPanel({ projectId, node }: ExamChatPanelProps) {
     }
   }
 
-  async function sendMessage() {
-    const text = draft.trim();
+  async function sendMessage(retryText?: string) {
+    const text = (retryText ?? draft).trim();
     if (!activeSessionId || !text || sending) return;
     const controller = new AbortController();
     abortRef.current = controller;
@@ -164,16 +164,16 @@ export function ExamChatPanel({ projectId, node }: ExamChatPanelProps) {
         if (event.type === "delta") {
           setPending((current) => current && { ...current, examinerText: current.examinerText + event.text });
         } else if (event.type === "error") {
-          setFailure({ code: event.code, detail: event.detail });
+          setFailure({ code: event.code, detail: event.detail, retryText: text });
         }
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         // Остановлено пользователем — итоговое сообщение придёт с сервера ниже.
       } else if (error instanceof ProjectApiError) {
-        setFailure({ code: error.code ?? "unknown", detail: error.message });
+        setFailure({ code: error.code ?? "unknown", detail: error.message, retryText: text });
       } else {
-        setFailure({ code: "unknown", detail: "Ответ не получен" });
+        setFailure({ code: "unknown", detail: "Ответ не получен", retryText: text });
       }
     } finally {
       setPending(null);
@@ -289,6 +289,9 @@ export function ExamChatPanel({ projectId, node }: ExamChatPanelProps) {
               messages={detail.messages}
               pending={pending}
               failure={failure}
+              onRetry={() => {
+                if (failure?.retryText) void sendMessage(failure.retryText);
+              }}
               onAnswerAgain={() => { setDraft(""); setAnswering(true); }}
             />
           )}

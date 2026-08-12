@@ -149,15 +149,29 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
     fragments, fragment_entries = _budget_fragments(all_fragments, max(budget, 0))
 
     manifest: list[dict[str, Any]] = [
-        {"kind": "program_node", "id": str(node.id), "included": True},
+        {
+            "kind": "program_node",
+            "id": str(node.id),
+            "sha256": _sha256(node.title),
+            "bytes": len(node.title.encode()),
+            "included": True,
+        },
         {
             "kind": "reference_answer",
             "id": f"{chat.project_id}:{chat.program_node_id}",
             "revision": answer.revision if answer is not None else None,
+            "sha256": _sha256(reference_text) if reference_text is not None else None,
+            "bytes": len(reference_text.encode()) if reference_text is not None else 0,
             "included": reference_text is not None,
         },
         *fragment_entries,
-        {"kind": "chat_tail", "count": len(tail), "included": bool(tail)},
+        {
+            "kind": "chat_tail",
+            "id": str(chat.id),
+            "count": len(tail),
+            "bytes": sum(len(message.text.encode()) for message in tail),
+            "included": bool(tail),
+        },
     ]
 
     snapshot = {

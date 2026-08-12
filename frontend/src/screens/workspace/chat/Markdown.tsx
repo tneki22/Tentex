@@ -34,6 +34,7 @@ function parseBlocks(text: string): ReactNode[] {
   let paragraph: string[] = [];
   let list: ListState | null = null;
   let codeLines: string[] | null = null;
+  let openFenceLine: string | null = null;
   let key = 0;
 
   function flushParagraph() {
@@ -54,6 +55,7 @@ function parseBlocks(text: string): ReactNode[] {
       if (FENCE_RE.test(line)) {
         blocks.push(<pre key={key++}><code>{codeLines.join("\n")}</code></pre>);
         codeLines = null;
+        openFenceLine = null;
       } else {
         codeLines.push(line);
       }
@@ -63,6 +65,7 @@ function parseBlocks(text: string): ReactNode[] {
       flushParagraph();
       flushList();
       codeLines = [];
+      openFenceLine = line;
       continue;
     }
     const heading = HEADING_RE.exec(line);
@@ -103,7 +106,11 @@ function parseBlocks(text: string): ReactNode[] {
     paragraph.push(line.trim());
   }
   // Незакрытый блок кода — обычное дело для потокового текста: рисуем как есть.
-  if (codeLines !== null) blocks.push(<pre key={key++}><code>{codeLines.join("\n")}</code></pre>);
+  if (codeLines !== null) {
+    blocks.push(
+      <pre key={key++}><code>{[openFenceLine ?? "```", ...codeLines].join("\n")}</code></pre>,
+    );
+  }
   flushParagraph();
   flushList();
   return blocks;

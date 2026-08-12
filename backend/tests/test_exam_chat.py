@@ -10,8 +10,15 @@ from app.ai.gateway import ModelGateway
 from app.ai.provider import FakeTransport, ProviderStreamEvent, ProviderUsage
 from app.exam import chat as chat_service
 from app.exam import router as chat_router
+from app.exam.context import build_context
 from app.exam.schemas import ChatAnswerWrite, ChatMessageWrite
-from app.models import AiSettings, ChatMessageRole
+from app.models import (
+    AiSettings,
+    ChatMessageRole,
+    ReferenceAnswer,
+    ReferenceAnswerMatchMethod,
+    ReferenceAnswerOrigin,
+)
 from app.projects.errors import ProjectDomainError
 
 
@@ -36,6 +43,35 @@ def test_draft_survives_read(session: Session) -> None:
     chat_service.save_draft(session, project.id, chat.id, "черновик ответа")
     detail = chat_service.get_session_detail(session, project.id, chat.id)
     assert detail.draft_text == "черновик ответа"
+
+
+def test_context_manifest_records_source_sizes(session: Session) -> None:
+    project = make_exam_project(session)
+    topic = make_topic_node(session, project, title="Размер вопроса")
+    reference_text = "Короткий эталон"
+    session.add(
+        ReferenceAnswer(
+            project_id=project.id,
+            program_node_id=topic.id,
+            text=reference_text,
+            origin_kind=ReferenceAnswerOrigin.MANUAL,
+            match_method=ReferenceAnswerMatchMethod.MANUAL,
+            is_confirmed=True,
+            is_active=True,
+            revision=2,
+        )
+    )
+    session.commit()
+    chat = chat_service.create_session(session, project.id, topic.id)
+    chat_service.append_message(session, chat, role=ChatMessageRole.USER, text="хвост")
+
+    manifest = build_context(session, chat, for_judge=False).manifest
+    entries = {entry["kind"]: entry for entry in manifest}
+
+    assert entries["program_node"]["bytes"] == len(topic.title.encode())
+    assert entries["reference_answer"]["bytes"] == len(reference_text.encode())
+    assert entries["reference_answer"]["revision"] == 2
+    assert entries["chat_tail"]["bytes"] == len("хвост".encode())
 
 
 @pytest.mark.asyncio
