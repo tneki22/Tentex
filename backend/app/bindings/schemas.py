@@ -31,6 +31,22 @@ class SearchResultRead(ApiModel):
     already_bound: bool = False
 
 
+class HeadingSuggestionCandidateRead(ApiModel):
+    node_id: UUID
+    node_title: str
+    score: float
+
+
+class HeadingSuggestionRead(ApiModel):
+    """Заголовок без уверенного вопроса: показываем кандидатов, решает пользователь."""
+
+    block_id: UUID
+    heading: str
+    preview: str | None = None
+    page_from: int
+    candidates: list[HeadingSuggestionCandidateRead]
+
+
 class AnswersLinkRead(ApiModel):
     """Отчёт автопривязки файла эталонных ответов: что легло, что не нашлось."""
 
@@ -39,8 +55,15 @@ class AnswersLinkRead(ApiModel):
     created_answers: int
     updated_answers: int
     kept_answers: int
+    fuzzy_headings: list[str] = Field(default_factory=list)
     unmatched_headings: list[str]
     duplicate_headings: list[str]
+    suggestions: list[HeadingSuggestionRead] = Field(default_factory=list)
+
+
+class AnswersHeadingResolveWrite(ApiModel):
+    block_id: UUID
+    program_node_id: UUID
 
 
 class ReindexResult(ApiModel):
@@ -65,6 +88,11 @@ class BindingFragmentRead(ApiModel):
     mechanism: BindingMechanism
     created_at: datetime
     updated_at: datetime
+
+
+class BindingBulkRemoveWrite(ApiModel):
+    material_id: UUID
+    page_number: int | None = None
 
 
 class BindingCreateWrite(ApiModel):

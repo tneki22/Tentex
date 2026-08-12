@@ -4,6 +4,7 @@ import {
   getBindingsSummary,
   listBindings,
   removeBinding,
+  removeBindingsBulk,
   restoreBinding,
 } from "../api/bindings";
 import type {
@@ -88,6 +89,8 @@ export function useBindings(projectId: string | undefined) {
       projectId ? mutate(() => createBindings(projectId, command)) : null,
     unbind: (bindingId: string) =>
       projectId ? mutate(() => removeBinding(projectId, bindingId)) : null,
+    removeAllForMaterial: (materialId: string, pageNumber?: number) =>
+      projectId ? mutate(() => removeBindingsBulk(projectId, { materialId, pageNumber })) : null,
     restore: (bindingId: string) =>
       projectId ? mutate(() => restoreBinding(projectId, bindingId)) : null,
   };

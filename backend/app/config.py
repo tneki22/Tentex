@@ -19,6 +19,18 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     seed_demo_project: bool = True
 
+    # Уровень корневого логгера приложения. Ниже INFO стоит опускать только при
+    # отладке: DEBUG в SQLAlchemy очень многословен.
+    log_level: str = "INFO"
+    # JSON-строки в лог вместо человекочитаемых — на случай, если логи начнут
+    # куда-то собираться. По умолчанию человекочитаемо: это локальный запуск.
+    log_json: bool = False
+
+    # Ключ шифрования можно задать явно. Иначе он один раз создаётся рядом с
+    # локальными данными установки; в SQLite этот секрет не хранится.
+    secret_key: str | None = None
+    ai_timeout_seconds: float = 60.0
+
     @property
     def database_path(self) -> Path:
         return self.data_dir / "tentex.sqlite"
@@ -26,6 +38,10 @@ class Settings(BaseSettings):
     @property
     def storage_dir(self) -> Path:
         return self.data_dir / "storage"
+
+    @property
+    def installation_secret_path(self) -> Path:
+        return self.data_dir / "installation.secret"
 
 
 settings = Settings()

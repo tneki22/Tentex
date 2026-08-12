@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -7,8 +8,12 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import Base
 from app.models import (
+    AiConnection,
+    AiModelCatalogEntry,
+    AiSettings,
     BlockClass,
     Material,
     MaterialBlock,
@@ -53,6 +58,59 @@ def session(tmp_path: Path) -> Iterator[Session]:
     with Session(engine, expire_on_commit=False) as db_session:
         yield db_session
     engine.dispose()
+
+
+@pytest.fixture
+def ai_config(session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    model_id = "test/structured-model"
+    now = utc_now()
+    session.add_all(
+        [
+            AiSettings(
+                id=1,
+                external_models_enabled=True,
+                confirm_input_tokens=100_000,
+                usd_rub_rate=Decimal("90"),
+                usd_rub_rate_date=now.date(),
+            ),
+            AiConnection(
+                modality="text",
+                label="Текстовые модели",
+                base_url="https://example.test/v1",
+                api_key_ciphertext=None,
+                default_model_id=model_id,
+            ),
+            AiConnection(
+                modality="speech",
+                label="Распознавание речи",
+                base_url="",
+                api_key_ciphertext=None,
+            ),
+            AiModelCatalogEntry(
+                modality="text",
+                model_id=model_id,
+                display_name="Test structured model",
+                context_length=100_000,
+                supported_parameters=["response_format"],
+                input_modalities=["text"],
+                output_modalities=["text"],
+                prompt_price_usd=Decimal("0.000001"),
+                completion_price_usd=Decimal("0.000002"),
+                pricing_snapshot_at=now,
+                catalog_snapshot_at=now,
+                is_available=True,
+            ),
+        ]
+    )
+    session.commit()
+    from app.ai.credentials import encrypt_secret
+
+    connection = session.get(AiConnection, "text")
+    assert connection is not None
+    connection.api_key_ciphertext = encrypt_secret("test-secret")
+    session.commit()
+    return model_id
 
 
 def make_material(db_session: Session, seed: str) -> Material:

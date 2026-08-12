@@ -10,8 +10,18 @@ from app.projects.errors import ProjectDomainError
 
 MAX_FILE_BYTES = 100 * 1024 * 1024
 ALLOWED_SUFFIXES = {
-    ".pdf", ".docx", ".txt", ".md", ".jpg", ".jpeg", ".png",
-    ".mp3", ".wav", ".m4a", ".ogg", ".flac",
+    ".pdf",
+    ".docx",
+    ".txt",
+    ".md",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".mp3",
+    ".wav",
+    ".m4a",
+    ".ogg",
+    ".flac",
 }
 
 
@@ -23,9 +33,7 @@ async def store_upload(upload: UploadFile) -> tuple[str, str, int, str, str]:
     original_name = Path(upload.filename or "material").name
     suffix = Path(original_name).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
-        raise _unsupported(
-            "Поддерживаются PDF, DOCX, TXT, MD, JPG, PNG, MP3, WAV, M4A, OGG и FLAC"
-        )
+        raise _unsupported("Поддерживаются PDF, DOCX, TXT, MD, JPG, PNG, MP3, WAV, M4A, OGG и FLAC")
 
     temporary_dir = settings.storage_dir / "tmp"
     temporary_dir.mkdir(parents=True, exist_ok=True)
@@ -90,15 +98,56 @@ def store_material_asset(owner: str, name: str, data: bytes) -> str:
     return relative_path.as_posix()
 
 
-def store_answer_attachment(project_id: str, file_name: str, data: bytes) -> tuple[str, str]:
-    """Файл, принесённый к эталонному ответу: путь в хранилище и media type."""
-    suffix = Path(file_name).suffix.lower()
-    relative_path = Path("answers") / project_id / f"{uuid4().hex}{suffix}"
-    final_path = settings.storage_dir / relative_path
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    final_path.write_bytes(data)
-    media_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
-    return relative_path.as_posix(), media_type
+async def store_answer_upload(
+    project_id: str,
+    upload: UploadFile,
+    *,
+    allowed_suffixes: set[str],
+    max_bytes: int,
+) -> tuple[str, str, int, str]:
+    """Вложение к эталону: пишем потоком во временный файл и обрубаем на лету.
+
+    В отличие от прежнего `await file.read()`, гигантский файл не попадает в
+    память целиком — превышение ловится посреди потока и временный файл удаляется.
+    """
+    original_name = Path(upload.filename or "файл").name
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in allowed_suffixes:
+        raise ProjectDomainError(
+            "К ответу прикрепляются изображения, PDF, DOCX, TXT и MD",
+            status=422,
+            code="attachment_unsupported",
+        )
+    temporary_dir = settings.storage_dir / "tmp"
+    temporary_dir.mkdir(parents=True, exist_ok=True)
+    temporary_path = temporary_dir / f"{uuid4().hex}{suffix}"
+    size = 0
+    try:
+        with temporary_path.open("wb") as target:
+            while chunk := await upload.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise ProjectDomainError(
+                        "Файл больше 20 МБ", status=413, code="attachment_too_large"
+                    )
+                target.write(chunk)
+        if size == 0:
+            raise ProjectDomainError("Файл пуст", status=422, code="attachment_empty")
+        relative_path = Path("answers") / project_id / f"{uuid4().hex}{suffix}"
+        final_path = settings.storage_dir / relative_path
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path.replace(final_path)
+        media_type = (
+            upload.content_type
+            or mimetypes.guess_type(original_name)[0]
+            or "application/octet-stream"
+        )
+        return relative_path.as_posix(), media_type, size, original_name
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+    finally:
+        await upload.close()
 
 
 def material_path(storage_path: str) -> Path:

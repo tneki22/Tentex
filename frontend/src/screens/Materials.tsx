@@ -32,8 +32,8 @@ import {
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import type { BindingFragmentRead } from "../api/bindings";
-import { linkAnswersMaterial, listBindings } from "../api/bindings";
+import type { BindingFragmentRead, HeadingSuggestion, NodeBindingSummary } from "../api/bindings";
+import { linkAnswersMaterial, listBindings, resolveAnswersHeading } from "../api/bindings";
 import {
   getMaterialPage,
   getMaterialCapabilities,
@@ -70,6 +70,10 @@ import { MetricList } from "../components/domain";
 import { useBindings } from "../hooks/useBindings";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTreeNode } from "./programTree";
+import { AiCleanupPanel } from "./AiCleanupPanel";
+
+const EMPTY_STRING_SET: Set<string> = new Set();
+const EMPTY_TITLES_MAP: Map<string, string[]> = new Map();
 
 const STUDY_NODE_TYPES = new Set(["topic", "subpoint"]);
 const isStudyNode = (node: ProgramTreeNode): boolean =>
@@ -825,6 +829,7 @@ interface BindingsTabProps {
   pageBindingCount: number;
   documentBindingCount: number;
   listedBindings: BindingFragmentRead[];
+  nodeNumberById: Map<string, string>;
   focusedFragmentId: string | null;
   onSelectBinding: (binding: BindingFragmentRead) => void;
   focusedFragment: MaterialFragmentRead | null;
@@ -832,6 +837,15 @@ interface BindingsTabProps {
   onBindFocusedToActive: () => void;
   onOpenPickerForFocused: () => void;
   onUnbind: (bindingId: string) => void;
+  onRemoveAllInScope: () => void;
+  headingSuggestions: HeadingSuggestion[];
+  onResolveHeading: (blockId: string, nodeId: string) => void;
+}
+
+/** «5. Реляционная модель…» — номер узла программы, если он известен. */
+function nodeLabel(nodeNumberById: Map<string, string>, node: { program_node_id: string; node_title: string }): string {
+  const number = nodeNumberById.get(node.program_node_id);
+  return number ? `${number}. ${node.node_title}` : node.node_title;
 }
 
 function BindingsTab({
@@ -855,6 +869,7 @@ function BindingsTab({
   pageBindingCount,
   documentBindingCount,
   listedBindings,
+  nodeNumberById,
   focusedFragmentId,
   onSelectBinding,
   focusedFragment,
@@ -862,6 +877,9 @@ function BindingsTab({
   onBindFocusedToActive,
   onOpenPickerForFocused,
   onUnbind,
+  onRemoveAllInScope,
+  headingSuggestions,
+  onResolveHeading,
 }: BindingsTabProps) {
   const alreadyBoundToActive = activeNode
     ? focusedFragmentBindings.some((binding) => binding.program_node_id === activeNode.id)
@@ -884,6 +902,48 @@ function BindingsTab({
       </Tooltip>
 
       <NoticeLine notice={notice} onDismiss={onDismissNotice} />
+
+      {headingSuggestions.length > 0 && (
+        <section className="materials-suggestions" aria-label="Заголовки без вопроса">
+          <header>
+            <b>Не нашли вопрос · {headingSuggestions.length}</b>
+            <small>
+              Заголовок разошёлся с формулировкой сильнее, чем можно решить без вас.
+              Выбор запомнится: повторная привязка файла его не потеряет.
+            </small>
+          </header>
+          {headingSuggestions.map((suggestion) => (
+            <article className="materials-suggestion" key={suggestion.block_id}>
+              <b className="materials-suggestion-heading">{suggestion.heading}</b>
+              <small className="materials-suggestion-preview">
+                стр. {suggestion.page_from}
+                {suggestion.preview ? ` · ${bindingPreview(suggestion.preview, 90)}` : ""}
+              </small>
+              <div className="materials-suggestion-actions">
+                {suggestion.candidates.map((candidate) => (
+                  <Button
+                    key={candidate.node_id}
+                    variant="secondary"
+                    onClick={() => onResolveHeading(suggestion.block_id, candidate.node_id)}
+                  >
+                    <Link2 size={13} />
+                    {nodeNumberById.get(candidate.node_id)
+                      ? `${nodeNumberById.get(candidate.node_id)}. ${candidate.node_title}`
+                      : candidate.node_title}
+                  </Button>
+                ))}
+                <Button
+                  variant="ghost"
+                  disabled={!activeNode}
+                  onClick={() => activeNode && onResolveHeading(suggestion.block_id, activeNode.id)}
+                >
+                  {activeNode ? `К вопросу ${activeNode.number}` : "Выберите вопрос ниже"}
+                </Button>
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
 
       <div className="materials-active-node">
         <small className="materials-active-node-label">Привязываем к вопросу:</small>
@@ -938,6 +998,17 @@ function BindingsTab({
           ]}
           onChange={onBindingScopeChange}
         />
+        <div className="materials-binding-toolbar">
+          <Button
+            variant="ghost"
+            className="materials-binding-remove-all"
+            disabled={listedBindings.length === 0}
+            onClick={onRemoveAllInScope}
+          >
+            <Trash2 size={13} />
+            {bindingScope === "page" ? "Удалить все на странице" : "Удалить все в документе"} · {listedBindings.length}
+          </Button>
+        </div>
         <div className="materials-binding-list" aria-label="Привязки этого файла">
           {listedBindings.length ? listedBindings.map((binding) => (
             <div
@@ -950,8 +1021,12 @@ function BindingsTab({
                 title={`${binding.text} · ${MECHANISM_LABEL[binding.mechanism]}`}
                 onClick={() => onSelectBinding(binding)}
               >
-                <strong>{binding.node_title}</strong>
-                <small>{bindingPreview(binding.text)} · стр. {binding.page_number}</small>
+                <span className="materials-binding-row-question">
+                  <b>Вопрос:</b> {nodeLabel(nodeNumberById, binding)}
+                </span>
+                <span className="materials-binding-row-fragment">
+                  <b>Фрагмент:</b> {bindingPreview(binding.text)} · стр. {binding.page_number}
+                </span>
               </button>
               <IconButton
                 label={`Снять привязку к вопросу «${binding.node_title}»`}
@@ -981,7 +1056,7 @@ function BindingsTab({
             <ul className="materials-fragment-questions">
               {focusedFragmentBindings.map((binding) => (
                 <li key={binding.id}>
-                  <span>{binding.node_title}</span>
+                  <span>{nodeLabel(nodeNumberById, binding)}</span>
                   <IconButton label={`Снять привязку к вопросу «${binding.node_title}»`} onClick={() => onUnbind(binding.id)}><Unlink size={13} /></IconButton>
                 </li>
               ))}
@@ -1001,6 +1076,72 @@ function BindingsTab({
   );
 }
 
+interface ExamStructureBindingsTabProps {
+  studyNodes: ProgramTreeNode[];
+  summary: NodeBindingSummary[];
+  fragmentsBound: number;
+  questionsWithMaterial: number;
+  questionsWithoutMaterial: number;
+  notice: NoticeState | null;
+  onDismissNotice: () => void;
+}
+
+/** Файл со списком вопросов сам по себе — привязывать его абзацы к вопросам
+    программы бессмысленно (см. §«Поиск: файл вопросов исключён»). Вместо
+    режима привязки — честный список: какие вопросы уже получили материал
+    из других файлов, без разбора по фрагментам. */
+function ExamStructureBindingsTab({
+  studyNodes,
+  summary,
+  fragmentsBound,
+  questionsWithMaterial,
+  questionsWithoutMaterial,
+  notice,
+  onDismissNotice,
+}: ExamStructureBindingsTabProps) {
+  const summaryByNode = useMemo(
+    () => new Map(summary.map((item) => [item.program_node_id, item])),
+    [summary],
+  );
+  return (
+    <div className="materials-inspector-content">
+      <MetricList
+        layout="row"
+        metrics={[
+          { label: "Привязано", value: String(fragmentsBound) },
+          { label: "С материалом", value: String(questionsWithMaterial) },
+          { label: "Без материала", value: String(questionsWithoutMaterial) },
+        ]}
+      />
+      <NoticeLine notice={notice} onDismiss={onDismissNotice} />
+      <p className="materials-muted">
+        Это файл со списком вопросов — привязывать его фрагменты к темам по
+        отдельности не имеет смысла. Ниже видно, какие вопросы уже получили
+        материал из других файлов.
+      </p>
+      <div className="materials-examnode-list" role="list" aria-label="Вопросы программы и материал по ним">
+        {studyNodes.length ? studyNodes.map((node) => {
+          const bound = summaryByNode.get(node.id);
+          return (
+            <div
+              className="materials-examnode-row"
+              role="listitem"
+              key={node.id}
+              style={{ paddingInlineStart: `${12 + Math.max(0, node.depth - 1) * 14}px` }}
+            >
+              <small>{node.number}</small>
+              <span>{node.title}</span>
+              {bound
+                ? <StatusBadge tone="success">{bound.fragment_count} фрагм. · {bound.material_count} ф.</StatusBadge>
+                : <span className="materials-examnode-empty">Без материала</span>}
+            </div>
+          );
+        }) : <p className="materials-list-empty">В программе нет вопросов.</p>}
+      </div>
+    </div>
+  );
+}
+
 function MaterialInspector({
   material,
   activeTab,
@@ -1016,7 +1157,9 @@ function MaterialInspector({
   onLinkAnswers,
   capabilities,
   bindingsProps,
+  examStructureProps,
   textbook,
+  isExamStructureFile,
   onDismissNotice,
 }: {
   material: MaterialRead;
@@ -1033,7 +1176,9 @@ function MaterialInspector({
   onLinkAnswers: () => void;
   capabilities: MaterialCapabilities | null;
   bindingsProps: BindingsTabProps;
+  examStructureProps: ExamStructureBindingsTabProps;
   textbook: boolean;
+  isExamStructureFile: boolean;
   onDismissNotice: () => void;
 }) {
   return (
@@ -1054,7 +1199,8 @@ function MaterialInspector({
                 к вопросам в этой вкладке работает только в экзаменационном проекте.
               </p>
             </div>
-          ) : <BindingsTab {...bindingsProps} />
+          ) : isExamStructureFile ? <ExamStructureBindingsTab {...examStructureProps} />
+          : <BindingsTab {...bindingsProps} />
         )}
         {activeTab === "processing" && (
           <ProcessingTab material={material} busy={busy} onStart={onStart} onControl={onControl} onImport={onImport} onEdit={onEdit} onReparse={onReparse} onLinkAnswers={onLinkAnswers} capabilities={capabilities} notice={notice} onDismissNotice={onDismissNotice} />
@@ -1091,9 +1237,14 @@ function MaterialSurface() {
   const [editOpen, setEditOpen] = useState(false);
   const [editText, setEditText] = useState("");
   const [editBusy, setEditBusy] = useState(false);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("bindings");
   const [bindingMode, setBindingMode] = useState(false);
+  /** Заголовки файла ответов без уверенного вопроса — живут до перехода на другой файл. */
+  const [answersSuggestions, setAnswersSuggestions] = useState<
+    { materialId: string; items: HeadingSuggestion[] } | null
+  >(null);
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [bindingScope, setBindingScope] = useState<"page" | "document">("document");
   const [selectedFragmentIds, setSelectedFragmentIds] = useState<string[]>([]);
@@ -1112,6 +1263,10 @@ function MaterialSurface() {
   const hasOriginal = material?.media_type === "application/pdf"
     || material?.media_type.startsWith("image/");
   const textbook = project?.project.workspace_variant === "textbook";
+  // Список вопросов сам себя не привязывает: у него нет фрагментов, которые
+  // имело бы смысл сопоставлять с темами программы (см. пояснение к вкладке).
+  const isExamStructureFile = material?.purposes.includes("exam_structure") ?? false;
+  const documentBindingEnabled = !textbook && !isExamStructureFile;
 
   const treeResult = useMemo(() => {
     try { return buildProgramTree(project?.program.nodes ?? []); }
@@ -1119,6 +1274,7 @@ function MaterialSurface() {
   }, [project?.program.nodes]);
   const studyNodes = useMemo(() => flattenProgramTree(treeResult).filter(isStudyNode), [treeResult]);
   const activeNode = studyNodes.find((node) => node.id === activeNodeId) ?? null;
+  const nodeNumberById = useMemo(() => new Map(studyNodes.map((node) => [node.id, node.number])), [studyNodes]);
   const refreshBindingData = useCallback(() => setDataVersion((value) => value + 1), []);
 
   const pageCount = material?.page_count ?? 1;
@@ -1210,8 +1366,11 @@ function MaterialSurface() {
   }, [material?.id]);
 
   useEffect(() => {
+    // Без сброса здесь pageNumber остаётся от прошлого материала: переход
+    // со страницы 6 одного файла на однострочное фото запрашивал бы у бэкенда
+    // несуществующую страницу 6 и получал 404 «Страница не найдена».
     const pageParam = Number(searchParams.get("page"));
-    if (Number.isFinite(pageParam) && pageParam > 0) setPageNumber(pageParam);
+    setPageNumber(Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1);
     const focusParam = searchParams.get("focus");
     if (focusParam) {
       setFocusedFragmentId(focusParam);
@@ -1248,10 +1407,11 @@ function MaterialSurface() {
   const fragmentBindingTitles = useMemo(() => {
     const titles = new Map<string, string[]>();
     for (const binding of pageBindings) {
-      titles.set(binding.fragment_id, [...(titles.get(binding.fragment_id) ?? []), binding.node_title]);
+      const label = nodeLabel(nodeNumberById, binding);
+      titles.set(binding.fragment_id, [...(titles.get(binding.fragment_id) ?? []), label]);
     }
     return titles;
-  }, [pageBindings]);
+  }, [pageBindings, nodeNumberById]);
   const selectedFragmentIdSet = useMemo(() => new Set(selectedFragmentIds), [selectedFragmentIds]);
   const focusedFragment = page?.fragments.find((fragment) => fragment.id === focusedFragmentId) ?? null;
   const focusedFragmentBindings = useMemo(
@@ -1330,6 +1490,26 @@ function MaterialSurface() {
       setLastUndoableAction(result.latest_undoable_action);
       refreshBindingData();
       say("Привязка возвращена.", "success");
+    } else if (bindings.error) {
+      say(bindings.error, "danger");
+    }
+  }
+
+  async function removeAllInScope() {
+    if (!material) return;
+    const count = bindingScope === "page" ? pageBindings.length : documentBindings.length;
+    if (count === 0) return;
+    const targetPage = bindingScope === "page" ? page?.page_number : undefined;
+    const result = await bindings.removeAllForMaterial(material.id, targetPage);
+    if (result) {
+      setLastUndoableAction(result.latest_undoable_action);
+      refreshBindingData();
+      const sequence = result.latest_undoable_action?.sequence;
+      say(
+        `Привязок снято: ${result.bindings.length}.`,
+        "info",
+        sequence === undefined ? undefined : () => void undoAction(sequence, "Массовое снятие отменено."),
+      );
     } else if (bindings.error) {
       say(bindings.error, "danger");
     }
@@ -1527,6 +1707,13 @@ function MaterialSurface() {
     }
   }
 
+  async function reloadCurrentPage() {
+    if (!material) return;
+    const updated = await getMaterialPage(projectId, material.id, pageNumber);
+    setPage(updated);
+    await store.refresh();
+  }
+
   /** Снять назначение «эталонные ответы» со старого файла: он остаётся учебным источником. */
   async function releaseAnswersMaterial(): Promise<boolean> {
     if (!answersMaterial) return true;
@@ -1547,11 +1734,15 @@ function MaterialSurface() {
       const result = await linkAnswersMaterial(projectId, material.id);
       refreshBindingData();
       void bindings.refreshSummary();
+      setAnswersSuggestions({ materialId: material.id, items: result.suggestions });
       const parts = [
         `Разделов привязано: ${result.linked_sections}`,
         `фрагментов: ${result.linked_fragments}`,
         `эталонов создано: ${result.created_answers}`,
       ];
+      if (result.fuzzy_headings.length) {
+        parts.push(`по близкой формулировке: ${result.fuzzy_headings.length}`);
+      }
       if (result.updated_answers) parts.push(`обновлено: ${result.updated_answers}`);
       if (result.kept_answers) parts.push(`оставлено своих: ${result.kept_answers}`);
       if (result.unmatched_headings.length) {
@@ -1561,8 +1752,34 @@ function MaterialSurface() {
         parts.push(`формулировка повторяется в программе: ${result.duplicate_headings.length}`);
       }
       say(`${parts.join(", ")}.`, result.linked_sections > 0 ? "success" : "danger");
+      if (result.suggestions.length) setInspectorTab("bindings");
     } catch (caught) {
       say(caught instanceof Error ? caught.message : "Привязать не удалось", "danger");
+    }
+  }
+
+  /** Пользователь указал вопрос для заголовка, который система не опознала. */
+  async function resolveHeading(blockId: string, nodeId: string) {
+    if (!material) return;
+    try {
+      const result = await resolveAnswersHeading(projectId, material.id, {
+        blockId,
+        programNodeId: nodeId,
+      });
+      setAnswersSuggestions((current) => current && ({
+        materialId: current.materialId,
+        items: current.items.filter((item) => item.block_id !== blockId),
+      }));
+      refreshBindingData();
+      void bindings.refreshSummary();
+      say(
+        result.created_answers
+          ? "Раздел привязан, эталон заполнен. Решение запомнено — повторная привязка его не потеряет."
+          : "Раздел привязан; эталон у вопроса уже был и не тронут.",
+        "success",
+      );
+    } catch (caught) {
+      say(caught instanceof Error ? caught.message : "Не удалось привязать раздел", "danger");
     }
   }
 
@@ -1627,23 +1844,23 @@ function MaterialSurface() {
                   </Tooltip>
                   <IconButton label="Увеличить" disabled={effectiveZoom >= 2} onClick={() => setZoom(Math.min(2, Number((effectiveZoom + 0.25).toFixed(2))))}><ZoomIn size={15} /></IconButton>
                 </div>
-                <Tooltip label={textbook ? "Привязки появятся после этапа 7 (учебник)" : "Режим привязки (B)"}>
+                <Tooltip label={textbook ? "Привязки появятся после этапа 7 (учебник)" : isExamStructureFile ? "Список вопросов не привязывается по фрагментам" : "Режим привязки (B)"}>
                   <IconButton
                     label="Режим привязки"
-                    aria-pressed={bindingMode && !textbook}
-                    disabled={textbook}
+                    aria-pressed={bindingMode && documentBindingEnabled}
+                    disabled={!documentBindingEnabled}
                     onClick={() => setBindingMode((value) => !value)}
                   >
                     <Link2 size={15} />
                   </IconButton>
                 </Tooltip>
-                {!textbook && bindingMode && selectedFragmentIds.length > 0 && (
+                {documentBindingEnabled && bindingMode && selectedFragmentIds.length > 0 && (
                   <span className="materials-selection-hint">Выбрано: {selectedFragmentIds.length} · <Kbd>Enter</Kbd> привязать</span>
                 )}
               </div>
               <div className="materials-toolbar-end">
-                <Tooltip label="Списки, отступы и абзацы уже расставляет разбор. Модель сможет переписать спорные места, когда на этапе 7 появится шлюз">
-                  <IconButton label="Прибрать текст с ИИ · этап 7" disabled>
+                <Tooltip label={!page ? "Текст страницы станет доступен после разбора" : !(page.markdown || page.text).trim() ? "На странице нет текста для уборки" : "Предложить исправление оформления и спорных мест"}>
+                  <IconButton label="Прибрать текст с ИИ" disabled={!page || !(page.markdown || page.text).trim()} onClick={() => setCleanupOpen(true)}>
                     <Sparkles size={15} />
                   </IconButton>
                 </Tooltip>
@@ -1699,15 +1916,15 @@ function MaterialSurface() {
                       viewMode={viewMode}
                       query={documentQuery}
                       binding={{
-                        bindingMode: bindingMode && !textbook,
-                        activeNodeId,
-                        boundFragmentIds,
-                        activeNodeFragmentIds,
-                        selectedFragmentIds: selectedFragmentIdSet,
+                        bindingMode: bindingMode && documentBindingEnabled,
+                        activeNodeId: documentBindingEnabled ? activeNodeId : null,
+                        boundFragmentIds: documentBindingEnabled ? boundFragmentIds : EMPTY_STRING_SET,
+                        activeNodeFragmentIds: documentBindingEnabled ? activeNodeFragmentIds : EMPTY_STRING_SET,
+                        selectedFragmentIds: documentBindingEnabled ? selectedFragmentIdSet : EMPTY_STRING_SET,
                         onFragmentActivate: handleFragmentActivate,
                         onBindBlock: handleBindBlock,
                         onFragmentUnbind: handleFragmentUnbind,
-                        fragmentBindingTitles,
+                        fragmentBindingTitles: documentBindingEnabled ? fragmentBindingTitles : EMPTY_TITLES_MAP,
                       }}
                     />
                   )
@@ -1733,7 +1950,17 @@ function MaterialSurface() {
           onLinkAnswers={() => void linkAnswers()}
           capabilities={capabilities}
           textbook={Boolean(textbook)}
+          isExamStructureFile={isExamStructureFile}
           onDismissNotice={() => setNotice(null)}
+          examStructureProps={{
+            studyNodes,
+            summary: bindings.summary,
+            fragmentsBound,
+            questionsWithMaterial,
+            questionsWithoutMaterial,
+            notice,
+            onDismissNotice: () => setNotice(null),
+          }}
           bindingsProps={{
             activeNode,
             studyNodeCount: studyNodes.length,
@@ -1755,6 +1982,7 @@ function MaterialSurface() {
             pageBindingCount: pageBindings.length,
             documentBindingCount: documentBindings.length,
             listedBindings: bindingScope === "page" ? pageBindings : documentBindings,
+            nodeNumberById,
             focusedFragmentId,
             onSelectBinding: (binding) => {
               setFocusedFragmentId(binding.fragment_id);
@@ -1767,6 +1995,10 @@ function MaterialSurface() {
             },
             onOpenPickerForFocused: () => { setPickerTarget("fragment"); setPickerOpen(true); },
             onUnbind: (bindingId) => void unbindOne(bindingId),
+            onRemoveAllInScope: () => void removeAllInScope(),
+            headingSuggestions:
+              answersSuggestions?.materialId === material.id ? answersSuggestions.items : [],
+            onResolveHeading: (blockId, nodeId) => void resolveHeading(blockId, nodeId),
           }}
         />
       )}
@@ -1795,6 +2027,41 @@ function MaterialSurface() {
       >
         <label className="materials-page-editor">Текст страницы<textarea autoFocus value={editText} onChange={(event) => setEditText(event.target.value)} /></label>
       </Dialog>
+      {material && page && (
+        <AiCleanupPanel
+          open={cleanupOpen}
+          projectId={projectId}
+          material={material}
+          page={page}
+          onOpenChange={setCleanupOpen}
+          onManualEdit={() => {
+            setEditText(page.markdown || page.text);
+            setEditOpen(true);
+          }}
+          onReload={reloadCurrentPage}
+          onApplied={(result, undo) => {
+            setPage(result.page);
+            refreshBindingData();
+            void store.refresh();
+            say("Текст страницы обновлён новой ревизией.", "success", () => {
+              void updateMaterialPageText(
+                projectId,
+                material.id,
+                page.page_number,
+                undo.originalText,
+                { revision: undo.appliedRevision, sourceHash: undo.appliedSourceHash },
+              ).then((restored) => {
+                setPage(restored.page);
+                refreshBindingData();
+                void store.refresh();
+                say("Применение отменено: исходный снимок сохранён новой ревизией.", "info");
+              }).catch((caught) => {
+                say(caught instanceof Error ? caught.message : "Не удалось отменить применение", "danger");
+              });
+            });
+          }}
+        />
+      )}
       {material && (
         <ConfirmDialog
           open={reparseOpen}

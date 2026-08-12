@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.ai.dependencies import get_model_gateway
+from app.ai.gateway import ModelGateway
 from app.db import get_session
-from app.materials import service
+from app.materials import ai_cleanup, service
 from app.materials.schemas import (
     ExamProgramImportWrite,
     ExamProgramPreview,
@@ -29,6 +31,7 @@ from app.projects.errors import ProjectDomainError
 from app.projects.schemas import ProgramChangeResult
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
 router = APIRouter(prefix="/api", tags=["materials"])
 
 
@@ -170,6 +173,52 @@ def get_material_page(
     session: SessionDependency,
 ) -> PageRead:
     return service.get_page(session, project_id, material_id, page_number)
+
+
+@router.post(
+    "/projects/{project_id}/materials/{material_id}/pages/{page_number}/ai-cleanup/preflight",
+    response_model=ai_cleanup.CleanupPreflightRead,
+)
+async def preflight_material_page_cleanup(
+    project_id: UUID,
+    material_id: UUID,
+    page_number: int,
+    command: ai_cleanup.CleanupPreflightWrite,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> ai_cleanup.CleanupPreflightRead:
+    return await ai_cleanup.preflight(
+        session, gateway, project_id, material_id, page_number, command
+    )
+
+
+@router.post(
+    "/projects/{project_id}/materials/{material_id}/pages/{page_number}/ai-cleanup",
+    response_model=ai_cleanup.CleanupRunRead,
+)
+async def run_material_page_cleanup(
+    project_id: UUID,
+    material_id: UUID,
+    page_number: int,
+    command: ai_cleanup.CleanupRunWrite,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> ai_cleanup.CleanupRunRead:
+    return await ai_cleanup.run(session, gateway, project_id, material_id, page_number, command)
+
+
+@router.post(
+    "/projects/{project_id}/materials/{material_id}/pages/{page_number}/ai-cleanup/apply",
+    response_model=PageCorrectionRead,
+)
+def apply_material_page_cleanup(
+    project_id: UUID,
+    material_id: UUID,
+    page_number: int,
+    command: ai_cleanup.CleanupApplyWrite,
+    session: SessionDependency,
+) -> PageCorrectionRead:
+    return ai_cleanup.apply(session, project_id, material_id, page_number, command)
 
 
 @router.put(

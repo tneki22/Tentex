@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
@@ -15,6 +16,8 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -137,6 +140,10 @@ class ReferenceAnswerOrigin(StrEnum):
 class ReferenceAnswerMatchMethod(StrEnum):
     MANUAL = "manual"
     EXACT_TITLE = "exact_title"
+    # Заголовок разошёлся с формулировкой вопроса по написанию, но это тот же вопрос.
+    FUZZY_TITLE = "fuzzy_title"
+    # Пользователь сам указал вопрос для заголовка, который система не опознала.
+    RESOLVED_TITLE = "resolved_title"
 
 
 class MaterialState(StrEnum):
@@ -548,9 +555,7 @@ class ProgramNode(Base):
         enum_type(OriginKind, "origin_kind"), default=OriginKind.MANUAL
     )
     origin_note: Mapped[str | None] = mapped_column(String, nullable=True)
-    origin_material_id: Mapped[UUID | None] = mapped_column(
-        Uuid(as_uuid=True), nullable=True
-    )
+    origin_material_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
@@ -692,3 +697,132 @@ class ProjectActionLog(Base):
     inverse_data: Mapped[dict[str, Any]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     undone_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AiSettings(Base):
+    __tablename__ = "ai_settings"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="singleton"),
+        CheckConstraint("confirm_input_tokens >= 0", name="confirm_tokens_nonnegative"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    external_models_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    daily_limit_usd: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
+    operation_limit_usd: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
+    confirm_input_tokens: Mapped[int] = mapped_column(Integer, default=20_000)
+    usd_rub_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    usd_rub_rate_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class AiConnection(Base):
+    __tablename__ = "ai_connections"
+    __table_args__ = (CheckConstraint("modality IN ('text', 'speech')", name="modality"),)
+
+    modality: Mapped[str] = mapped_column(String, primary_key=True)
+    label: Mapped[str] = mapped_column(String)
+    base_url: Mapped[str] = mapped_column(String)
+    api_key_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    default_model_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_test_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_catalog_refresh_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class AiRoleSetting(Base):
+    __tablename__ = "ai_role_settings"
+
+    role: Mapped[str] = mapped_column(String, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    model_override: Mapped[str | None] = mapped_column(String, nullable=True)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class AiModelCatalogEntry(Base):
+    __tablename__ = "ai_model_catalog"
+    __table_args__ = (
+        CheckConstraint("modality IN ('text', 'speech')", name="modality"),
+        Index("ix_ai_model_catalog_modality_available", "modality", "is_available"),
+    )
+
+    modality: Mapped[str] = mapped_column(String, primary_key=True)
+    model_id: Mapped[str] = mapped_column(String, primary_key=True)
+    display_name: Mapped[str] = mapped_column(String)
+    context_length: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    supported_parameters: Mapped[list[str]] = mapped_column(JSON, default=list)
+    input_modalities: Mapped[list[str]] = mapped_column(JSON, default=list)
+    output_modalities: Mapped[list[str]] = mapped_column(JSON, default=list)
+    prompt_price_usd: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
+    completion_price_usd: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
+    pricing_snapshot_at: Mapped[datetime] = mapped_column(DateTime)
+    catalog_snapshot_at: Mapped[datetime] = mapped_column(DateTime)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_available: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AiRun(Base):
+    __tablename__ = "ai_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'cached')",
+            name="status",
+        ),
+        Index("ix_ai_runs_created_role", "created_at", "role"),
+        Index("ix_ai_runs_project_created", "project_id", "created_at"),
+        Index("ix_ai_runs_request_hash", "request_hash"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
+    )
+    role: Mapped[str] = mapped_column(String)
+    modality: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String)
+    requested_model_id: Mapped[str] = mapped_column(String)
+    actual_model_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    prompt_version: Mapped[str] = mapped_column(String)
+    request_hash: Mapped[str] = mapped_column(String)
+    context_manifest: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    estimated_input_tokens: Mapped[int] = mapped_column(Integer)
+    estimated_output_tokens: Mapped[int] = mapped_column(Integer)
+    estimated_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    provider_cached_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actual_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
+    usd_rub_rate_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    usd_rub_rate_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    actual_cost_rub: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
+    pricing_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    provider_request_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    cached_from_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AiCacheEntry(Base):
+    __tablename__ = "ai_cache_entries"
+    __table_args__ = (Index("ix_ai_cache_project_role", "project_id", "role"),)
+
+    request_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    source_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="CASCADE")
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
+    )
+    role: Mapped[str] = mapped_column(String)
+    response_payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    hit_count: Mapped[int] = mapped_column(Integer, default=0)

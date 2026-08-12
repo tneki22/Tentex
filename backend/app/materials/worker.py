@@ -1,4 +1,5 @@
 import argparse
+import logging
 import os
 import socket
 import time
@@ -13,6 +14,7 @@ from app.bindings.answers_link import link_answers_material
 from app.bindings.search import reindex_material
 from app.bindings.service import transfer_bindings_on_revision
 from app.db import SessionLocal, upgrade_database
+from app.logging_config import configure_logging
 from app.materials.parsers.base import ParsedPage
 from app.materials.parsers.native import extract_outline, iter_pages
 from app.materials.schemas import MaterialPurpose
@@ -34,6 +36,8 @@ from app.models import (
     utc_now,
 )
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
+
+log = logging.getLogger("tentex.worker")
 
 LEASE_SECONDS = 60
 
@@ -77,6 +81,7 @@ def claim_task(session: Session, worker_id: str) -> ProcessingTask | None:
             material.outline = extract_outline(material_path(material.storage_path))
         session.flush()
         session.expunge(task)
+        log.info("claimed task=%s material=%s total=%s", task.id, task.material_id, task.total)
         return task
 
 
@@ -145,9 +150,7 @@ def _link_answers_projects(session: Session, material_id: UUID) -> None:
     а связать его заново можно кнопкой в «Обработке».
     """
     links = list(
-        session.scalars(
-            select(ProjectMaterial).where(ProjectMaterial.material_id == material_id)
-        )
+        session.scalars(select(ProjectMaterial).where(ProjectMaterial.material_id == material_id))
     )
     for link in links:
         if MaterialPurpose.REFERENCE_ANSWERS.value not in (link.purposes or []):
@@ -337,6 +340,7 @@ def process_task(session: Session, task: ProcessingTask) -> None:
         _finish(session, task.id)
     except Exception as error:
         session.rollback()
+        log.exception("task failed material=%s: %s", task.material_id, error)
         with session.begin():
             failed = session.get(ProcessingTask, task.id)
             material = session.get(Material, task.material_id)
@@ -353,10 +357,18 @@ def process_task(session: Session, task: ProcessingTask) -> None:
 
 def run_once() -> bool:
     with SessionLocal() as session:
-        task = claim_task(session, _worker_id())
+        worker_id = _worker_id()
+        task = claim_task(session, worker_id)
         if task is None:
             return False
+        started = time.perf_counter()
         process_task(session, task)
+        log.info(
+            "processed task=%s material=%s %.1fms",
+            task.id,
+            task.material_id,
+            (time.perf_counter() - started) * 1000,
+        )
         return True
 
 
@@ -365,6 +377,7 @@ def main() -> None:
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     upgrade_database()
+    configure_logging()
     if args.once:
         run_once()
         return

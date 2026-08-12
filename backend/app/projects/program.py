@@ -80,9 +80,7 @@ def _require_writable_project(session: Session, project_id: UUID) -> Project:
     return project
 
 
-def _latest_action_row(
-    session: Session, project_id: UUID, phase: str
-) -> ProjectActionLog | None:
+def _latest_action_row(session: Session, project_id: UUID, phase: str) -> ProjectActionLog | None:
     return session.scalar(
         select(ProjectActionLog)
         .where(
@@ -189,17 +187,11 @@ def _place_node(
     nodes: list[ProgramNode], node: ProgramNode, parent_id: UUID | None, position: int | None
 ) -> None:
     siblings = sorted(
-        (
-            sibling
-            for sibling in nodes
-            if sibling.parent_id == parent_id and sibling.id != node.id
-        ),
+        (sibling for sibling in nodes if sibling.parent_id == parent_id and sibling.id != node.id),
         key=lambda sibling: (sibling.sort_order, str(sibling.id)),
     )
     visible = [
-        sibling
-        for sibling in siblings
-        if sibling.is_in_current_program and not sibling.is_archived
+        sibling for sibling in siblings if sibling.is_in_current_program and not sibling.is_archived
     ]
     target_position = len(visible) if position is None else position
     if target_position > len(visible):
@@ -216,9 +208,7 @@ def _place_node(
         sibling.sort_order = index
 
 
-def _begin_program_change(
-    session: Session, project: Project, expected_revision: int
-) -> int | None:
+def _begin_program_change(session: Session, project: Project, expected_revision: int) -> int | None:
     now = utc_now()
     result = session.execute(
         update(Project)
@@ -230,9 +220,7 @@ def _begin_program_change(
         .execution_options(synchronize_session=False)
     )
     if result.rowcount != 1:
-        current = session.scalar(
-            select(Project.program_revision).where(Project.id == project.id)
-        )
+        current = session.scalar(select(Project.program_revision).where(Project.id == project.id))
         raise ProjectConflictError(
             "Программа уже изменена в другой вкладке",
             code="stale_program_revision",
@@ -295,9 +283,7 @@ def _change_result(
             ProgramNodeRead.model_validate(changed_node) if changed_node is not None else None
         ),
         program=read_program(session, project.id),
-        latest_undoable_action=latest_undoable_action(
-            session, project.id, _phase(project)
-        ),
+        latest_undoable_action=latest_undoable_action(session, project.id, _phase(project)),
         draft_revision=draft_revision,
     )
 
@@ -362,9 +348,7 @@ def create_program_node(
         nodes.append(node)
         _place_node(nodes, node, command.parent_id, command.position)
         session.add(node)
-        draft_revision = _begin_program_change(
-            session, project, command.expected_program_revision
-        )
+        draft_revision = _begin_program_change(session, project, command.expected_program_revision)
         _record_action(
             session,
             project,
@@ -402,9 +386,7 @@ def update_program_node(
             inverse[field] = old_value.value if hasattr(old_value, "value") else old_value
             setattr(node, field, value)
         _validate_variant(project.workspace_variant, node.node_type, node.exam_kind)
-        draft_revision = _begin_program_change(
-            session, project, command.expected_program_revision
-        )
+        draft_revision = _begin_program_change(session, project, command.expected_program_revision)
         node.updated_at = utc_now()
         _record_action(
             session,
@@ -444,9 +426,7 @@ def move_program_node(
         _place_node(nodes, node, command.parent_id, command.position)
         if old_parent != command.parent_id:
             _normalize_group(nodes, old_parent)
-        draft_revision = _begin_program_change(
-            session, project, command.expected_program_revision
-        )
+        draft_revision = _begin_program_change(session, project, command.expected_program_revision)
         now = utc_now()
         for item in nodes:
             item.updated_at = now
@@ -496,9 +476,7 @@ def swap_program_nodes(
         node.parent_id, node.sort_order = target.parent_id, target.sort_order
         target.parent_id, target.sort_order = node_parent_id, node_sort_order
 
-        draft_revision = _begin_program_change(
-            session, project, command.expected_program_revision
-        )
+        draft_revision = _begin_program_change(session, project, command.expected_program_revision)
         now = utc_now()
         for item in nodes:
             item.updated_at = now
@@ -534,9 +512,7 @@ def set_target_level(
             }
             for item_id in ids
         ]
-        draft_revision = _begin_program_change(
-            session, project, command.expected_program_revision
-        )
+        draft_revision = _begin_program_change(session, project, command.expected_program_revision)
         now = utc_now()
         for item_id in ids:
             nodes_by_id[item_id].target_level = command.target_level
@@ -582,9 +558,7 @@ def _set_subtree_visibility(
             }
             for item_id in ids
         ]
-        draft_revision = _begin_program_change(
-            session, project, command.expected_program_revision
-        )
+        draft_revision = _begin_program_change(session, project, command.expected_program_revision)
         now = utc_now()
         for item_id in ids:
             nodes_by_id[item_id].is_in_current_program = restore
@@ -602,17 +576,13 @@ def _set_subtree_visibility(
 def remove_program_node(
     session: Session, project_id: UUID, node_id: UUID, command: ProgramRevisionCommand
 ) -> ProgramChangeResult:
-    return _set_subtree_visibility(
-        session, project_id, node_id, command, restore=False
-    )
+    return _set_subtree_visibility(session, project_id, node_id, command, restore=False)
 
 
 def restore_program_node(
     session: Session, project_id: UUID, node_id: UUID, command: ProgramRevisionCommand
 ) -> ProgramChangeResult:
-    return _set_subtree_visibility(
-        session, project_id, node_id, command, restore=True
-    )
+    return _set_subtree_visibility(session, project_id, node_id, command, restore=True)
 
 
 def _delete_nodes_leaves_first(session: Session, nodes: list[ProgramNode]) -> None:
@@ -656,9 +626,7 @@ def replace_draft_program(
             )
         old_nodes = _nodes(session, project_id)
         snapshot = [_node_snapshot(node) for node in old_nodes]
-        draft_revision = _begin_program_change(
-            session, project, expected_program_revision
-        )
+        draft_revision = _begin_program_change(session, project, expected_program_revision)
         _delete_nodes_leaves_first(session, old_nodes)
         passport = session.get(GoalPassport, project_id)
         target_level = passport.target_outcome if passport is not None else None
@@ -811,9 +779,7 @@ def _restore_snapshot(session: Session, project_id: UUID, snapshots: list[dict[s
                 section_purpose=snapshot["section_purpose"],
                 goal_role=GoalRole(snapshot["goal_role"]) if snapshot["goal_role"] else None,
                 target_level=(
-                    TargetOutcome(snapshot["target_level"])
-                    if snapshot["target_level"]
-                    else None
+                    TargetOutcome(snapshot["target_level"]) if snapshot["target_level"] else None
                 ),
                 is_in_current_program=snapshot["is_in_current_program"],
                 needs_material=snapshot["needs_material"],
@@ -891,9 +857,7 @@ def undo_last_project_action(
                     node.origin_kind = OriginKind(item["origin_kind"])
                     node.origin_note = item["origin_note"]
                     node.origin_material_id = (
-                        UUID(item["origin_material_id"])
-                        if item.get("origin_material_id")
-                        else None
+                        UUID(item["origin_material_id"]) if item.get("origin_material_id") else None
                     )
                 for node_id in map(UUID, data["created_ids"]):
                     node = nodes_by_id.get(node_id)
@@ -924,9 +888,7 @@ def undo_last_project_action(
                     node = nodes_by_id.get(UUID(position["id"]))
                     if node is None:
                         raise ProjectInvariantError("Узел порядка для undo не найден")
-                    node.parent_id = (
-                        UUID(position["parent_id"]) if position["parent_id"] else None
-                    )
+                    node.parent_id = UUID(position["parent_id"]) if position["parent_id"] else None
                     node.sort_order = position["sort_order"]
             case "target_level_subtree":
                 for value in data["values"]:
@@ -934,9 +896,7 @@ def undo_last_project_action(
                     if node is None:
                         raise ProjectInvariantError("Узел уровня для undo не найден")
                     node.target_level = (
-                        TargetOutcome(value["target_level"])
-                        if value["target_level"]
-                        else None
+                        TargetOutcome(value["target_level"]) if value["target_level"] else None
                     )
             case "node_remove" | "node_restore":
                 for value in data["values"]:
@@ -946,10 +906,36 @@ def undo_last_project_action(
                     node.is_in_current_program = value["is_in_current_program"]
             case "binding_create" | "binding_remove":
                 apply_binding_undo(session, project_id, action.action_type, data)
+            case "ai_program_grouping":
+                section_ids = {UUID(item["id"]) for item in data["sections"]}
+                sections_by_id = {
+                    section_id: nodes_by_id.get(section_id) for section_id in section_ids
+                }
+                if any(section is None for section in sections_by_id.values()):
+                    raise ProjectInvariantError("Раздел группировки для undo не найден")
+                for item in data["sections"]:
+                    section = sections_by_id[UUID(item["id"])]
+                    assert section is not None
+                    if section.title != item["title"] or section.origin_note != item["origin_note"]:
+                        raise ProjectConflictError(
+                            "Разделы уже отредактированы; автоматическая отмена небезопасна",
+                            code="ai_grouping_undo_conflict",
+                        )
+                for position in data["positions"]:
+                    node = nodes_by_id.get(UUID(position["id"]))
+                    if node is None or node.parent_id not in section_ids:
+                        raise ProjectConflictError(
+                            "Состав разделов уже изменён; автоматическая отмена небезопасна",
+                            code="ai_grouping_undo_conflict",
+                        )
+                    node.parent_id = None
+                    node.sort_order = position["sort_order"]
+                session.flush()
+                for section in sections_by_id.values():
+                    assert section is not None
+                    session.delete(section)
             case _:
-                raise ProjectInvariantError(
-                    f"Тип действия {action.action_type!r} нельзя отменить"
-                )
+                raise ProjectInvariantError(f"Тип действия {action.action_type!r} нельзя отменить")
 
         action.undone_at = utc_now()
         draft_revision = _increment_for_undo(session, project)

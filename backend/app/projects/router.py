@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, statu
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.ai.dependencies import get_model_gateway
+from app.ai.gateway import ModelGateway
 from app.db import get_session
-from app.projects import answers, program, service
+from app.projects import answers, program, program_ai, service
 from app.projects.schemas import (
     ActionUndoResult,
     ActivateWizardDraft,
@@ -41,6 +43,7 @@ from app.projects.schemas import (
 )
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
 
 router = APIRouter(prefix="/api")
 drafts = APIRouter(prefix="/wizard-drafts", tags=["wizard-drafts"])
@@ -99,9 +102,7 @@ def list_all_projects(session: SessionDependency) -> list[ProjectSummary]:
 
 
 @projects.put("/order", response_model=list[ProjectSummary])
-def save_order(
-    command: ProjectOrderWrite, session: SessionDependency
-) -> list[ProjectSummary]:
+def save_order(command: ProjectOrderWrite, session: SessionDependency) -> list[ProjectSummary]:
     return service.save_project_order(session, command)
 
 
@@ -197,8 +198,7 @@ async def add_answer_attachment(
     session: SessionDependency,
     file: Annotated[UploadFile, File()],
 ) -> ReferenceAnswerAttachmentRead:
-    data = await file.read()
-    return answers.add_attachment(session, project_id, node_id, file.filename or "файл", data)
+    return await answers.add_attachment(session, project_id, node_id, file)
 
 
 @projects.get(
@@ -258,9 +258,46 @@ def create_node(
     return program.create_program_node(session, project_id, command)
 
 
-@projects.patch(
-    "/{project_id}/program-nodes/{node_id}", response_model=ProgramChangeResult
+@projects.post(
+    "/{project_id}/program/ai-grouping/preflight",
+    response_model=program_ai.ProgramGroupingPreflightRead,
 )
+async def preflight_program_grouping(
+    project_id: UUID,
+    command: program_ai.ProgramGroupingPreflightWrite,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> program_ai.ProgramGroupingPreflightRead:
+    del command
+    return await program_ai.preflight(session, gateway, project_id)
+
+
+@projects.post(
+    "/{project_id}/program/ai-grouping",
+    response_model=program_ai.ProgramGroupingRunRead,
+)
+async def run_program_grouping(
+    project_id: UUID,
+    command: program_ai.ProgramGroupingRunWrite,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> program_ai.ProgramGroupingRunRead:
+    return await program_ai.run(session, gateway, project_id, command)
+
+
+@projects.post(
+    "/{project_id}/program/ai-grouping/apply",
+    response_model=ProgramChangeResult,
+)
+def apply_program_grouping(
+    project_id: UUID,
+    command: program_ai.ProgramGroupingApplyWrite,
+    session: SessionDependency,
+) -> ProgramChangeResult:
+    return program_ai.apply(session, project_id, command)
+
+
+@projects.patch("/{project_id}/program-nodes/{node_id}", response_model=ProgramChangeResult)
 def update_node(
     project_id: UUID,
     node_id: UUID,
@@ -270,18 +307,14 @@ def update_node(
     return program.update_program_node(session, project_id, node_id, command)
 
 
-@projects.post(
-    "/{project_id}/program-nodes/{node_id}/move", response_model=ProgramChangeResult
-)
+@projects.post("/{project_id}/program-nodes/{node_id}/move", response_model=ProgramChangeResult)
 def move_node(
     project_id: UUID, node_id: UUID, command: ProgramMove, session: SessionDependency
 ) -> ProgramChangeResult:
     return program.move_program_node(session, project_id, node_id, command)
 
 
-@projects.post(
-    "/{project_id}/program-nodes/{node_id}/swap", response_model=ProgramChangeResult
-)
+@projects.post("/{project_id}/program-nodes/{node_id}/swap", response_model=ProgramChangeResult)
 def swap_node(
     project_id: UUID, node_id: UUID, command: ProgramSwap, session: SessionDependency
 ) -> ProgramChangeResult:
@@ -301,9 +334,7 @@ def set_node_target(
     return program.set_target_level(session, project_id, node_id, command)
 
 
-@projects.post(
-    "/{project_id}/program-nodes/{node_id}/remove", response_model=ProgramChangeResult
-)
+@projects.post("/{project_id}/program-nodes/{node_id}/remove", response_model=ProgramChangeResult)
 def remove_node(
     project_id: UUID,
     node_id: UUID,
@@ -313,9 +344,7 @@ def remove_node(
     return program.remove_program_node(session, project_id, node_id, command)
 
 
-@projects.post(
-    "/{project_id}/program-nodes/{node_id}/restore", response_model=ProgramChangeResult
-)
+@projects.post("/{project_id}/program-nodes/{node_id}/restore", response_model=ProgramChangeResult)
 def restore_node(
     project_id: UUID,
     node_id: UUID,
@@ -329,9 +358,7 @@ def restore_node(
 def undo_action(
     project_id: UUID, command: UndoProjectAction, session: SessionDependency
 ) -> ActionUndoResult:
-    return program.undo_last_project_action(
-        session, project_id, command.expected_action_sequence
-    )
+    return program.undo_last_project_action(session, project_id, command.expected_action_sequence)
 
 
 @projects.put("/{project_id}/workspace-state", response_model=WorkspaceStateRead)

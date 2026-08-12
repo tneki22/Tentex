@@ -14,6 +14,7 @@ import { CommandPalette } from "./CommandPalette";
 import { screenById } from "./screens";
 import { SCREEN_VIEWS } from "./views";
 import { ThemeToggle } from "./ThemeToggle";
+import { getAiSettings, type AiSettingsRead } from "../api/ai";
 
 /**
  * Оболочка: панель установки слева, полоса действий сверху, контент справа.
@@ -35,6 +36,27 @@ export function AppLayout() {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === "1");
   const [scrolled, setScrolled] = useState(false);
+  const [aiSnapshot, setAiSnapshot] = useState<AiSettingsRead | null>(null);
+  const [aiSnapshotFailed, setAiSnapshotFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const loadAiSnapshot = () => {
+      void getAiSettings().then((snapshot) => {
+        if (!active) return;
+        setAiSnapshot(snapshot);
+        setAiSnapshotFailed(false);
+      }).catch(() => {
+        if (active) setAiSnapshotFailed(true);
+      });
+    };
+    loadAiSnapshot();
+    window.addEventListener("tentex:ai-settings-updated", loadAiSnapshot);
+    return () => {
+      active = false;
+      window.removeEventListener("tentex:ai-settings-updated", loadAiSnapshot);
+    };
+  }, []);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 0);
@@ -151,7 +173,19 @@ export function AppLayout() {
                 </button>
               }
             >
-              <p className="popover-note" style={{ marginTop: 0 }}>Внешние модели не настроены.</p>
+              {aiSnapshot ? (
+                <div className="app-models-summary">
+                  <p>{aiSnapshot.external_models_enabled ? "Внешние модели включены" : "Внешние модели выключены"}</p>
+                  <dl>
+                    <div><dt>Текст</dt><dd>{aiSnapshot.connections.find((item) => item.modality === "text")?.default_model_id ?? "не настроена"}</dd></div>
+                    <div><dt>Речь</dt><dd>{aiSnapshot.connections.find((item) => item.modality === "speech")?.default_model_id ?? "не настроена"}</dd></div>
+                    <div><dt>Сегодня</dt><dd>${Number(aiSnapshot.today_usage.actual_cost_usd).toFixed(4)}</dd></div>
+                  </dl>
+                  <Link className="popover-link" to="/setup?section=ai">Открыть параметры ИИ</Link>
+                </div>
+              ) : (
+                <p className="popover-note" style={{ marginTop: 0 }}>{aiSnapshotFailed ? "Снимок моделей сейчас недоступен." : "Загружаем состояние моделей…"}</p>
+              )}
             </Popover>
 
             <Popover

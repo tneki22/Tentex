@@ -1,14 +1,14 @@
 import re
-import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
+from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.materials.storage import material_path, store_answer_attachment
+from app.materials.storage import material_path, store_answer_upload
 from app.models import (
     NodeType,
     ProgramNode,
@@ -22,6 +22,7 @@ from app.models import (
     utc_now,
 )
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
+from app.projects.heading_match import HeadingIndex, HeadingMatch, normalize_answer_heading
 from app.projects.program import read_program
 from app.projects.schemas import (
     CoverageMapRead,
@@ -39,15 +40,6 @@ from app.projects.schemas import (
     ReferenceAnswerWrite,
 )
 
-# Отделитель после номера может и не стоять: «Вопрос 21 Использование индексов»
-# — такой же заголовок, как «Вопрос 21. Использование индексов».
-LEADING_MARKER_RE = re.compile(
-    r"^\s*(?:#+\s*)?(?:"
-    r"(?:(?:вопрос|задача|задание)\s*(?:№|#)?\s*\d+(?:\.\d+)*\s*(?:[.):—–-]\s*|\s+))"
-    r"|(?:\d+(?:\.\d+)*\s*[.)]\s*))",
-    re.IGNORECASE,
-)
-PUNCTUATION_RE = re.compile(r"[,;:.!?«»\"'()\[\]{}/\\—–\-]+")
 ANSWER_PREFIX_RE = re.compile(r"^\s*Ответ\s*:\s*(.*)$", re.IGNORECASE)
 STUDY_NODE_TYPES = {NodeType.TOPIC, NodeType.SUBPOINT}
 
@@ -63,6 +55,7 @@ class ParsedAnswerMatch:
     node_id: UUID
     heading: str
     text: str
+    method: ReferenceAnswerMatchMethod = ReferenceAnswerMatchMethod.EXACT_TITLE
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,19 +71,6 @@ class ParsedReferenceAnswers:
     ambiguous: tuple[ParsedAnswerSection, ...]
     unmatched_sections: tuple[ParsedAnswerSection, ...]
     empty_sections: tuple[str, ...]
-
-
-def normalize_answer_heading(value: str) -> str:
-    """Заголовок раздела ответов и формулировка вопроса сравниваются по этой форме.
-
-    Пунктуация выбрасывается целиком: «Ключи, как средство создания связей» в списке
-    вопросов и «Ключи как средство создания связей» в ответах — один и тот же вопрос,
-    и расходиться из-за запятой они не должны.
-    """
-    normalized = unicodedata.normalize("NFKC", value).casefold().replace("ё", "е")
-    normalized = LEADING_MARKER_RE.sub("", normalized)
-    normalized = PUNCTUATION_RE.sub(" ", normalized)
-    return " ".join(normalized.split())
 
 
 def _answer_text(lines: list[str]) -> str:
@@ -110,9 +90,7 @@ def parse_reference_answers(
     raw_text: str,
     study_nodes: Sequence[ProgramNodeTitle],
 ) -> ParsedReferenceAnswers:
-    title_index: dict[str, list[ProgramNodeTitle]] = {}
-    for node in study_nodes:
-        title_index.setdefault(normalize_answer_heading(node.title), []).append(node)
+    index = HeadingIndex((node.id, node.title) for node in study_nodes)
 
     matches: list[ParsedAnswerMatch] = []
     ambiguous: list[ParsedAnswerSection] = []
@@ -120,22 +98,24 @@ def parse_reference_answers(
     empty: list[str] = []
     leading_lines: list[str] = []
     current_heading: str | None = None
-    current_candidates: list[ProgramNodeTitle] = []
+    current_nodes: tuple[UUID, ...] = ()
+    current_method = ReferenceAnswerMatchMethod.EXACT_TITLE
     current_lines: list[str] = []
 
     def flush_current() -> None:
-        nonlocal current_heading, current_candidates, current_lines
+        nonlocal current_heading, current_nodes, current_lines
         if current_heading is None:
             return
         text = _answer_text(current_lines)
         if not text:
             empty.append(current_heading)
-        elif len(current_candidates) == 1:
+        elif len(current_nodes) == 1:
             matches.append(
                 ParsedAnswerMatch(
-                    node_id=current_candidates[0].id,
+                    node_id=current_nodes[0],
                     heading=current_heading,
                     text=text,
+                    method=current_method,
                 )
             )
         else:
@@ -143,20 +123,24 @@ def parse_reference_answers(
                 ParsedAnswerSection(
                     heading=current_heading,
                     text=text,
-                    candidate_node_ids=tuple(node.id for node in current_candidates),
+                    candidate_node_ids=current_nodes,
                 )
             )
         current_heading = None
-        current_candidates = []
+        current_nodes = ()
         current_lines = []
 
     normalized_text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
     for line in normalized_text.split("\n"):
-        candidates = title_index.get(normalize_answer_heading(line), []) if line.strip() else []
-        if candidates:
+        # Неуверенный подбор здесь не используется: в сплошном тексте отличить
+        # заголовок от обычной строки нечем, и предложение кандидатов разрезало бы
+        # ответ пополам. Разбор файла (answers_link) знает границы блоков и умеет.
+        match = index.match(line) if line.strip() else HeadingMatch()
+        if match.matched:
             flush_current()
             current_heading = line.strip()
-            current_candidates = candidates
+            current_nodes = match.node_ids
+            current_method = match.method or ReferenceAnswerMatchMethod.EXACT_TITLE
             continue
         if current_heading is None:
             leading_lines.append(line)
@@ -465,31 +449,26 @@ def list_attachments(
     return [ReferenceAnswerAttachmentRead.model_validate(row) for row in rows]
 
 
-def add_attachment(
-    session: Session, project_id: UUID, node_id: UUID, file_name: str, data: bytes
+async def add_attachment(
+    session: Session, project_id: UUID, node_id: UUID, upload: UploadFile
 ) -> ReferenceAnswerAttachmentRead:
-    suffix = Path(file_name).suffix.lower()
-    if suffix not in ATTACHMENT_SUFFIXES:
-        raise ProjectDomainError(
-            "К ответу прикрепляются изображения, PDF, DOCX, TXT и MD",
-            status=422,
-            code="attachment_unsupported",
-        )
-    if len(data) > MAX_ATTACHMENT_BYTES:
-        raise ProjectDomainError("Файл больше 20 МБ", status=413, code="attachment_too_large")
-    if not data:
-        raise ProjectDomainError("Файл пуст", status=422, code="attachment_empty")
+    _require_exam_project(session, project_id, writable=False)  # ранний отказ до чтения тела
+    storage_path, media_type, size, original_name = await store_answer_upload(
+        str(project_id),
+        upload,
+        allowed_suffixes=ATTACHMENT_SUFFIXES,
+        max_bytes=MAX_ATTACHMENT_BYTES,
+    )
     with session.begin():
         _require_exam_project(session, project_id, writable=True)
         _require_study_node(session, project_id, node_id)
-        storage_path, media_type = store_answer_attachment(str(project_id), file_name, data)
         row = ReferenceAnswerAttachment(
             project_id=project_id,
             program_node_id=node_id,
-            file_name=Path(file_name).name,
+            file_name=original_name,
             storage_path=storage_path,
             media_type=media_type,
-            size_bytes=len(data),
+            size_bytes=size,
             created_at=utc_now(),
         )
         session.add(row)
@@ -559,7 +538,7 @@ def import_reference_answers(
                     program_node_id=match.node_id,
                     text=match.text,
                     origin_kind=ReferenceAnswerOrigin.IMPORT,
-                    match_method=ReferenceAnswerMatchMethod.EXACT_TITLE,
+                    match_method=match.method,
                     matched_title=node.title,
                     is_confirmed=False,
                     is_active=True,

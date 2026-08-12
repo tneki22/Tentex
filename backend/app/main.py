@@ -1,12 +1,17 @@
+import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.ai.router import router as ai_router
 from app.bindings.router import router as bindings_router
 from app.config import settings
 from app.db import SessionLocal, upgrade_database
+from app.logging_config import configure_logging
 from app.materials.router import router as materials_router
 from app.projects.demo import seed_demo_project
 from app.projects.errors import ProjectDomainError
@@ -37,6 +42,9 @@ async def lifespan(_: FastAPI):
 
 
 def create_app() -> FastAPI:
+    configure_logging()
+    log = logging.getLogger("tentex.http")
+
     app = FastAPI(
         title="Tentex API",
         description="Подготовка к экзамену: программа, материалы, покрытие в обе стороны.",
@@ -51,6 +59,42 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def request_context(request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        start = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            log.exception(
+                "unhandled error %s %s rid=%s %.1fms",
+                request.method,
+                request.url.path,
+                request_id,
+                elapsed_ms,
+            )
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": "Внутренняя ошибка сервера",
+                    "code": "internal_error",
+                    "request_id": request_id,
+                },
+                headers={"X-Request-ID": request_id},
+            )
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        response.headers["X-Request-ID"] = request_id
+        log.info(
+            "%s %s -> %s rid=%s %.1fms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            request_id,
+            elapsed_ms,
+        )
+        return response
 
     @app.exception_handler(ProjectDomainError)
     async def domain_error(_: Request, error: ProjectDomainError) -> JSONResponse:
@@ -67,6 +111,7 @@ def create_app() -> FastAPI:
     app.include_router(projects_router)
     app.include_router(materials_router)
     app.include_router(bindings_router)
+    app.include_router(ai_router)
     return app
 
 

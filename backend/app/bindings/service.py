@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.bindings import search as search_module
 from app.bindings.schemas import (
     AffectedProjectPreview,
+    BindingBulkRemoveWrite,
     BindingChangeResult,
     BindingCreateWrite,
     BindingFragmentRead,
@@ -115,11 +116,18 @@ def _latest_undoable_action(session: Session, project_id: UUID) -> LatestUndoabl
 
 
 def _fragment_read(
-    session: Session, binding: Binding, node: ProgramNode | None = None
+    session: Session,
+    binding: Binding,
+    node: ProgramNode | None = None,
+    fragment: MaterialFragment | None = None,
+    page: MaterialPage | None = None,
+    material: Material | None = None,
 ) -> BindingFragmentRead:
-    fragment = session.get(MaterialFragment, binding.fragment_id)
-    page = session.get(MaterialPage, fragment.page_id)
-    material = session.get(Material, binding.material_id)
+    # Опциональные fragment/page/material — чтобы вызывающий мог передать их из
+    # уже сделанного join и не плодить по запросу на привязку (Р7, аудит N+1).
+    fragment = fragment or session.get(MaterialFragment, binding.fragment_id)
+    page = page or session.get(MaterialPage, fragment.page_id)
+    material = material or session.get(Material, binding.material_id)
     if node is None:
         node = session.get(ProgramNode, binding.program_node_id)
     return BindingFragmentRead(
@@ -294,6 +302,61 @@ def restore_binding(session: Session, project_id: UUID, binding_id: UUID) -> Bin
         )
 
 
+def remove_bindings_bulk(
+    session: Session, project_id: UUID, command: BindingBulkRemoveWrite
+) -> BindingChangeResult:
+    """Снять разом все активные привязки материала — на одной странице или во всём файле.
+
+    Одна запись в журнале на всю операцию: undo (Ctrl+Z или кнопка в уведомлении)
+    возвращает всю пачку разом, тем же механизмом, что и одиночное снятие.
+    """
+    with session.begin():
+        project = _require_project(session, project_id, writable=True)
+        material = _require_project_material(session, project_id, command.material_id)
+        link = session.get(ProjectMaterial, (project_id, command.material_id))
+        query = (
+            select(Binding, MaterialFragment, MaterialPage)
+            .join(MaterialFragment, MaterialFragment.id == Binding.fragment_id)
+            .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+            .where(
+                Binding.project_id == project_id,
+                Binding.material_id == command.material_id,
+                Binding.status.in_(ACTIVE_STATUSES),
+            )
+        )
+        if command.page_number is not None:
+            query = query.where(MaterialPage.page_number == command.page_number)
+        rows = session.execute(query).all()
+
+        touched_ids: list[UUID] = []
+        results: list[BindingFragmentRead] = []
+        now = utc_now()
+        for binding, fragment, page in rows:
+            binding.status = BindingStatus.REMOVED
+            binding.updated_at = now
+            touched_ids.append(binding.id)
+            # Материал у всей пачки один — тот, что уже загрузили выше.
+            results.append(
+                _fragment_read(session, binding, fragment=fragment, page=page, material=material)
+            )
+
+        if touched_ids:
+            label = (link.display_name if link else None) or material.original_name
+            scope = f", стр. {command.page_number}" if command.page_number is not None else ""
+            _record_action(
+                session,
+                project,
+                "binding_remove",
+                f"{label}{scope}",
+                {"binding_ids": [str(binding_id) for binding_id in touched_ids]},
+            )
+        session.flush()
+        return BindingChangeResult(
+            bindings=results,
+            latest_undoable_action=_latest_undoable_action(session, project_id),
+        )
+
+
 def apply_undo(session: Session, project_id: UUID, action_type: str, data: dict) -> None:
     """Вызывается из projects.program.undo_last_project_action (Р1, journal reuse)."""
     target_status = (
@@ -320,10 +383,13 @@ def list_bindings(
     status: BindingStatus | None = None,
 ) -> list[BindingFragmentRead]:
     _require_project(session, project_id, writable=False)
+    # Джойним фрагмент/страницу/материал сразу в основной запрос — раньше каждая
+    # строка добивалась тремя session.get() внутри _fragment_read (Р7, аудит N+1).
     query = (
-        select(Binding, MaterialPage.page_number)
+        select(Binding, MaterialFragment, MaterialPage, Material)
         .join(MaterialFragment, MaterialFragment.id == Binding.fragment_id)
         .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+        .join(Material, Material.id == Binding.material_id)
         .where(Binding.project_id == project_id)
     )
     if node_id is not None:
@@ -338,16 +404,18 @@ def list_bindings(
         query = query.where(Binding.status.in_(ACTIVE_STATUSES))
     query = query.order_by(MaterialPage.page_number, MaterialFragment.sort_order)
 
-    nodes_by_id: dict[UUID, ProgramNode] = {}
-    results: list[BindingFragmentRead] = []
-    for binding, _page_number in session.execute(query).all():
-        node = nodes_by_id.get(binding.program_node_id)
-        if node is None:
-            node = session.get(ProgramNode, binding.program_node_id)
-            if node is not None:
-                nodes_by_id[binding.program_node_id] = node
-        results.append(_fragment_read(session, binding, node))
-    return results
+    rows = session.execute(query).all()
+    node_ids = {binding.program_node_id for binding, *_ in rows}
+    nodes_by_id = {
+        node.id: node
+        for node in session.scalars(select(ProgramNode).where(ProgramNode.id.in_(node_ids)))
+    }
+    return [
+        _fragment_read(
+            session, binding, nodes_by_id.get(binding.program_node_id), fragment, page, material
+        )
+        for binding, fragment, page, material in rows
+    ]
 
 
 def get_summary(session: Session, project_id: UUID) -> list[NodeBindingSummary]:
@@ -392,9 +460,7 @@ def _project_material_ids(
         if link is None:
             raise ProjectNotFoundError("Материал проекта не найден")
         return [material_id]
-    links = session.scalars(
-        select(ProjectMaterial).where(ProjectMaterial.project_id == project_id)
-    )
+    links = session.scalars(select(ProjectMaterial).where(ProjectMaterial.project_id == project_id))
     return [
         link.material_id
         for link in links
@@ -547,9 +613,7 @@ def transfer_bindings_on_revision(
     return TransferResult(transferred=transferred, orphaned=orphaned)
 
 
-def delete_project_material_bindings(
-    session: Session, project_id: UUID, material_id: UUID
-) -> None:
+def delete_project_material_bindings(session: Session, project_id: UUID, material_id: UUID) -> None:
     """Материал уходит из проекта (не из библиотеки) — привязки этого проекта теряют смысл."""
     session.execute(
         delete(Binding).where(Binding.project_id == project_id, Binding.material_id == material_id)
@@ -567,9 +631,7 @@ def binding_count_for_material(session: Session, material_id: UUID) -> int:
     )
 
 
-def affected_projects_preview(
-    session: Session, material_id: UUID
-) -> list[AffectedProjectPreview]:
+def affected_projects_preview(session: Session, material_id: UUID) -> list[AffectedProjectPreview]:
     """Р7: для каждого проекта — узлы, которые останутся без материала после удаления."""
     pairs = session.execute(
         select(Binding.project_id, Binding.program_node_id)
@@ -599,9 +661,7 @@ def affected_projects_preview(
         if not losing_node_ids:
             continue
         project = session.get(Project, project_id)
-        nodes = session.scalars(
-            select(ProgramNode).where(ProgramNode.id.in_(losing_node_ids))
-        )
+        nodes = session.scalars(select(ProgramNode).where(ProgramNode.id.in_(losing_node_ids)))
         results.append(
             AffectedProjectPreview(
                 project_id=project_id,

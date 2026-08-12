@@ -201,6 +201,48 @@ def run() -> None:
                 f"предпросмотр удаления: {delete_preview['binding_count']} привязок, "
                 f"{len(delete_preview['affected_projects'])} затронутых проектов"
             )
+
+            status, page_bindings_before = request(
+                server, "GET", f"{bindings_path}?material_id={material_id}&page={page_number}"
+            )
+            assert status == 200 and len(page_bindings_before) >= 1, page_bindings_before
+            expected_removed = len(page_bindings_before)
+
+            status, bulk_removed = request(
+                server,
+                "POST",
+                f"{bindings_path}/bulk-remove",
+                {"material_id": material_id, "page_number": page_number},
+            )
+            removed_count = len(bulk_removed["bindings"])
+            assert status == 200 and removed_count == expected_removed, bulk_removed
+            removed_statuses = [item["status"] for item in bulk_removed["bindings"]]
+            assert all(status_value == "removed" for status_value in removed_statuses), bulk_removed
+
+            status, page_bindings_after = request(
+                server, "GET", f"{bindings_path}?material_id={material_id}&page={page_number}"
+            )
+            assert status == 200 and page_bindings_after == [], page_bindings_after
+            print(
+                f"массовое снятие: {expected_removed} привязок страницы {page_number} "
+                "сняты разом"
+            )
+
+            bulk_undo_sequence = bulk_removed["latest_undoable_action"]["sequence"]
+            status, bulk_undone = request(
+                server,
+                "POST",
+                f"/api/projects/{project_id}/actions/undo",
+                {"expected_action_sequence": bulk_undo_sequence},
+            )
+            undone_type = bulk_undone["undone_action_type"]
+            assert status == 200 and undone_type == "binding_remove", bulk_undone
+            status, page_bindings_restored = request(
+                server, "GET", f"{bindings_path}?material_id={material_id}&page={page_number}"
+            )
+            restored_count = len(page_bindings_restored)
+            assert status == 200 and restored_count == expected_removed, page_bindings_restored
+            print("undo вернул массовое снятие одной операцией")
         finally:
             server.stop()
             if server.stderr_output and "Traceback" in server.stderr_output:

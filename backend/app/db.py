@@ -4,6 +4,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import URL, MetaData, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.config import BACKEND_ROOT, settings
 
@@ -23,6 +24,12 @@ class Base(DeclarativeBase):
 engine = create_engine(
     URL.create("sqlite+pysqlite", database=str(settings.database_path)),
     connect_args={"autocommit": False, "check_same_thread": False, "timeout": 5},
+    # SQLAlchemy-пул рассчитан на дорогие сетевые соединения. Для SQLite
+    # соединение — это просто open() файла, а WAL и busy_timeout уже решают
+    # конкуренцию на уровне самого SQLite. С QueuePool по умолчанию (5+10)
+    # пачка параллельных запросов с экрана (~6 GET разом) исчерпывала пул и
+    # часть запросов падала с sqlalchemy.exc.TimeoutError после 30с ожидания.
+    poolclass=NullPool,
 )
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
@@ -37,6 +44,10 @@ def configure_sqlite(dbapi_connection: object, _: object) -> None:
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA busy_timeout=5000")
+            # data/ — bind-mount с Windows-хоста: mmap для wal-index там ненадёжен
+            # и роняет параллельные запросы с "disk I/O error".
+            # Обычный файловый ввод-вывод работает.
+            cursor.execute("PRAGMA mmap_size=0")
         finally:
             cursor.close()
     finally:

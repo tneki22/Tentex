@@ -8,7 +8,11 @@ from app.db import Base, engine
 
 config = context.config
 if config.config_file_name:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers по умолчанию True: без него fileConfig на каждом
+    # запуске (upgrade_database вызывается при старте api и worker) глушит уже
+    # созданные логгеры uvicorn ("uvicorn.access", "uvicorn.error") — из-за
+    # этого пропадали и строки доступа, и трейсбеки 500-х.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

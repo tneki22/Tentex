@@ -1,4 +1,5 @@
 import { ProjectApiError, request, type ProgramChangeResult } from "./projects";
+import type { AiPreflight, AiUsage } from "./ai";
 
 export type MaterialPurpose = "exam_structure" | "reference_answers" | "study_source";
 export type MaterialState =
@@ -155,6 +156,36 @@ export interface PageCorrectionRead {
   orphaned_binding_ids: string[];
 }
 
+export interface CleanupSuggestion {
+  markdown: string;
+  changes: string[];
+  warnings: string[];
+}
+
+export interface CleanupPreflightRead {
+  material_id: string;
+  page_id: string;
+  page_number: number;
+  revision: number;
+  source_hash: string;
+  source_bytes: number;
+  preflight: AiPreflight;
+}
+
+export interface CleanupRunRead {
+  run_id: string;
+  material_id: string;
+  page_id: string;
+  page_number: number;
+  revision: number;
+  source_hash: string;
+  suggestion: CleanupSuggestion;
+  usage: AiUsage;
+  requested_model_id: string;
+  actual_model_id: string;
+  cached: boolean;
+}
+
 export interface ExamProgramPreview {
   material_id: string;
   material_name: string;
@@ -271,9 +302,60 @@ export const updateMaterialPageText = (
   materialId: string,
   page: number,
   text: string,
+  expected?: { revision: number; sourceHash?: string },
 ): Promise<PageCorrectionRead> => request(
   `${materialPath(projectId, materialId)}/pages/${page}`,
-  { method: "PUT", body: JSON.stringify({ text }) },
+  {
+    method: "PUT",
+    body: JSON.stringify({
+      text,
+      expected_revision: expected?.revision,
+      expected_source_hash: expected?.sourceHash,
+    }),
+  },
+);
+
+export const preflightMaterialPageCleanup = (
+  projectId: string,
+  materialId: string,
+  page: number,
+  instruction: string,
+  signal?: AbortSignal,
+): Promise<CleanupPreflightRead> => request(
+  `${materialPath(projectId, materialId)}/pages/${page}/ai-cleanup/preflight`,
+  { method: "POST", body: JSON.stringify({ instruction }), signal },
+);
+
+export const runMaterialPageCleanup = (
+  projectId: string,
+  materialId: string,
+  page: number,
+  command: {
+    instruction: string;
+    expected_revision: number;
+    expected_source_hash: string;
+    confirmed: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<CleanupRunRead> => request(
+  `${materialPath(projectId, materialId)}/pages/${page}/ai-cleanup`,
+  { method: "POST", body: JSON.stringify(command), signal },
+);
+
+export const applyMaterialPageCleanup = (
+  projectId: string,
+  materialId: string,
+  page: number,
+  command: {
+    run_id: string;
+    expected_revision: number;
+    expected_source_hash: string;
+    markdown: string;
+  },
+  signal?: AbortSignal,
+): Promise<PageCorrectionRead> => request(
+  `${materialPath(projectId, materialId)}/pages/${page}/ai-cleanup/apply`,
+  { method: "POST", body: JSON.stringify(command), signal },
 );
 
 export const materialPageImageUrl = (

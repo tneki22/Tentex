@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 
 from app.bindings import answers_link, service
 from app.bindings.schemas import (
+    AnswersHeadingResolveWrite,
     AnswersLinkRead,
+    BindingBulkRemoveWrite,
     BindingChangeResult,
     BindingCreateWrite,
     BindingFragmentRead,
@@ -51,6 +53,20 @@ def link_answers(
     return AnswersLinkRead.model_validate(result, from_attributes=True)
 
 
+@router.post("/materials/{material_id}/link-answers/resolve", response_model=AnswersLinkRead)
+def resolve_answers_heading(
+    project_id: UUID,
+    material_id: UUID,
+    command: AnswersHeadingResolveWrite,
+    session: SessionDependency,
+) -> AnswersLinkRead:
+    with session.begin():
+        result = answers_link.resolve_answers_heading(
+            session, project_id, material_id, command.block_id, command.program_node_id
+        )
+    return AnswersLinkRead.model_validate(result, from_attributes=True)
+
+
 @router.get("/bindings", response_model=list[BindingFragmentRead])
 def list_bindings(
     project_id: UUID,
@@ -80,6 +96,13 @@ def create_bindings(
     project_id: UUID, command: BindingCreateWrite, session: SessionDependency
 ) -> BindingChangeResult:
     return service.create_bindings(session, project_id, command)
+
+
+@router.post("/bindings/bulk-remove", response_model=BindingChangeResult)
+def remove_bindings_bulk(
+    project_id: UUID, command: BindingBulkRemoveWrite, session: SessionDependency
+) -> BindingChangeResult:
+    return service.remove_bindings_bulk(session, project_id, command)
 
 
 @router.delete("/bindings/{binding_id}", response_model=BindingChangeResult)

@@ -4,14 +4,30 @@ import { request, type LatestUndoableAction } from "./projects";
 export type BindingStatus = "manual" | "confirmed" | "machine" | "removed" | "orphaned";
 export type BindingMechanism = "manual" | "search" | "answers_file" | "pass_two";
 
+export interface HeadingSuggestionCandidate {
+  node_id: string;
+  node_title: string;
+  score: number;
+}
+
+export interface HeadingSuggestion {
+  block_id: string;
+  heading: string;
+  preview: string | null;
+  page_from: number;
+  candidates: HeadingSuggestionCandidate[];
+}
+
 export interface AnswersLinkRead {
   linked_sections: number;
   linked_fragments: number;
   created_answers: number;
   updated_answers: number;
   kept_answers: number;
+  fuzzy_headings: string[];
   unmatched_headings: string[];
   duplicate_headings: string[];
+  suggestions: HeadingSuggestion[];
 }
 
 export interface BindingFragmentRead {
@@ -90,12 +106,32 @@ export const removeBinding = (
   { method: "DELETE" },
 );
 
+export const removeBindingsBulk = (
+  projectId: string,
+  command: { materialId: string; pageNumber?: number },
+): Promise<BindingChangeResult> => request(`${bindingsPath(projectId)}/bulk-remove`, {
+  method: "POST",
+  body: JSON.stringify({ material_id: command.materialId, page_number: command.pageNumber ?? null }),
+});
+
 export const linkAnswersMaterial = (
   projectId: string,
   materialId: string,
 ): Promise<AnswersLinkRead> => request(
   `/api/projects/${encodeURIComponent(projectId)}/materials/${encodeURIComponent(materialId)}/link-answers`,
   { method: "POST" },
+);
+
+export const resolveAnswersHeading = (
+  projectId: string,
+  materialId: string,
+  command: { blockId: string; programNodeId: string },
+): Promise<AnswersLinkRead> => request(
+  `/api/projects/${encodeURIComponent(projectId)}/materials/${encodeURIComponent(materialId)}/link-answers/resolve`,
+  {
+    method: "POST",
+    body: JSON.stringify({ block_id: command.blockId, program_node_id: command.programNodeId }),
+  },
 );
 
 export const restoreBinding = (

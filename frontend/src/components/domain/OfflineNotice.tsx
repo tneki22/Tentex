@@ -25,10 +25,10 @@ export function OfflineNotice({ reason, alternative }: OfflineNoticeProps) {
       <span>
         {disabled ? (
           <>
-            Внешние модели выключены — включаются в <Link to="/setup">Установке</Link>.
+            Внешние модели выключены — включаются в <Link to="/setup?section=ai">Параметрах ИИ</Link>.
           </>
         ) : (
-          <>Провайдер не отвечает — работаем в детерминированном режиме.</>
+          <>Провайдер не отвечает.</>
         )}
         {alternative && <> {alternative}</>}
       </span>

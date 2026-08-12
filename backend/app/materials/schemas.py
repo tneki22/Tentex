@@ -148,6 +148,8 @@ class PageTextUpdate(ApiModel):
     text: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2_000_000)
     ]
+    expected_revision: int | None = Field(default=None, ge=1)
+    expected_source_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class LibraryUsageRead(ApiModel):

@@ -2,6 +2,10 @@
 # для локальных эмбеддингов, а он отстаёт от свежих версий Python.
 FROM python:3.13-slim
 
+# Без этого stdout в контейнере блочно буферизуется (не tty), и логи —
+# включая трейсбеки 500-х — не долетают до `docker compose logs` до перезапуска процесса.
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 COPY requirements.txt requirements-dev.txt ./

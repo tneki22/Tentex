@@ -1,5 +1,7 @@
+import hashlib
 import shutil
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
@@ -115,7 +117,23 @@ def _task_read(task: ProcessingTask | None) -> ProcessingTaskRead | None:
     return ProcessingTaskRead.model_validate(task) if task else None
 
 
-def _read(session: Session, link: ProjectMaterial, material: Material) -> MaterialRead:
+def _latest_tasks_by_material(
+    session: Session, material_ids: list[UUID]
+) -> dict[UUID, ProcessingTask]:
+    """Одним запросом вместо `_latest_task` на каждый материал (Р7, аудит N+1)."""
+    if not material_ids:
+        return {}
+    latest: dict[UUID, ProcessingTask] = {}
+    for task in session.scalars(
+        select(ProcessingTask)
+        .where(ProcessingTask.material_id.in_(material_ids))
+        .order_by(ProcessingTask.material_id, desc(ProcessingTask.created_at))
+    ):
+        latest.setdefault(task.material_id, task)
+    return latest
+
+
+def _read(link: ProjectMaterial, material: Material, task: ProcessingTask | None) -> MaterialRead:
     purposes = [purpose for purpose in link.purposes if purpose in PURPOSE_VALUES]
     return MaterialRead(
         id=material.id,
@@ -140,7 +158,7 @@ def _read(session: Session, link: ProjectMaterial, material: Material) -> Materi
         outline=material.outline,
         diagnostics=material.diagnostics,
         error=material.error,
-        task=_task_read(_latest_task(session, material.id)),
+        task=_task_read(task),
         created_at=material.created_at,
         updated_at=material.updated_at,
     )
@@ -238,7 +256,7 @@ async def upload_material(
         )
         session.add(link)
         session.flush()
-        return _read(session, link, material)
+        return _read(link, material, _latest_task(session, material.id))
 
 
 def create_text_material(
@@ -287,7 +305,7 @@ def create_text_material(
         )
         session.add(link)
         session.flush()
-        return _read(session, link, material)
+        return _read(link, material, _latest_task(session, material.id))
 
 
 def create_external_material(
@@ -344,7 +362,7 @@ def create_external_material(
         )
         session.add(link)
         session.flush()
-        return _read(session, link, material)
+        return _read(link, material, _latest_task(session, material.id))
 
 
 def list_materials(session: Session, project_id: UUID) -> list[MaterialRead]:
@@ -355,7 +373,9 @@ def list_materials(session: Session, project_id: UUID) -> list[MaterialRead]:
         .where(ProjectMaterial.project_id == project_id)
         .order_by(ProjectMaterial.priority, ProjectMaterial.created_at)
     ).all()
-    return [_read(session, link, material) for link, material in rows]
+    material_ids = [material.id for _link, material in rows]
+    tasks_by_material = _latest_tasks_by_material(session, material_ids)
+    return [_read(link, material, tasks_by_material.get(material.id)) for link, material in rows]
 
 
 def get_material(session: Session, project_id: UUID, material_id: UUID) -> MaterialRead:
@@ -364,7 +384,7 @@ def get_material(session: Session, project_id: UUID, material_id: UUID) -> Mater
     material = session.get(Material, material_id)
     if material is None:
         raise ProjectNotFoundError("Материал не найден")
-    return _read(session, link, material)
+    return _read(link, material, _latest_task(session, material.id))
 
 
 def update_material(
@@ -385,7 +405,7 @@ def update_material(
         if command.source_role is not None:
             link.affects_program = command.source_role != SourceRole.REFERENCE
         session.flush()
-        return _read(session, link, material)
+        return _read(link, material, _latest_task(session, material.id))
 
 
 def detach_material(session: Session, project_id: UUID, material_id: UUID) -> None:
@@ -433,7 +453,7 @@ def start_processing(
         material.error = None
         session.add(task)
         session.flush()
-        return _read(session, link, material)
+        return _read(link, material, _latest_task(session, material.id))
 
 
 def control_task(
@@ -467,7 +487,7 @@ def control_task(
             )
         task.updated_at = utc_now()
         session.flush()
-        return _read(session, link, material)
+        return _read(link, material, _latest_task(session, material.id))
 
 
 def get_page(session: Session, project_id: UUID, material_id: UUID, page_number: int) -> PageRead:
@@ -573,6 +593,15 @@ def update_page_text(
         material = session.get(Material, material_id)
         if material is None or material.active_parse_revision == 0:
             raise ProjectNotFoundError("Материал ещё не разобран")
+        if (
+            command.expected_revision is not None
+            and material.active_parse_revision != command.expected_revision
+        ):
+            raise ProjectConflictError(
+                "Страница изменилась после предпросмотра",
+                code="stale_material_revision",
+                context={"current_revision": material.active_parse_revision},
+            )
         old_pages = list(
             session.scalars(
                 select(MaterialPage)
@@ -585,6 +614,15 @@ def update_page_text(
         )
         if not any(page.page_number == page_number for page in old_pages):
             raise ProjectNotFoundError("Страница не найдена")
+        current_page = next(page for page in old_pages if page.page_number == page_number)
+        current_source = current_page.markdown or current_page.text
+        current_hash = hashlib.sha256(current_source.encode()).hexdigest()
+        if command.expected_source_hash and current_hash != command.expected_source_hash:
+            raise ProjectConflictError(
+                "Текст страницы изменился после предпросмотра",
+                code="stale_material_source",
+                context={"current_source_hash": current_hash},
+            )
         old_revision = material.active_parse_revision
         old_pages_by_id = {page.id: page for page in old_pages}
         old_fragments_by_page: dict[int, list[MaterialFragment]] = defaultdict(list)
@@ -739,21 +777,85 @@ def update_page_text(
     )
 
 
-def _library_read(session: Session, material: Material) -> LibraryMaterialRead:
-    revision = material.active_parse_revision
-    quality_counts = dict(
+@dataclass(frozen=True, slots=True)
+class _LibraryAggregate:
+    quality_counts: dict[PageQuality, int]
+    block_count: int
+    fragment_count: int
+    usage: list[tuple[ProjectMaterial, Project]]
+
+
+_EMPTY_LIBRARY_AGGREGATE = _LibraryAggregate(
+    quality_counts={}, block_count=0, fragment_count=0, usage=[]
+)
+
+
+def _library_aggregates(
+    session: Session, materials: list[Material]
+) -> dict[UUID, _LibraryAggregate]:
+    """Четыре запроса на всю библиотеку разом вместо четырёх на каждый материал (Р7, аудит N+1)."""
+    material_ids = [material.id for material in materials]
+    if not material_ids:
+        return {}
+
+    quality_counts: dict[UUID, dict[PageQuality, int]] = defaultdict(dict)
+    for material_id, quality, count in session.execute(
+        select(MaterialPage.material_id, MaterialPage.quality, func.count())
+        .join(Material, Material.id == MaterialPage.material_id)
+        .where(
+            MaterialPage.material_id.in_(material_ids),
+            MaterialPage.revision == Material.active_parse_revision,
+        )
+        .group_by(MaterialPage.material_id, MaterialPage.quality)
+    ).all():
+        quality_counts[material_id][quality] = count
+
+    block_counts: dict[UUID, int] = dict(
         session.execute(
-            select(MaterialPage.quality, func.count())
-            .where(MaterialPage.material_id == material.id, MaterialPage.revision == revision)
-            .group_by(MaterialPage.quality)
+            select(MaterialBlock.material_id, func.count())
+            .join(Material, Material.id == MaterialBlock.material_id)
+            .where(
+                MaterialBlock.material_id.in_(material_ids),
+                MaterialBlock.revision == Material.active_parse_revision,
+            )
+            .group_by(MaterialBlock.material_id)
         ).all()
-    ) if revision else {}
-    usage_rows = session.execute(
+    )
+
+    fragment_counts: dict[UUID, int] = dict(
+        session.execute(
+            select(MaterialFragment.material_id, func.count())
+            .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+            .join(Material, Material.id == MaterialFragment.material_id)
+            .where(
+                MaterialFragment.material_id.in_(material_ids),
+                MaterialPage.revision == Material.active_parse_revision,
+            )
+            .group_by(MaterialFragment.material_id)
+        ).all()
+    )
+
+    usage_by_material: dict[UUID, list[tuple[ProjectMaterial, Project]]] = defaultdict(list)
+    for link, project in session.execute(
         select(ProjectMaterial, Project)
         .join(Project, Project.id == ProjectMaterial.project_id)
-        .where(ProjectMaterial.material_id == material.id)
+        .where(ProjectMaterial.material_id.in_(material_ids))
         .order_by(Project.name, Project.created_at)
-    ).all()
+    ).all():
+        usage_by_material[link.material_id].append((link, project))
+
+    return {
+        material.id: _LibraryAggregate(
+            quality_counts=quality_counts.get(material.id, {}),
+            block_count=block_counts.get(material.id, 0),
+            fragment_count=fragment_counts.get(material.id, 0),
+            usage=usage_by_material.get(material.id, []),
+        )
+        for material in materials
+    }
+
+
+def _library_read(material: Material, aggregate: _LibraryAggregate) -> LibraryMaterialRead:
     return LibraryMaterialRead(
         id=material.id,
         original_name=material.original_name,
@@ -763,26 +865,11 @@ def _library_read(session: Session, material: Material) -> LibraryMaterialRead:
         size_bytes=material.size_bytes,
         page_count=material.page_count,
         status=material.status,
-        native_page_count=quality_counts.get(PageQuality.NATIVE, 0),
-        ocr_page_count=quality_counts.get(PageQuality.OCR, 0),
-        ocr_low_page_count=quality_counts.get(PageQuality.OCR_LOW, 0),
-        block_count=session.scalar(
-            select(func.count()).select_from(MaterialBlock).where(
-                MaterialBlock.material_id == material.id,
-                MaterialBlock.revision == revision,
-            )
-        ) or 0,
-        fragment_count=session.scalar(
-            select(func.count()).select_from(MaterialFragment).where(
-                MaterialFragment.material_id == material.id,
-                MaterialFragment.page_id.in_(
-                    select(MaterialPage.id).where(
-                        MaterialPage.material_id == material.id,
-                        MaterialPage.revision == revision,
-                    )
-                ),
-            )
-        ) or 0,
+        native_page_count=aggregate.quality_counts.get(PageQuality.NATIVE, 0),
+        ocr_page_count=aggregate.quality_counts.get(PageQuality.OCR, 0),
+        ocr_low_page_count=aggregate.quality_counts.get(PageQuality.OCR_LOW, 0),
+        block_count=aggregate.block_count,
+        fragment_count=aggregate.fragment_count,
         sha256=material.sha256,
         created_at=material.created_at,
         usage=[
@@ -796,14 +883,18 @@ def _library_read(session: Session, material: Material) -> LibraryMaterialRead:
                     MaterialPurpose(value) for value in link.purposes if value in PURPOSE_VALUES
                 ],
             )
-            for link, project in usage_rows
+            for link, project in aggregate.usage
         ],
     )
 
 
 def list_library_materials(session: Session) -> list[LibraryMaterialRead]:
     materials = list(session.scalars(select(Material).order_by(desc(Material.created_at))))
-    return [_library_read(session, material) for material in materials]
+    aggregates = _library_aggregates(session, materials)
+    return [
+        _library_read(material, aggregates.get(material.id, _EMPTY_LIBRARY_AGGREGATE))
+        for material in materials
+    ]
 
 
 def material_delete_preview(session: Session, material_id: UUID) -> MaterialDeletePreview:
@@ -811,14 +902,16 @@ def material_delete_preview(session: Session, material_id: UUID) -> MaterialDele
     if material is None:
         raise ProjectNotFoundError("Материал не найден")
     task = _latest_task(session, material_id)
+    aggregate = _library_aggregates(session, [material]).get(material.id, _EMPTY_LIBRARY_AGGREGATE)
     return MaterialDeletePreview(
-        material=_library_read(session, material),
+        material=_library_read(material, aggregate),
         active_task=bool(task and task.state in ACTIVE_TASK_STATES),
         reference_answer_count=session.scalar(
-            select(func.count()).select_from(ReferenceAnswer).where(
-                ReferenceAnswer.source_material_id == material_id
-            )
-        ) or 0,
+            select(func.count())
+            .select_from(ReferenceAnswer)
+            .where(ReferenceAnswer.source_material_id == material_id)
+        )
+        or 0,
         binding_count=binding_count_for_material(session, material_id),
         affected_projects=affected_projects_preview(session, material_id),
     )

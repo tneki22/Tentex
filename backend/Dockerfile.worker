@@ -1,7 +1,8 @@
 FROM python:3.13-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
+    PYTHONUNBUFFERED=1
 
 RUN apt-get update -qq \
     && apt-get install -y -qq --no-install-recommends libgl1 libglib2.0-0 libgomp1 \

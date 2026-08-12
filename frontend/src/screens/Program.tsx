@@ -70,6 +70,7 @@ import {
 } from "./programTree";
 import { useBindings } from "../hooks/useBindings";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
+import { AiGroupingDialog } from "./AiGroupingDialog";
 
 type AddKind = "section" | "ticket" | "question" | "task" | "topic" | "subpoint";
 type OutlineFilter = "all" | "sections" | "ungrouped";
@@ -143,6 +144,8 @@ export function Program() {
   const [importPreview, setImportPreview] = useState<ExamProgramPreview | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState("");
+  const [groupingOpen, setGroupingOpen] = useState(false);
+  const [groupingNotice, setGroupingNotice] = useState(false);
 
   async function load(signal?: AbortSignal) {
     setLoading(true);
@@ -252,6 +255,7 @@ export function Program() {
         detail.program.revision,
       );
       acceptResult(result);
+      setGroupingNotice(false);
       setImportOpen(false);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "Импорт не выполнен");
@@ -265,6 +269,7 @@ export function Program() {
     setCommandError("");
     try {
       acceptResult(await command);
+      setGroupingNotice(false);
     } catch (error) {
       if (error instanceof ProjectApiError && ["stale_program_revision", "stale_action_sequence"].includes(error.code ?? "")) {
         setConflict(true);
@@ -426,6 +431,7 @@ export function Program() {
         setDetail({ ...detail, program: result.program, latest_undoable_action: result.latest_undoable_action });
         const visible = result.program.nodes.filter((node) => node.is_in_current_program && !node.is_archived);
         setSelectedId((current) => current && visible.some((node) => node.id === current) ? current : visible[0]?.id ?? null);
+        setGroupingNotice(false);
       }
     } catch (error) {
       if (error instanceof ProjectApiError && error.code === "stale_action_sequence") setConflict(true);
@@ -450,6 +456,18 @@ export function Program() {
   const hiddenRoots = visibleHiddenRoots(detail.program.nodes);
   const sectionCount = currentFlat.filter((node) => node.node_type === "section").length;
   const ungroupedCount = currentFlat.filter((node) => node.parent_id === null && node.node_type !== "section").length;
+  const groupingNodes = currentFlat.filter((node) => node.exam_kind === "question" || node.exam_kind === "task");
+  const groupingProblem = detail.project.status !== "active"
+    ? "Разложить вопросы можно только в активном проекте"
+    : currentFlat.some((node) => node.exam_kind === "ticket")
+      ? "Билеты раскладываются вручную"
+      : currentFlat.some((node) => node.node_type === "section" || node.parent_id !== null)
+        ? "Сначала уберите существующие разделы"
+        : groupingNodes.length < 6
+          ? "Нужно не меньше 6 вопросов"
+          : groupingNodes.length !== currentFlat.length
+            ? "В плоском списке должны остаться только вопросы и задачи"
+            : null;
   const filteredNodes = shown.filter((node) => {
     if (filter === "sections") return node.node_type === "section";
     if (filter === "ungrouped") return node.parent_id === null && node.node_type !== "section";
@@ -659,11 +677,17 @@ export function Program() {
           title={textbook ? "Программа" : "Вопросы экзамена"}
           actions={<>
             {!textbook && <Button variant="secondary" disabled={busy} onClick={openImport}><Files size={15} />Импорт</Button>}
-            <Button variant="secondary" disabled title="Автоматическая раскладка появится на этапе 7"><WandSparkles size={15} />Разложить · этап 7</Button>
+            {!textbook && <Tooltip label={groupingProblem ?? "Предложить смысловые разделы без изменения формулировок"}><Button variant="secondary" disabled={busy || Boolean(groupingProblem)} onClick={() => setGroupingOpen(true)}><WandSparkles size={15} />Разложить по разделам</Button></Tooltip>}
             <Button variant="secondary" disabled={busy || !detail.latest_undoable_action} onClick={() => void undo()}><Undo2 size={15} />Отменить</Button>
             <Button disabled={busy} onClick={() => openAddDialog()}><Plus size={15} />Добавить</Button>
           </>}
         />
+        {groupingNotice && detail.latest_undoable_action?.action_type === "ai_program_grouping" && (
+          <section className="program-plan-notice" role="status">
+            <span>Вопросы разложены по разделам. Стабильные id и связанные данные сохранены.</span>
+            <Button variant="secondary" disabled={busy} onClick={() => void undo()}><Undo2 size={14} />Отменить раскладку</Button>
+          </section>
+        )}
         {conflict && <section className="program-plan-notice" role="alert"><span>Программа изменилась в другой вкладке.</span><Button onClick={() => void load()}>Загрузить серверную версию</Button></section>}
         {commandError && <p className="inline-error" role="alert">{commandError}</p>}
           {textbook && <section className="program-metrics is-three-columns" aria-label="Состояние программы">
@@ -818,6 +842,23 @@ export function Program() {
             </div>
           )}
         </Dialog>
+      )}
+
+      {!textbook && (
+        <AiGroupingDialog
+          open={groupingOpen}
+          projectId={projectId}
+          projectName={detail.project.name ?? "Экзамен"}
+          nodes={groupingNodes}
+          onOpenChange={setGroupingOpen}
+          onApplied={(result) => {
+            acceptResult(result);
+            setExpanded(new Set(result.program.nodes
+              .filter((node) => node.node_type === "section" && node.is_in_current_program && !node.is_archived)
+              .map((node) => node.id)));
+            setGroupingNotice(true);
+          }}
+        />
       )}
 
       <Dialog open={addOpen} onOpenChange={setAddOpen} title="Добавить в программу" description="Укажите формулировку, тип и место в дереве. Вложенность можно изменить и после добавления." footer={<><Button variant="ghost" onClick={() => setAddOpen(false)}>Отменить</Button><Button disabled={!newTitle.trim()} onClick={() => addNode(false)}>Добавить узел</Button></>}>

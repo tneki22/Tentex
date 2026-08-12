@@ -205,6 +205,30 @@ export interface ProgramChangeResult {
   draft_revision: number | null;
 }
 
+export interface ProgramGroupingItem {
+  title: string;
+  rationale: string;
+  node_ids: string[];
+}
+
+export interface ProgramGroupingPreflightRead {
+  program_revision: number;
+  source_hash: string;
+  node_count: number;
+  preflight: import("./ai").AiPreflight;
+}
+
+export interface ProgramGroupingRunRead {
+  run_id: string;
+  program_revision: number;
+  source_hash: string;
+  suggestion: { groups: ProgramGroupingItem[] };
+  usage: import("./ai").AiUsage;
+  requested_model_id: string;
+  actual_model_id: string;
+  cached: boolean;
+}
+
 export interface ActionUndoResult {
   undone_action_type: string;
   program: ProgramState | null;
@@ -574,6 +598,44 @@ export const undoProjectAction = (
 ): Promise<ActionUndoResult> => request(`${projectPath(projectId)}/actions/undo`, {
   method: "POST",
   body: JSON.stringify({ expected_action_sequence: expectedActionSequence }),
+});
+
+export const preflightProgramGrouping = (
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ProgramGroupingPreflightRead> => request(`${projectPath(projectId)}/program/ai-grouping/preflight`, {
+  method: "POST",
+  body: JSON.stringify({}),
+  signal,
+});
+
+export const runProgramGrouping = (
+  projectId: string,
+  command: {
+    expected_program_revision: number;
+    expected_source_hash: string;
+    confirmed: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<ProgramGroupingRunRead> => request(`${projectPath(projectId)}/program/ai-grouping`, {
+  method: "POST",
+  body: JSON.stringify(command),
+  signal,
+});
+
+export const applyProgramGrouping = (
+  projectId: string,
+  command: {
+    run_id: string;
+    expected_program_revision: number;
+    expected_source_hash: string;
+    groups: ProgramGroupingItem[];
+  },
+  signal?: AbortSignal,
+): Promise<ProgramChangeResult> => request(`${projectPath(projectId)}/program/ai-grouping/apply`, {
+  method: "POST",
+  body: JSON.stringify(command),
+  signal,
 });
 
 export const saveWorkspaceState = (
