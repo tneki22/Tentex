@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
+from app.bindings.service import apply_undo as apply_binding_undo
 from app.models import (
     ExamKind,
     GoalPassport,
@@ -37,6 +38,7 @@ from app.projects.schemas import (
     ProgramNodeUpdate,
     ProgramRevisionCommand,
     ProgramState,
+    ProgramSwap,
     ProgramTargetLevel,
 )
 
@@ -317,6 +319,7 @@ def _node_snapshot(node: ProgramNode) -> dict[str, Any]:
         "is_archived": node.is_archived,
         "origin_kind": node.origin_kind.value,
         "origin_note": node.origin_note,
+        "origin_material_id": str(node.origin_material_id) if node.origin_material_id else None,
         "created_at": node.created_at.isoformat(),
         "updated_at": node.updated_at.isoformat(),
     }
@@ -452,6 +455,58 @@ def move_program_node(
             project,
             "node_move",
             node.title,
+            {"positions": positions},
+        )
+        return _change_result(session, project, node.id, draft_revision)
+
+
+def swap_program_nodes(
+    session: Session, project_id: UUID, node_id: UUID, command: ProgramSwap
+) -> ProgramChangeResult:
+    with session.begin():
+        project = _require_writable_project(session, project_id)
+        nodes = _nodes(session, project_id)
+        nodes_by_id = {node.id: node for node in nodes}
+        node = nodes_by_id.get(node_id)
+        target = nodes_by_id.get(command.target_node_id)
+        if node is None or target is None:
+            raise ProjectNotFoundError("Узел программы не найден")
+        if node.id == target.id:
+            raise ProjectInvariantError("Нельзя поменять узел местами с самим собой")
+        if not node.is_in_current_program or node.is_archived:
+            raise ProjectInvariantError("Скрытый или архивный узел нельзя перемещать")
+        if not target.is_in_current_program or target.is_archived:
+            raise ProjectInvariantError("Скрытый или архивный узел нельзя перемещать")
+        if target.id in _subtree_ids(nodes, node.id) or node.id in _subtree_ids(nodes, target.id):
+            raise ProjectInvariantError("Нельзя поменять местами родительский и дочерний узлы")
+
+        positions = [
+            {
+                "id": str(item.id),
+                "parent_id": str(item.parent_id) if item.parent_id else None,
+                "sort_order": item.sort_order,
+            }
+            for item in nodes
+        ]
+        node_parent_id, node_sort_order = node.parent_id, node.sort_order
+        parent_map = {item.id: item.parent_id for item in nodes}
+        parent_map[node.id] = target.parent_id
+        parent_map[target.id] = node_parent_id
+        _validate_tree(parent_map)
+        node.parent_id, node.sort_order = target.parent_id, target.sort_order
+        target.parent_id, target.sort_order = node_parent_id, node_sort_order
+
+        draft_revision = _begin_program_change(
+            session, project, command.expected_program_revision
+        )
+        now = utc_now()
+        for item in nodes:
+            item.updated_at = now
+        _record_action(
+            session,
+            project,
+            "node_swap",
+            f"{node.title} ↔ {target.title}",
             {"positions": positions},
         )
         return _change_result(session, project, node.id, draft_revision)
@@ -645,6 +700,95 @@ def replace_draft_program(
         return _change_result(session, project, None, draft_revision)
 
 
+def replace_active_exam_program(
+    session: Session,
+    project_id: UUID,
+    *,
+    expected_program_revision: int,
+    parsed: ParsedExamProgram,
+    material_id: UUID,
+    material_name: str,
+) -> ProgramChangeResult:
+    with session.begin():
+        project = _require_writable_project(session, project_id)
+        if (
+            project.status != ProjectStatus.ACTIVE
+            or project.workspace_variant != WorkspaceVariant.EXAM
+        ):
+            raise ProjectConflictError("Импорт доступен только в активном экзаменационном проекте")
+        old_nodes = _nodes(session, project_id)
+        snapshot = [_node_snapshot(node) for node in old_nodes]
+        draft_revision = _begin_program_change(session, project, expected_program_revision)
+        passport = session.get(GoalPassport, project_id)
+        target_level = passport.target_outcome if passport is not None else None
+
+        candidates: dict[tuple[str, str | None, str], list[ProgramNode]] = defaultdict(list)
+        for node in old_nodes:
+            if node.is_in_current_program and not node.is_archived:
+                key = (
+                    node.node_type.value,
+                    node.exam_kind.value if node.exam_kind else None,
+                    node.title.casefold(),
+                )
+                candidates[key].append(node)
+
+        imported: list[ProgramNode] = []
+        reused: set[UUID] = set()
+        created: list[UUID] = []
+        for parsed_node in parsed.nodes:
+            key = (
+                parsed_node.node_type.value,
+                parsed_node.exam_kind.value,
+                parsed_node.title.casefold(),
+            )
+            matches = [node for node in candidates.get(key, []) if node.id not in reused]
+            if len(matches) == 1:
+                node = matches[0]
+                reused.add(node.id)
+            else:
+                node = ProgramNode(id=uuid4(), project_id=project_id)
+                session.add(node)
+                created.append(node.id)
+            parent_id = (
+                imported[parsed_node.parent_index].id
+                if parsed_node.parent_index is not None
+                else None
+            )
+            node.parent_id = parent_id
+            node.node_type = parsed_node.node_type
+            node.exam_kind = parsed_node.exam_kind
+            node.sort_order = parsed_node.position
+            node.title = parsed_node.title
+            node.section_purpose = None
+            node.goal_role = GoalRole.TARGET
+            node.target_level = node.target_level or target_level
+            node.is_in_current_program = True
+            node.needs_material = False
+            node.is_archived = False
+            node.origin_kind = OriginKind.IMPORT
+            node.origin_note = f"Материал: {material_name}"
+            node.origin_material_id = material_id
+            session.flush()
+            imported.append(node)
+
+        imported_ids = {node.id for node in imported}
+        for node in old_nodes:
+            if node.id not in imported_ids:
+                node.is_in_current_program = False
+                node.is_archived = True
+
+        _record_action(
+            session,
+            project,
+            "active_exam_import",
+            f"Импорт из {material_name}",
+            {"nodes": snapshot, "created_ids": [str(node_id) for node_id in created]},
+        )
+        return _change_result(
+            session, project, imported[0].id if imported else None, draft_revision
+        )
+
+
 def _restore_snapshot(session: Session, project_id: UUID, snapshots: list[dict[str, Any]]) -> None:
     current = _nodes(session, project_id)
     _delete_nodes_leaves_first(session, current)
@@ -725,6 +869,37 @@ def undo_last_project_action(
         match action.action_type:
             case "exam_import":
                 _restore_snapshot(session, project_id, data["nodes"])
+            case "active_exam_import":
+                old_ids = {UUID(item["id"]) for item in data["nodes"]}
+                for item in data["nodes"]:
+                    node = nodes_by_id.get(UUID(item["id"]))
+                    if node is None:
+                        raise ProjectInvariantError("Узел до импорта для undo не найден")
+                    node.parent_id = UUID(item["parent_id"]) if item["parent_id"] else None
+                    node.node_type = NodeType(item["node_type"])
+                    node.exam_kind = ExamKind(item["exam_kind"]) if item["exam_kind"] else None
+                    node.sort_order = item["sort_order"]
+                    node.title = item["title"]
+                    node.section_purpose = item["section_purpose"]
+                    node.goal_role = GoalRole(item["goal_role"]) if item["goal_role"] else None
+                    node.target_level = (
+                        TargetOutcome(item["target_level"]) if item["target_level"] else None
+                    )
+                    node.is_in_current_program = item["is_in_current_program"]
+                    node.needs_material = item["needs_material"]
+                    node.is_archived = item["is_archived"]
+                    node.origin_kind = OriginKind(item["origin_kind"])
+                    node.origin_note = item["origin_note"]
+                    node.origin_material_id = (
+                        UUID(item["origin_material_id"])
+                        if item.get("origin_material_id")
+                        else None
+                    )
+                for node_id in map(UUID, data["created_ids"]):
+                    node = nodes_by_id.get(node_id)
+                    if node is not None and node.id not in old_ids:
+                        node.is_in_current_program = False
+                        node.is_archived = True
             case "node_create":
                 node_id = UUID(data["node_id"])
                 node = nodes_by_id.get(node_id)
@@ -744,7 +919,7 @@ def undo_last_project_action(
                 for field, value in data["fields"].items():
                     enum_class = enum_fields.get(field)
                     setattr(node, field, enum_class(value) if enum_class and value else value)
-            case "node_move":
+            case "node_move" | "node_swap":
                 for position in data["positions"]:
                     node = nodes_by_id.get(UUID(position["id"]))
                     if node is None:
@@ -769,6 +944,8 @@ def undo_last_project_action(
                     if node is None:
                         raise ProjectInvariantError("Скрытый узел для undo не найден")
                     node.is_in_current_program = value["is_in_current_program"]
+            case "binding_create" | "binding_remove":
+                apply_binding_undo(session, project_id, action.action_type, data)
             case _:
                 raise ProjectInvariantError(
                     f"Тип действия {action.action_type!r} нельзя отменить"

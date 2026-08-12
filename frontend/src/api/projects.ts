@@ -95,6 +95,7 @@ export interface ProgramNodeRead {
   is_archived: boolean;
   origin_kind: "manual" | "import" | "outline" | "pass1" | "catalog" | "model";
   origin_note: string | null;
+  origin_material_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -232,6 +233,9 @@ export interface ReferenceAnswerRead {
   is_active: boolean;
   revision: number;
   source_label: string | null;
+  source_material_id: string | null;
+  source_page_from: number | null;
+  source_page_to: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -324,7 +328,8 @@ function errorPayload(payload: unknown, status: number): {
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
-  if (init.body) headers.set("Content-Type", "application/json");
+  // FormData сам проставляет multipart-границу: свой Content-Type её ломает.
+  if (typeof init.body === "string") headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...init, headers });
   const payload: unknown = response.status === 204 ? null : await response.json().catch(() => null);
   if (!response.ok) {
@@ -393,6 +398,48 @@ export const deleteReferenceAnswer = (
   `${projectPath(projectId)}/program-nodes/${encodeURIComponent(nodeId)}/reference-answer?expected_revision=${expectedRevision}`,
   { method: "DELETE" },
 );
+
+export interface ReferenceAnswerAttachment {
+  id: string;
+  program_node_id: string;
+  file_name: string;
+  media_type: string;
+  size_bytes: number;
+  created_at: string;
+}
+
+export const listAnswerAttachments = (
+  projectId: string,
+  nodeId: string,
+  signal?: AbortSignal,
+): Promise<ReferenceAnswerAttachment[]> => request(
+  `${projectPath(projectId)}/reference-answers/${encodeURIComponent(nodeId)}/attachments`,
+  { signal },
+);
+
+export const addAnswerAttachment = async (
+  projectId: string,
+  nodeId: string,
+  file: File,
+): Promise<ReferenceAnswerAttachment> => {
+  const body = new FormData();
+  body.append("file", file);
+  return request(
+    `${projectPath(projectId)}/reference-answers/${encodeURIComponent(nodeId)}/attachments`,
+    { method: "POST", body },
+  );
+};
+
+export const deleteAnswerAttachment = (
+  projectId: string,
+  attachmentId: string,
+): Promise<void> => request(
+  `${projectPath(projectId)}/attachments/${encodeURIComponent(attachmentId)}`,
+  { method: "DELETE" },
+);
+
+export const answerAttachmentUrl = (projectId: string, attachmentId: string): string =>
+  `${projectPath(projectId)}/attachments/${encodeURIComponent(attachmentId)}/file`;
 
 export const importReferenceAnswers = (
   projectId: string,
@@ -483,6 +530,15 @@ export const moveProgramNode = (
   nodeId: string,
   command: ProgramCommandBase & { parent_id: string | null; position: number | null },
 ): Promise<ProgramChangeResult> => request(`${projectPath(projectId)}/program-nodes/${encodeURIComponent(nodeId)}/move`, {
+  method: "POST",
+  body: JSON.stringify(command),
+});
+
+export const swapProgramNodes = (
+  projectId: string,
+  nodeId: string,
+  command: ProgramCommandBase & { target_node_id: string },
+): Promise<ProgramChangeResult> => request(`${projectPath(projectId)}/program-nodes/${encodeURIComponent(nodeId)}/swap`, {
   method: "POST",
   body: JSON.stringify(command),
 });

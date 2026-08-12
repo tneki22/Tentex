@@ -1,26 +1,31 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
   ArrowLeft,
   ArrowDown,
   ArrowRight,
   ArrowUp,
-  BookOpen,
   ChevronDown,
   ChevronRight,
   Copy,
   Files,
-  ListTree,
-  PanelsTopLeft,
+  GripVertical,
+  Pencil,
   Plus,
   RotateCcw,
   Search,
-  Settings,
   Target,
   Trash2,
   Undo2,
   WandSparkles,
+  Upload,
 } from "lucide-react";
+import {
+  importExamProgramFromMaterial,
+  previewExamProgram,
+  type ExamProgramPreview,
+} from "../api/materials";
 import {
   createProgramNode,
   getProject,
@@ -28,6 +33,7 @@ import {
   removeProgramNode,
   restoreProgramNode,
   setProgramTargetLevel,
+  swapProgramNodes,
   undoProjectAction,
   updateProgramNode,
   ProjectApiError,
@@ -37,21 +43,24 @@ import {
   type ProjectDetail,
   type TargetOutcome,
 } from "../api/projects";
-import { GOAL_LEVELS, GoalLevelPicker } from "../components/domain";
+import { GOAL_LEVELS, GoalLevelPicker, ProjectNav } from "../components/domain";
 import type { GoalLevelValue } from "../components/domain";
 import {
   Button,
+  ContextMenu,
   Dialog,
   Disclosure,
   EmptyState,
   ErrorState,
   Field,
   IconButton,
+  Kbd,
   LoadingState,
   PageHead,
   SegmentedTabs,
   Tooltip,
 } from "../components/ui";
+import type { ContextMenuItem } from "../components/ui";
 import {
   buildProgramTree,
   filterProgramTree,
@@ -59,6 +68,8 @@ import {
   visibleHiddenRoots,
   type ProgramTreeNode,
 } from "./programTree";
+import { useBindings } from "../hooks/useBindings";
+import { useProjectMaterials } from "../hooks/useProjectMaterials";
 
 type AddKind = "section" | "ticket" | "question" | "task" | "topic" | "subpoint";
 type OutlineFilter = "all" | "sections" | "ungrouped";
@@ -82,8 +93,22 @@ function nodeKind(node: ProgramNodeRead, textbook: boolean): AddKind {
   return "section";
 }
 
+function kindLabel(kind: AddKind) {
+  switch (kind) {
+    case "ticket": return "билет";
+    case "question": return "вопрос";
+    case "task": return "задача";
+    case "topic": return "тема";
+    case "subpoint": return "подпункт";
+    default: return "раздел";
+  }
+}
+
 export function Program() {
   const { projectId = "" } = useParams();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const preferredTopic = searchParams.get("topic");
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<unknown>(null);
@@ -97,9 +122,27 @@ export function Program() {
   const [addOpen, setAddOpen] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newKind, setNewKind] = useState<AddKind>("question");
-  const [newParentId, setNewParentId] = useState<string>("");
+  const [newParentId, setNewParentId] = useState<string | null>(null);
+  const [newPosition, setNewPosition] = useState<number | null>(null);
+  const [addPlacementLabel, setAddPlacementLabel] = useState("");
   const [duplicateWarning, setDuplicateWarning] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const materials = useProjectMaterials(projectId);
+  const bindings = useBindings(detail?.project.workspace_variant === "exam" ? projectId : undefined);
+  const bindingsSummaryByNode = useMemo(
+    () => new Map(bindings.summary.map((item) => [item.program_node_id, item])),
+    [bindings.summary],
+  );
+  const importInput = useRef<HTMLInputElement>(null);
+  const titleInput = useRef<HTMLInputElement>(null);
+  const focusTitleAfterMenu = useRef(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importMaterialId, setImportMaterialId] = useState("");
+  const [importPreview, setImportPreview] = useState<ExamProgramPreview | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importError, setImportError] = useState("");
 
   async function load(signal?: AbortSignal) {
     setLoading(true);
@@ -109,7 +152,9 @@ export function Program() {
       const next = await getProject(projectId, signal);
       setDetail(next);
       const first = next.program.nodes.find((node) => node.is_in_current_program && !node.is_archived);
-      setSelectedId((current) => current && next.program.nodes.some((node) => node.id === current) ? current : first?.id ?? null);
+      const preferred = preferredTopic && next.program.nodes.some((node) =>
+        node.id === preferredTopic && node.is_in_current_program && !node.is_archived) ? preferredTopic : null;
+      setSelectedId((current) => preferred ?? (current && next.program.nodes.some((node) => node.id === current) ? current : first?.id ?? null));
       setExpanded(new Set(next.program.nodes.filter((node) => node.node_type === "section").map((node) => node.id)));
     } catch (error) {
       if (!signal?.aborted) setLoadError(error);
@@ -122,7 +167,7 @@ export function Program() {
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [projectId]);
+  }, [projectId, preferredTopic]);
 
   const treeResult = useMemo(() => {
     try {
@@ -134,6 +179,10 @@ export function Program() {
   const flat = useMemo(() => flattenProgramTree(treeResult.tree), [treeResult.tree]);
   const selected = detail?.program.nodes.find((node) => node.id === selectedId) ?? null;
   const textbook = detail?.project.workspace_variant === "textbook";
+  const kindOptions: Array<[AddKind, string]> = textbook
+    ? [["section", "Раздел"], ["topic", "Тема"], ["subpoint", "Подпункт"]]
+    : [["section", "Раздел"], ["ticket", "Билет"], ["question", "Вопрос"], ["task", "Задача"]];
+  const addParentOptions = flat.filter((node) => node.is_in_current_program && !node.is_archived && node.depth < 4);
 
   useEffect(() => setTitleDraft(selected?.title ?? ""), [selected?.id, selected?.title]);
 
@@ -151,6 +200,64 @@ export function Program() {
       if (current && visibleIds.has(current)) return current;
       return result.program.nodes.find((node) => visibleIds.has(node.id))?.id ?? null;
     });
+  }
+
+  const examMaterials = materials.materials.filter((material) =>
+    material.purposes.includes("exam_structure"));
+  const importMaterial = examMaterials.find((material) => material.id === importMaterialId) ?? null;
+
+  async function loadImportPreview(materialId: string) {
+    setImportBusy(true);
+    setImportError("");
+    try {
+      setImportPreview(await previewExamProgram(projectId, materialId));
+    } catch (error) {
+      setImportPreview(null);
+      setImportError(error instanceof Error ? error.message : "Не удалось подготовить список");
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
+  function openImport() {
+    const only = examMaterials.length === 1 ? examMaterials[0] : null;
+    setImportMaterialId(only?.id ?? "");
+    setImportPreview(null);
+    setImportError("");
+    setImportOpen(true);
+    if (only?.status === "ready") void loadImportPreview(only.id);
+  }
+
+  useEffect(() => {
+    if (!importOpen || !importMaterial || importMaterial.status !== "ready") return;
+    if (importPreview?.material_id === importMaterial.id || importBusy) return;
+    void loadImportPreview(importMaterial.id);
+  }, [importMaterial?.id, importMaterial?.status, importOpen]);
+
+  async function uploadExamMaterial(file: File) {
+    const created = await materials.upload(file, "reference", ["exam_structure"]);
+    if (!created) return;
+    setImportMaterialId(created.id);
+    setImportPreview(null);
+  }
+
+  async function confirmImport() {
+    if (!detail || !importPreview) return;
+    setImportBusy(true);
+    setImportError("");
+    try {
+      const result = await importExamProgramFromMaterial(
+        projectId,
+        importPreview.material_id,
+        detail.program.revision,
+      );
+      acceptResult(result);
+      setImportOpen(false);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "Импорт не выполнен");
+    } finally {
+      setImportBusy(false);
+    }
   }
 
   async function runCommand(command: Promise<ProgramChangeResult>) {
@@ -234,13 +341,53 @@ export function Program() {
     setAddOpen(false);
     void runCommand(createProgramNode(projectId, {
       expected_program_revision: detail.program.revision,
-      parent_id: newParentId || null,
-      position: null,
+      parent_id: newParentId,
+      position: newPosition,
       ...kind,
       title: newTitle.trim(),
       goal_role: "target",
     }));
     setNewTitle("");
+  }
+
+  function openAddDialog(options?: { kind?: AddKind; parentId?: string | null; position?: number | null; placementLabel?: string }) {
+    const kind = options?.kind ?? (textbook ? "topic" : "question");
+    setNewTitle("");
+    setNewKind(kind);
+    setNewParentId(options?.parentId ?? null);
+    setNewPosition(options?.position ?? null);
+    setAddPlacementLabel(options?.placementLabel ?? "");
+    setDuplicateWarning(false);
+    setAddOpen(true);
+  }
+
+  function openAddDialogFromMenu(options: { kind: AddKind; parentId: string | null; position: number | null; placementLabel: string }) {
+    window.setTimeout(() => openAddDialog(options), 0);
+  }
+
+  function changeNewKind(kind: AddKind) {
+    setNewKind(kind);
+  }
+
+  function startRename(node: ProgramNodeRead) {
+    setSelectedId(node.id);
+    setTitleDraft(node.title);
+    focusTitleAfterMenu.current = true;
+  }
+
+  function handleContextMenuCloseAutoFocus(event: Event) {
+    if (!focusTitleAfterMenu.current) return;
+    event.preventDefault();
+    focusTitleAfterMenu.current = false;
+    window.requestAnimationFrame(() => {
+      titleInput.current?.focus();
+      titleInput.current?.select();
+    });
+  }
+
+  function subtreeHeight(nodeId: string): number {
+    const children = flat.filter((node) => node.parent_id === nodeId);
+    return children.length ? 1 + Math.max(...children.map((child) => subtreeHeight(child.id))) : 1;
   }
 
   function duplicate(node: ProgramNodeRead) {
@@ -301,7 +448,6 @@ export function Program() {
   const shown = flattenProgramTree(filteredTree)
     .filter((node) => node.is_in_current_program && !node.is_archived);
   const hiddenRoots = visibleHiddenRoots(detail.program.nodes);
-  const parentOptions = currentFlat.filter((node) => node.node_type === "section" || textbook);
   const sectionCount = currentFlat.filter((node) => node.node_type === "section").length;
   const ungroupedCount = currentFlat.filter((node) => node.parent_id === null && node.node_type !== "section").length;
   const filteredNodes = shown.filter((node) => {
@@ -314,32 +460,115 @@ export function Program() {
 
   function nodeActions(node: ProgramNodeRead) {
     const info = siblingInfo(node);
+    const previous = info.index > 0 ? flat.find((item) => item.id === info.siblings[info.index - 1]?.id) ?? null : null;
+    const canNest = Boolean(previous && previous.depth + subtreeHeight(node.id) <= 4);
     return (
       <div className="program-row-actions">
         <Button variant="ghost" aria-label="Вверх" disabled={busy || info.index <= 0} onClick={() => move(node, -1)}><ArrowUp size={14} /></Button>
         <Button variant="ghost" aria-label="Вниз" disabled={busy || info.index >= info.siblings.length - 1} onClick={() => move(node, 1)}><ArrowDown size={14} /></Button>
-        <Button variant="ghost" aria-label="Сделать дочерним" disabled={busy || info.index <= 0} onClick={() => indent(node)}><ArrowRight size={14} /></Button>
+        <Button variant="ghost" aria-label="Сделать дочерним" disabled={busy || !canNest} onClick={() => indent(node)}><ArrowRight size={14} /></Button>
         <Button variant="ghost" aria-label="Поднять на уровень" disabled={busy || !node.parent_id} onClick={() => outdent(node)}><ArrowLeft size={14} /></Button>
       </div>
     );
   }
 
+  function nodeMenuItems(node: ProgramTreeNode): ContextMenuItem[] {
+    if (!detail) return [];
+    const revision = detail.program.revision;
+    const info = siblingInfo(node);
+    const previous = info.index > 0 ? flat.find((item) => item.id === info.siblings[info.index - 1]?.id) ?? null : null;
+    const canNest = Boolean(previous && previous.depth + subtreeHeight(node.id) <= 4);
+    return [
+      {
+        label: "Добавить внутрь",
+        icon: <Plus size={14} />,
+        items: kindOptions.map(([kind, label]) => ({
+          label,
+          disabled: busy || node.depth >= 4,
+          onSelect: () => openAddDialogFromMenu({ kind, parentId: node.id, position: null, placementLabel: `Внутрь «${node.title}»` }),
+        })),
+      },
+      { label: "Добавить перед", icon: <ArrowUp size={14} />, disabled: busy, onSelect: () => openAddDialogFromMenu({ kind: nodeKind(node, textbook), parentId: node.parent_id, position: info.index, placementLabel: `Перед «${node.title}»` }) },
+      { label: "Добавить после", icon: <ArrowDown size={14} />, disabled: busy, onSelect: () => openAddDialogFromMenu({ kind: nodeKind(node, textbook), parentId: node.parent_id, position: info.index + 1, placementLabel: `После «${node.title}»` }) },
+      { label: "Переименовать", icon: <Pencil size={14} />, disabled: busy, onSelect: () => startRename(node) },
+      { label: "Продублировать", icon: <Copy size={14} />, disabled: busy, onSelect: () => duplicate(node) },
+      {
+        label: "Тип узла",
+        items: kindOptions.map(([kind, label]) => ({
+          label,
+          disabled: busy || nodeKind(node, textbook) === kind,
+          onSelect: () => changeKind(node, kind),
+        })),
+      },
+      { label: "Поднять", icon: <ArrowUp size={14} />, disabled: busy || info.index <= 0, onSelect: () => move(node, -1) },
+      { label: "Опустить", icon: <ArrowDown size={14} />, disabled: busy || info.index >= info.siblings.length - 1, onSelect: () => move(node, 1) },
+      { label: "Увеличить вложенность", icon: <ArrowRight size={14} />, disabled: busy || !canNest, onSelect: () => indent(node) },
+      { label: "Уменьшить вложенность", icon: <ArrowLeft size={14} />, disabled: busy || !node.parent_id, onSelect: () => outdent(node) },
+      { label: "Открыть в рабочей области", icon: <Target size={14} />, disabled: node.node_type === "section", onSelect: () => navigate(`/projects/${projectId}?topic=${node.id}`) },
+      { label: "Убрать из программы", icon: <Trash2 size={14} />, destructive: true, disabled: busy, onSelect: () => void runCommand(removeProgramNode(projectId, node.id, revision)) },
+    ];
+  }
+
+  function startDrag(event: DragEvent<HTMLElement>, node: ProgramNodeRead) {
+    if (busy || node.node_type === "section") return;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", node.id);
+    setDraggedId(node.id);
+  }
+
+  function endDrag() {
+    setDraggedId(null);
+    setDropTargetId(null);
+  }
+
+  function allowDrop(event: DragEvent<HTMLElement>, target: ProgramNodeRead) {
+    if (!draggedId || draggedId === target.id) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropTargetId(target.id);
+  }
+
+  function dropNode(event: DragEvent<HTMLElement>, target: ProgramNodeRead) {
+    event.preventDefault();
+    const source = detail?.program.nodes.find((node) => node.id === draggedId);
+    endDrag();
+    if (!detail || !source || source.id === target.id || source.node_type === "section") return;
+    if (target.node_type === "section") {
+      void runCommand(moveProgramNode(projectId, source.id, {
+        expected_program_revision: detail.program.revision,
+        parent_id: target.id,
+        position: null,
+      }));
+      return;
+    }
+    void runCommand(swapProgramNodes(projectId, source.id, {
+      expected_program_revision: detail.program.revision,
+      target_node_id: target.id,
+    }));
+  }
+
   function questionRow(node: ProgramTreeNode, includeChildren = true) {
     const children = node.children.filter((child) => child.is_in_current_program && !child.is_archived);
+    const row = (
+      <div
+        className={`program-question-row ${selectedId === node.id ? "is-selected" : ""} ${draggedId === node.id ? "is-dragging" : ""} ${dropTargetId === node.id ? "is-drop-target" : ""}`.trim()}
+        style={{ paddingInlineStart: `calc(${node.depth} * var(--space-5))` }}
+        onContextMenu={() => setSelectedId(node.id)}
+        onDragOver={(event) => allowDrop(event, node)}
+        onDrop={(event) => dropNode(event, node)}
+      >
+        <span className="program-drag-handle" draggable={!busy} title="Перетащить вопрос" aria-hidden="true" onDragStart={(event) => startDrag(event, node)} onDragEnd={endDrag}><GripVertical size={15} /></span>
+        <button type="button" className="program-question-main" onClick={() => setSelectedId(node.id)}>
+          <span className="program-question-number">{node.number}</span>
+          <span className="program-question-copy"><strong>{node.title}</strong><small>{kindLabel(nodeKind(node, textbook))}</small></span>
+        </button>
+        <span className="program-goal-label"><Target size={14} />{GOAL_LEVELS.find((level) => level.value === node.target_level)?.label ?? "уровень не задан"}</span>
+        {nodeActions(node)}
+      </div>
+    );
     return (
       <Fragment key={node.id}>
-        <div
-          className={`program-question-row ${selectedId === node.id ? "is-selected" : ""}`.trim()}
-          style={{ paddingInlineStart: `calc(${node.depth} * var(--space-5))` }}
-        >
-          <span className="program-review-placeholder" />
-          <button type="button" className="program-question-main" onClick={() => setSelectedId(node.id)}>
-            <span className="program-question-number">{node.number}</span>
-            <span className="program-question-copy"><strong>{node.title}</strong><small>{nodeKind(node, textbook)}</small></span>
-          </button>
-          <span className="program-goal-label"><Target size={14} />{GOAL_LEVELS.find((level) => level.value === node.target_level)?.label ?? "уровень не задан"}</span>
-          {nodeActions(node)}
-        </div>
+        <ContextMenu label={`Действия с «${node.title}»`} trigger={row} items={nodeMenuItems(node)} onCloseAutoFocus={handleContextMenuCloseAutoFocus} />
         {includeChildren && children.map(renderNode)}
       </Fragment>
     );
@@ -348,19 +577,22 @@ export function Program() {
   function sectionCard(node: ProgramTreeNode) {
     const children = node.children.filter((child) => child.is_in_current_program && !child.is_archived);
     const open = expanded.has(node.id) || Boolean(query.trim());
+    const row = (
+      <div className={`program-section-row ${selectedId === node.id ? "is-selected" : ""} ${dropTargetId === node.id ? "is-drop-target" : ""}`.trim()} onContextMenu={() => setSelectedId(node.id)} onDragOver={(event) => allowDrop(event, node)} onDrop={(event) => dropNode(event, node)}>
+        <IconButton label={open ? "Свернуть раздел" : "Раскрыть раздел"} onClick={() => toggle(node.id)}>
+          {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        </IconButton>
+        <button type="button" className="program-section-main" onClick={() => setSelectedId(node.id)}>
+          <span className="program-section-index">{node.number}</span>
+          <span><strong>{node.title}</strong><small>{children.length} элементов</small></span>
+        </button>
+        <span className="program-goal-label"><Target size={14} />{GOAL_LEVELS.find((level) => level.value === node.target_level)?.label ?? "уровень не задан"}</span>
+        {nodeActions(node)}
+      </div>
+    );
     return (
       <article className="program-section-card" key={node.id}>
-        <div className={`program-section-row ${selectedId === node.id ? "is-selected" : ""}`.trim()}>
-          <IconButton label={open ? "Свернуть раздел" : "Раскрыть раздел"} onClick={() => toggle(node.id)}>
-            {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          </IconButton>
-          <button type="button" className="program-section-main" onClick={() => setSelectedId(node.id)}>
-            <span className="program-section-index">{node.number}</span>
-            <span><strong>{node.title}</strong><small>{children.length} элементов</small></span>
-          </button>
-          <span className="program-goal-label"><Target size={14} />{GOAL_LEVELS.find((level) => level.value === node.target_level)?.label ?? "уровень не задан"}</span>
-          {nodeActions(node)}
-        </div>
+        <ContextMenu label={`Действия с «${node.title}»`} trigger={row} items={nodeMenuItems(node)} onCloseAutoFocus={handleContextMenuCloseAutoFocus} />
         {open && children.length > 0 && <div className="program-section-children">{children.map(renderNode)}</div>}
       </article>
     );
@@ -408,14 +640,17 @@ export function Program() {
             </button>
           ))}
         </nav>
-        <nav className="workspace-project-nav program-project-nav" aria-label="Разделы проекта">
-          <Link className="workspace-project-link" to={`/projects/${projectId}`}><ListTree size={15} /><span>Рабочая область</span></Link>
-          <span className="workspace-project-link is-active"><ListTree size={15} /><span>{textbook ? "Программа" : "Вопросы экзамена"}</span><small>{currentFlat.filter((node) => node.node_type !== "section").length}</small></span>
-          {!textbook && <Link className="workspace-project-link" to={`/projects/${projectId}/coverage-map`}><Target size={15} /><span>Карта эталонов</span></Link>}
-          <Link className="workspace-project-link" to={`/projects/${projectId}/settings`}><Settings size={15} /><span>Настройки</span></Link>
-          <span className="workspace-project-link is-disabled" title="Материалы появятся на этапе 5"><BookOpen size={15} /><span>Материалы · этап 5</span></span>
-          <span className="workspace-project-link is-disabled" title="План появится на этапе 9"><PanelsTopLeft size={15} /><span>План · этап 9</span></span>
-        </nav>
+        <ProjectNav
+          projectId={projectId}
+          active="program"
+          textbook={textbook}
+          modules={detail.project.enabled_modules}
+          counts={{
+            program: currentFlat.filter((node) => node.node_type !== "section").length,
+            materials: materials.materials.length,
+          }}
+          className="program-project-nav"
+        />
       </aside>
 
       <main className="program-main">
@@ -423,32 +658,34 @@ export function Program() {
           eyebrow={textbook ? "Ручная структура" : "Структура экзамена"}
           title={textbook ? "Программа" : "Вопросы экзамена"}
           actions={<>
-            <Button variant="secondary" disabled title="Повторный импорт появится на этапе 5"><Files size={15} />Повторный импорт · этап 5</Button>
+            {!textbook && <Button variant="secondary" disabled={busy} onClick={openImport}><Files size={15} />Импорт</Button>}
             <Button variant="secondary" disabled title="Автоматическая раскладка появится на этапе 7"><WandSparkles size={15} />Разложить · этап 7</Button>
             <Button variant="secondary" disabled={busy || !detail.latest_undoable_action} onClick={() => void undo()}><Undo2 size={15} />Отменить</Button>
-            <Button disabled={busy} onClick={() => { setNewKind(textbook ? "topic" : "question"); setNewParentId(""); setAddOpen(true); }}><Plus size={15} />Добавить</Button>
+            <Button disabled={busy} onClick={() => openAddDialog()}><Plus size={15} />Добавить</Button>
           </>}
         />
         {conflict && <section className="program-plan-notice" role="alert"><span>Программа изменилась в другой вкладке.</span><Button onClick={() => void load()}>Загрузить серверную версию</Button></section>}
         {commandError && <p className="inline-error" role="alert">{commandError}</p>}
-        <section className="program-metrics is-three-columns" aria-label="Состояние программы">
-          <button type="button" onClick={() => setFilter("all")}><strong>{currentFlat.length}</strong><span>{textbook ? "узлов программы" : "вопросов и задач"}</span></button>
-          <button type="button" onClick={() => setFilter("sections")}><strong>{sectionCount}</strong><span>разделов</span></button>
-          <button type="button" onClick={() => setFilter("ungrouped")}><strong>{ungroupedCount}</strong><span>без раздела</span></button>
-        </section>
+          {textbook && <section className="program-metrics is-three-columns" aria-label="Состояние программы">
+            <button type="button" onClick={() => setFilter("all")}><strong>{currentFlat.length}</strong><span>узлов программы</span></button>
+            <button type="button" onClick={() => setFilter("sections")}><strong>{sectionCount}</strong><span>разделов</span></button>
+            <button type="button" onClick={() => setFilter("ungrouped")}><strong>{ungroupedCount}</strong><span>без раздела</span></button>
+          </section>}
         <div className="program-toolbar"><label className="program-search"><Search size={16} /><span className="sr-only">Найти в программе</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={textbook ? "Найти тему" : "Найти вопрос"} /></label></div>
 
         {currentFlat.length === 0 ? (
           <>
             <EmptyState title="Программа пока пуста">
-              <p>{textbook ? "Добавьте первую тему вручную." : "Вернитесь в мастер и импортируйте список или добавьте вопрос вручную."}</p>
-              <Button onClick={() => setAddOpen(true)}>Добавить первый узел</Button>
+              <p>{textbook ? "Добавьте первую тему вручную." : "Импортируйте список из материала или добавьте вопрос вручную."}</p>
+              {!textbook && <Button onClick={openImport}>Импортировать вопросы</Button>}
+              <Button variant={textbook ? undefined : "secondary"} onClick={() => openAddDialog({ kind: textbook ? "section" : "question" })}>Добавить первый узел</Button>
             </EmptyState>
             {hiddenRootsDisclosure()}
           </>
         ) : (
           <div className="program-editor-grid">
             <section className="program-outline" aria-label={textbook ? "Структура программы" : "Структура вопросов экзамена"}>
+              <p className="program-context-hint">Правой кнопкой по узлу — добавить внутрь или рядом, переименовать и переместить. С клавиатуры: <Kbd>Shift+F10</Kbd>.</p>
               {usesTreeRenderer
                 ? filteredTree.filter((node) => node.is_in_current_program && !node.is_archived).map(renderNode)
                 : filteredNodes.map(renderFlatNode)}
@@ -460,11 +697,15 @@ export function Program() {
               {selected ? <>
                 <p className="eyebrow">Свойства</p>
                 <h2>{selected.title}</h2>
-                <Field label="Формулировка"><input value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} onBlur={() => { const title = titleDraft.trim(); if (title && title !== selected.title) void runCommand(updateProgramNode(projectId, selected.id, { expected_program_revision: detail.program.revision, title })); }} /></Field>
+                <Field label="Формулировка"><input ref={titleInput} value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} onBlur={() => { const title = titleDraft.trim(); if (title && title !== selected.title) void runCommand(updateProgramNode(projectId, selected.id, { expected_program_revision: detail.program.revision, title })); }} /></Field>
                 <SegmentedTabs label="Тип узла" value={nodeKind(selected, textbook)} onChange={(value) => changeKind(selected, value as AddKind)} tabs={(textbook ? [["section", "Раздел"], ["topic", "Тема"], ["subpoint", "Подпункт"]] : [["section", "Раздел"], ["ticket", "Билет"], ["question", "Вопрос"], ["task", "Задача"]]).map(([value, label]) => ({ value, label }))} />
                 <GoalLevelPicker label="узла" value={(selected.target_level ?? "understanding") as GoalLevelValue} onChange={(target) => void runCommand(setProgramTargetLevel(projectId, selected.id, { expected_program_revision: detail.program.revision, target_level: target as TargetOutcome, include_descendants: true }))} />
-                <section className="program-impact"><h3>Что связано</h3><dl><div><dt>Эталон</dt><dd>Статус доступен на Карте эталонов</dd></div><div><dt>Материалы и привязки</dt><dd>Появятся после привязок на этапе 8</dd></div><div><dt>План</dt><dd>Появится на этапе 9</dd></div></dl></section>
-                <div className="program-inspector-links"><Link to={`/projects/${projectId}?topic=${selected.id}`}>Открыть в рабочей области</Link><Button variant="ghost" disabled title="Источники появятся на этапе 5">Источники · этап 5</Button><Button variant="ghost" disabled title="Привязки появятся на этапе 8">Привязки · этап 8</Button></div>
+                <section className="program-impact"><h3>Что связано</h3><dl><div><dt>Эталон</dt><dd>Статус доступен на Карте эталонов</dd></div><div><dt>Источник списка</dt><dd>{selected.origin_material_id ? materials.materials.find((item) => item.id === selected.origin_material_id)?.display_name ?? "Материал удалён" : "Добавлено вручную"}</dd></div><div><dt>Привязки</dt><dd>{(() => {
+                  const summary = bindingsSummaryByNode.get(selected.id);
+                  if (!summary) return "Материал не привязан";
+                  return `${summary.fragment_count} фрагм. из ${summary.material_count} ${summary.material_count === 1 ? "файла" : "файлов"}`;
+                })()}</dd></div><div><dt>План</dt><dd>Появится на этапе 9</dd></div></dl></section>
+                <div className="program-inspector-links"><Link to={`/projects/${projectId}?topic=${selected.id}`}>Открыть в рабочей области</Link>{selected.origin_material_id && <Link to={`/projects/${projectId}/materials/${selected.origin_material_id}`}>Открыть материал списка</Link>}<Link to={`/projects/${projectId}/materials`}>Привязки в материалах</Link></div>
                 <div className="program-row-actions"><Button variant="secondary" disabled={busy} onClick={() => duplicate(selected)}><Copy size={15} />Продублировать</Button><Button variant="ghost" disabled={busy} onClick={() => void runCommand(removeProgramNode(projectId, selected.id, detail.program.revision))}><Trash2 size={15} />Убрать из списка</Button></div>
               </> : <p>Выберите узел программы.</p>}
             </aside>
@@ -472,10 +713,119 @@ export function Program() {
         )}
       </main>
 
-      <Dialog open={addOpen} onOpenChange={setAddOpen} title="Добавить в программу" description="Положение и происхождение узла сохранит сервер." footer={<><Button variant="ghost" onClick={() => setAddOpen(false)}>Отменить</Button><Button disabled={!newTitle.trim()} onClick={() => addNode(false)}>Добавить узел</Button></>}>
+      {!textbook && (
+        <Dialog
+          open={importOpen}
+          onOpenChange={setImportOpen}
+          title="Импортировать вопросы"
+          description={currentFlat.length
+            ? "Проверьте новый список. После подтверждения он заменит текущий состав экзамена; совпавшие вопросы сохранят свои данные."
+            : "Выберите или загрузите материал со списком вопросов, затем проверьте распознанный состав."}
+          footer={<>
+            <Button variant="ghost" onClick={() => setImportOpen(false)}>Закрыть</Button>
+            {importMaterial?.status === "ready_to_process" && (
+              <Button disabled={materials.busy} onClick={() => void materials.start(importMaterial.id)}>
+                Начать быстрый разбор
+              </Button>
+            )}
+            {importMaterial?.status === "failed" && (
+              <Button disabled={materials.busy} onClick={() => void materials.control(importMaterial.id, "retry")}>
+                Повторить разбор
+              </Button>
+            )}
+            {importPreview && (
+              <Button disabled={importBusy} onClick={() => void confirmImport()}>
+                {currentFlat.length ? "Заменить список вопросов" : "Импортировать вопросы"}
+              </Button>
+            )}
+          </>}
+        >
+          <input
+            ref={importInput}
+            className="materials-file-input"
+            type="file"
+            tabIndex={-1}
+            aria-hidden="true"
+            accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void uploadExamMaterial(file);
+              event.target.value = "";
+            }}
+          />
+          {examMaterials.length === 0 ? (
+            <section className="program-import-empty">
+              <Upload size={24} aria-hidden="true" />
+              <h3>Список вопросов ещё не загружен</h3>
+              <p>Подойдут PDF, DOCX, текстовый файл или фотография. Ограничение — 100 МБ и 500 страниц.</p>
+              <Button variant="secondary" disabled={materials.busy} onClick={() => importInput.current?.click()}>
+                Загрузить список вопросов
+              </Button>
+            </section>
+          ) : (
+            <div className="program-import-layout">
+              {examMaterials.length > 1 && (
+                <fieldset className="program-import-materials">
+                  <legend>Материал со списком вопросов</legend>
+                  {examMaterials.map((material) => (
+                    <label key={material.id}>
+                      <input
+                        type="radio"
+                        name="exam-material"
+                        value={material.id}
+                        checked={importMaterialId === material.id}
+                        onChange={() => {
+                          setImportMaterialId(material.id);
+                          setImportPreview(null);
+                          setImportError("");
+                        }}
+                      />
+                      <span><strong>{material.display_name}</strong><small>{material.status === "ready" ? "Разобран" : material.status === "ready_to_process" ? "Ожидает запуска" : material.status === "failed" ? "Ошибка разбора" : "Обрабатывается"}</small></span>
+                    </label>
+                  ))}
+                </fieldset>
+              )}
+              {examMaterials.length === 1 && <p className="program-import-source"><strong>Источник:</strong> {examMaterials[0].display_name}</p>}
+              <Button variant="ghost" disabled={materials.busy} onClick={() => importInput.current?.click()}><Upload size={14} />Загрузить другой материал</Button>
+              {importMaterial?.status === "ready_to_process" && (
+                <section className="program-import-estimate">
+                  <h3>Перед разбором</h3>
+                  <p>{importMaterial.page_count ?? 1} стр. · OCR потребуется для {importMaterial.scan_page_count} · примерно {importMaterial.estimated_seconds ?? 1} сек. · стоимость 0 ₽.</p>
+                </section>
+              )}
+              {importMaterial && ["queued", "processing", "paused"].includes(importMaterial.status) && (
+                <p className="program-import-progress" role="status">Материал обрабатывается: {importMaterial.task?.done ?? 0} из {importMaterial.task?.total ?? importMaterial.page_count ?? 1} страниц.</p>
+              )}
+              {importBusy && <LoadingState label="Готовим предпросмотр вопросов" />}
+              {importError && <p className="inline-error" role="alert">{importError}</p>}
+              {materials.error && <p className="inline-error" role="alert">{materials.error}</p>}
+              {importPreview && (
+                <section className="program-import-preview" aria-labelledby="program-import-preview-title">
+                  <header>
+                    <h3 id="program-import-preview-title">Будет импортировано</h3>
+                    <p>{importPreview.counts.questions} вопросов · {importPreview.counts.tasks} задач · {importPreview.counts.tickets} билетов</p>
+                  </header>
+                  {importPreview.warnings.length > 0 && <ul>{importPreview.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+                  <ol>
+                    {importPreview.nodes.map((node, index) => (
+                      <li key={`${node.title}-${index}`} style={{ "--program-import-depth": node.depth } as React.CSSProperties}>
+                        <span>{index + 1}</span><strong>{node.title}</strong><small>{node.exam_kind === "task" ? "Задача" : node.exam_kind === "ticket" ? "Билет" : "Вопрос"}</small>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              )}
+            </div>
+          )}
+        </Dialog>
+      )}
+
+      <Dialog open={addOpen} onOpenChange={setAddOpen} title="Добавить в программу" description="Укажите формулировку, тип и место в дереве. Вложенность можно изменить и после добавления." footer={<><Button variant="ghost" onClick={() => setAddOpen(false)}>Отменить</Button><Button disabled={!newTitle.trim()} onClick={() => addNode(false)}>Добавить узел</Button></>}>
         <Field label="Формулировка" required><input autoFocus value={newTitle} onChange={(event) => { setNewTitle(event.target.value); setDuplicateWarning(false); }} placeholder="Например, индексы и B-деревья" /></Field>
-        <Field label="Тип"><select value={newKind} onChange={(event) => setNewKind(event.target.value as AddKind)}>{(textbook ? [["section", "Раздел"], ["topic", "Тема"], ["subpoint", "Подпункт"]] : [["section", "Раздел"], ["ticket", "Билет"], ["question", "Вопрос"], ["task", "Задача"]]).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
-        <Field label="Родитель"><select value={newParentId} onChange={(event) => setNewParentId(event.target.value)}><option value="">Корень программы</option>{parentOptions.map((node) => <option key={node.id} value={node.id}>{node.title}</option>)}</select></Field>
+        <Field label="Тип"><select value={newKind} onChange={(event) => changeNewKind(event.target.value as AddKind)}>{kindOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
+        {addPlacementLabel
+          ? <Field label="Расположение"><div className="program-add-placement">{addPlacementLabel}</div></Field>
+          : <Field label="Расположение" hint="Выберите корень или узел, внутрь которого нужно добавить новый пункт."><select value={newParentId ?? ""} onChange={(event) => { setNewParentId(event.target.value || null); setNewPosition(null); }}><option value="">В конце программы</option>{addParentOptions.map((node) => <option key={node.id} value={node.id}>{`${"— ".repeat(Math.max(0, node.depth - 1))}${node.number}. ${node.title}`}</option>)}</select></Field>}
         {duplicateWarning && <div className="inline-error" role="alert"><p>Узел с такой формулировкой уже есть.</p><Button variant="secondary" onClick={() => addNode(true)}>Всё равно добавить</Button></div>}
       </Dialog>
     </div>

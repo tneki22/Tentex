@@ -52,6 +52,7 @@ export function useWizardDraft({
   const [conflict, setConflict] = useState<ProjectApiError | null>(null);
   const detailRef = useRef<WizardDraftDetail | null>(null);
   const queueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const createRequestRef = useRef<Promise<WizardDraftDetail> | null>(null);
   const blockedRef = useRef(false);
   const loadRequestRef = useRef(0);
 
@@ -94,7 +95,14 @@ export function useWizardDraft({
     // Его уже актуальная версия лежит в detailRef; повторный GET может вернуть revision 0
     // после первого PUT и затереть revision 1, создавая ложный конфликт autosave.
     const requestId = ++loadRequestRef.current;
-    if (!projectId) return;
+    if (!projectId) {
+      detailRef.current = null;
+      setDetail(null);
+      setStatus("idle");
+      setError(null);
+      setConflict(null);
+      return;
+    }
     if (detailRef.current?.project.id === projectId) {
       setError(null);
       setStatus("ready");
@@ -114,14 +122,19 @@ export function useWizardDraft({
 
   const ensureDraft = useCallback(async () => {
     if (detailRef.current) return detailRef.current;
+    if (createRequestRef.current) return createRequestRef.current;
     setStatus("saving");
-    try {
-      const next = await createWizardDraft(templateKey);
-      accept(next);
-      return next;
-    } catch (caught) {
-      return fail(caught) as never;
-    }
+    const request = createWizardDraft(templateKey)
+      .then((next) => {
+        accept(next);
+        return next;
+      })
+      .catch((caught) => fail(caught) as never)
+      .finally(() => {
+        if (createRequestRef.current === request) createRequestRef.current = null;
+      });
+    createRequestRef.current = request;
+    return request;
   }, [accept, fail, templateKey]);
 
   const enqueue = useCallback(<T,>(task: () => Promise<T>): Promise<T> => {

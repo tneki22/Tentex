@@ -407,6 +407,9 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
 
           <div className="wizard-actions">
             <Button variant="ghost" onClick={() => changeStep(2)}>Назад</Button>
+            <Button variant="secondary" disabled={busy} onClick={() => changeStep(4)}>
+              Добавить вопросы позже
+            </Button>
             <Button disabled={busy || !form.rawText.trim()} onClick={() => void importText()}>
               <Upload size={15} aria-hidden="true" />Импортировать список
             </Button>
@@ -536,6 +539,12 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                 }));
               }}
             />
+            {studyCount === 0 && (
+              <Card className="wizard-import-result">
+                <h2>Вопросы пока не добавлены</h2>
+                <p>Проект можно создать сейчас, а список загрузить позже кнопкой «Импорт» в разделе «Вопросы экзамена».</p>
+              </Card>
+            )}
             {countMismatch && (
               <div className="wizard-warning-card">
                 <span>!</span>
@@ -559,7 +568,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
           </section>
           <div className="wizard-actions">
             <Button variant="ghost" onClick={() => changeStep(4)}>Назад</Button>
-            <Button disabled={busy || studyCount === 0} onClick={() => void activate()}>Создать проект</Button>
+            <Button disabled={busy} onClick={() => void activate()}>Создать проект</Button>
           </div>
         </section>
       )}

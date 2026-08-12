@@ -8,6 +8,8 @@ interface PageHeadProps {
   lead?: string;
   /** Действия справа от заголовка: главная кнопка экрана. */
   actions?: ReactNode;
+  /** Элемент слева от заголовка: кнопка «назад» там, где нет боковой панели. */
+  leading?: ReactNode;
 }
 
 /**
@@ -19,10 +21,12 @@ export function PageHead({
   eyebrow,
   lead,
   actions,
+  leading,
   children,
 }: PropsWithChildren<PageHeadProps>) {
   return (
-    <header className={`page-head ${actions ? "has-actions" : ""}`.trim()}>
+    <header className={`page-head ${actions ? "has-actions" : ""} ${leading ? "has-leading" : ""}`.trim()}>
+      {leading && <div className="page-head-leading">{leading}</div>}
       <div className="page-head-text">
         {eyebrow && <p className="eyebrow">{eyebrow}</p>}
         <h1>{title}</h1>

@@ -10,6 +10,8 @@
 export { Button } from "./Button";
 export { Card } from "./Card";
 export { Checkbox } from "./Checkbox";
+export { ContextMenu } from "./ContextMenu";
+export type { ContextMenuItem } from "./ContextMenu";
 export { ConfirmDialog, Dialog } from "./Dialog";
 export { Disclosure } from "./Disclosure";
 export { EmptyState } from "./EmptyState";

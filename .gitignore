@@ -46,6 +46,8 @@ Thumbs.db
 
 # --- Claude Code ---
 .claude/settings.local.json
+# skills — единственный источник в .agents/skills, .claude/skills это junction на него
+.claude/skills/
 
 # --- Local worktrees ---
 .worktrees/

@@ -1,0 +1,1 @@
+"""Нормализующие adapters document parsers."""

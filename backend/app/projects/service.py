@@ -289,14 +289,6 @@ def activate_wizard_draft(
             getattr(goal_passport, field) in {None, ""} for field in required_goal_fields
         ):
             raise ProjectConflictError("Перед активацией заполните паспорт цели")
-        state = program.read_program(session, project_id)
-        if not any(
-            node.node_type in {NodeType.TOPIC, NodeType.SUBPOINT}
-            and node.is_in_current_program
-            and not node.is_archived
-            for node in state.nodes
-        ):
-            raise ProjectConflictError("Перед активацией добавьте хотя бы одну тему программы")
         assert goal_passport.target_outcome is not None
         program.prepare_for_activation(session, project_id, goal_passport.target_outcome)
         now = utc_now()

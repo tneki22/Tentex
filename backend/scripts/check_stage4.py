@@ -355,24 +355,14 @@ def run() -> None:
             )
 
             textbook_id, _ = create_saved_draft(server, "textbook")
-            status, textbook_node = request(
-                server,
-                "POST",
-                f"/api/projects/{textbook_id}/program-nodes",
-                {
-                    "expected_program_revision": 0,
-                    "node_type": "topic",
-                    "title": "Устройство индекса",
-                },
-            )
-            assert status == 201
-            status, _ = request(
+            status, textbook_project = request(
                 server,
                 "POST",
                 f"/api/wizard-drafts/{textbook_id}/activate",
-                {"expected_revision": 2},
+                {"expected_revision": 1},
             )
-            assert status == 200
+            assert status == 200 and textbook_project["project"]["status"] == "active"
+            assert textbook_project["program"]["nodes"] == []
             assert_error(
                 request(server, "GET", f"/api/projects/{textbook_id}/coverage-map"),
                 409,
@@ -438,7 +428,7 @@ def run() -> None:
             migration = connection.execute(
                 "SELECT version_num FROM alembic_version"
             ).fetchone()[0]
-            assert migration == "20260809_0004"
+            assert migration == "20260812_0009"
 
     print("stage 4 smoke check passed")
 

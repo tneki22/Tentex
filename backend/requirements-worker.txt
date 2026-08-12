@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Зафиксированная рабочая пара для русского PP-OCRv5. PaddleOCR 3.7 +
+# PaddlePaddle 3.3.1 падают в oneDNN, а PP-OCRv6 не имеет lang=ru.
+paddlepaddle==3.2.2
+paddleocr==3.4.1
+faster-whisper==1.2.1

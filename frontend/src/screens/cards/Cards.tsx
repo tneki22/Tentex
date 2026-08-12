@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
-import { ArrowLeft, CalendarDays, Files, Layers, ListTree, Settings } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
+import { ProjectNav } from "../../components/domain";
 import { StatusBadge, Tooltip } from "../../components/ui";
 import { RepetitionMode, type SessionConfig } from "./RepetitionMode";
 import { CreationMode, type CreationPath } from "./CreationMode";
@@ -107,13 +108,12 @@ export function Cards() {
           </div>
         </section>
 
-        <nav className="workspace-project-nav cards-project-nav" aria-label="Разделы проекта">
-          <Link className="workspace-project-link" to={`/projects/${projectId}/materials`}><Files size={15} /><span>Материалы</span><small>3</small></Link>
-          <Link className="workspace-project-link" to={`/projects/${projectId}/program`}><ListTree size={15} /><span>Вопросы экзамена</span><small>10</small></Link>
-          <Link className="workspace-project-link" to={`/projects/${projectId}/plan`}><CalendarDays size={15} /><span>План подготовки</span><small>7 дней</small></Link>
-          <span className="workspace-project-link is-active"><Layers size={15} /><span>Карточки</span><small>31</small></span>
-          <button type="button" disabled><Settings size={15} /><span>Настройки</span></button>
-        </nav>
+        <ProjectNav
+          projectId={projectId}
+          active="cards"
+          counts={{ materials: 3, program: 10, plan: "7 дней", cards: 31 }}
+          className="cards-project-nav"
+        />
       </aside>
 
       <main className={`cards-main ${inSession ? "is-session" : ""}`.trim()}>

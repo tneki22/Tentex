@@ -4,8 +4,9 @@
   "private": true,
   "description": "Корневые скрипты монорепо. Код лежит в backend/ и frontend/.",
   "scripts": {
-    "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev": "concurrently -k -n api,worker,web -c cyan,yellow,magenta \"npm:dev:api\" \"npm:dev:worker\" \"npm:dev:web\"",
     "dev:api": "cd backend && python -m uvicorn app.main:app --reload --port 8000",
+    "dev:worker": "cd backend && python -m app.materials.worker",
     "dev:web": "cd frontend && npm run dev",
     "typecheck": "cd frontend && npm run typecheck",
     "lint": "cd backend && python -m ruff check .",

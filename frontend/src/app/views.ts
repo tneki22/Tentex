@@ -3,7 +3,7 @@ import { Cards } from "../screens/cards/Cards";
 import { CoverageMap } from "../screens/CoverageMap";
 import { Library } from "../screens/Library";
 import { Lessons } from "../screens/lessons/Lessons";
-import { Materials } from "../screens/Materials";
+import { Materials, SourceViewer } from "../screens/Materials";
 import { Plan } from "../screens/Plan";
 import { Program } from "../screens/Program";
 import { ProjectWorkspace } from "../screens/ProjectWorkspace";
@@ -27,6 +27,7 @@ export const SCREEN_VIEWS: Record<string, ComponentType> = {
   workspace: ProjectWorkspace,
   lessons: Lessons,
   materials: Materials,
+  "source-viewer": SourceViewer,
   program: Program,
   plan: Plan,
   cards: Cards,

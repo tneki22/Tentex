@@ -172,11 +172,6 @@
   margin: auto calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
 }
 
-.cards-project-nav .workspace-project-link.is-active {
-  background: var(--accent-wash);
-  color: var(--accent);
-}
-
 .cards-main {
   min-width: 0;
   padding: var(--space-8);

@@ -3,7 +3,9 @@ from dataclasses import dataclass
 
 from app.models import ExamFormat, ExamKind, NodeType
 
-ITEM_RE = re.compile(r"^\s*(?:\d+(?:\.\d+)*(?:[.)])?|[-—*•])\s+(.+?)\s*$")
+ITEM_RE = re.compile(
+    r"^\s*(?:(?:\d+(?:\.\d+)*[.)])\s*|(?:\d+(?:\.\d+)*)\s+|[-—*•]\s+)(.+?)\s*$"
+)
 TICKET_RE = re.compile(
     r"^\s*Билет\s*(?:№|#)?\s*(\d+)?\s*(?:[.:—-]\s*)?(.*?)\s*$",
     re.IGNORECASE,

@@ -1,20 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
   ArrowLeft,
   BookOpen,
-  CalendarDays,
-  CircleDashed,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   FileText,
-  Files,
   Filter,
   GraduationCap,
   History,
-  Layers,
   ListTree,
   MessageSquare,
   NotebookPen,
@@ -22,25 +18,41 @@ import {
   PanelsTopLeft,
   Plus,
   Search,
-  Settings,
+  Tag,
   Target,
+  Unlink,
   X,
 } from "lucide-react";
+import type { BindingFragmentRead } from "../api/bindings";
+import { listBindings, removeBinding, createBindings } from "../api/bindings";
 import {
+  getCoverageMap,
   getReferenceAnswer,
   getProject,
   ProjectApiError,
   saveWorkspaceState,
+  type CoverageMapRead,
   type ProgramNodeRead,
   type ProjectDetail,
   type ProjectRead,
   type ReferenceAnswerSlot,
+  type ReferenceAnswerStatus,
   type WorkspaceLayout,
   type WorkspaceTab,
 } from "../api/projects";
-import { ReferenceAnswerBadge } from "../components/domain";
+import type { SearchHighlightRead, SearchResultRead } from "../api/search";
+import { searchProjectMaterials } from "../api/search";
+import {
+  PERSONAL_MARK_OPTIONS,
+  PersonalMarkIcon,
+  ProjectNav,
+  QualityBadge,
+  ReferenceAnswerBadge,
+  referenceAnswerStatusLabel,
+} from "../components/domain";
 import {
   Button,
+  ContextMenu,
   EmptyState,
   ErrorState,
   IconButton,
@@ -49,6 +61,8 @@ import {
   PanelResizeHandle,
   Tooltip,
 } from "../components/ui";
+import type { ContextMenuItem } from "../components/ui";
+import { useBindings } from "../hooks/useBindings";
 import {
   buildProgramTree,
   filterProgramTree,
@@ -56,6 +70,7 @@ import {
   type ProgramTreeNode,
 } from "./programTree";
 import { StudioPanel } from "./StudioPanel";
+import { usePersonalMarks } from "../hooks/usePersonalMarks";
 
 const DEFAULT_LAYOUT: WorkspaceLayout = {
   selected_node_id: null,
@@ -113,8 +128,29 @@ function deadlineTone(days: number): "success" | "warning" | "danger" {
   return "success";
 }
 
+function answerDotClass(status: ReferenceAnswerStatus | undefined): string {
+  if (status === "needs_review") return "is-answer-needs-review";
+  if (status === "auto_matched") return "is-answer-auto";
+  if (status === "confirmed" || status === "manual") return "is-answer-present";
+  return "";
+}
+
 function isStudyNode(node: ProgramNodeRead): boolean {
   return STUDY_TYPES.has(node.node_type) && node.is_in_current_program && !node.is_archived;
+}
+
+function renderHighlighted(text: string, highlights: SearchHighlightRead[]): ReactNode {
+  if (highlights.length === 0) return text;
+  const sorted = [...highlights].sort((left, right) => left.start - right.start);
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  sorted.forEach((range, index) => {
+    if (range.start > cursor) nodes.push(text.slice(cursor, range.start));
+    nodes.push(<mark key={index}>{text.slice(range.start, range.end)}</mark>);
+    cursor = Math.max(cursor, range.end);
+  });
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
 }
 
 function sanitizeLayout(
@@ -152,6 +188,7 @@ function sanitizeLayout(
 
 export function ProjectWorkspace() {
   const { projectId = "" } = useParams();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const preferredTopic = searchParams.get("topic");
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
@@ -162,9 +199,21 @@ export function ProjectWorkspace() {
   const [answerSlot, setAnswerSlot] = useState<ReferenceAnswerSlot | null>(null);
   const [answerLoading, setAnswerLoading] = useState(false);
   const [answerError, setAnswerError] = useState("");
+  const [coverage, setCoverage] = useState<CoverageMapRead | null>(null);
   const [query, setQuery] = useState("");
   const [studioExpanded, setStudioExpanded] = useState(false);
   const [activeGroupId, setActiveGroupId] = useState(DEFAULT_LAYOUT.groups[0].id);
+  const { marks, setMark } = usePersonalMarks(projectId);
+  const bindings = useBindings(projectId);
+  const [sourceBindings, setSourceBindings] = useState<BindingFragmentRead[]>([]);
+  const [sourceBindingsLoading, setSourceBindingsLoading] = useState(false);
+  const [sourceQuery, setSourceQuery] = useState("");
+  const [sourceResults, setSourceResults] = useState<SearchResultRead[]>([]);
+  const [sourceSearching, setSourceSearching] = useState(false);
+  const [sourceSearched, setSourceSearched] = useState(false);
+  const [sourceBusy, setSourceBusy] = useState(false);
+  const [sourceNotice, setSourceNotice] = useState("");
+  const sourceSearchInput = useRef<HTMLInputElement>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   const resizeReadyRef = useRef(false);
   const layoutRef = useRef<WorkspaceLayout>(DEFAULT_LAYOUT);
@@ -182,6 +231,11 @@ export function ProjectWorkspace() {
       resizeReadyRef.current = false;
       if (JSON.stringify(sanitized) !== JSON.stringify(next.workspace_state?.layout)) {
         await saveWorkspaceState(projectId, sanitized);
+      }
+      if (next.project.workspace_variant === "exam") {
+        getCoverageMap(projectId, signal).then(setCoverage).catch(() => undefined);
+      } else {
+        setCoverage(null);
       }
     } catch (error) {
       if (!signal?.aborted) setLoadError(error);
@@ -245,6 +299,13 @@ export function ProjectWorkspace() {
   const textbook = detail?.project.workspace_variant === "textbook";
   const availableTabs = allowedTabs(detail?.project ?? null);
   const filteredTree = useMemo(() => filterProgramTree(treeResult.tree, query), [treeResult.tree, query]);
+  const answerStatusByNode = useMemo(() => {
+    const map = new Map<string, ReferenceAnswerStatus>();
+    for (const row of coverage?.rows ?? []) {
+      if (row.answer_status) map.set(row.node_id, row.answer_status);
+    }
+    return map;
+  }, [coverage]);
 
   useEffect(() => {
     if (!selected || textbook !== false) {
@@ -268,6 +329,82 @@ export function ProjectWorkspace() {
       });
     return () => controller.abort();
   }, [projectId, selected?.id, textbook]);
+
+  useEffect(() => {
+    if (!selected || textbook) {
+      setSourceBindings([]);
+      setSourceResults([]);
+      setSourceSearched(false);
+      return;
+    }
+    setSourceQuery(selected.title);
+    setSourceResults([]);
+    setSourceSearched(false);
+    setSourceNotice("");
+    setSourceBindings([]);
+    const controller = new AbortController();
+    setSourceBindingsLoading(true);
+    listBindings(projectId, { nodeId: selected.id }, controller.signal)
+      .then(setSourceBindings)
+      .catch(() => undefined)
+      .finally(() => { if (!controller.signal.aborted) setSourceBindingsLoading(false); });
+    return () => controller.abort();
+  }, [projectId, selected?.id, textbook]);
+
+  async function runSourceSearch() {
+    if (!selected || !sourceQuery.trim()) return;
+    setSourceSearching(true);
+    setSourceNotice("");
+    try {
+      const results = await searchProjectMaterials(projectId, sourceQuery, { nodeId: selected.id });
+      setSourceResults(results);
+      setSourceSearched(true);
+    } catch (caught) {
+      setSourceNotice(caught instanceof Error ? caught.message : "Поиск не выполнен");
+    } finally {
+      setSourceSearching(false);
+    }
+  }
+
+  async function bindSourceCandidate(result: SearchResultRead) {
+    if (!selected) return;
+    setSourceBusy(true);
+    try {
+      const created = await createBindings(projectId, {
+        program_node_id: selected.id,
+        fragment_ids: result.fragment_ids,
+        mechanism: "search",
+      });
+      setSourceBindings((current) => [
+        ...current,
+        ...created.bindings.filter((binding) => !current.some((existing) => existing.id === binding.id)),
+      ]);
+      setSourceResults((current) => current.map((item) => item === result ? { ...item, already_bound: true } : item));
+      setSourceNotice("Фрагмент привязан.");
+      void bindings.refreshSummary();
+    } catch (caught) {
+      setSourceNotice(caught instanceof Error ? caught.message : "Не удалось привязать фрагмент");
+    } finally {
+      setSourceBusy(false);
+    }
+  }
+
+  async function unbindSourceBinding(bindingId: string) {
+    setSourceBusy(true);
+    try {
+      await removeBinding(projectId, bindingId);
+      setSourceBindings((current) => current.filter((binding) => binding.id !== bindingId));
+      setSourceResults((current) => current.map((item) => item.fragment_ids.includes(
+        sourceBindings.find((binding) => binding.id === bindingId)?.fragment_id ?? "",
+      ) ? { ...item, already_bound: false } : item));
+      setSourceNotice("Привязка снята.");
+      void bindings.refreshSummary();
+    } catch (caught) {
+      setSourceNotice(caught instanceof Error ? caught.message : "Не удалось снять привязку");
+    } finally {
+      setSourceBusy(false);
+    }
+  }
 
   function selectNode(nodeId: string) {
     persist((current) => ({ ...current, selected_node_id: nodeId }));
@@ -372,7 +509,7 @@ export function ProjectWorkspace() {
 
   function renderTabContent(tab: WorkspaceTab) {
     if (tab === "answer") return answerPanel();
-    if (tab === "source") return <div className="workspace-empty-copy"><FileText size={26} /><h2>{textbook ? "Источник ещё не добавлен" : "Материалов пока нет"}</h2><p>Материалы и привязанные фрагменты появятся на этапе 5 и этапе 8.</p></div>;
+    if (tab === "source") return sourcePanel();
     return renderTabStub(tab);
   }
 
@@ -407,6 +544,94 @@ export function ProjectWorkspace() {
     return <div className="workspace-empty-copy"><BookOpen size={26} /><h2>Ответ пока не найден</h2><p>Добавьте эталон вручную или импортируйте общий текст с ответами.</p><Link className="secondary-button" to={`/projects/${projectId}/coverage-map?topic=${selected?.id ?? ""}`}>Открыть эталоны</Link></div>;
   }
 
+  function sourcePanel() {
+    if (textbook) {
+      return <div className="workspace-empty-copy"><FileText size={26} /><h2>Источник ещё не добавлен</h2><p>Привязка учебника к программе — отдельный раздел «Привязки», появится на этапе 7.</p></div>;
+    }
+    if (!selected) {
+      return <div className="workspace-empty-copy"><FileText size={26} /><h2>Выберите тему</h2><p>Материал появится после выбора темы слева.</p></div>;
+    }
+    return (
+      <div className="workspace-source-tab">
+        {sourceNotice && <p className="workspace-source-tab-notice" role="status">{sourceNotice}</p>}
+        {sourceBindingsLoading ? <LoadingState label="Загружаем привязки" /> : sourceBindings.length > 0 ? (
+          <ul className="workspace-source-tab-list">
+            {sourceBindings.map((binding) => (
+              <li key={binding.id}>
+                <Link to={`/projects/${projectId}/materials/${binding.material_id}?page=${binding.page_number}&focus=${binding.fragment_id}`}>
+                  <p>{binding.text.length > 160 ? `${binding.text.slice(0, 160)}…` : binding.text}</p>
+                  <small>{binding.material_name} · стр. {binding.page_number}</small>
+                </Link>
+                <QualityBadge quality={binding.quality} />
+                <IconButton
+                  label="Это не по теме"
+                  disabled={sourceBusy}
+                  onClick={() => void unbindSourceBinding(binding.id)}
+                >
+                  <Unlink size={14} />
+                </IconButton>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="workspace-empty-copy">
+            <FileText size={26} />
+            <h2>Для этого вопроса материал ещё не привязан</h2>
+            <p>Найдите подходящий фрагмент в материалах проекта или откройте Материалы, чтобы привязать вручную.</p>
+            <div className="workspace-source-tab-empty-actions">
+              <Button onClick={() => sourceSearchInput.current?.focus()}>Найти в материалах</Button>
+              <Link className="secondary-button" to={`/projects/${projectId}/materials`}>Открыть материалы</Link>
+            </div>
+          </div>
+        )}
+        <form
+          className="workspace-source-tab-search"
+          onSubmit={(event) => { event.preventDefault(); void runSourceSearch(); }}
+        >
+          <label>
+            <Search size={14} />
+            <input
+              ref={sourceSearchInput}
+              type="search"
+              value={sourceQuery}
+              onChange={(event) => setSourceQuery(event.target.value)}
+              placeholder="Найти в материалах проекта"
+              aria-label="Найти в материалах проекта"
+            />
+          </label>
+          <Button type="submit" disabled={sourceSearching || !sourceQuery.trim()}>Найти</Button>
+        </form>
+        {sourceSearching && <LoadingState label="Ищем" />}
+        {sourceSearched && !sourceSearching && (
+          sourceResults.length > 0 ? (
+            <ul className="workspace-source-tab-results">
+              {sourceResults.map((result) => {
+                const alreadyBound = result.already_bound
+                  || sourceBindings.some((binding) => result.fragment_ids.includes(binding.fragment_id));
+                return (
+                  <li key={result.fragment_ids.join(",")}>
+                    <p>{renderHighlighted(result.text, result.highlights)}</p>
+                    <small>
+                      {result.material_name} · стр. {result.page_from === result.page_to ? result.page_from : `${result.page_from}–${result.page_to}`}
+                    </small>
+                    <QualityBadge quality={result.quality} />
+                    <Button
+                      variant="secondary"
+                      disabled={alreadyBound || sourceBusy}
+                      onClick={() => void bindSourceCandidate(result)}
+                    >
+                      {alreadyBound ? "Уже привязано" : "Привязать"}
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : <p className="workspace-list-empty">Ничего не найдено.</p>
+        )}
+      </div>
+    );
+  }
+
   function renderTree(nodes: ProgramTreeNode[]): ReactNode {
     return nodes.map((node) => {
       if (!node.is_in_current_program || node.is_archived) return null;
@@ -423,24 +648,65 @@ export function ProjectWorkspace() {
           </section>
         );
       }
+      const answerStatus = textbook ? undefined : answerStatusByNode.get(node.id) ?? "missing";
+      const mark = marks[node.id];
+      const row = (
+        <button
+          type="button"
+          className={`workspace-question-row depth-${Math.min(Math.max(node.depth - 2, 0), 3)} ${selected?.id === node.id ? "is-active" : ""}`.trim()}
+          onClick={() => selectNode(node.id)}
+        >
+          {answerStatus ? (
+            <Tooltip label={referenceAnswerStatusLabel(answerStatus)}>
+              <span className={`workspace-question-status ${answerDotClass(answerStatus)}`.trim()} aria-label={referenceAnswerStatusLabel(answerStatus)} />
+            </Tooltip>
+          ) : <span className="workspace-question-status" />}
+          <span className="workspace-question-copy">
+            <small>{textbook ? node.node_type === "subpoint" ? "Подпункт" : "Тема" : node.exam_kind === "task" ? "Задача" : "Вопрос"} {node.number}</small>
+            <span>{node.title}</span>
+          </span>
+          <span className="workspace-question-signals">{mark && <PersonalMarkIcon mark={mark} />}</span>
+        </button>
+      );
       return (
         <div className="workspace-question-node" key={node.id}>
-          <button
-            type="button"
-            className={`workspace-question-row depth-${Math.min(Math.max(node.depth - 2, 0), 3)} ${selected?.id === node.id ? "is-active" : ""}`.trim()}
-            onClick={() => selectNode(node.id)}
-          >
-            <span className="workspace-question-status" aria-label="Нет материала" />
-            <span className="workspace-question-copy">
-              <small>{textbook ? node.node_type === "subpoint" ? "Подпункт" : "Тема" : node.exam_kind === "task" ? "Задача" : "Вопрос"} {node.number}</small>
-              <span>{node.title}</span>
-            </span>
-            <span className="workspace-question-signals"><CircleDashed size={14} aria-label="Нет материала" /></span>
-          </button>
+          <ContextMenu label={`Действия с «${node.title}»`} trigger={row} items={questionMenuItems(node)} />
           {node.children.length > 0 && <div className="workspace-question-list is-nested">{renderTree(node.children)}</div>}
         </div>
       );
     });
+  }
+
+  function questionMenuItems(node: ProgramTreeNode): ContextMenuItem[] {
+    return [
+      {
+        label: "Открыть в Программе",
+        icon: <ListTree size={14} />,
+        onSelect: () => navigate(`/projects/${projectId}/program?topic=${node.id}`),
+      },
+      ...(!textbook ? [{
+        label: "Открыть в Ответах",
+        icon: <Target size={14} />,
+        onSelect: () => navigate(`/projects/${projectId}/coverage-map?topic=${node.id}`),
+      }] : []),
+      {
+        label: "Пометить",
+        icon: <Tag size={14} />,
+        items: [
+          ...PERSONAL_MARK_OPTIONS.map((option) => ({
+            label: option.label,
+            icon: <option.icon size={14} />,
+            onSelect: () => setMark(node.id, option.value),
+          })),
+          {
+            label: "Без пометки",
+            icon: <X size={14} />,
+            disabled: !marks[node.id],
+            onSelect: () => setMark(node.id, null),
+          },
+        ],
+      },
+    ];
   }
 
   if (loading) return <div className="screen"><LoadingState label="Загружаем рабочую область" /></div>;
@@ -456,7 +722,6 @@ export function ProjectWorkspace() {
   }
 
   const deadline = daysUntil(detail.project.deadline);
-  const modules = new Set(detail.project.enabled_modules);
   const editorGroups = layout.groups;
   const editorWeights = layout.group_weights;
   const editorColumns = editorGroups
@@ -469,15 +734,7 @@ export function ProjectWorkspace() {
         <header className="workspace-tree-head"><div className={`workspace-tree-title ${textbook ? "is-textbook" : ""}`}><Link className="workspace-back-button" to="/projects" aria-label="К проектам"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong>{deadline !== null && <span className={`workspace-project-deadline is-${deadlineTone(deadline)}`} aria-label={deadline >= 0 ? `${deadline} дней до дедлайна` : `Дедлайн прошёл ${Math.abs(deadline)} дней назад`}><b>{deadline >= 0 ? deadline : Math.abs(deadline)}</b><small>{deadline >= 0 ? "дней" : "прошло"}</small></span>}</div></header>
         <div className="workspace-tree-tools"><label className="workspace-tree-search"><Search size={15} /><span className="sr-only">{textbook ? "Поиск по темам" : "Поиск по вопросам"}</span><input type="search" placeholder={textbook ? "Найти тему" : "Найти вопрос"} value={query} onChange={(event) => setQuery(event.target.value)} />{query && <button type="button" onClick={() => setQuery("")} aria-label="Очистить поиск"><X size={14} /></button>}</label><Tooltip label="Фильтры появятся вместе с разбором материалов"><span><IconButton label="Фильтры" disabled><Filter size={15} /></IconButton></span></Tooltip></div>
         <nav className="workspace-question-tree" aria-label={textbook ? "Программа" : "Вопросы экзамена"}>{filteredTree.length > 0 ? renderTree(filteredTree) : <p className="workspace-tree-empty">По запросу ничего не найдено.</p>}</nav>
-        <nav className="workspace-project-nav" aria-label={textbook ? "Разделы учебного проекта" : "Разделы проекта"}>
-          {textbook ? <Tooltip label="Учебная конфигурация Материалов будет спроектирована отдельно" side="right"><span><button type="button" disabled><Files size={15} /><span>Материалы</span><small>позже</small></button></span></Tooltip> : <Link className="workspace-project-link" to={`/projects/${projectId}/materials`}><Files size={15} /><span>Материалы</span></Link>}
-          <Link className="workspace-project-link" to={`/projects/${projectId}/program${textbook ? "?mode=textbook" : ""}`}><ListTree size={15} /><span>{textbook ? "Программа" : "Вопросы экзамена"}</span></Link>
-          {!textbook && <Link className="workspace-project-link" to={`/projects/${projectId}/coverage-map`}><Target size={15} /><span>Карта эталонов</span></Link>}
-          {modules.has("lessons") && <Link className="workspace-project-link" to={`/projects/${projectId}/lessons`}><GraduationCap size={15} /><span>Уроки</span></Link>}
-          {!textbook && modules.has("plan") && <Link className="workspace-project-link" to={`/projects/${projectId}/plan`}><CalendarDays size={15} /><span>План подготовки</span></Link>}
-          {textbook ? <Tooltip label="Учебная конфигурация Карточек будет спроектирована отдельно" side="right"><span><button type="button" disabled><Layers size={15} /><span>Карточки</span><small>позже</small></button></span></Tooltip> : modules.has("cards") && <Link className="workspace-project-link" to={`/projects/${projectId}/cards`}><Layers size={15} /><span>Карточки</span></Link>}
-          <Link className="workspace-project-link" to={`/projects/${projectId}/settings`}><Settings size={15} /><span>Настройки</span></Link>
-        </nav>
+        <ProjectNav projectId={projectId} textbook={textbook} modules={detail.project.enabled_modules} />
       </aside>
 
       <PanelResizeHandle
@@ -491,7 +748,7 @@ export function ProjectWorkspace() {
       />
 
       <main className="workspace-main">
-        <header className="workspace-question-bar"><div className="workspace-question-heading"><h1>{selected.title}</h1></div><div className="workspace-question-actions"><div className={`workspace-material-notice ${textbook ? "is-textbook" : ""}`}><BookOpen size={15} /><span>{textbook ? "Материал появится после разбора" : "Материалы ещё не добавлены"}</span></div><div className="workspace-question-nav" aria-label="Переход между темами"><IconButton label="Предыдущая тема" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><ChevronLeft size={15} /></IconButton><span>{selectedIndex + 1} из {studyNodes.length}</span><IconButton label="Следующая тема" disabled={selectedIndex >= studyNodes.length - 1} onClick={() => selectRelative(1)}><ChevronRight size={15} /></IconButton></div><IconButton label="Разделить рабочую область" disabled={editorGroups.length >= 3} onClick={addPanel}><PanelsTopLeft size={15} /></IconButton></div></header>
+        <header className="workspace-question-bar"><div className="workspace-question-heading"><h1>{selected.title}</h1></div><div className="workspace-question-actions">{(textbook || (!sourceBindingsLoading && sourceBindings.length === 0)) && <div className={`workspace-material-notice ${textbook ? "is-textbook" : ""}`}><BookOpen size={15} /><span>{textbook ? "Материал появится после разбора" : "Ответы ещё не добавлены"}</span></div>}<div className="workspace-question-nav" aria-label="Переход между темами"><IconButton label="Предыдущая тема" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><ChevronLeft size={15} /></IconButton><span>{selectedIndex + 1} из {studyNodes.length}</span><IconButton label="Следующая тема" disabled={selectedIndex >= studyNodes.length - 1} onClick={() => selectRelative(1)}><ChevronRight size={15} /></IconButton></div><IconButton label="Разделить рабочую область" disabled={editorGroups.length >= 3} onClick={addPanel}><PanelsTopLeft size={15} /></IconButton></div></header>
         <div className="workspace-save-status" aria-live="polite">{saveError && <p className="inline-error" role="alert">{saveError}</p>}</div>
         <div className="workspace-editor-grid" ref={editorGridRef} style={{ gridTemplateColumns: editorColumns }}>
           {editorGroups.map((group, index) => {

@@ -2,17 +2,20 @@ import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.materials.storage import material_path, store_answer_attachment
 from app.models import (
     NodeType,
     ProgramNode,
     Project,
     ProjectStatus,
     ReferenceAnswer,
+    ReferenceAnswerAttachment,
     ReferenceAnswerMatchMethod,
     ReferenceAnswerOrigin,
     WorkspaceVariant,
@@ -25,6 +28,7 @@ from app.projects.schemas import (
     CoverageMapRow,
     CoverageMapTotals,
     ProgramNodeRead,
+    ReferenceAnswerAttachmentRead,
     ReferenceAnswerConfirm,
     ReferenceAnswerImportIssue,
     ReferenceAnswerImportResult,
@@ -35,10 +39,15 @@ from app.projects.schemas import (
     ReferenceAnswerWrite,
 )
 
+# Отделитель после номера может и не стоять: «Вопрос 21 Использование индексов»
+# — такой же заголовок, как «Вопрос 21. Использование индексов».
 LEADING_MARKER_RE = re.compile(
-    r"^\s*(?:#+\s*)?(?:(?:(?:вопрос|задача|задание)\s*(?:№|#)?\s*\d+(?:\.\d+)*\s*[.):—–-]\s*)|(?:\d+(?:\.\d+)*\s*[.)]\s*))",
+    r"^\s*(?:#+\s*)?(?:"
+    r"(?:(?:вопрос|задача|задание)\s*(?:№|#)?\s*\d+(?:\.\d+)*\s*(?:[.):—–-]\s*|\s+))"
+    r"|(?:\d+(?:\.\d+)*\s*[.)]\s*))",
     re.IGNORECASE,
 )
+PUNCTUATION_RE = re.compile(r"[,;:.!?«»\"'()\[\]{}/\\—–\-]+")
 ANSWER_PREFIX_RE = re.compile(r"^\s*Ответ\s*:\s*(.*)$", re.IGNORECASE)
 STUDY_NODE_TYPES = {NodeType.TOPIC, NodeType.SUBPOINT}
 
@@ -72,9 +81,15 @@ class ParsedReferenceAnswers:
 
 
 def normalize_answer_heading(value: str) -> str:
+    """Заголовок раздела ответов и формулировка вопроса сравниваются по этой форме.
+
+    Пунктуация выбрасывается целиком: «Ключи, как средство создания связей» в списке
+    вопросов и «Ключи как средство создания связей» в ответах — один и тот же вопрос,
+    и расходиться из-за запятой они не должны.
+    """
     normalized = unicodedata.normalize("NFKC", value).casefold().replace("ё", "е")
     normalized = LEADING_MARKER_RE.sub("", normalized)
-    normalized = normalized.strip(" \t\r\n.:;!?—–-")
+    normalized = PUNCTUATION_RE.sub(" ", normalized)
     return " ".join(normalized.split())
 
 
@@ -429,6 +444,76 @@ def _coverage_map(session: Session, project: Project) -> CoverageMapRead:
 def get_coverage_map(session: Session, project_id: UUID) -> CoverageMapRead:
     project = _require_exam_project(session, project_id, writable=False)
     return _coverage_map(session, project)
+
+
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+ATTACHMENT_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf", ".docx", ".txt", ".md"}
+
+
+def list_attachments(
+    session: Session, project_id: UUID, node_id: UUID
+) -> list[ReferenceAnswerAttachmentRead]:
+    _require_exam_project(session, project_id, writable=False)
+    rows = session.scalars(
+        select(ReferenceAnswerAttachment)
+        .where(
+            ReferenceAnswerAttachment.project_id == project_id,
+            ReferenceAnswerAttachment.program_node_id == node_id,
+        )
+        .order_by(ReferenceAnswerAttachment.created_at)
+    )
+    return [ReferenceAnswerAttachmentRead.model_validate(row) for row in rows]
+
+
+def add_attachment(
+    session: Session, project_id: UUID, node_id: UUID, file_name: str, data: bytes
+) -> ReferenceAnswerAttachmentRead:
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in ATTACHMENT_SUFFIXES:
+        raise ProjectDomainError(
+            "К ответу прикрепляются изображения, PDF, DOCX, TXT и MD",
+            status=422,
+            code="attachment_unsupported",
+        )
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        raise ProjectDomainError("Файл больше 20 МБ", status=413, code="attachment_too_large")
+    if not data:
+        raise ProjectDomainError("Файл пуст", status=422, code="attachment_empty")
+    with session.begin():
+        _require_exam_project(session, project_id, writable=True)
+        _require_study_node(session, project_id, node_id)
+        storage_path, media_type = store_answer_attachment(str(project_id), file_name, data)
+        row = ReferenceAnswerAttachment(
+            project_id=project_id,
+            program_node_id=node_id,
+            file_name=Path(file_name).name,
+            storage_path=storage_path,
+            media_type=media_type,
+            size_bytes=len(data),
+            created_at=utc_now(),
+        )
+        session.add(row)
+        session.flush()
+        return ReferenceAnswerAttachmentRead.model_validate(row)
+
+
+def delete_attachment(session: Session, project_id: UUID, attachment_id: UUID) -> None:
+    with session.begin():
+        _require_exam_project(session, project_id, writable=True)
+        row = session.get(ReferenceAnswerAttachment, attachment_id)
+        if row is None or row.project_id != project_id:
+            raise ProjectNotFoundError("Вложение не найдено")
+        path = material_path(row.storage_path)
+        session.delete(row)
+    path.unlink(missing_ok=True)
+
+
+def attachment_path(session: Session, project_id: UUID, attachment_id: UUID) -> Path:
+    _require_exam_project(session, project_id, writable=False)
+    row = session.get(ReferenceAnswerAttachment, attachment_id)
+    if row is None or row.project_id != project_id:
+        raise ProjectNotFoundError("Вложение не найдено")
+    return material_path(row.storage_path)
 
 
 def import_reference_answers(

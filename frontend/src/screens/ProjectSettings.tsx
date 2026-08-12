@@ -39,6 +39,7 @@ import {
   LoadingState,
   PageHead,
   Switch,
+  Tooltip,
 } from "../components/ui";
 
 interface SettingsForm {
@@ -346,17 +347,21 @@ export function ProjectSettings() {
   return (
     <div className="screen project-settings-screen">
       <PageHead
-        eyebrow="Проект"
         title="Настройки проекта"
         lead="Параметры этого проекта, его паспорт цели и доступные учебные модули."
-        actions={<Link className="secondary-button" to={`/projects/${projectId}`}><ArrowLeft size={15} aria-hidden="true" /> В рабочую область</Link>}
+        leading={
+          <Tooltip label="Вернуться в рабочую область">
+            <Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область">
+              <ArrowLeft size={15} />
+            </Link>
+          </Tooltip>
+        }
       >
-        <div className="settings-project-identity">
-          {form.project.icon && form.project.color !== null && (
+        {form.project.icon && form.project.color !== null && (
+          <div className="settings-project-identity">
             <ProjectChip icon={form.project.icon} color={previewColor} size="sm" />
-          )}
-          <span>{statusLabel(detail)}</span>
-        </div>
+          </div>
+        )}
       </PageHead>
 
       {readOnly && (

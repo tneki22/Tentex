@@ -53,9 +53,11 @@ export function WizardChrome({
         )}
         <span className="wizard-brand"><Sparkles size={17} aria-hidden="true" />Tentex</span>
         <div className="wizard-topbar-actions">
-          <span className="wizard-step-caption">
-            {trackLabel && !isLanding ? `${trackLabel} — шаг ${step} из ${stepLabels.length}` : "Мастер проектов"}
-          </span>
+          {(isLanding || trackLabel) && (
+            <span className="wizard-step-caption">
+              {isLanding ? "Мастер проектов" : `${trackLabel} — шаг ${step} из ${stepLabels.length}`}
+            </span>
+          )}
           {onDiscard && (
             <Button variant="ghost" className="wizard-discard" onClick={onDiscard}>
               <Trash2 size={15} aria-hidden="true" />Удалить черновик

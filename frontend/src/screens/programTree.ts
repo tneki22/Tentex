@@ -37,14 +37,23 @@ export function buildProgramTree(nodes: ProgramNodeRead[]): ProgramTreeNode[] {
       ...node,
       depth,
       number,
-      children: (children.get(node.id) ?? []).map((child, index) =>
-        build(child, depth + 1, `${number}.${index + 1}`)),
+      children: (children.get(node.id) ?? []).map((child, index, siblings) =>
+        build(
+          child,
+          depth + 1,
+          `${number}.${siblings.slice(0, index + 1).filter((item) => item.is_in_current_program && !item.is_archived).length}`,
+        )),
     };
     visiting.delete(node.id);
     visited.add(node.id);
     return result;
   };
-  const roots = (children.get(null) ?? []).map((node, index) => build(node, 1, String(index + 1)));
+  const roots = (children.get(null) ?? []).map((node, index, siblings) =>
+    build(
+      node,
+      1,
+      String(siblings.slice(0, index + 1).filter((item) => item.is_in_current_program && !item.is_archived).length),
+    ));
   if (visited.size !== nodes.length) throw new Error("Часть дерева программы недоступна от корня");
   return roots;
 }

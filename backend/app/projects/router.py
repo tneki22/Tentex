@@ -1,7 +1,8 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_session
@@ -17,12 +18,14 @@ from app.projects.schemas import (
     ProgramNodeCreate,
     ProgramNodeUpdate,
     ProgramRevisionCommand,
+    ProgramSwap,
     ProgramTargetLevel,
     ProjectDetail,
     ProjectOrderWrite,
     ProjectSettingsResult,
     ProjectSettingsWrite,
     ProjectSummary,
+    ReferenceAnswerAttachmentRead,
     ReferenceAnswerConfirm,
     ReferenceAnswerImportResult,
     ReferenceAnswerImportWrite,
@@ -174,6 +177,47 @@ def delete_reference_answer(
     )
 
 
+@projects.get(
+    "/{project_id}/reference-answers/{node_id}/attachments",
+    response_model=list[ReferenceAnswerAttachmentRead],
+)
+def list_answer_attachments(
+    project_id: UUID, node_id: UUID, session: SessionDependency
+) -> list[ReferenceAnswerAttachmentRead]:
+    return answers.list_attachments(session, project_id, node_id)
+
+
+@projects.post(
+    "/{project_id}/reference-answers/{node_id}/attachments",
+    response_model=ReferenceAnswerAttachmentRead,
+)
+async def add_answer_attachment(
+    project_id: UUID,
+    node_id: UUID,
+    session: SessionDependency,
+    file: Annotated[UploadFile, File()],
+) -> ReferenceAnswerAttachmentRead:
+    data = await file.read()
+    return answers.add_attachment(session, project_id, node_id, file.filename or "файл", data)
+
+
+@projects.get(
+    "/{project_id}/attachments/{attachment_id}/file",
+    response_class=FileResponse,
+)
+def download_answer_attachment(
+    project_id: UUID, attachment_id: UUID, session: SessionDependency
+) -> FileResponse:
+    return FileResponse(answers.attachment_path(session, project_id, attachment_id))
+
+
+@projects.delete("/{project_id}/attachments/{attachment_id}", status_code=204)
+def remove_answer_attachment(
+    project_id: UUID, attachment_id: UUID, session: SessionDependency
+) -> None:
+    answers.delete_attachment(session, project_id, attachment_id)
+
+
 @projects.post(
     "/{project_id}/reference-answers/import",
     response_model=ReferenceAnswerImportResult,
@@ -233,6 +277,15 @@ def move_node(
     project_id: UUID, node_id: UUID, command: ProgramMove, session: SessionDependency
 ) -> ProgramChangeResult:
     return program.move_program_node(session, project_id, node_id, command)
+
+
+@projects.post(
+    "/{project_id}/program-nodes/{node_id}/swap", response_model=ProgramChangeResult
+)
+def swap_node(
+    project_id: UUID, node_id: UUID, command: ProgramSwap, session: SessionDependency
+) -> ProgramChangeResult:
+    return program.swap_program_nodes(session, project_id, node_id, command)
 
 
 @projects.post(

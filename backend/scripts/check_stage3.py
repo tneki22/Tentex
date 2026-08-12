@@ -333,43 +333,82 @@ def run() -> None:
                 },
             )
             assert status == 200 and moved["program"]["revision"] == 5
+            swap_target = next(
+                node
+                for node in moved["program"]["nodes"]
+                if node["exam_kind"] == "question" and node["id"] != study_node["id"]
+            )
+            status, swapped = request(
+                server,
+                "POST",
+                f"/api/projects/{project_id}/program-nodes/{study_node['id']}/swap",
+                {
+                    "expected_program_revision": 5,
+                    "target_node_id": swap_target["id"],
+                },
+            )
+            assert status == 200 and swapped["program"]["revision"] == 6
+            swapped_nodes = {node["id"]: node for node in swapped["program"]["nodes"]}
+            assert swapped_nodes[study_node["id"]]["parent_id"] == swap_target["parent_id"]
+            assert swapped_nodes[swap_target["id"]]["parent_id"] == section["id"]
+            swap_sequence = swapped["latest_undoable_action"]["sequence"]
+            status, undone_swap = request(
+                server,
+                "POST",
+                f"/api/projects/{project_id}/actions/undo",
+                {"expected_action_sequence": swap_sequence},
+            )
+            assert status == 200 and undone_swap["program"]["revision"] == 7
+            restored_nodes = {node["id"]: node for node in undone_swap["program"]["nodes"]}
+            assert restored_nodes[study_node["id"]]["parent_id"] == section["id"]
+            assert restored_nodes[swap_target["id"]]["parent_id"] == swap_target["parent_id"]
+            status, swapped = request(
+                server,
+                "POST",
+                f"/api/projects/{project_id}/program-nodes/{study_node['id']}/swap",
+                {
+                    "expected_program_revision": 7,
+                    "target_node_id": swap_target["id"],
+                },
+            )
+            assert status == 200 and swapped["program"]["revision"] == 8
             status, targeted = request(
                 server,
                 "POST",
                 f"/api/projects/{project_id}/program-nodes/{section['id']}/target-level",
                 {
-                    "expected_program_revision": 5,
+                    "expected_program_revision": 8,
                     "target_level": "mastery",
                     "include_descendants": True,
                 },
             )
-            assert status == 200 and targeted["program"]["revision"] == 6
+            assert status == 200 and targeted["program"]["revision"] == 9
             assert all(
                 node["target_level"] == "mastery"
                 for node in targeted["program"]["nodes"]
-                if node["id"] in {section["id"], study_node["id"]}
+                if node["id"] in {section["id"], swap_target["id"]}
             )
             status, removed = request(
                 server,
                 "POST",
                 f"/api/projects/{project_id}/program-nodes/{section['id']}/remove",
-                {"expected_program_revision": 6},
+                {"expected_program_revision": 9},
             )
-            assert status == 200 and removed["program"]["revision"] == 7
+            assert status == 200 and removed["program"]["revision"] == 10
             status, _ = request(
                 server,
                 "POST",
-                f"/api/projects/{project_id}/program-nodes/{study_node['id']}/restore",
-                {"expected_program_revision": 7},
+                f"/api/projects/{project_id}/program-nodes/{swap_target['id']}/restore",
+                {"expected_program_revision": 10},
             )
             assert status == 422
             status, restored = request(
                 server,
                 "POST",
                 f"/api/projects/{project_id}/program-nodes/{section['id']}/restore",
-                {"expected_program_revision": 7},
+                {"expected_program_revision": 10},
             )
-            assert status == 200 and restored["program"]["revision"] == 8
+            assert status == 200 and restored["program"]["revision"] == 11
             restore_sequence = restored["latest_undoable_action"]["sequence"]
             status, undo_restore = request(
                 server,
@@ -377,7 +416,7 @@ def run() -> None:
                 f"/api/projects/{project_id}/actions/undo",
                 {"expected_action_sequence": restore_sequence},
             )
-            assert status == 200 and undo_restore["program"]["revision"] == 9
+            assert status == 200 and undo_restore["program"]["revision"] == 12
 
             status, project_list = request(server, "GET", "/api/projects")
             active_ids = [item["id"] for item in project_list if item["status"] == "active"]
@@ -517,7 +556,7 @@ def run() -> None:
             migration = connection.execute(
                 "SELECT version_num FROM alembic_version"
             ).fetchone()[0]
-            assert migration == "20260809_0004"
+            assert migration == "20260812_0009"
 
     print("stage 3 smoke check passed")
 

@@ -6,6 +6,7 @@ import {
   Card,
   Checkbox,
   ConfirmDialog,
+  ContextMenu,
   Dialog,
   Disclosure,
   EmptyState,
@@ -220,6 +221,15 @@ export function UiKit() {
                 onSelect: () => setConfirm(true),
                 destructive: true,
               },
+            ]}
+          />
+          <ContextMenu
+            label="Действия с узлом программы"
+            trigger={<Button variant="secondary">Правой кнопкой</Button>}
+            items={[
+              { label: "Переименовать", onSelect: () => undefined },
+              { label: "Добавить внутрь", items: [{ label: "Тему", onSelect: () => undefined }, { label: "Подпункт", onSelect: () => undefined }] },
+              { label: "Убрать из программы", icon: <Trash2 size={14} />, onSelect: () => undefined, destructive: true },
             ]}
           />
         </div>

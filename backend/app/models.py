@@ -10,6 +10,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -138,6 +139,58 @@ class ReferenceAnswerMatchMethod(StrEnum):
     EXACT_TITLE = "exact_title"
 
 
+class MaterialState(StrEnum):
+    READY_TO_PROCESS = "ready_to_process"
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    PAUSED = "paused"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class MaterialSourceKind(StrEnum):
+    FILE = "file"
+    TEXT = "text"
+    URL = "url"
+    YOUTUBE = "youtube"
+    AUDIO = "audio"
+
+
+class ParserMode(StrEnum):
+    FAST = "fast"
+    TEXTBOOK = "textbook"
+
+
+class PageQuality(StrEnum):
+    NATIVE = "native"
+    OCR = "ocr"
+    OCR_LOW = "ocr_low"
+
+
+class ProcessingTaskKind(StrEnum):
+    PARSE = "parse"
+
+
+class ProcessingTaskState(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    PAUSED = "paused"
+    FAILED = "failed"
+    COMPLETED = "completed"
+
+
+class ProcessingStage(StrEnum):
+    QUEUED = "queued"
+    EXTRACT = "extract"
+    SEGMENT = "segment"
+    COMPLETE = "complete"
+
+
+class BlockClass(StrEnum):
+    CONTENT = "content"
+    SERVICE = "service"
+
+
 class ModuleKey(StrEnum):
     PLAN = "plan"
     LESSONS = "lessons"
@@ -145,6 +198,22 @@ class ModuleKey(StrEnum):
     REPETITIONS = "repetitions"
     ORAL_ANSWERS = "oral_answers"
     SQL = "sql"
+
+
+class BindingStatus(StrEnum):
+    MANUAL = "manual"
+    CONFIRMED = "confirmed"
+    MACHINE = "machine"
+    REMOVED = "removed"
+    ORPHANED = "orphaned"
+
+
+class BindingMechanism(StrEnum):
+    MANUAL = "manual"
+    SEARCH = "search"
+    # Разбор файла эталонных ответов по заголовкам: детерминированно, без модели.
+    ANSWERS_FILE = "answers_file"
+    PASS_TWO = "pass_two"
 
 
 class Project(Base):
@@ -263,9 +332,28 @@ class Material(Base):
     original_name: Mapped[str] = mapped_column(String)
     storage_path: Mapped[str] = mapped_column(String, unique=True)
     media_type: Mapped[str] = mapped_column(String)
+    source_kind: Mapped[MaterialSourceKind] = mapped_column(
+        enum_type(MaterialSourceKind, "material_source_kind"), default=MaterialSourceKind.FILE
+    )
+    source_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[MaterialState] = mapped_column(
+        enum_type(MaterialState, "material_state"), default=MaterialState.READY_TO_PROCESS
+    )
+    active_parse_revision: Mapped[int] = mapped_column(Integer, default=0)
+    parser_mode: Mapped[ParserMode | None] = mapped_column(
+        enum_type(ParserMode, "parser_mode"), nullable=True
+    )
+    scan_page_count: Mapped[int] = mapped_column(Integer, default=0)
+    ocr_low_page_count: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    outline: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    diagnostics: Mapped[list[str]] = mapped_column(JSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class ProjectMaterial(Base):
@@ -285,7 +373,136 @@ class ProjectMaterial(Base):
     priority: Mapped[int] = mapped_column(Integer, default=0)
     affects_program: Mapped[bool] = mapped_column(Boolean, default=True)
     instruction: Mapped[str | None] = mapped_column(String, nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    purposes: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["study_source"])
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class MaterialPage(Base):
+    __tablename__ = "material_pages"
+    __table_args__ = (
+        UniqueConstraint("material_id", "revision", "page_number"),
+        CheckConstraint("revision > 0", name="revision_positive"),
+        CheckConstraint("page_number > 0", name="page_number_positive"),
+        CheckConstraint("width > 0 AND height > 0", name="dimensions_positive"),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="confidence_range",
+        ),
+        Index("ix_material_pages_material_revision_page", "material_id", "revision", "page_number"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    material_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE")
+    )
+    revision: Mapped[int] = mapped_column(Integer)
+    page_number: Mapped[int] = mapped_column(Integer)
+    width: Mapped[float] = mapped_column(Float)
+    height: Mapped[float] = mapped_column(Float)
+    text: Mapped[str] = mapped_column(Text, default="")
+    markdown: Mapped[str] = mapped_column(Text, default="")
+    quality: Mapped[PageQuality] = mapped_column(enum_type(PageQuality, "page_quality"))
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    elements: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    diagnostics: Mapped[list[str]] = mapped_column(JSON, default=list)
+    image_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class MaterialBlock(Base):
+    __tablename__ = "material_blocks"
+    __table_args__ = (
+        UniqueConstraint("material_id", "revision", "sort_order"),
+        CheckConstraint("revision > 0", name="revision_positive"),
+        CheckConstraint("sort_order >= 0", name="sort_order_nonnegative"),
+        CheckConstraint("page_from > 0 AND page_to >= page_from", name="page_range_valid"),
+        Index(
+            "ix_material_blocks_material_revision_order", "material_id", "revision", "sort_order"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    material_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE")
+    )
+    revision: Mapped[int] = mapped_column(Integer)
+    sort_order: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
+    block_class: Mapped[BlockClass] = mapped_column(enum_type(BlockClass, "block_class"))
+    service_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    page_from: Mapped[int] = mapped_column(Integer)
+    page_to: Mapped[int] = mapped_column(Integer)
+
+
+class MaterialFragment(Base):
+    __tablename__ = "material_fragments"
+    __table_args__ = (
+        UniqueConstraint("page_id", "sort_order"),
+        CheckConstraint("sort_order >= 0", name="sort_order_nonnegative"),
+        CheckConstraint(
+            "structure_level IS NULL OR structure_level >= 0", name="level_nonnegative"
+        ),
+        Index("ix_material_fragments_page_order", "page_id", "sort_order"),
+        Index("ix_material_fragments_block", "block_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    material_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE")
+    )
+    page_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("material_pages.id", ondelete="CASCADE")
+    )
+    block_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("material_blocks.id", ondelete="CASCADE")
+    )
+    sort_order: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    bbox: Mapped[list[float]] = mapped_column(JSON)
+    element_kind: Mapped[str] = mapped_column(String)
+    structure_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    degraded_structure: Mapped[bool] = mapped_column(Boolean, default=False)
+    quality: Mapped[PageQuality] = mapped_column(enum_type(PageQuality, "fragment_quality"))
+    # Заполняется у element_kind == "image": путь к вынутой из файла картинке.
+    asset_path: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class ProcessingTask(Base):
+    __tablename__ = "processing_tasks"
+    __table_args__ = (
+        CheckConstraint("done >= 0 AND total >= 0 AND done <= total", name="progress_valid"),
+        Index("ix_processing_tasks_state_created", "state", "created_at"),
+        Index("ix_processing_tasks_material_created", "material_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    material_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE")
+    )
+    kind: Mapped[ProcessingTaskKind] = mapped_column(
+        enum_type(ProcessingTaskKind, "processing_task_kind"), default=ProcessingTaskKind.PARSE
+    )
+    state: Mapped[ProcessingTaskState] = mapped_column(
+        enum_type(ProcessingTaskState, "processing_task_state"),
+        default=ProcessingTaskState.QUEUED,
+    )
+    stage: Mapped[ProcessingStage] = mapped_column(
+        enum_type(ProcessingStage, "processing_stage"), default=ProcessingStage.QUEUED
+    )
+    parser_mode: Mapped[ParserMode] = mapped_column(enum_type(ParserMode, "task_parser_mode"))
+    done: Mapped[int] = mapped_column(Integer, default=0)
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    checkpoint: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    diagnostics: Mapped[list[str]] = mapped_column(JSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pause_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    lease_owner: Mapped[str | None] = mapped_column(String, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ProgramNode(Base):
@@ -331,6 +548,9 @@ class ProgramNode(Base):
         enum_type(OriginKind, "origin_kind"), default=OriginKind.MANUAL
     )
     origin_note: Mapped[str | None] = mapped_column(String, nullable=True)
+    origin_material_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
@@ -362,15 +582,81 @@ class ReferenceAnswer(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     revision: Mapped[int] = mapped_column(Integer, default=0)
     source_label: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_material_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="SET NULL"), nullable=True
+    )
+    source_page_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_page_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class ReferenceAnswerAttachment(Base):
+    """Файл, прикреплённый к эталонному ответу вручную.
+
+    Картинки, приехавшие из материала, отдельно не копируются: они уже лежат
+    фрагментами и показываются через привязки. Здесь только то, что пользователь
+    принёс сам — фотография доски, схема, скан.
+    """
+
+    __tablename__ = "reference_answer_attachments"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "program_node_id"],
+            ["program_nodes.project_id", "program_nodes.id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("size_bytes >= 0", name="size_nonnegative"),
+        Index("ix_answer_attachments_node", "project_id", "program_node_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    program_node_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    file_name: Mapped[str] = mapped_column(String)
+    storage_path: Mapped[str] = mapped_column(String)
+    media_type: Mapped[str] = mapped_column(String)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class Binding(Base):
+    __tablename__ = "bindings"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "program_node_id"],
+            ["program_nodes.project_id", "program_nodes.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("project_id", "program_node_id", "fragment_id"),
+        Index("ix_bindings_project_node", "project_id", "program_node_id"),
+        Index("ix_bindings_project_fragment", "project_id", "fragment_id"),
+        Index("ix_bindings_material", "material_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    program_node_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    fragment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("material_fragments.id", ondelete="CASCADE")
+    )
+    material_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE")
+    )
+    block_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("material_blocks.id", ondelete="CASCADE"), nullable=True
+    )
+    status: Mapped[BindingStatus] = mapped_column(enum_type(BindingStatus, "binding_status"))
+    mechanism: Mapped[BindingMechanism] = mapped_column(
+        enum_type(BindingMechanism, "binding_mechanism")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class WorkspaceState(Base):
     __tablename__ = "workspace_states"
-    __table_args__ = (
-        CheckConstraint("schema_version >= 1", name="schema_version_positive"),
-    )
+    __table_args__ = (CheckConstraint("schema_version >= 1", name="schema_version_positive"),)
 
     project_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True

@@ -4,8 +4,10 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.bindings.router import router as bindings_router
 from app.config import settings
 from app.db import SessionLocal, upgrade_database
+from app.materials.router import router as materials_router
 from app.projects.demo import seed_demo_project
 from app.projects.errors import ProjectDomainError
 from app.projects.router import router as projects_router
@@ -63,6 +65,8 @@ def create_app() -> FastAPI:
 
     app.include_router(api)
     app.include_router(projects_router)
+    app.include_router(materials_router)
+    app.include_router(bindings_router)
     return app
 
 

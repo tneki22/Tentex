@@ -162,6 +162,11 @@ class ProgramMove(ApiModel):
     position: int | None = Field(default=None, ge=0)
 
 
+class ProgramSwap(ApiModel):
+    expected_program_revision: int = Field(ge=0)
+    target_node_id: UUID
+
+
 class ProgramTargetLevel(ApiModel):
     expected_program_revision: int = Field(ge=0)
     target_level: TargetOutcome
@@ -283,6 +288,7 @@ class ProgramNodeRead(ApiModel):
     is_archived: bool
     origin_kind: OriginKind
     origin_note: str | None
+    origin_material_id: UUID | None
     created_at: datetime
     updated_at: datetime
 
@@ -311,8 +317,20 @@ class ReferenceAnswerRead(ApiModel):
     is_active: bool
     revision: int
     source_label: str | None
+    source_material_id: UUID | None
+    source_page_from: int | None
+    source_page_to: int | None
     created_at: datetime
     updated_at: datetime
+
+
+class ReferenceAnswerAttachmentRead(ApiModel):
+    id: UUID
+    program_node_id: UUID
+    file_name: str
+    media_type: str
+    size_bytes: int
+    created_at: datetime
 
 
 class ReferenceAnswerSlot(ApiModel):

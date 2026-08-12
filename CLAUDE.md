@@ -34,7 +34,7 @@ npm run typecheck && npm run build
 
 ## Инструменты
 
-- Индекс кода: `codebase-memory-mcp` (`search_graph`, `trace_path`, `get_code_snippet`). Если проект не проиндексирован — `index_repository`.
+- Индекс кода: `codebase-memory-mcp` (`search_graph`, `trace_path`, `get_code_snippet`, `get_architecture`). Проект проиндексирован под именем `Tentex` — используй его в параметре `project`, не создавай второе имя. Если `index_status` показывает `head_sha`, отличный от текущего `git rev-parse HEAD`, перед работой освежи индекс через `index_repository`.
 - Документация библиотек: скилл `find-docs` или `npx ctx7@latest`. Не отвечай по памяти про версии и API — стек свежий.
 - Посмотреть приложение живьём: `preview_start` с конфигурацией `web` из `.claude/launch.json`, дальше браузерные инструменты.
 

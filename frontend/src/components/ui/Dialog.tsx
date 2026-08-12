@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PropsWithChildren, ReactNode } from "react";
 import { Dialog as RadixDialog } from "radix-ui";
 import { Button } from "./Button";
@@ -75,7 +75,7 @@ interface ConfirmDialogProps {
   title: string;
   /** Кнопка называет действие словом: «Удалить файл», а не «OK». */
   confirmLabel: string;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
   /** Необратимое действие красит кнопку в danger. */
   destructive?: boolean;
 }
@@ -93,6 +93,20 @@ export function ConfirmDialog({
   destructive = false,
   children,
 }: PropsWithChildren<ConfirmDialogProps>) {
+  const [pending, setPending] = useState(false);
+
+  async function confirm() {
+    setPending(true);
+    try {
+      await onConfirm();
+      onOpenChange(false);
+    } catch {
+      // Оставляем диалог открытым: вызывающий экран показывает свою ошибку.
+    } finally {
+      setPending(false);
+    }
+  }
+
   return (
     <Dialog
       open={open}
@@ -101,17 +115,15 @@ export function ConfirmDialog({
       className="dialog-confirm"
       footer={
         <>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" disabled={pending} onClick={() => onOpenChange(false)}>
             Отменить
           </Button>
           <Button
             className={destructive ? "is-destructive" : ""}
-            onClick={() => {
-              onConfirm();
-              onOpenChange(false);
-            }}
+            disabled={pending}
+            onClick={() => void confirm()}
           >
-            {confirmLabel}
+            {pending ? "Удаляем…" : confirmLabel}
           </Button>
         </>
       }

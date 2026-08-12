@@ -8,19 +8,16 @@ import {
   ChevronRight,
   CircleAlert,
   Clock3,
-  Files,
   GraduationCap,
   Layers,
-  ListTree,
   MoveRight,
   Pin,
   RotateCcw,
-  Settings,
   Sparkles,
   WandSparkles,
 } from "lucide-react";
 import { Button, Dialog, Field, PageHead, SegmentedTabs, Tooltip } from "../components/ui";
-import { CostEstimate, MachineMark } from "../components/domain";
+import { CostEstimate, MachineMark, ProjectNav } from "../components/domain";
 
 type DayKind = "past" | "today" | "future" | "review" | "exam";
 type PlanItemKind = "new" | "review" | "gap";
@@ -162,12 +159,12 @@ export function Plan() {
           <strong>7 учебных дней</strong>
           <div>{days.map((day) => <button type="button" className={`is-${day.kind} ${selectedDayId === day.id ? "is-selected" : ""}`.trim()} key={day.id} onClick={() => setSelectedDayId(day.id)} aria-label={`${day.weekday}, ${day.date}`}><span>{day.weekday.slice(0, 2)}</span><b>{day.date.split(" ")[0]}</b></button>)}</div>
         </section>
-        <nav className="workspace-project-nav program-project-nav" aria-label="Разделы проекта">
-          <Link className="workspace-project-link" to={`/projects/${projectId}/materials`}><Files size={15} /><span>Материалы</span><small>3</small></Link>
-          <Link className="workspace-project-link" to={`/projects/${projectId}/program`}><ListTree size={15} /><span>Вопросы экзамена</span><small>10</small></Link>
-          <span className="workspace-project-link is-active"><CalendarDays size={15} /><span>План подготовки</span><small>7 дней</small></span>
-          <button type="button" disabled><Settings size={15} /><span>Настройки</span></button>
-        </nav>
+        <ProjectNav
+          projectId={projectId}
+          active="plan"
+          counts={{ materials: 3, program: 10, plan: "7 дней" }}
+          className="program-project-nav"
+        />
       </aside>
 
       <main className="plan-main">
