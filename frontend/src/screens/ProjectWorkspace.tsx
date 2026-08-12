@@ -71,6 +71,7 @@ import {
 } from "./programTree";
 import { StudioPanel } from "./StudioPanel";
 import { usePersonalMarks } from "../hooks/usePersonalMarks";
+import { ExamChatPanel } from "./workspace/chat/ExamChatPanel";
 
 const DEFAULT_LAYOUT: WorkspaceLayout = {
   selected_node_id: null,
@@ -501,15 +502,16 @@ export function ProjectWorkspace() {
       lesson: "Уроки пока доступны только в прототипном разделе.",
       conspect: "Личный конспект пока не подключён к хранилищу.",
       history: "История появится после первых учебных активностей.",
-      chat: "Помощник будет подключён вместе со шлюзом моделей на этапе 7.",
+      chat: "Учебниковый чат появится в своей вертикали.",
       summary: "Сводный конспект появится после сохранения личных конспектов.",
     }[tab];
-    return <div className="workspace-empty-copy"><TabIcon size={26} /><h2>{tabLabel(tab, Boolean(textbook))}</h2><p>{copy}</p>{tab === "chat" && <div className="workspace-chat-prompts"><Button variant="secondary" disabled>Объяснить проще</Button><Button variant="secondary" disabled>Проверить мой ответ</Button></div>}</div>;
+    return <div className="workspace-empty-copy"><TabIcon size={26} /><h2>{tabLabel(tab, Boolean(textbook))}</h2><p>{copy}</p></div>;
   }
 
   function renderTabContent(tab: WorkspaceTab) {
     if (tab === "answer") return answerPanel();
     if (tab === "source") return sourcePanel();
+    if (tab === "chat" && !textbook && projectId) return <ExamChatPanel projectId={projectId} node={selected} />;
     return renderTabStub(tab);
   }
 

@@ -8275,7 +8275,6 @@ button.wizard-back-projects {
 }
 
 .workspace-empty-panel > div,
-.workspace-chat-prompts,
 .workspace-chat-context {
   display: flex;
   align-items: center;
