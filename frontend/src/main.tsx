@@ -10,6 +10,7 @@ import "./styles/ui-kit.css";
 import "./styles/domain.css";
 import "./styles/lessons.css";
 import "./styles/cards.css";
+import "./styles/chat.css";
 import "./styles/layout.css";
 
 const container = document.getElementById("root");

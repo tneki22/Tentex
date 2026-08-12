@@ -9,6 +9,9 @@ interface PopoverProps {
   align?: "start" | "center" | "end";
   side?: "top" | "right" | "bottom" | "left";
   className?: string;
+  /** Управляемое состояние — нужно, чтобы закрыть всплывашку по выбору пункта списка внутри. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -24,10 +27,12 @@ export function Popover({
   align = "start",
   side = "right",
   className = "",
+  open,
+  onOpenChange,
   children,
 }: PropsWithChildren<PopoverProps>) {
   return (
-    <RadixPopover.Root>
+    <RadixPopover.Root open={open} onOpenChange={onOpenChange}>
       <RadixPopover.Trigger asChild>{trigger}</RadixPopover.Trigger>
       <RadixPopover.Portal>
         <RadixPopover.Content
