@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.exam.context import section_scope
-from app.exam.schemas import ChatMessageRead, ChatSessionDetail, ChatSessionSummary
+from app.exam.context import (
+    TAIL_MESSAGES,
+    ChatContext,
+    bound_fragments,
+    build_context,
+    section_scope,
+)
+from app.exam.schemas import (
+    ChatContextRead,
+    ChatMessageRead,
+    ChatSessionDetail,
+    ChatSessionSummary,
+)
 from app.models import (
     ChatMessage,
     ChatMessageRole,
@@ -20,6 +31,7 @@ from app.models import (
     ProgramNode,
     Project,
     ProjectStatus,
+    ReferenceAnswer,
     WorkspaceVariant,
     utc_now,
 )
@@ -137,6 +149,15 @@ def _message_read(message: ChatMessage) -> ChatMessageRead:
     return ChatMessageRead.model_validate(message)
 
 
+def get_session(session: Session, project_id: UUID, chat_id: UUID) -> ChatSession:
+    _require_exam_project(session, project_id)
+    return _require_session(session, project_id, chat_id)
+
+
+def get_node(session: Session, project_id: UUID, node_id: UUID) -> ProgramNode:
+    return _require_chat_node(session, project_id, node_id)
+
+
 def get_session_detail(session: Session, project_id: UUID, chat_id: UUID) -> ChatSessionDetail:
     _require_exam_project(session, project_id)
     chat = _require_session(session, project_id, chat_id)
@@ -171,7 +192,21 @@ def save_draft(session: Session, project_id: UUID, chat_id: UUID, text: str) -> 
     return chat
 
 
-def append_message(
+def context_preview(session: Session, project_id: UUID, node_id: UUID) -> ChatContextRead:
+    _require_exam_project(session, project_id)
+    node = _require_chat_node(session, project_id, node_id)
+    answer = session.get(ReferenceAnswer, (project_id, node_id))
+    fragments = bound_fragments(session, project_id, node_id)
+    return ChatContextRead(
+        node_id=node.id,
+        question=node.title,
+        reference_included=answer is not None and answer.is_active,
+        material_count=len(fragments),
+        tail_limit=TAIL_MESSAGES,
+    )
+
+
+def _append_message_row(
     session: Session,
     chat: ChatSession,
     *,
@@ -182,26 +217,119 @@ def append_message(
     payload: dict[str, Any] | None = None,
     context_snapshot: dict[str, Any] | None = None,
     ai_run_id: UUID | None = None,
+    message_id: UUID | None = None,
+) -> ChatMessage:
+    """Raw insert, no transaction of its own — caller must already be inside one.
+
+    SQLAlchemy autobegins a transaction on the session's first read, so a
+    second `with session.begin():` inside the same request raises
+    "A transaction is already begun". Compound flows (build context, then
+    append) call this directly inside their own single `with session.begin():`;
+    `append_message` below stays the transactional entry point for callers
+    that touch nothing else on the session first.
+    """
+    next_sequence = session.scalar(
+        select(func.coalesce(func.max(ChatMessage.sequence), 0) + 1).where(
+            ChatMessage.session_id == chat.id
+        )
+    )
+    message = ChatMessage(
+        id=message_id or uuid4(),
+        session_id=chat.id,
+        sequence=next_sequence,
+        role=role,
+        text=text,
+        stream_state=stream_state,
+        payload_kind=payload_kind,
+        payload=payload or {},
+        context_snapshot=context_snapshot or {},
+        ai_run_id=ai_run_id,
+    )
+    session.add(message)
+    chat.updated_at = utc_now()
+    session.flush()
+    session.refresh(message)
+    return message
+
+
+def append_message(session: Session, chat: ChatSession, **fields: Any) -> ChatMessage:
+    with session.begin():
+        return _append_message_row(session, chat, **fields)
+
+
+def start_turn(
+    session: Session, project_id: UUID, chat_id: UUID, text: str
+) -> tuple[ChatSession, ChatContext]:
+    """Validate, build the reply context and record the user's turn — one transaction."""
+    with session.begin():
+        _require_exam_project(session, project_id)
+        chat = _require_session(session, project_id, chat_id)
+        ctx = build_context(session, chat, for_judge=False)
+        _append_message_row(
+            session, chat, role=ChatMessageRole.USER, text=text, context_snapshot=ctx.snapshot
+        )
+    return chat, ctx
+
+
+def finish_turn(
+    session: Session,
+    project_id: UUID,
+    chat_id: UUID,
+    *,
+    message_id: UUID,
+    text: str,
+    stream_state: ChatStreamState,
+    ai_run_id: UUID | None,
 ) -> ChatMessage:
     with session.begin():
-        next_sequence = session.scalar(
-            select(func.coalesce(func.max(ChatMessage.sequence), 0) + 1).where(
-                ChatMessage.session_id == chat.id
-            )
-        )
-        message = ChatMessage(
-            session_id=chat.id,
-            sequence=next_sequence,
-            role=role,
+        _require_exam_project(session, project_id)
+        chat = _require_session(session, project_id, chat_id)
+        return _append_message_row(
+            session,
+            chat,
+            message_id=message_id,
+            role=ChatMessageRole.EXAMINER,
             text=text,
             stream_state=stream_state,
-            payload_kind=payload_kind,
-            payload=payload or {},
-            context_snapshot=context_snapshot or {},
             ai_run_id=ai_run_id,
         )
-        session.add(message)
-        chat.updated_at = utc_now()
-        session.flush()
-        session.refresh(message)
-    return message
+
+
+def submit_answer_stub(
+    session: Session, project_id: UUID, chat_id: UUID, text: str
+) -> list[ChatMessage]:
+    """1a: records the answer form and a placeholder note; checking lands in 1b."""
+    with session.begin():
+        _require_exam_project(session, project_id)
+        chat = _require_session(session, project_id, chat_id)
+        node = _require_chat_node(session, project_id, chat.program_node_id)
+        ordinal = (
+            session.scalar(
+                select(func.count(ChatMessage.id))
+                .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+                .where(
+                    ChatSession.program_node_id == chat.program_node_id,
+                    ChatMessage.payload_kind == ChatPayloadKind.ANSWER_FORM,
+                )
+            )
+            or 0
+        ) + 1
+        answer_message = _append_message_row(
+            session,
+            chat,
+            role=ChatMessageRole.USER,
+            payload_kind=ChatPayloadKind.ANSWER_FORM,
+            payload={
+                "question": node.title,
+                "ordinal": ordinal,
+                "submitted_at": utc_now().isoformat(),
+                "text": text,
+            },
+        )
+        system_message = _append_message_row(
+            session,
+            chat,
+            role=ChatMessageRole.SYSTEM,
+            text="Проверка ответа подключается следующим шагом.",
+        )
+    return [answer_message, system_message]

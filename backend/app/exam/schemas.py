@@ -75,7 +75,12 @@ class ChatContextRead(ApiModel):
     question: str
     reference_included: bool
     material_count: int
-    tail_count: int
+    tail_limit: int
+
+
+class ChatDraftRead(ApiModel):
+    text: str
+    updated_at: datetime
 
 
 class ChatMessageWrite(ApiModel):

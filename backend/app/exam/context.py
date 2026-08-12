@@ -54,8 +54,8 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _fragments(session: Session, chat: ChatSession) -> list[FragmentSnippet]:
-    bindings = list_bindings(session, chat.project_id, node_id=chat.program_node_id)
+def bound_fragments(session: Session, project_id: UUID, node_id: UUID) -> list[FragmentSnippet]:
+    bindings = list_bindings(session, project_id, node_id=node_id)
     fragments: list[FragmentSnippet] = []
     for binding in bindings[:MAX_FRAGMENTS]:
         text = binding.text[:FRAGMENT_CHARS]
@@ -140,7 +140,7 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
     assert node is not None
     answer = session.get(ReferenceAnswer, (chat.project_id, chat.program_node_id))
     reference_text = answer.text if answer is not None and answer.is_active else None
-    all_fragments = _fragments(session, chat)
+    all_fragments = bound_fragments(session, chat.project_id, chat.program_node_id)
     # Хвост сообщений судье не передаётся вообще (FR-V7): роль судьи получает
     # тот же вопрос, эталон и фрагменты, но не переписку чата.
     tail = [] if for_judge else _tail(session, chat)
