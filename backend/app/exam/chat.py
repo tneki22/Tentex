@@ -217,6 +217,8 @@ def _append_message_row(
     payload: dict[str, Any] | None = None,
     context_snapshot: dict[str, Any] | None = None,
     ai_run_id: UUID | None = None,
+    attempt_id: UUID | None = None,
+    grade_attempt_id: UUID | None = None,
     message_id: UUID | None = None,
 ) -> ChatMessage:
     """Raw insert, no transaction of its own — caller must already be inside one.
@@ -244,6 +246,8 @@ def _append_message_row(
         payload=payload or {},
         context_snapshot=context_snapshot or {},
         ai_run_id=ai_run_id,
+        attempt_id=attempt_id,
+        grade_attempt_id=grade_attempt_id,
     )
     session.add(message)
     chat.updated_at = utc_now()
