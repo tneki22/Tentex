@@ -223,6 +223,38 @@ class BindingMechanism(StrEnum):
     PASS_TWO = "pass_two"
 
 
+class ChatMessageRole(StrEnum):
+    USER = "user"
+    EXAMINER = "examiner"
+    SYSTEM = "system"
+
+
+class ChatStreamState(StrEnum):
+    COMPLETE = "complete"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+
+class ChatPayloadKind(StrEnum):
+    NONE = "none"
+    ANSWER_FORM = "answer_form"
+    VERDICT = "verdict"
+    TASK = "task"
+    INTERACTIVE = "interactive"
+
+
+class ExaminerPersona(StrEnum):
+    CALM_TEACHER = "calm_teacher"
+    NEUTRAL_EXAMINER = "neutral_examiner"
+    STRICT_REVIEWER = "strict_reviewer"
+
+
+class ExaminerStrictness(StrEnum):
+    SOFT = "soft"
+    NORMAL = "normal"
+    STRICT = "strict"
+
+
 class Project(Base):
     __tablename__ = "projects"
     __table_args__ = (
@@ -826,3 +858,69 @@ class AiCacheEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     last_used_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     hit_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ChatSession(Base):
+    """Один чат по одному вопросу. Новый чат не стирает старые."""
+
+    __tablename__ = "chat_sessions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "program_node_id"],
+            ["program_nodes.project_id", "program_nodes.id"],
+            ondelete="CASCADE",
+        ),
+        Index("ix_chat_sessions_node_updated", "project_id", "program_node_id", "updated_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    )
+    program_node_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    # Ближайший предок-раздел на момент создания; NULL — плоский список.
+    # Показывается и используется памятью раздела только с итерации 2.
+    section_scope_node_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    title: Mapped[str] = mapped_column(String)
+    persona: Mapped[ExaminerPersona] = mapped_column(
+        enum_type(ExaminerPersona, "examiner_persona"),
+        default=ExaminerPersona.NEUTRAL_EXAMINER,
+    )
+    strictness: Mapped[ExaminerStrictness] = mapped_column(
+        enum_type(ExaminerStrictness, "examiner_strictness"),
+        default=ExaminerStrictness.NORMAL,
+    )
+    draft_text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class ChatMessage(Base):
+    """Реплика или типизированный блок. Оценка здесь не хранится — только ссылка."""
+
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        UniqueConstraint("session_id", "sequence"),
+        CheckConstraint("sequence >= 1", name="sequence_positive"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    session_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="CASCADE")
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    role: Mapped[ChatMessageRole] = mapped_column(enum_type(ChatMessageRole, "chat_message_role"))
+    text: Mapped[str] = mapped_column(Text, default="")
+    stream_state: Mapped[ChatStreamState] = mapped_column(
+        enum_type(ChatStreamState, "chat_stream_state"), default=ChatStreamState.COMPLETE
+    )
+    payload_kind: Mapped[ChatPayloadKind] = mapped_column(
+        enum_type(ChatPayloadKind, "chat_payload_kind"), default=ChatPayloadKind.NONE
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    context_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    ai_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
