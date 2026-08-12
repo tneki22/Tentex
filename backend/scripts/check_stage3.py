@@ -556,7 +556,7 @@ def run() -> None:
             migration = connection.execute(
                 "SELECT version_num FROM alembic_version"
             ).fetchone()[0]
-            assert migration == "20260812_0011"
+            assert migration == "20260812_0014"
 
     print("stage 3 smoke check passed")
 

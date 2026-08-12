@@ -243,7 +243,7 @@ def run() -> None:
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
             assert (
                 connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-                == "20260812_0011"
+                == "20260812_0014"
             )
             assert connection.execute("SELECT COUNT(*) FROM material_pages").fetchone()[0] == 3
             assert (

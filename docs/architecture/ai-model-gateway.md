@@ -1,8 +1,8 @@
 # Шлюз внешних моделей: фактический контракт
 
 Дата фиксации: 12.08.2026. Реализованы серверное ядро, типизированный клиент,
-глобальные Параметры → ИИ и два первых потребителя. HTTP-контракт серверной части
-после фронтенд-среза не менялся.
+глобальные Параметры → ИИ и первые потребители, включая экзаменационный чат и
+судью ответа.
 
 ## Граница среза
 
@@ -14,11 +14,12 @@
 - локальный снимок USD/RUB, предварительная оценка, лимиты, журнал и exact-кэш;
 - структурный `complete` и потоковый `stream` через единый `ModelGateway`;
 - «Прибрать текст с ИИ» и «Разложить по разделам»;
+- потоковый экзаменационный чат и структурный судья письменной Попытки;
 - живой раздел Параметров → ИИ и краткий снимок моделей в глобальной панели.
 
 Не реализованы и не имитируются: Ollama, fallback между провайдерами, автоматический
-курс валют, OCR через модель, эмбеддинги, проходы 1/2, веб-поиск, STT/TTS, чат,
-агенты и инструменты модели.
+курс валют, OCR через модель, эмбеддинги, проходы 1/2, веб-поиск, STT/TTS,
+чатовая память, агенты и инструменты модели.
 
 ## Граница модуля
 
@@ -46,6 +47,8 @@ ModelGateway
 | `app/ai/router.py` | глобальный HTTP раздела ИИ |
 | `app/materials/ai_cleanup.py` | снимок, prompt, run и apply уборки |
 | `app/projects/program_ai.py` | eligibility, prompt, валидация и apply группировки |
+| `app/exam/router.py` | потоковый consumer чата и HTTP проверки ответа |
+| `app/exam/judge.py` | структурный consumer судьи и проверка цитат |
 
 Production transport создаёт `AsyncOpenAI(base_url, api_key, timeout, max_retries=0)`.
 Платный completion автоматически не повторяется. Каталог является бесплатной проверкой
@@ -60,8 +63,8 @@ Production transport создаёт `AsyncOpenAI(base_url, api_key, timeout, max
 |---|---|---|---|---|
 | `material_text_cleanup` | text | structured output | exact | да |
 | `exam_program_grouping` | text | structured output | exact | да |
-| `exam_chat_reply` | text | streaming | none | шлюз готов, consumer позже |
-| `exam_answer_judge` | text | structured output | exact | позже |
+| `exam_chat_reply` | text | streaming | none | да |
+| `exam_answer_judge` | text | structured output | exact | да |
 | `exam_chat_memory` | text | structured output | none | позже |
 | `speech_transcription` | speech | audio transcription | content hash | позже |
 
@@ -193,8 +196,8 @@ URL. Сохранение настройки не тестирует соеди�
 отменой, расход/кэш, редактируемое предложение, stale-состояние и offline-путь. Cleanup
 после apply предлагает восстановить исходный снимок обычной новой ревизией; grouping
 переходит в общий undo Программы. На 390 px диалоги остаются внутри viewport, а сравнение
-cleanup переключается вкладками. Экзаменационный чат в этот срез не входит и остаётся
-заглушкой.
+cleanup переключается вкладками. Экзаменационный чат использует те же настройки и роли
+шлюза; его фактический контракт вынесен в `docs/architecture/exam-chat.md`.
 
 ## Cleanup
 
