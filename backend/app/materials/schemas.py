@@ -80,8 +80,25 @@ class ExternalMaterialCreate(ApiModel):
     purposes: list[MaterialPurpose] = Field(default_factory=lambda: [MaterialPurpose.STUDY_SOURCE])
 
 
+ProcessingScope = Literal["all", "needs_review", "range"]
+
+
 class ProcessingStart(ApiModel):
     parser_mode: ParserMode = ParserMode.FAST
+    scope: ProcessingScope = "all"
+    page_from: int | None = Field(default=None, ge=1)
+    page_to: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def range_is_complete(self) -> "ProcessingStart":
+        if self.scope == "range":
+            if self.page_from is None or self.page_to is None:
+                raise ValueError("Для диапазона нужны первая и последняя страница")
+            if self.page_from > self.page_to:
+                raise ValueError("Первая страница диапазона больше последней")
+        elif self.page_from is not None or self.page_to is not None:
+            raise ValueError("Диапазон задаётся только вместе с областью «Диапазон»")
+        return self
 
 
 class ProcessingTaskRead(ApiModel):
@@ -138,6 +155,9 @@ class FragmentRead(ApiModel):
     structure_level: int | None
     degraded_structure: bool
     quality: PageQuality
+    # Границы сегмента у расшифровки аудио и субтитров; у остальных источников None.
+    time_from: float | None = None
+    time_to: float | None = None
 
 
 class BlockRead(ApiModel):
@@ -198,6 +218,90 @@ class LibraryMaterialRead(ApiModel):
     sha256: str
     created_at: datetime
     usage: list[LibraryUsageRead]
+
+
+MaterialPresentationKind = Literal[
+    "pdf", "image", "document", "plain_text", "web", "youtube", "audio"
+]
+OutlineSource = Literal["embedded", "recognized", "none"]
+
+
+class LibraryMaterialCapabilities(ApiModel):
+    """Что можно делать с этим материалом. Выводится из вида источника и данных,
+    а не хранится отдельными флагами: иначе они разъезжаются с реальностью."""
+
+    can_compare: bool
+    can_view_original: bool
+    can_edit_text: bool
+    can_run_ocr: bool
+    can_refresh_source: bool
+    has_outline: bool
+    has_timeline: bool
+
+
+class OutlineItem(ApiModel):
+    level: int
+    title: str
+    page: int
+
+
+class MaterialRevisionRead(ApiModel):
+    revision: int
+    origin: Literal[
+        "imported", "parse", "manual_edit", "ai_cleanup", "source_refresh", "restore"
+    ]
+    parser_mode: ParserMode | None
+    parent_revision: int | None
+    scope: dict[str, object]
+    summary: dict[str, object]
+    created_at: datetime
+    is_current: bool
+
+
+class LibraryMaterialDetailRead(LibraryMaterialRead):
+    presentation_kind: MaterialPresentationKind
+    capabilities: LibraryMaterialCapabilities
+    outline: list[OutlineItem]
+    outline_source: OutlineSource
+    active_parse_revision: int
+    parser_mode: ParserMode | None
+    scan_page_count: int
+    estimated_seconds: int | None
+    diagnostics: list[str]
+    error: str | None
+    task: ProcessingTaskRead | None
+    retrieved_at: datetime | None
+    updated_at: datetime
+
+
+class LibraryMaterialAttachWrite(ApiModel):
+    project_id: UUID
+    display_name: NonBlank | None = None
+    source_role: SourceRole = SourceRole.ADDITIONAL
+    purposes: list[MaterialPurpose] = Field(
+        default_factory=lambda: [MaterialPurpose.STUDY_SOURCE]
+    )
+
+
+class LibrarySearchHit(ApiModel):
+    fragment_id: UUID
+    page_number: int
+    block_title: str | None
+    bbox: list[float]
+    text: str
+    rank: float
+
+
+class LibrarySearchResult(ApiModel):
+    query: str
+    revision: int
+    hits: list[LibrarySearchHit]
+
+
+class SourceRefreshResult(ApiModel):
+    material: LibraryMaterialDetailRead
+    revision: int
+    changed: bool
 
 
 class MaterialDeletePreview(ApiModel):

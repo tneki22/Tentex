@@ -87,6 +87,23 @@ def store_text(name: str, text: str) -> tuple[str, str, int, str, str]:
     return digest, relative_path.as_posix(), len(data), safe_name, media_type
 
 
+def store_revision_text(
+    material_id: object, revision: int, name: str, text: str
+) -> tuple[str, int]:
+    """Снимок внешнего источника, принадлежащий одной версии материала.
+
+    Общее хранилище по хешу здесь не подходит: обновление снимка не должно
+    перезаписывать файл прежней версии, иначе история перестанет читаться.
+    """
+    data = text.encode("utf-8")
+    suffix = ".md" if name.lower().endswith(".md") else ".txt"
+    relative_path = Path("snapshots") / str(material_id) / f"{revision}{suffix}"
+    final_path = settings.storage_dir / relative_path
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    final_path.write_bytes(data)
+    return relative_path.as_posix(), len(data)
+
+
 def store_material_asset(owner: str, name: str, data: bytes) -> str:
     """Картинка, вынутая из материала. Имя детерминированное, поэтому повторный
     разбор той же страницы переиспользует файл и не плодит копий."""

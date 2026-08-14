@@ -176,6 +176,17 @@ class PageQuality(StrEnum):
     OCR_LOW = "ocr_low"
 
 
+class MaterialRevisionOrigin(StrEnum):
+    """Откуда взялась ревизия материала. Наружу переводится человеческой фразой."""
+
+    IMPORTED = "imported"
+    PARSE = "parse"
+    MANUAL_EDIT = "manual_edit"
+    AI_CLEANUP = "ai_cleanup"
+    SOURCE_REFRESH = "source_refresh"
+    RESTORE = "restore"
+
+
 class ProcessingTaskKind(StrEnum):
     PARSE = "parse"
 
@@ -500,6 +511,12 @@ class MaterialFragment(Base):
         CheckConstraint(
             "structure_level IS NULL OR structure_level >= 0", name="level_nonnegative"
         ),
+        CheckConstraint("time_from IS NULL OR time_from >= 0", name="time_from_nonnegative"),
+        CheckConstraint("time_to IS NULL OR time_to >= 0", name="time_to_nonnegative"),
+        CheckConstraint(
+            "time_to IS NULL OR time_from IS NULL OR time_to >= time_from",
+            name="time_range_valid",
+        ),
         Index("ix_material_fragments_page_order", "page_id", "sort_order"),
         Index("ix_material_fragments_block", "block_id"),
     )
@@ -523,6 +540,48 @@ class MaterialFragment(Base):
     quality: Mapped[PageQuality] = mapped_column(enum_type(PageQuality, "fragment_quality"))
     # Заполняется у element_kind == "image": путь к вынутой из файла картинке.
     asset_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Границы сегмента у временных источников: расшифровка аудио и субтитры.
+    time_from: Mapped[float | None] = mapped_column(Float, nullable=True)
+    time_to: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class MaterialRevision(Base):
+    """Реестр версий разбора общего материала.
+
+    Активная версия хранится в `Material.active_parse_revision`; здесь лежит
+    история: чем версия была получена, из какой выросла и что дала. Страницы и
+    фрагменты зарегистрированных версий не удаляются при новой обработке —
+    только вместе с самим материалом.
+    """
+
+    __tablename__ = "material_revisions"
+    __table_args__ = (
+        UniqueConstraint("material_id", "revision", name="uq_material_revision"),
+        CheckConstraint("revision > 0", name="revision_positive"),
+        CheckConstraint(
+            "parent_revision IS NULL OR parent_revision > 0", name="parent_revision_positive"
+        ),
+        Index("ix_material_revisions_material_revision", "material_id", "revision"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    material_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE")
+    )
+    revision: Mapped[int] = mapped_column(Integer)
+    origin: Mapped[MaterialRevisionOrigin] = mapped_column(
+        enum_type(MaterialRevisionOrigin, "material_revision_origin")
+    )
+    parser_mode: Mapped[ParserMode | None] = mapped_column(
+        enum_type(ParserMode, "revision_parser_mode"), nullable=True
+    )
+    parent_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    task_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    source_storage_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    scope: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class ProcessingTask(Base):

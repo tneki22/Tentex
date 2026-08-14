@@ -8,7 +8,7 @@ from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from check_stage2 import ApiServer, free_port, request
+from check_stage2 import ApiServer, alembic_head, free_port, request
 from check_stage3 import create_saved_draft, draft_payload
 from check_stage4 import create_exam_project
 
@@ -329,7 +329,7 @@ def run() -> None:
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
             assert (
                 connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-                == "20260812_0014"
+                == alembic_head()
             )
             assert connection.execute("SELECT COUNT(*) FROM material_pages").fetchone()[0] == 5
             assert (

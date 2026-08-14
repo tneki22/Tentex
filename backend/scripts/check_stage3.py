@@ -6,7 +6,7 @@ from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from check_stage2 import ApiServer, free_port, request
+from check_stage2 import ApiServer, alembic_head, free_port, request
 
 
 def assert_error(
@@ -556,7 +556,7 @@ def run() -> None:
             migration = connection.execute(
                 "SELECT version_num FROM alembic_version"
             ).fetchone()[0]
-            assert migration == "20260812_0014"
+            assert migration == alembic_head()
 
     print("stage 3 smoke check passed")
 

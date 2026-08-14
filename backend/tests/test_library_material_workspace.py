@@ -1,0 +1,332 @@
+"""Глобальная рабочая область материала: вид источника, доступ без проекта, поиск.
+
+Ключевая граница задачи: чтение и обработка общего материала не должны требовать
+`ProjectMaterial`, а привязки остаются проектными. Здесь проверяется первое.
+"""
+
+from datetime import datetime
+from uuid import uuid4
+
+import pytest
+from conftest import add_page_with_fragments, link_material, make_exam_project, make_material
+from sqlalchemy.orm import Session
+
+from app.materials import library
+from app.materials import revisions as revision_registry
+from app.materials.schemas import (
+    LibraryMaterialAttachWrite,
+    MaterialPurpose,
+    TextMaterialCreate,
+)
+from app.models import (
+    Material,
+    MaterialPage,
+    MaterialRevisionOrigin,
+    MaterialSourceKind,
+    PageQuality,
+    ProjectStatus,
+    SourceRole,
+    utc_now,
+)
+from app.projects.errors import ProjectConflictError, ProjectNotFoundError
+
+
+def _material(
+    session: Session,
+    seed: str,
+    *,
+    media_type: str,
+    source_kind: MaterialSourceKind = MaterialSourceKind.FILE,
+    source_url: str | None = None,
+    outline: list[dict[str, object]] | None = None,
+) -> Material:
+    material = Material(
+        id=uuid4(),
+        sha256=seed.rjust(64, "0"),
+        original_name=f"{seed}.bin",
+        storage_path=f"materials/{seed}.bin",
+        media_type=media_type,
+        source_kind=source_kind,
+        source_url=source_url,
+        retrieved_at=utc_now() if source_url else None,
+        size_bytes=10,
+        page_count=1,
+        active_parse_revision=0,
+        outline=outline or [],
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    session.add(material)
+    session.commit()
+    return material
+
+
+@pytest.mark.parametrize(
+    ("media_type", "source_kind", "expected"),
+    [
+        ("application/pdf", MaterialSourceKind.FILE, "pdf"),
+        ("image/png", MaterialSourceKind.FILE, "image"),
+        (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            MaterialSourceKind.FILE,
+            "document",
+        ),
+        ("text/plain", MaterialSourceKind.TEXT, "plain_text"),
+        ("text/markdown", MaterialSourceKind.URL, "web"),
+        ("text/markdown", MaterialSourceKind.YOUTUBE, "youtube"),
+        ("audio/mpeg", MaterialSourceKind.AUDIO, "audio"),
+    ],
+)
+def test_presentation_kind_is_derived_once(
+    session: Session, media_type: str, source_kind: MaterialSourceKind, expected: str
+) -> None:
+    material = _material(
+        session,
+        f"b{abs(hash(expected)) % 1000:03d}",
+        media_type=media_type,
+        source_kind=source_kind,
+        source_url="https://example.org/a" if source_kind != MaterialSourceKind.FILE else None,
+    )
+    assert library.presentation_kind(material) == expected
+
+
+def test_capabilities_follow_source_kind(session: Session) -> None:
+    pdf = _material(session, "c01", media_type="application/pdf")
+    add_page_with_fragments(session, pdf, page_number=1, revision=1, fragments=["Текст"])
+    pdf.active_parse_revision = 1
+    session.commit()
+
+    detail = library.read_library_material(session, pdf.id)
+    assert detail.presentation_kind == "pdf"
+    assert detail.capabilities.can_compare is True
+    assert detail.capabilities.can_run_ocr is True
+    assert detail.capabilities.can_refresh_source is False
+    assert detail.capabilities.can_edit_text is True
+    assert detail.capabilities.has_timeline is False
+
+    audio = _material(session, "c02", media_type="audio/mpeg", source_kind=MaterialSourceKind.AUDIO)
+    audio_detail = library.read_library_material(session, audio.id)
+    assert audio_detail.capabilities.can_run_ocr is False
+    assert audio_detail.capabilities.has_timeline is True
+    assert audio_detail.capabilities.can_edit_text is False
+
+
+def test_embedded_outline_wins_over_recognized_headings(session: Session) -> None:
+    material = _material(
+        session,
+        "c03",
+        media_type="application/pdf",
+        outline=[{"level": 1, "title": "Глава 1", "page": 1}],
+    )
+    material.active_parse_revision = 1
+    session.commit()
+
+    detail = library.read_library_material(session, material.id)
+    assert detail.outline_source == "embedded"
+    assert [item.title for item in detail.outline] == ["Глава 1"]
+
+
+def test_recognized_outline_is_built_from_heading_fragments(session: Session) -> None:
+    material = _material(session, "c04", media_type="application/pdf")
+    add_page_with_fragments(
+        session, material, page_number=1, revision=1, fragments=["Заголовок", "Абзац"]
+    )
+    material.active_parse_revision = 1
+    session.commit()
+    # Первый фрагмент делаем заголовком: у PDF без закладок оглавление собирается так.
+    page_fragments = library.fragments_by_page(session, material.id, 1)[1]
+    page_fragments[0].element_kind = "heading"
+    page_fragments[0].structure_level = 1
+    session.commit()
+
+    detail = library.read_library_material(session, material.id)
+    assert detail.outline_source == "recognized"
+    assert [item.title for item in detail.outline] == ["Заголовок"]
+
+
+def test_material_without_headings_has_no_outline(session: Session) -> None:
+    material = _material(session, "c05", media_type="application/pdf")
+    add_page_with_fragments(session, material, page_number=1, revision=1, fragments=["Абзац"])
+    material.active_parse_revision = 1
+    session.commit()
+
+    detail = library.read_library_material(session, material.id)
+    assert detail.outline_source == "none"
+    assert detail.outline == []
+    assert detail.capabilities.has_outline is False
+
+
+def test_page_is_readable_without_any_project(session: Session) -> None:
+    material = make_material(session, "c06")
+    add_page_with_fragments(session, material, page_number=1, revision=1, fragments=["Текст"])
+    session.commit()
+
+    page = library.read_library_page(session, material.id, 1)
+    assert page.page_number == 1
+    assert library.read_library_material(session, material.id).usage == []
+
+
+def test_global_text_material_is_created_without_project(session: Session) -> None:
+    detail = library.create_library_text(
+        session, TextMaterialCreate(name="Конспект.txt", text="Первый абзац")
+    )
+
+    assert detail.usage == []
+    assert detail.presentation_kind == "plain_text"
+    assert detail.status == "ready_to_process"
+
+
+def test_attach_links_existing_material_and_rejects_duplicate(session: Session) -> None:
+    project = make_exam_project(session)
+    material = make_material(session, "c07")
+    session.commit()
+
+    detail = library.attach_material_to_project(
+        session,
+        material.id,
+        LibraryMaterialAttachWrite(
+            project_id=project.id,
+            display_name="Методичка проекта",
+            source_role=SourceRole.MAIN,
+            purposes=[MaterialPurpose.STUDY_SOURCE],
+        ),
+    )
+    assert [usage.project_id for usage in detail.usage] == [project.id]
+    assert detail.usage[0].display_name == "Методичка проекта"
+
+    with pytest.raises(ProjectConflictError) as error:
+        library.attach_material_to_project(
+            session, material.id, LibraryMaterialAttachWrite(project_id=project.id)
+        )
+    assert error.value.code == "material_already_attached"
+
+
+def test_attach_to_two_projects_lists_both_usages(session: Session) -> None:
+    first = make_exam_project(session)
+    second = make_exam_project(session)
+    second.name = "Второй проект"
+    material = make_material(session, "c08")
+    session.commit()
+
+    library.attach_material_to_project(
+        session, material.id, LibraryMaterialAttachWrite(project_id=first.id)
+    )
+    detail = library.attach_material_to_project(
+        session, material.id, LibraryMaterialAttachWrite(project_id=second.id)
+    )
+
+    assert {usage.project_id for usage in detail.usage} == {first.id, second.id}
+
+
+def test_attach_to_archived_project_is_rejected(session: Session) -> None:
+    project = make_exam_project(session, status=ProjectStatus.ARCHIVED)
+    material = make_material(session, "c09")
+    session.commit()
+
+    with pytest.raises(ProjectConflictError) as error:
+        library.attach_material_to_project(
+            session, material.id, LibraryMaterialAttachWrite(project_id=project.id)
+        )
+    assert error.value.code == "project_read_only"
+
+
+def test_attach_to_missing_project_is_not_found(session: Session) -> None:
+    material = make_material(session, "c0a")
+    session.commit()
+
+    with pytest.raises(ProjectNotFoundError):
+        library.attach_material_to_project(
+            session, material.id, LibraryMaterialAttachWrite(project_id=uuid4())
+        )
+
+
+def test_search_finds_page_without_project_and_ignores_other_materials(session: Session) -> None:
+    target = make_material(session, "c0b")
+    other = make_material(session, "c0c")
+    add_page_with_fragments(
+        session, target, page_number=1, revision=1, fragments=["Индексы ускоряют выборку"]
+    )
+    add_page_with_fragments(
+        session, other, page_number=1, revision=1, fragments=["Индексы в другом файле"]
+    )
+    session.commit()
+    from app.bindings.search import reindex_material
+
+    reindex_material(session, target.id)
+    reindex_material(session, other.id)
+    session.commit()
+
+    result = library.search_library_material(session, target.id, "индекс")
+
+    assert result.hits, "лексический поиск должен найти лемму «индекс»"
+    assert all(hit.page_number == 1 for hit in result.hits)
+    assert len(result.hits) == 1
+
+
+def test_empty_query_returns_no_hits(session: Session) -> None:
+    material = make_material(session, "c0d")
+    add_page_with_fragments(session, material, page_number=1, revision=1, fragments=["Текст"])
+    session.commit()
+
+    assert library.search_library_material(session, material.id, "   ").hits == []
+
+
+def test_historical_search_uses_its_own_fragments(session: Session) -> None:
+    material = make_material(session, "c0e")
+    add_page_with_fragments(
+        session, material, page_number=1, revision=1, fragments=["Старая формулировка теоремы"]
+    )
+    revision_registry.record_revision(
+        session, material.id, 1, origin=MaterialRevisionOrigin.IMPORTED
+    )
+    session.commit()
+    from app.materials.schemas import PageTextUpdate
+
+    library.update_library_page_text(
+        session, material.id, 1, PageTextUpdate(text="Новая формулировка леммы")
+    )
+
+    historical = library.search_library_material(session, material.id, "теорема", revision=1)
+    current = library.search_library_material(session, material.id, "теорема")
+
+    assert [hit.text for hit in historical.hits] == ["Старая формулировка теоремы"]
+    assert current.hits == []
+
+
+def test_delete_preview_lists_every_project(session: Session) -> None:
+    first = make_exam_project(session)
+    second = make_exam_project(session)
+    material = make_material(session, "c0f")
+    link_material(session, first, material)
+    link_material(session, second, material)
+    session.commit()
+
+    preview = library.material_delete_preview(session, material.id)
+
+    assert {usage.project_id for usage in preview.material.usage} == {first.id, second.id}
+
+
+def test_detail_reports_quality_counters_for_active_revision(session: Session) -> None:
+    material = make_material(session, "c10")
+    add_page_with_fragments(session, material, page_number=1, revision=1, fragments=["Текст"])
+    session.add(
+        MaterialPage(
+            id=uuid4(),
+            material_id=material.id,
+            revision=1,
+            page_number=2,
+            width=595,
+            height=842,
+            text="Скан",
+            markdown="Скан",
+            quality=PageQuality.OCR_LOW,
+            elements=[],
+            diagnostics=[],
+        )
+    )
+    session.commit()
+
+    detail = library.read_library_material(session, material.id)
+    assert detail.native_page_count == 1
+    assert detail.ocr_low_page_count == 1
+    assert isinstance(detail.updated_at, datetime)

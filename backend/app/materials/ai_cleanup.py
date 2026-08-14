@@ -10,12 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.ai.gateway import AiTextRequest, ModelGateway
 from app.ai.schemas import AiMessage, AiPreflight, AiUsage
-from app.materials import service
+from app.materials import library
 from app.materials.schemas import PageCorrectionRead, PageTextUpdate
 from app.models import (
     AiRun,
     Material,
     MaterialPage,
+    MaterialRevisionOrigin,
     Project,
     ProjectMaterial,
     ProjectStatus,
@@ -90,7 +91,8 @@ class CleanupRunRead(BaseModel):
 
 @dataclass(frozen=True)
 class PageSnapshot:
-    project_id: UUID
+    # None — уборка запущена из Библиотеки: у общего материала проекта нет.
+    project_id: UUID | None
     material_id: UUID
     page_id: UUID
     page_number: int
@@ -100,18 +102,19 @@ class PageSnapshot:
 
 
 def _snapshot(
-    session: Session, project_id: UUID, material_id: UUID, page_number: int
+    session: Session, project_id: UUID | None, material_id: UUID, page_number: int
 ) -> PageSnapshot:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise ProjectNotFoundError("Проект не найден")
-    if project.status not in {ProjectStatus.DRAFT, ProjectStatus.ACTIVE}:
-        raise ProjectConflictError(
-            "Архивный или завершённый проект нельзя изменять",
-            code="project_read_only",
-        )
-    if session.get(ProjectMaterial, (project_id, material_id)) is None:
-        raise ProjectNotFoundError("Материал не подключён к проекту")
+    if project_id is not None:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise ProjectNotFoundError("Проект не найден")
+        if project.status not in {ProjectStatus.DRAFT, ProjectStatus.ACTIVE}:
+            raise ProjectConflictError(
+                "Архивный или завершённый проект нельзя изменять",
+                code="project_read_only",
+            )
+        if session.get(ProjectMaterial, (project_id, material_id)) is None:
+            raise ProjectNotFoundError("Материал не подключён к проекту")
     material = session.get(Material, material_id)
     if material is None or material.active_parse_revision < 1:
         raise ProjectNotFoundError("Материал ещё не разобран")
@@ -196,7 +199,7 @@ def _request(snapshot: PageSnapshot, instruction: str, confirmed: bool) -> AiTex
 async def preflight(
     session: Session,
     gateway: ModelGateway,
-    project_id: UUID,
+    project_id: UUID | None,
     material_id: UUID,
     page_number: int,
     command: CleanupPreflightWrite,
@@ -217,7 +220,7 @@ async def preflight(
 async def run(
     session: Session,
     gateway: ModelGateway,
-    project_id: UUID,
+    project_id: UUID | None,
     material_id: UUID,
     page_number: int,
     command: CleanupRunWrite,
@@ -242,7 +245,7 @@ async def run(
 
 def apply(
     session: Session,
-    project_id: UUID,
+    project_id: UUID | None,
     material_id: UUID,
     page_number: int,
     command: CleanupApplyWrite,
@@ -276,9 +279,10 @@ def apply(
             code="ai_cleanup_run_invalid",
         )
     session.rollback()
-    return service.update_page_text(
+    # Правка общая для всех проектов с этим материалом, поэтому она идёт через
+    # то же ядро Библиотеки — с записью в реестр версий и id запуска в сводке.
+    return library.update_library_page_text(
         session,
-        project_id,
         material_id,
         page_number,
         PageTextUpdate(
@@ -286,6 +290,8 @@ def apply(
             expected_revision=command.expected_revision,
             expected_source_hash=command.expected_source_hash,
         ),
+        origin=MaterialRevisionOrigin.AI_CLEANUP,
+        summary_extra={"ai_run_id": str(command.run_id)},
     )
 
 

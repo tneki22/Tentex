@@ -18,8 +18,14 @@ class ProjectDomainError(Exception):
 
 
 class ProjectNotFoundError(ProjectDomainError):
-    def __init__(self, detail: str = "Проект не найден") -> None:
-        super().__init__(detail, status=404, code="not_found")
+    def __init__(
+        self,
+        detail: str = "Проект не найден",
+        *,
+        code: str = "not_found",
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(detail, status=404, code=code, context=context)
 
 
 class ProjectConflictError(ProjectDomainError):

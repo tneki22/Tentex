@@ -16,6 +16,22 @@ from urllib.request import Request, urlopen
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
 
+def alembic_head() -> str:
+    """Голова цепочки миграций из файлов, а не зашитая в проверку строка.
+
+    Константа устаревала при каждой новой миграции и роняла проверку по причине,
+    к предмету проверки отношения не имеющей.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    config = Config(str(BACKEND_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "migrations"))
+    head = ScriptDirectory.from_config(config).get_current_head()
+    assert head is not None
+    return head
+
+
 def free_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
