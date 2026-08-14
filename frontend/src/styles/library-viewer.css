@@ -212,9 +212,12 @@
 
 /* ── Рабочая область: каркас ─────────────────────────────────────────────── */
 
+/* Колонка, а не сетка с фиксированными рядами: полос над сценой переменное
+   число (read-only, сообщение, ошибка), и при жёстких рядах сцена доставалась
+   ряду `auto` и схлопывалась по высоте своего содержимого. */
 .library-workspace {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   height: 100dvh;
   min-height: 0;
   background: var(--canvas);
@@ -282,6 +285,7 @@
 
 .library-workspace-body {
   display: grid;
+  flex: 1;
   grid-template-columns: minmax(0, 1fr);
   min-height: 0;
 }
@@ -367,7 +371,6 @@
    ничего не сообщает о том, что откроется. */
 .library-workspace.is-skeleton {
   display: grid;
-  grid-template-rows: none;
   grid-template-columns: 248px minmax(0, 1fr) 348px;
   gap: 1px;
   background: var(--line);
@@ -1459,10 +1462,6 @@
 }
 
 @media (width < 900px) {
-  .library-workspace {
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
-  }
-
   .library-workspace-head {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
@@ -1482,16 +1481,6 @@
   .library-workspace.has-inspector .library-workspace-body,
   .library-workspace.has-outline.has-inspector .library-workspace-body {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  /* Сравнение на узком окне не помещается: остаются вкладки «Исходник»/«Текст». */
-  .viewer-stage.is-compare {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .viewer-stage.is-compare .viewer-pane.is-source,
-  .viewer-stage.is-compare .viewer-split-handle {
-    display: none;
   }
 
   .lib-row {

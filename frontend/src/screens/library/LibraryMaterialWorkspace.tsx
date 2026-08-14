@@ -154,6 +154,14 @@ export function LibraryMaterialWorkspace() {
     setMode(detail?.capabilities.can_compare ? presentation.defaultMode : "text");
   }, [presentation, detail?.capabilities.can_compare, mode]);
 
+  /* На узком окне половины не помещаются рядом, поэтому «Сравнение» там не
+     предлагается: сегмент, который показывает не то, что обещает, хуже его
+     отсутствия. */
+  const canCompare = Boolean(detail?.capabilities.can_compare) && !narrow;
+  const stageMode: MaterialViewMode = !canCompare && (mode ?? "text") === "compare"
+    ? "text"
+    : (mode ?? presentation?.defaultMode ?? "text");
+
   const readOnly = selectedRevision !== null && selectedRevision !== detail?.active_parse_revision;
   const hasOutline = Boolean(detail && detail.outline_source !== "none" && detail.outline.length > 0);
   const showOutline = hasOutline && outlineOpen && !narrow;
@@ -228,7 +236,7 @@ export function LibraryMaterialWorkspace() {
 
   const stage = (
     <DocumentStage
-      mode={detail.capabilities.can_compare ? (mode ?? presentation.defaultMode) : "text"}
+      mode={stageMode}
       storageKey={detail.id}
       sourceLabel={presentation.sourceLabel}
       textLabel={presentation.textLabel}
@@ -302,8 +310,8 @@ export function LibraryMaterialWorkspace() {
         {prepared && (
           <ViewerToolbar
             presentation={presentation}
-            mode={detail.capabilities.can_compare ? (mode ?? presentation.defaultMode) : "text"}
-            canCompare={detail.capabilities.can_compare}
+            mode={stageMode}
+            canCompare={canCompare}
             page={activePage}
             pageCount={pageCount}
             query={search.query}
