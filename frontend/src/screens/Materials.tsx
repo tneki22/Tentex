@@ -49,6 +49,7 @@ import type {
   MaterialPurpose,
   MaterialRead,
   MaterialCapabilities,
+  MaterialUpdateCommand,
   SourceRole,
 } from "../api/materials";
 import { getProject, undoProjectAction, type LatestUndoableAction, type ProjectDetail } from "../api/projects";
@@ -71,6 +72,7 @@ import { useBindings } from "../hooks/useBindings";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTreeNode } from "./programTree";
 import { AiCleanupPanel } from "./AiCleanupPanel";
+import { MaterialFileTab } from "./materials/MaterialFileTab";
 
 const EMPTY_STRING_SET: Set<string> = new Set();
 const EMPTY_TITLES_MAP: Map<string, string[]> = new Map();
@@ -93,12 +95,6 @@ const PURPOSE: Record<MaterialPurpose, string> = {
   reference_answers: "Эталонные ответы",
   study_source: "Учебный источник",
 };
-
-function sizeLabel(bytes: number): string {
-  if (bytes < 1024) return `${bytes} Б`;
-  if (bytes < 1024 ** 2) return `${Math.round(bytes / 1024)} КБ`;
-  return `${(bytes / 1024 ** 2).toFixed(1)} МБ`;
-}
 
 function fileCountLabel(count: number): string {
   const mod100 = count % 100;
@@ -794,35 +790,6 @@ function ProcessingTab({
   );
 }
 
-function FileTab({
-  material,
-  onRemove,
-  notice,
-  onDismissNotice,
-}: {
-  material: MaterialRead;
-  onRemove: () => void;
-  notice: NoticeState | null;
-  onDismissNotice: () => void;
-}) {
-  return (
-    <div className="materials-inspector-content">
-      <NoticeLine notice={notice} onDismiss={onDismissNotice} />
-      <dl className="materials-file-details">
-        <div><dt>Файл</dt><dd>{material.original_name}</dd></div>
-        <div><dt>Используется как</dt><dd>{material.purposes.map((purpose) => PURPOSE[purpose]).join(", ")}</dd></div>
-        <div><dt>Размер</dt><dd>{sizeLabel(material.size_bytes)}</dd></div>
-        <div><dt>Страницы</dt><dd>{material.page_count ?? "—"}</dd></div>
-        <div><dt>Сканов</dt><dd>{material.scan_page_count}</dd></div>
-        <div><dt>Плохо распознано</dt><dd>{material.ocr_low_page_count ? `${material.ocr_low_page_count} стр.` : "нет"}</dd></div>
-      </dl>
-      {material.source_url && <a className="materials-text-link" href={material.source_url} target="_blank" rel="noreferrer">Открыть исходную ссылку</a>}
-      {material.outline.length > 0 && <details className="materials-outline"><summary>Оглавление · {material.outline.length}</summary><ol>{material.outline.map((item, index) => <li key={`${item.page}-${index}`} style={{ paddingInlineStart: `${Math.max(0, item.level - 1) * 12}px` }}><span>{item.title}</span><small>с. {item.page}</small></li>)}</ol></details>}
-      <Button variant="ghost" className="materials-remove-button" onClick={onRemove}><Trash2 size={14} /> Убрать из проекта</Button>
-    </div>
-  );
-}
-
 type NoticeTone = "info" | "success" | "danger";
 
 interface NoticeState {
@@ -1217,6 +1184,8 @@ function MaterialInspector({
   onEdit,
   onReparse,
   onLinkAnswers,
+  answersMaterial,
+  onSaveFile,
   capabilities,
   bindingsProps,
   examStructureProps,
@@ -1236,6 +1205,8 @@ function MaterialInspector({
   onEdit: () => void;
   onReparse: () => void;
   onLinkAnswers: () => void;
+  answersMaterial: MaterialRead | null;
+  onSaveFile: (command: MaterialUpdateCommand) => Promise<MaterialRead | null>;
   capabilities: MaterialCapabilities | null;
   bindingsProps: BindingsTabProps;
   examStructureProps: ExamStructureBindingsTabProps;
@@ -1267,7 +1238,18 @@ function MaterialInspector({
         {activeTab === "processing" && (
           <ProcessingTab material={material} busy={busy} onStart={onStart} onControl={onControl} onImport={onImport} onEdit={onEdit} onReparse={onReparse} onLinkAnswers={onLinkAnswers} capabilities={capabilities} notice={notice} onDismissNotice={onDismissNotice} />
         )}
-        {activeTab === "file" && <FileTab material={material} onRemove={onRemove} notice={notice} onDismissNotice={onDismissNotice} />}
+        {activeTab === "file" && (
+          <div className="materials-inspector-content">
+            <NoticeLine notice={notice} onDismiss={onDismissNotice} />
+            <MaterialFileTab
+              material={material}
+              answersMaterial={answersMaterial}
+              busy={busy}
+              onSave={onSaveFile}
+              onRemove={onRemove}
+            />
+          </div>
+        )}
       </div>
     </aside>
   );
@@ -1858,6 +1840,17 @@ function MaterialSurface() {
     }
   }
 
+  async function saveFileSettings(command: MaterialUpdateCommand) {
+    if (!material) return null;
+    const updated = await store.update(material.id, command);
+    if (updated) {
+      say("Настройки файла сохранены.", "success");
+      return updated;
+    }
+    say("Не удалось сохранить настройки файла.", "danger");
+    return null;
+  }
+
   if (store.loading) return <LoadingState label="Загружаем материалы" placement="page" />;
 
   return (
@@ -2013,6 +2006,8 @@ function MaterialSurface() {
           onEdit={() => { if (page) { setEditText(page.text); setEditOpen(true); } }}
           onReparse={() => setReparseOpen(true)}
           onLinkAnswers={() => void linkAnswers()}
+          answersMaterial={answersMaterial}
+          onSaveFile={saveFileSettings}
           capabilities={capabilities}
           textbook={Boolean(textbook)}
           isExamStructureFile={isExamStructureFile}
