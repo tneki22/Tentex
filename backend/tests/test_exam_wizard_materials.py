@@ -15,10 +15,14 @@ from app.models import (
 from app.projects.errors import ProjectConflictError
 
 
-def make_ready_exam_draft(session: Session, text: str):
+def make_ready_exam_draft(session: Session, text: str, *, expected_item_count: int | None = None):
     project = make_exam_project(session, status=ProjectStatus.DRAFT)
     draft = WizardDraft(project_id=project.id, revision=2, state={"exam_format": "questions"})
-    passport = GoalPassport(project_id=project.id, exam_format=ExamFormat.QUESTIONS)
+    passport = GoalPassport(
+        project_id=project.id,
+        exam_format=ExamFormat.QUESTIONS,
+        expected_item_count=expected_item_count,
+    )
     material = make_material(session, "e1")
     add_page_with_fragments(session, material, page_number=1, revision=1, fragments=[text])
     link = ProjectMaterial(
@@ -69,3 +73,22 @@ def test_exam_material_import_rejects_stale_draft_revision(session: Session) -> 
         )
 
     assert caught.value.code == "stale_draft_revision"
+
+
+def test_exam_material_uses_expected_count_to_ignore_title_and_trailing_reset(
+    session: Session,
+) -> None:
+    project, _draft, material = make_ready_exam_draft(
+        session,
+        "Вопросы для подготовки\n1. Первый\n2. Второй\n3. Третий\n1. Приложение",
+        expected_item_count=3,
+    )
+
+    preview = service.preview_exam_program(session, project.id, material.id)
+
+    assert preview.counts["questions"] == 3
+    assert [node.title for node in preview.nodes] == ["Первый", "Второй", "Третий"]
+    assert preview.warnings == [
+        "Перед списком пропущено строк: 1",
+        "После списка пропущено строк: 1",
+    ]

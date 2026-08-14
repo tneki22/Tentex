@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 
 from app.models import ExamFormat, ExamKind, NodeType
+from app.projects.numbered_series import select_numbered_series
 
 ITEM_RE = re.compile(
     r"^\s*(?:(?:\d+(?:\.\d+)*[.)])\s*|(?:\d+(?:\.\d+)*)\s+|[-—*•]\s+)(.+?)\s*$"
@@ -69,7 +70,27 @@ def _duplicate_warnings(nodes: list[ParsedNode]) -> list[str]:
     return warnings
 
 
-def _parse_flat(lines: list[str], exam_format: ExamFormat) -> list[ParsedNode]:
+def _parse_flat(
+    lines: list[str], exam_format: ExamFormat, expected_item_count: int | None
+) -> tuple[list[ParsedNode], list[str]]:
+    selection = select_numbered_series(lines, expected_item_count)
+    if selection.ambiguous:
+        raise ExamImportError("Не удалось однозначно выбрать основной нумерованный список")
+    if selection.items:
+        nodes = []
+        for item in selection.items:
+            kind, title = _kind_and_title(item.text, ExamKind.QUESTION)
+            nodes.append(
+                ParsedNode(
+                    parent_index=None,
+                    node_type=NodeType.TOPIC,
+                    exam_kind=kind,
+                    title=title,
+                    position=len(nodes),
+                )
+            )
+        return nodes, list(selection.warnings)
+
     marker_present = any(ITEM_RE.match(line) for line in lines)
     nodes: list[ParsedNode] = []
     current_kind = ExamKind.QUESTION
@@ -102,7 +123,7 @@ def _parse_flat(lines: list[str], exam_format: ExamFormat) -> list[ParsedNode]:
                     position=len(nodes),
                 )
             )
-    return nodes
+    return nodes, []
 
 
 def _parse_tickets(lines: list[str]) -> list[ParsedNode]:
@@ -162,7 +183,12 @@ def _parse_tickets(lines: list[str]) -> list[ParsedNode]:
     return nodes
 
 
-def parse_exam_program(raw_text: str, exam_format: ExamFormat) -> ParsedExamProgram:
+def parse_exam_program(
+    raw_text: str,
+    exam_format: ExamFormat,
+    *,
+    expected_item_count: int | None = None,
+) -> ParsedExamProgram:
     if len(raw_text) > 1_000_000:
         raise ExamImportError("Текст списка не может быть длиннее 1 000 000 символов")
     lines = _lines(raw_text)
@@ -170,8 +196,9 @@ def parse_exam_program(raw_text: str, exam_format: ExamFormat) -> ParsedExamProg
         raise ExamImportError("Вставьте хотя бы один вопрос, задачу или билет")
     if exam_format == ExamFormat.TICKETS:
         nodes = _parse_tickets(lines)
+        parse_warnings: list[str] = []
     elif exam_format in {ExamFormat.QUESTIONS, ExamFormat.QUESTIONS_TASKS}:
-        nodes = _parse_flat(lines, exam_format)
+        nodes, parse_warnings = _parse_flat(lines, exam_format, expected_item_count)
     else:
         raise ExamImportError("Этот формат нельзя импортировать без материалов")
 
@@ -183,5 +210,5 @@ def parse_exam_program(raw_text: str, exam_format: ExamFormat) -> ParsedExamProg
         tickets=sum(node.exam_kind == ExamKind.TICKET for node in nodes),
         questions=sum(node.exam_kind == ExamKind.QUESTION for node in study_nodes),
         tasks=sum(node.exam_kind == ExamKind.TASK for node in study_nodes),
-        warnings=_duplicate_warnings(nodes),
+        warnings=[*parse_warnings, *_duplicate_warnings(nodes)],
     )

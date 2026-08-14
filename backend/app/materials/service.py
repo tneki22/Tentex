@@ -971,7 +971,11 @@ def _parsed_exam_from_material(
     if exam_format == ExamFormat.UNKNOWN:
         exam_format = ExamFormat.QUESTIONS
     try:
-        parsed = parse_exam_program(raw_text, exam_format)
+        parsed = parse_exam_program(
+            raw_text,
+            exam_format,
+            expected_item_count=passport.expected_item_count if passport else None,
+        )
     except ExamImportError as error:
         raise ProjectConflictError(str(error), code="material_exam_parse_failed") from error
     return parsed, material, link
