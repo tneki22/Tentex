@@ -322,7 +322,7 @@ export function ProjectSettings() {
     }
   }
 
-  if (loading) return <div className="screen project-settings-screen"><LoadingState label="Загружаем настройки проекта" /></div>;
+  if (loading) return <div className="screen project-settings-screen"><LoadingState label="Загружаем настройки проекта" placement="page" /></div>;
 
   if (loadError instanceof ProjectApiError && loadError.status === 404) {
     return (

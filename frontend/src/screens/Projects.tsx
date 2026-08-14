@@ -302,7 +302,7 @@ export function Projects() {
     }
   }
 
-  if (loading) return <div className="screen"><LoadingState label="Загружаем проекты" /></div>;
+  if (loading) return <div className="screen"><LoadingState label="Загружаем проекты" placement="page" /></div>;
   if (loadError) {
     return (
       <div className="screen">

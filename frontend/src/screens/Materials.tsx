@@ -1858,7 +1858,7 @@ function MaterialSurface() {
     }
   }
 
-  if (store.loading) return <LoadingState label="Загружаем материалы" />;
+  if (store.loading) return <LoadingState label="Загружаем материалы" placement="page" />;
 
   return (
     <div

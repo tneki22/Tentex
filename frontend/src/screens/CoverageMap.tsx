@@ -316,7 +316,7 @@ export function CoverageMap() {
     }
   }
 
-  if (loading) return <div className="screen"><LoadingState label="Загружаем ответы" /></div>;
+  if (loading) return <div className="screen"><LoadingState label="Загружаем ответы" placement="page" /></div>;
   if (loadError) {
     const notFound = loadError instanceof ProjectApiError && loadError.status === 404;
     return <div className="screen"><ErrorState title={notFound ? "Проект не найден" : undefined} message={notFound ? "Проверьте адрес или вернитесь к списку проектов." : requestErrorMessage(loadError)} /><Button onClick={() => void load()}>Повторить загрузку</Button><Link className="secondary-button" to="/projects">К проектам</Link></div>;

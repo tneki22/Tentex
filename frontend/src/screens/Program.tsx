@@ -441,7 +441,7 @@ export function Program() {
     }
   }
 
-  if (loading) return <div className="screen"><LoadingState label="Загружаем программу" /></div>;
+  if (loading) return <div className="screen"><LoadingState label="Загружаем программу" placement="page" /></div>;
   if (loadError) {
     const notFound = loadError instanceof ProjectApiError && loadError.status === 404;
     return <div className="screen"><ErrorState title={notFound ? "Проект не найден" : undefined} message={notFound ? "Проверьте адрес или вернитесь к списку проектов." : loadError instanceof Error ? loadError.message : "Не удалось загрузить программу"} /><Button onClick={() => void load()}>Повторить загрузку</Button><Link className="secondary-button" to="/projects">К проектам</Link></div>;

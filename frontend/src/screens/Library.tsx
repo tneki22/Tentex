@@ -136,7 +136,7 @@ export function Library() {
     }
   }
 
-  if (loading) return <LoadingState label="Загружаем Библиотеку" />;
+  if (loading) return <LoadingState label="Загружаем Библиотеку" placement="page" />;
 
   return (
     <div className="screen">

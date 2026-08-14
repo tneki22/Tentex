@@ -501,7 +501,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     }
   }
 
-  if (controller.status === "loading") return <LoadingState label="Загружаем экзаменационный черновик" />;
+  if (controller.status === "loading") return <LoadingState label="Загружаем экзаменационный черновик" placement="page" />;
 
   const busy = controller.status === "saving";
   const studyCount = (controller.detail?.program.nodes ?? []).filter((node) => node.node_type !== "section").length;

@@ -599,6 +599,7 @@ export function UiKit() {
         <h2>Состояния экрана</h2>
         <p className="kit-hint">Загрузка, ошибка и пустота — три обязательных состояния.</p>
         <div className="kit-stack">
+          <LoadingState label="Загружаем рабочую область" placement="page" />
           <LoadingState label="Разбираем материал" />
           <ErrorState message="Файл повреждён на странице 14." />
           <EmptyState title="Материалов пока нет" icon={<Inbox size={24} />}>

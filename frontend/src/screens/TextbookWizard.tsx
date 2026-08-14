@@ -376,7 +376,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
     }
   }
 
-  if (controller.status === "loading" || (controller.status === "saving" && !controller.detail)) return <LoadingState label="Загружаем учебниковый черновик" />;
+  if (controller.status === "loading" || (controller.status === "saving" && !controller.detail)) return <LoadingState label="Загружаем учебниковый черновик" placement="page" />;
   const busy = controller.status === "saving";
 
   return (

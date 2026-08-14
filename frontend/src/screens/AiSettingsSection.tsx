@@ -666,7 +666,7 @@ export function AiSettingsSection({ subsection }: { subsection: AiSettingsSubsec
     return <UsagePanel settings={settings} runs={runs} />;
   }, [providerId, runs, settings, subsection]);
 
-  if (loading) return <LoadingState label="Загружаем настройки ИИ" />;
+  if (loading) return <LoadingState label="Загружаем настройки ИИ" placement="page" />;
   if (error) return <><ErrorState message={error} /><Button onClick={() => window.location.reload()}>Повторить</Button></>;
   return <div className="ai-settings">{content}</div>;
 }
