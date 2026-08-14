@@ -1,5 +1,5 @@
 import { Bot, BrainCircuit, DatabaseBackup, HardDrive } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { EmptyState, PageHead } from "../components/ui";
 import { AiSettingsSection } from "./AiSettingsSection";
@@ -19,8 +19,8 @@ const AI_SUBSECTIONS = [
   { id: "models", label: "Модели" },
   { id: "defaults", label: "По умолчанию" },
   { id: "functions", label: "Функции" },
-  { id: "limits", label: "Лимиты" },
-  { id: "usage", label: "Расход и журнал" },
+  { id: "limits", label: "Расходы" },
+  { id: "usage", label: "История" },
 ] as const;
 
 export type AiSettingsSubsection = typeof AI_SUBSECTIONS[number]["id"];
@@ -45,9 +45,10 @@ export function Setup() {
   const requested = searchParams.get("section") as SetupSection | null;
   const active = SECTIONS.some((section) => section.id === requested) ? requested! : "ai";
   const requestedSubsection = searchParams.get("subsection") as AiSettingsSubsection | null;
-  const activeSubsection = AI_SUBSECTIONS.some((item) => item.id === requestedSubsection)
+  const initialSubsection = AI_SUBSECTIONS.some((item) => item.id === requestedSubsection)
     ? requestedSubsection!
     : "overview";
+  const [activeSubsection, setActiveSubsection] = useState<AiSettingsSubsection>(initialSubsection);
 
   useEffect(() => {
     if (!requested) {
@@ -59,12 +60,25 @@ export function Setup() {
     }
   }, [active, requested, requestedSubsection, setSearchParams]);
 
+  useEffect(() => {
+    if (AI_SUBSECTIONS.some((item) => item.id === requestedSubsection)) {
+      setActiveSubsection(requestedSubsection!);
+    }
+  }, [requestedSubsection]);
+
   function selectSection(section: SetupSection) {
     setSearchParams(section === "ai" ? { section, subsection: activeSubsection } : { section });
   }
 
   function selectAiSubsection(subsection: AiSettingsSubsection) {
-    setSearchParams({ section: "ai", subsection });
+    setActiveSubsection(subsection);
+    setSearchParams({ section: "ai", subsection }, { replace: true });
+    window.requestAnimationFrame(() => {
+      document.getElementById(`ai-${subsection}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
   }
 
   const future = active === "ai" ? null : FUTURE_COPY[active];
@@ -89,15 +103,15 @@ export function Setup() {
               {section.id === "ai" && active === "ai" && (
                 <div className="setup-subnav" aria-label="Подразделы ИИ">
                   {AI_SUBSECTIONS.map((item) => (
-                    <button
+                    <a
                       key={item.id}
-                      type="button"
+                      href={`#ai-${item.id}`}
                       className={activeSubsection === item.id ? "is-active" : ""}
-                      aria-current={activeSubsection === item.id ? "page" : undefined}
-                      onClick={() => selectAiSubsection(item.id)}
+                      aria-current={activeSubsection === item.id ? "location" : undefined}
+                      onClick={(event) => { event.preventDefault(); selectAiSubsection(item.id); }}
                     >
                       {item.label}
-                    </button>
+                    </a>
                   ))}
                 </div>
               )}
@@ -106,7 +120,7 @@ export function Setup() {
         </nav>
         <div className="setup-content">
           {active === "ai" ? (
-            <AiSettingsSection subsection={activeSubsection} />
+            <AiSettingsSection subsection={activeSubsection} onActiveSubsection={setActiveSubsection} />
           ) : future ? (
             <EmptyState title={future.title}>
               <p>{future.body}</p>

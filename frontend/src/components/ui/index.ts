@@ -29,6 +29,8 @@ export { Progress } from "./Progress";
 export { RadioCards } from "./RadioCards";
 export type { RadioCardOption } from "./RadioCards";
 export { SegmentedTabs } from "./SegmentedTabs";
+export { Select } from "./Select";
+export type { SelectOption } from "./Select";
 export { StatusBadge } from "./StatusBadge";
 export type { StatusTone } from "./StatusBadge";
 export { Switch } from "./Switch";

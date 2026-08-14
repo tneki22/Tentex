@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.provider import (
@@ -11,8 +11,13 @@ from app.ai.provider import (
     ProviderError,
     ProviderModel,
 )
-from app.ai.schemas import AiModelRead, AiProviderTestRead
-from app.ai.settings import AiGatewayError, credential
+from app.ai.schemas import (
+    AiCatalogModelRead,
+    AiCatalogModelWrite,
+    AiProviderTestRead,
+    AiSettingsRead,
+)
+from app.ai.settings import AiGatewayError, credential, read_settings
 from app.models import AiModelCatalogEntry, AiProviderConnection, utc_now
 
 
@@ -47,11 +52,11 @@ async def test_connection(
     return AiProviderTestRead(status="connected", model_count=len(models), tested_at=now)
 
 
-async def refresh_catalog(
+async def search_catalog(
     session: Session,
     provider_id: UUID,
     transport: OpenAICompatibleTransport | None = None,
-) -> list[AiModelRead]:
+) -> list[AiCatalogModelRead]:
     transport = transport or production_transport(session, provider_id)
     try:
         models = await transport.list_models()
@@ -64,26 +69,46 @@ async def refresh_catalog(
         provider = session.get(AiProviderConnection, provider_id)
         if provider is None:
             raise AiGatewayError("Провайдер не найден", code="ai_provider_not_found", status=404)
-        session.execute(
-            update(AiModelCatalogEntry)
-            .where(AiModelCatalogEntry.provider_id == provider_id)
-            .values(is_available=False, catalog_snapshot_at=now)
-        )
-        for item in models:
-            _upsert_model(session, provider_id, item, now)
         provider.last_catalog_refresh_at = now
         provider.last_test_status = "connected"
         provider.last_tested_at = now
-    return list(
-        map(
-            AiModelRead.model_validate,
-            session.scalars(
-                select(AiModelCatalogEntry)
-                .where(AiModelCatalogEntry.provider_id == provider_id)
-                .order_by(AiModelCatalogEntry.display_name)
-            ),
+    added = set(
+        session.scalars(
+            select(AiModelCatalogEntry.model_id).where(
+                AiModelCatalogEntry.provider_id == provider_id
+            )
         )
     )
+    return sorted(
+        (_catalog_read(item, item.model_id in added) for item in models),
+        key=lambda item: item.display_name.casefold(),
+    )
+
+
+def add_catalog_model(
+    session: Session,
+    provider_id: UUID,
+    command: AiCatalogModelWrite,
+) -> AiSettingsRead:
+    now = utc_now()
+    session.commit()
+    with session.begin():
+        provider = session.get(AiProviderConnection, provider_id)
+        if provider is None:
+            raise AiGatewayError("Провайдер не найден", code="ai_provider_not_found", status=404)
+        _upsert_model(session, provider_id, ProviderModel(**command.model_dump()), now)
+    return read_settings(session)
+
+
+def _catalog_read(item: ProviderModel, is_added: bool) -> AiCatalogModelRead:
+    data = dict(item.__dict__)
+    # OpenRouter uses -1 for routers whose final price depends on the selected
+    # downstream model. It is not a real negative price, so expose it as unknown.
+    for field in ("prompt_price_usd", "completion_price_usd"):
+        value = data[field]
+        if value is not None and value < 0:
+            data[field] = None
+    return AiCatalogModelRead(**data, is_added=is_added)
 
 
 def _upsert_model(session: Session, provider_id: UUID, item: ProviderModel, snapshot_at) -> None:
@@ -91,7 +116,11 @@ def _upsert_model(session: Session, provider_id: UUID, item: ProviderModel, snap
     manual = dict(row.manual_overrides) if row else {}
     favorite_order = row.favorite_order if row else None
     if row is None:
-        row = AiModelCatalogEntry(provider_id=provider_id, model_id=item.model_id)
+        row = AiModelCatalogEntry(
+            provider_id=provider_id,
+            model_id=item.model_id,
+            is_manually_added=False,
+        )
         session.add(row)
     row.display_name = item.display_name
     row.context_length = item.context_length

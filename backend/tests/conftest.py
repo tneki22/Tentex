@@ -98,6 +98,7 @@ def ai_config(session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
                 completion_price_usd=Decimal("0.000002"),
                 pricing_snapshot_at=now,
                 catalog_snapshot_at=now,
+                is_manually_added=True,
                 is_available=True,
             ),
         ]

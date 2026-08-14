@@ -23,6 +23,7 @@ from app.ai.provider import (  # noqa: E402
     ProviderUsage,
 )
 from app.ai.schemas import (  # noqa: E402
+    AiCatalogModelWrite,
     AiDefaultWrite,
     AiGlobalSettingsWrite,
     AiModelSelection,
@@ -199,8 +200,16 @@ async def _run(session: Session) -> None:
             _completion(groups, "0.003"),
         ],
     )
-    catalog_result = await catalog.refresh_catalog(session, provider_id, fake)
+    catalog_result = await catalog.search_catalog(session, provider_id, fake)
     assert catalog_result[0].model_id == MODEL_ID
+    assert not catalog_result[0].is_added
+    catalog.add_catalog_model(
+        session,
+        provider_id,
+        AiCatalogModelWrite.model_validate(
+            catalog_result[0].model_dump(exclude={"is_added"})
+        ),
+    )
     session.commit()
     set_default(
         session,

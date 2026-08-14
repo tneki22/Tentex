@@ -254,6 +254,12 @@ export interface AiManualModelWrite {
   expiration_date: string | null;
 }
 
+export type AiCatalogModelWrite = AiManualModelWrite;
+
+export interface AiCatalogModelRead extends AiCatalogModelWrite {
+  is_added: boolean;
+}
+
 export interface AiRoleWrite {
   enabled: boolean;
   provider_override_id: string | null;
@@ -303,10 +309,16 @@ export const testAiProvider = (
   method: "POST", signal,
 });
 
-export const refreshAiModels = (
+export const searchAiModels = (
   providerId: string, signal?: AbortSignal,
-): Promise<AiModelRead[]> => request(`${AI_PATH}/providers/${providerId}/models/refresh`, {
+): Promise<AiCatalogModelRead[]> => request(`${AI_PATH}/providers/${providerId}/models/search`, {
   method: "POST", signal,
+});
+
+export const addAiCatalogModel = (
+  providerId: string, command: AiCatalogModelWrite, signal?: AbortSignal,
+): Promise<AiSettingsRead> => request(`${AI_PATH}/providers/${providerId}/models`, {
+  method: "POST", body: JSON.stringify(command), signal,
 });
 
 export const upsertManualAiModel = (

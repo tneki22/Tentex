@@ -7,9 +7,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.ai.catalog import add_catalog_model, search_catalog
 from app.ai.credentials import decrypt_secret, encrypt_secret
+from app.ai.provider import FakeTransport, ProviderModel
 from app.ai.router import router
 from app.ai.schemas import (
+    AiCatalogModelWrite,
     AiDefaultWrite,
     AiManualModelWrite,
     AiModelFavoritesWrite,
@@ -30,7 +33,7 @@ from app.ai.settings import (
 )
 from app.config import settings
 from app.db import get_session
-from app.models import AiProviderConnection, AiRoleSetting, AiSettings
+from app.models import AiModelCatalogEntry, AiProviderConnection, AiRoleSetting, AiSettings
 from app.projects.errors import ProjectDomainError
 
 
@@ -233,3 +236,77 @@ def test_provider_delete_reports_default_dependency(session: Session, ai_config:
     assert caught.value.code == "ai_provider_in_use"
     assert caught.value.status == 409
     assert caught.value.context == {"defaults": ["text"], "roles": []}
+
+
+@pytest.mark.asyncio
+async def test_model_search_does_not_fill_saved_catalog(
+    session: Session, ai_config: str
+) -> None:
+    provider = session.query(AiProviderConnection).one()
+    provider_id = provider.id
+    session.rollback()
+    fake = FakeTransport(
+        models=[
+            ProviderModel(model_id="catalog/one", display_name="Catalog one"),
+            ProviderModel(model_id="catalog/two", display_name="Catalog two"),
+        ]
+    )
+
+    found = await search_catalog(session, provider_id, fake)
+
+    assert [model.model_id for model in found] == ["catalog/one", "catalog/two"]
+    assert all(model.is_added is False for model in found)
+    assert session.query(AiModelCatalogEntry).count() == 1
+    assert session.get(AiModelCatalogEntry, (provider_id, ai_config)) is not None
+
+
+@pytest.mark.asyncio
+async def test_model_search_treats_dynamic_negative_price_as_unknown(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    provider_id = session.query(AiProviderConnection.id).scalar()
+    session.rollback()
+    fake = FakeTransport(
+        models=[
+            ProviderModel(
+                model_id="router/dynamic",
+                display_name="Dynamic router",
+                prompt_price_usd=-1,
+                completion_price_usd=-1,
+            )
+        ]
+    )
+
+    found = await search_catalog(session, provider_id, fake)
+
+    assert found[0].prompt_price_usd is None
+    assert found[0].completion_price_usd is None
+
+
+def test_catalog_model_is_saved_only_after_explicit_add(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    provider_id = session.query(AiProviderConnection.id).scalar()
+    session.rollback()
+
+    snapshot = add_catalog_model(
+        session,
+        provider_id,
+        AiCatalogModelWrite(
+            model_id="catalog/selected",
+            display_name="Selected model",
+            context_length=64_000,
+            input_modalities=["text"],
+            output_modalities=["text"],
+            prompt_price_usd="0.000001",
+            completion_price_usd="0.000004",
+        ),
+    )
+
+    assert any(model.model_id == "catalog/selected" for model in snapshot.models)
+    assert snapshot.providers[0].model_count == 2
+    row = session.get(AiModelCatalogEntry, (provider_id, "catalog/selected"))
+    assert row is not None
+    assert row.is_manually_added is False

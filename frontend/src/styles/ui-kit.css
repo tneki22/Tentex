@@ -288,6 +288,7 @@
 .status-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-2);
   min-height: 26px;
   padding: 0 var(--space-3);
@@ -327,6 +328,144 @@
   color: var(--tone-info);
   border-color: color-mix(in srgb, var(--tone-info) 28%, transparent);
   background: color-mix(in srgb, var(--tone-info) 12%, transparent);
+}
+
+/* --- Выпадающий список: общий шаблон на Radix Select --- */
+
+.select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 42px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    box-shadow var(--motion-fast) var(--motion-ease);
+}
+
+.select-trigger:hover:not(:disabled),
+.select-trigger[data-state="open"] {
+  border-color: var(--line-strong);
+  background: var(--paper-strong);
+}
+
+.select-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.select-trigger:disabled {
+  color: var(--faint);
+  background: var(--surface-sunken);
+  cursor: not-allowed;
+}
+
+.select-trigger[data-placeholder] {
+  color: var(--muted);
+}
+
+.select-chevron {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--muted);
+  transition: transform var(--motion-fast) var(--motion-ease);
+}
+
+.select-trigger[data-state="open"] .select-chevron {
+  transform: rotate(180deg);
+}
+
+.select-content {
+  z-index: calc(var(--z-dialog) + 1);
+  min-width: var(--radix-select-trigger-width);
+  max-width: min(440px, calc(100vw - var(--space-6)));
+  max-height: min(360px, var(--radix-select-content-available-height));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper-strong);
+  box-shadow: var(--shadow-lg);
+  transform-origin: var(--radix-select-content-transform-origin);
+  animation: popover-in var(--motion-fast) var(--motion-ease-out);
+}
+
+.select-viewport {
+  padding: var(--space-1);
+}
+
+.select-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 38px;
+  padding: var(--space-2) var(--space-8) var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+  transition:
+    background-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
+}
+
+.select-item[data-highlighted] {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.select-item[data-state="checked"] {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.select-item[data-disabled] {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.select-item-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.select-item-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-indicator {
+  position: absolute;
+  inset-inline-end: var(--space-3);
+  display: grid;
+  place-items: center;
+}
+
+.select-scroll-button {
+  display: grid;
+  place-items: center;
+  height: 28px;
+  color: var(--muted);
+  background: var(--paper-strong);
 }
 
 /* --- Вкладки: сегментированный переключатель на вдавленном треке --- */

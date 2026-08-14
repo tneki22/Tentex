@@ -1,10 +1,11 @@
-import { useId, useMemo } from "react";
+import { useMemo } from "react";
 import type {
   AiModality,
   AiModelRead,
   AiModelSelection,
   AiProviderRead,
 } from "../../api/ai";
+import { Select } from "../ui";
 
 function supports(
   model: AiModelRead,
@@ -43,7 +44,6 @@ export function ProviderModelPicker({
   disabled?: boolean;
   onChange: (value: AiModelSelection | null) => void;
 }) {
-  const id = useId();
   const eligible = useMemo(
     () => models.filter((model) => (
       supports(model, modality, capabilities)
@@ -54,7 +54,7 @@ export function ProviderModelPicker({
   const availableProviders = providers.filter((provider) => (
     eligible.some((model) => model.provider_id === provider.id)
   ));
-  const providerId = value?.provider_id ?? "";
+  const providerId = value?.provider_id ?? null;
   const providerModels = eligible
     .filter((model) => model.provider_id === providerId)
     .sort((left, right) => (
@@ -66,47 +66,48 @@ export function ProviderModelPicker({
   return (
     <div className="provider-model-picker">
       <div>
-        <label htmlFor={`${id}-provider`}>Провайдер</label>
-        <select
-          id={`${id}-provider`}
+        <span className="provider-model-picker-label">Провайдер</span>
+        <Select
+          ariaLabel="Провайдер"
           value={providerId}
           disabled={disabled}
-          onChange={(event) => {
-            const nextProvider = event.target.value;
+          emptyOption={inheritedLabel !== undefined ? "Использовать модель по умолчанию" : "Не выбран"}
+          options={availableProviders.map((provider) => ({
+            value: provider.id,
+            label: `${provider.is_favorite ? "★ " : ""}${provider.label}`,
+          }))}
+          onValueChange={(nextProvider) => {
             if (!nextProvider) {
               onChange(null);
               return;
             }
-            const first = eligible.find((model) => model.provider_id === nextProvider);
+            const first = eligible
+              .filter((model) => model.provider_id === nextProvider)
+              .sort((left, right) => (
+                (left.favorite_order ?? Number.MAX_SAFE_INTEGER)
+                - (right.favorite_order ?? Number.MAX_SAFE_INTEGER)
+                || left.display_name.localeCompare(right.display_name, "ru")
+              ))[0];
             onChange(first ? { provider_id: nextProvider, model_id: first.model_id } : null);
           }}
-        >
-          {inheritedLabel !== undefined && <option value="">Наследовать</option>}
-          {inheritedLabel === undefined && <option value="">Выберите провайдера</option>}
-          {availableProviders.map((provider) => (
-            <option key={provider.id} value={provider.id}>
-              {provider.is_favorite ? "★ " : ""}{provider.label}
-            </option>
-          ))}
-        </select>
+        />
       </div>
       <div>
-        <label htmlFor={`${id}-model`}>Модель</label>
-        <select
-          id={`${id}-model`}
-          value={value?.model_id ?? ""}
+        <span className="provider-model-picker-label">Модель</span>
+        <Select
+          ariaLabel="Модель"
+          value={value?.model_id ?? null}
           disabled={disabled || !providerId}
-          onChange={(event) => onChange(event.target.value
-            ? { provider_id: providerId, model_id: event.target.value }
+          emptyOption="Не выбрана"
+          options={providerModels.map((model) => ({
+            value: model.model_id,
+            label: `${model.favorite_order !== null ? "★ " : ""}${model.display_name}`,
+            description: model.is_available ? model.model_id : `${model.model_id} — недоступна`,
+          }))}
+          onValueChange={(nextModel) => onChange(nextModel && providerId
+            ? { provider_id: providerId, model_id: nextModel }
             : null)}
-        >
-          <option value="">Выберите модель</option>
-          {providerModels.map((model) => (
-            <option key={model.model_id} value={model.model_id}>
-              {model.favorite_order !== null ? "★ " : ""}{model.display_name}{model.is_available ? "" : " — больше не в каталоге"}
-            </option>
-          ))}
-        </select>
+        />
       </div>
       {inheritedLabel && !value && <small>{inheritedLabel}</small>}
     </div>

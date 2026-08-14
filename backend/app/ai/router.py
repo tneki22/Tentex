@@ -12,11 +12,12 @@ from sqlalchemy.orm import Session
 from app.ai import catalog, settings
 from app.ai.gateway import ModelGateway
 from app.ai.schemas import (
+    AiCatalogModelRead,
+    AiCatalogModelWrite,
     AiDefaultWrite,
     AiGlobalSettingsWrite,
     AiManualModelWrite,
     AiModelFavoritesWrite,
-    AiModelRead,
     AiModelSelection,
     AiModelTestRead,
     AiModelTestWrite,
@@ -79,11 +80,20 @@ async def test_ai_provider(
     return await catalog.test_connection(session, provider_id)
 
 
-@router.post("/providers/{provider_id}/models/refresh", response_model=list[AiModelRead])
-async def refresh_ai_models(
+@router.post("/providers/{provider_id}/models/search", response_model=list[AiCatalogModelRead])
+async def search_ai_models(
     provider_id: UUID, session: SessionDependency
-) -> list[AiModelRead]:
-    return await catalog.refresh_catalog(session, provider_id)
+) -> list[AiCatalogModelRead]:
+    return await catalog.search_catalog(session, provider_id)
+
+
+@router.post("/providers/{provider_id}/models", response_model=AiSettingsRead)
+def add_ai_catalog_model(
+    provider_id: UUID,
+    command: AiCatalogModelWrite,
+    session: SessionDependency,
+) -> AiSettingsRead:
+    return catalog.add_catalog_model(session, provider_id, command)
 
 
 @router.put("/providers/{provider_id}/models/manual", response_model=AiSettingsRead)

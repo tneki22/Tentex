@@ -21,6 +21,7 @@ import {
   Progress,
   RadioCards,
   SegmentedTabs,
+  Select,
   StatusBadge,
   Switch,
   Tooltip,
@@ -151,6 +152,7 @@ export function UiKit() {
   const [confirm, setConfirm] = useState(false);
   const [minutes, setMinutes] = useState("40");
   const [suggested, setSuggested] = useState(true);
+  const [selectValue, setSelectValue] = useState<string | null>("openrouter");
   const [modelSelection, setModelSelection] = useState<AiModelSelection | null>({
     provider_id: "demo-provider",
     model_id: "openai/gpt-demo",
@@ -274,6 +276,26 @@ export function UiKit() {
               { label: "Переименовать", onSelect: () => undefined },
               { label: "Добавить внутрь", items: [{ label: "Тему", onSelect: () => undefined }, { label: "Подпункт", onSelect: () => undefined }] },
               { label: "Убрать из программы", icon: <Trash2 size={14} />, onSelect: () => undefined, destructive: true },
+            ]}
+          />
+        </div>
+      </section>
+
+      <section className="kit-section">
+        <h2>Выпадающий список</h2>
+        <p className="kit-hint">
+          Один шаблон для всех экранов: наведение, фокус, прокрутка и выбор с клавиатуры
+          выглядят и работают одинаково.
+        </p>
+        <div style={{ maxWidth: "360px" }}>
+          <Select
+            ariaLabel="Провайдер"
+            value={selectValue}
+            onValueChange={setSelectValue}
+            emptyOption="Не выбран"
+            options={[
+              { value: "openrouter", label: "OpenRouter", description: "В избранном" },
+              { value: "local", label: "Локальный сервер", description: "OpenAI-совместимый API" },
             ]}
           />
         </div>

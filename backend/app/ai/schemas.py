@@ -73,6 +73,26 @@ class AiManualModelWrite(ApiModel):
     expiration_date: str | None = None
 
 
+class AiCatalogModelWrite(ApiModel):
+    model_id: NonBlank
+    display_name: NonBlank
+    context_length: int | None = Field(default=None, gt=0)
+    max_completion_tokens: int | None = Field(default=None, gt=0)
+    supported_parameters: list[str] = Field(default_factory=list)
+    input_modalities: list[str] = Field(default_factory=list)
+    output_modalities: list[str] = Field(default_factory=list)
+    reasoning: dict[str, object] = Field(default_factory=dict)
+    default_parameters: dict[str, object] = Field(default_factory=dict)
+    prompt_price_usd: Decimal | None = Field(default=None, ge=0)
+    completion_price_usd: Decimal | None = Field(default=None, ge=0)
+    knowledge_cutoff: str | None = None
+    expiration_date: str | None = None
+
+
+class AiCatalogModelRead(AiCatalogModelWrite):
+    is_added: bool
+
+
 class AiProviderRead(ApiModel):
     id: UUID
     label: str
