@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from check_stage2 import ApiServer, free_port, request
-from check_stage3 import create_saved_draft
+from check_stage3 import create_saved_draft, draft_payload
 from check_stage4 import create_exam_project
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
@@ -37,7 +37,79 @@ def run() -> None:
         server = ApiServer(data_dir, free_port())
         try:
             server.start()
+            draft_project_id, draft = create_saved_draft(server)
+            status, draft_material = request(
+                server,
+                "POST",
+                f"/api/projects/{draft_project_id}/materials/text",
+                {
+                    "name": "Билеты из мастера.txt",
+                    "text": "Билет 1\n1. Индексы\n2. Транзакции",
+                    "source_role": "reference",
+                    "purposes": ["exam_structure"],
+                },
+            )
+            assert status == 201
+            status, _ = request(
+                server,
+                "POST",
+                f"/api/projects/{draft_project_id}/materials/{draft_material['id']}/processing",
+                {"parser_mode": "fast"},
+            )
+            assert status == 200
+            run_worker(data_dir)
+            status, preview = request(
+                server,
+                "GET",
+                f"/api/projects/{draft_project_id}/materials/{draft_material['id']}/exam-program-preview",
+            )
+            assert status == 200 and preview["counts"] == {
+                "tickets": 1,
+                "questions": 2,
+                "tasks": 0,
+            }
+            status, imported_draft = request(
+                server,
+                "POST",
+                f"/api/projects/{draft_project_id}/materials/{draft_material['id']}/exam-draft-import",
+                {
+                    "expected_draft_revision": draft["draft"]["revision"],
+                    "expected_program_revision": draft["program"]["revision"],
+                },
+            )
+            assert status == 200 and imported_draft["draft_revision"] == 2
+            assert all(
+                node["origin_material_id"] == draft_material["id"]
+                for node in imported_draft["program"]["nodes"]
+            )
+            status, imported_project = request(
+                server,
+                "POST",
+                f"/api/wizard-drafts/{draft_project_id}/activate",
+                {"expected_revision": imported_draft["draft_revision"]},
+            )
+            assert status == 200 and len(imported_project["program"]["nodes"]) == 3
+
             empty_project_id, empty_draft = create_saved_draft(server)
+            status, empty_draft = request(
+                server,
+                "PUT",
+                f"/api/wizard-drafts/{empty_project_id}",
+                draft_payload(1, exam_format="unknown"),
+            )
+            assert status == 200
+            status, study_material = request(
+                server,
+                "POST",
+                f"/api/projects/{empty_project_id}/materials/text",
+                {
+                    "name": "Методичка без списка.txt",
+                    "text": "# Индексы\nУчебный материал для будущей программы.",
+                    "source_role": "main",
+                    "purposes": ["study_source"],
+                },
+            )
+            assert status == 201
             status, empty_project = request(
                 server,
                 "POST",
@@ -46,6 +118,20 @@ def run() -> None:
             )
             assert status == 200 and empty_project["project"]["status"] == "active"
             assert empty_project["program"]["nodes"] == []
+            status, _ = request(
+                server,
+                "POST",
+                f"/api/projects/{empty_project_id}/materials/{study_material['id']}/processing",
+                {"parser_mode": "fast"},
+            )
+            assert status == 200
+            run_worker(data_dir)
+            status, study_ready = request(
+                server,
+                "GET",
+                f"/api/projects/{empty_project_id}/materials/{study_material['id']}",
+            )
+            assert status == 200 and study_ready["status"] == "ready"
 
             project_id, _ = create_exam_project(server)
             status, capabilities = request(server, "GET", "/api/material-capabilities")
@@ -245,7 +331,7 @@ def run() -> None:
                 connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
                 == "20260812_0014"
             )
-            assert connection.execute("SELECT COUNT(*) FROM material_pages").fetchone()[0] == 3
+            assert connection.execute("SELECT COUNT(*) FROM material_pages").fetchone()[0] == 5
             assert (
                 connection.execute(
                     "SELECT COUNT(*) FROM reference_answers WHERE source_material_id IS NOT NULL"
