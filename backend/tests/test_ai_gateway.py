@@ -14,8 +14,14 @@ from app.ai.provider import (
     ProviderStreamEvent,
     ProviderUsage,
 )
-from app.ai.schemas import AiMessage
-from app.models import AiCacheEntry, AiConnection, AiModelCatalogEntry, AiRun, AiSettings
+from app.ai.schemas import AiMessage, AiModelSelection
+from app.models import (
+    AiCacheEntry,
+    AiModelCatalogEntry,
+    AiProviderConnection,
+    AiRun,
+    AiSettings,
+)
 from app.projects.errors import ProjectDomainError
 
 
@@ -139,7 +145,8 @@ async def test_limits_and_unknown_price_stop_before_provider(
     assert caught.value.code == "ai_operation_limit"
     assert fake.complete_calls == 0
     settings.operation_limit_usd = None
-    model = session.get(AiModelCatalogEntry, ("text", "test/structured-model"))
+    provider = session.query(AiProviderConnection).one()
+    model = session.get(AiModelCatalogEntry, (provider.id, "test/structured-model"))
     assert model is not None
     model.prompt_price_usd = None
     model.completion_price_usd = None
@@ -165,21 +172,22 @@ async def test_disabled_missing_credentials_and_capability(
         await ModelGateway(session, FakeTransport()).preflight(_request())
     assert caught.value.code == "ai_disabled"
     settings.external_models_enabled = True
-    connection = session.get(AiConnection, "text")
-    assert connection is not None
-    connection.api_key_ciphertext = None
+    provider = session.query(AiProviderConnection).one()
+    provider.api_key_ciphertext = None
     session.commit()
     with pytest.raises(ProjectDomainError) as caught:
         await ModelGateway(session, FakeTransport()).preflight(_request())
     assert caught.value.code == "ai_credentials_missing"
-    connection.api_key_ciphertext = encrypt_secret("test-secret")
-    connection.default_model_id = None
+    provider.api_key_ciphertext = encrypt_secret("test-secret")
+    settings.default_text_provider_id = None
+    settings.default_text_model_id = None
     session.commit()
     with pytest.raises(ProjectDomainError) as caught:
         await ModelGateway(session, FakeTransport()).preflight(_request())
     assert caught.value.code == "ai_model_not_configured"
-    connection.default_model_id = "test/structured-model"
-    model = session.get(AiModelCatalogEntry, ("text", connection.default_model_id))
+    settings.default_text_provider_id = provider.id
+    settings.default_text_model_id = "test/structured-model"
+    model = session.get(AiModelCatalogEntry, (provider.id, settings.default_text_model_id))
     assert model is not None
     model.supported_parameters = []
     session.commit()
@@ -233,3 +241,29 @@ async def test_stream_records_final_usage(session: Session, ai_config: str) -> N
     assert run is not None
     assert run.output_tokens == 2
     assert run.actual_cost_rub == Decimal("0.180000000000")
+
+
+@pytest.mark.asyncio
+async def test_model_test_uses_selected_provider_and_writes_safe_run(
+    session: Session, ai_config: str
+) -> None:
+    provider = session.query(AiProviderConnection).one()
+    fake = FakeTransport(
+        completions=[
+            ProviderCompletion(
+                content="работает",
+                actual_model_id=ai_config,
+                usage=ProviderUsage(input_tokens=7, output_tokens=1),
+            )
+        ]
+    )
+    result = await ModelGateway(session, fake).test_model(
+        AiModelSelection(provider_id=provider.id, model_id=ai_config)
+    )
+    run = session.get(AiRun, result.run_id)
+    assert result.status == "answered"
+    assert run is not None
+    assert run.provider_id == provider.id
+    assert run.role == "settings_model_test"
+    assert run.context_manifest == []
+    assert fake.complete_requests[0]["max_output_tokens"] == 8

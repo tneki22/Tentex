@@ -13,6 +13,18 @@ const SECTIONS = [
 
 type SetupSection = typeof SECTIONS[number]["id"];
 
+const AI_SUBSECTIONS = [
+  { id: "overview", label: "Обзор" },
+  { id: "providers", label: "Провайдеры" },
+  { id: "models", label: "Модели" },
+  { id: "defaults", label: "По умолчанию" },
+  { id: "functions", label: "Функции" },
+  { id: "limits", label: "Лимиты" },
+  { id: "usage", label: "Расход и журнал" },
+] as const;
+
+export type AiSettingsSubsection = typeof AI_SUBSECTIONS[number]["id"];
+
 const FUTURE_COPY: Record<Exclude<SetupSection, "ai">, { title: string; body: string }> = {
   bot: {
     title: "Бот пока не настроен",
@@ -32,14 +44,27 @@ export function Setup() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get("section") as SetupSection | null;
   const active = SECTIONS.some((section) => section.id === requested) ? requested! : "ai";
+  const requestedSubsection = searchParams.get("subsection") as AiSettingsSubsection | null;
+  const activeSubsection = AI_SUBSECTIONS.some((item) => item.id === requestedSubsection)
+    ? requestedSubsection!
+    : "overview";
 
   useEffect(() => {
-    if (requested) return;
-    setSearchParams({ section: "ai" }, { replace: true });
-  }, [requested, setSearchParams]);
+    if (!requested) {
+      setSearchParams({ section: "ai", subsection: "overview" }, { replace: true });
+      return;
+    }
+    if (active === "ai" && !AI_SUBSECTIONS.some((item) => item.id === requestedSubsection)) {
+      setSearchParams({ section: "ai", subsection: "overview" }, { replace: true });
+    }
+  }, [active, requested, requestedSubsection, setSearchParams]);
 
   function selectSection(section: SetupSection) {
-    setSearchParams({ section });
+    setSearchParams(section === "ai" ? { section, subsection: activeSubsection } : { section });
+  }
+
+  function selectAiSubsection(subsection: AiSettingsSubsection) {
+    setSearchParams({ section: "ai", subsection });
   }
 
   const future = active === "ai" ? null : FUTURE_COPY[active];
@@ -51,9 +76,8 @@ export function Setup() {
         <nav className="setup-nav" aria-label="Разделы параметров">
           {SECTIONS.map((section) => {
             const Icon = section.icon;
-            return (
+            return <div className="setup-nav-group" key={section.id}>
               <button
-                key={section.id}
                 type="button"
                 className={active === section.id ? "is-active" : ""}
                 aria-current={active === section.id ? "page" : undefined}
@@ -62,12 +86,27 @@ export function Setup() {
                 <Icon size={15} aria-hidden="true" />
                 {section.label}
               </button>
-            );
+              {section.id === "ai" && active === "ai" && (
+                <div className="setup-subnav" aria-label="Подразделы ИИ">
+                  {AI_SUBSECTIONS.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={activeSubsection === item.id ? "is-active" : ""}
+                      aria-current={activeSubsection === item.id ? "page" : undefined}
+                      onClick={() => selectAiSubsection(item.id)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>;
           })}
         </nav>
         <div className="setup-content">
           {active === "ai" ? (
-            <AiSettingsSection />
+            <AiSettingsSection subsection={activeSubsection} />
           ) : future ? (
             <EmptyState title={future.title}>
               <p>{future.body}</p>

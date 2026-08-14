@@ -15,6 +15,7 @@ export { MetricList } from "./MetricList";
 export type { Metric } from "./MetricList";
 export { OfflineNotice } from "./OfflineNotice";
 export { PersonalMarkIcon, PERSONAL_MARK_OPTIONS } from "./PersonalMarkIcon";
+export { ProviderModelPicker } from "./ProviderModelPicker";
 export { ProjectChip, PROJECT_ICONS } from "./ProjectChip";
 export type { ProjectColor, ProjectIconName } from "./ProjectChip";
 export { ProjectNav } from "./ProjectNav";

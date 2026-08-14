@@ -33,8 +33,8 @@ from app.exam.schemas import (  # noqa: E402
     SelfAssessmentWrite,
 )
 from app.models import (  # noqa: E402
-    AiConnection,
     AiModelCatalogEntry,
+    AiProviderConnection,
     AiSettings,
     AttemptOutcome,
     ExamKind,
@@ -59,6 +59,14 @@ REFERENCE = (
 
 def _configure_ai(session: Session) -> None:
     now = utc_now()
+    provider = AiProviderConnection(
+        label="Fake provider",
+        catalog_profile="openai_compatible",
+        base_url="https://fake.test/v1",
+        api_key_ciphertext=encrypt_secret("not-a-real-key"),
+    )
+    session.add(provider)
+    session.flush()
     session.add_all(
         [
             AiSettings(
@@ -67,22 +75,11 @@ def _configure_ai(session: Session) -> None:
                 confirm_input_tokens=100_000,
                 usd_rub_rate=Decimal("90"),
                 usd_rub_rate_date=now.date(),
-            ),
-            AiConnection(
-                modality="text",
-                label="Текстовые модели",
-                base_url="https://fake.test/v1",
-                api_key_ciphertext=encrypt_secret("not-a-real-key"),
-                default_model_id=MODEL_ID,
-            ),
-            AiConnection(
-                modality="speech",
-                label="Распознавание речи",
-                base_url="",
-                api_key_ciphertext=None,
+                default_text_provider_id=provider.id,
+                default_text_model_id=MODEL_ID,
             ),
             AiModelCatalogEntry(
-                modality="text",
+                provider_id=provider.id,
                 model_id=MODEL_ID,
                 display_name="Fake exam structured",
                 context_length=100_000,

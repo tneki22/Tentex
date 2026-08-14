@@ -10,13 +10,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai import catalog, settings
+from app.ai.gateway import ModelGateway
 from app.ai.schemas import (
-    AiConnectionRead,
-    AiConnectionTestRead,
-    AiConnectionWrite,
-    AiFavoritesWrite,
+    AiDefaultWrite,
     AiGlobalSettingsWrite,
+    AiManualModelWrite,
+    AiModelFavoritesWrite,
     AiModelRead,
+    AiModelSelection,
+    AiModelTestRead,
+    AiModelTestWrite,
+    AiProviderFavoritesWrite,
+    AiProviderTestRead,
+    AiProviderWrite,
     AiRoleWrite,
     AiRunRead,
     AiSettingsRead,
@@ -41,31 +47,84 @@ def put_ai_settings(command: AiGlobalSettingsWrite, session: SessionDependency) 
     return settings.update_global_settings(session, command)
 
 
-@router.put("/connections/{modality}", response_model=AiConnectionRead)
-def put_ai_connection(
-    modality: Modality,
-    command: AiConnectionWrite,
-    session: SessionDependency,
-) -> AiConnectionRead:
-    return settings.update_connection(session, modality, command)
+@router.post("/providers", response_model=AiSettingsRead, status_code=status.HTTP_201_CREATED)
+def post_ai_provider(command: AiProviderWrite, session: SessionDependency) -> AiSettingsRead:
+    return settings.create_provider(session, command)
 
 
-@router.delete("/connections/{modality}/credential", status_code=status.HTTP_204_NO_CONTENT)
-def delete_ai_credential(modality: Modality, session: SessionDependency) -> Response:
-    settings.delete_credential(session, modality)
+@router.put("/providers/{provider_id}", response_model=AiSettingsRead)
+def put_ai_provider(
+    provider_id: UUID, command: AiProviderWrite, session: SessionDependency
+) -> AiSettingsRead:
+    return settings.update_provider(session, provider_id, command)
+
+
+@router.delete("/providers/{provider_id}", response_model=AiSettingsRead)
+def delete_ai_provider(provider_id: UUID, session: SessionDependency) -> AiSettingsRead:
+    return settings.delete_provider(session, provider_id)
+
+
+@router.delete(
+    "/providers/{provider_id}/credential", status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_ai_credential(provider_id: UUID, session: SessionDependency) -> Response:
+    settings.delete_credential(session, provider_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/connections/{modality}/test", response_model=AiConnectionTestRead)
-async def test_ai_connection(
-    modality: Modality, session: SessionDependency
-) -> AiConnectionTestRead:
-    return await catalog.test_connection(session, modality)
+@router.post("/providers/{provider_id}/test", response_model=AiProviderTestRead)
+async def test_ai_provider(
+    provider_id: UUID, session: SessionDependency
+) -> AiProviderTestRead:
+    return await catalog.test_connection(session, provider_id)
 
 
-@router.post("/connections/{modality}/models/refresh", response_model=list[AiModelRead])
-async def refresh_ai_models(modality: Modality, session: SessionDependency) -> list[AiModelRead]:
-    return await catalog.refresh_catalog(session, modality)
+@router.post("/providers/{provider_id}/models/refresh", response_model=list[AiModelRead])
+async def refresh_ai_models(
+    provider_id: UUID, session: SessionDependency
+) -> list[AiModelRead]:
+    return await catalog.refresh_catalog(session, provider_id)
+
+
+@router.put("/providers/{provider_id}/models/manual", response_model=AiSettingsRead)
+def put_manual_ai_model(
+    provider_id: UUID,
+    command: AiManualModelWrite,
+    session: SessionDependency,
+) -> AiSettingsRead:
+    return settings.upsert_manual_model(session, provider_id, command)
+
+
+@router.post("/providers/{provider_id}/models/test", response_model=AiModelTestRead)
+async def test_ai_model(
+    provider_id: UUID,
+    command: AiModelTestWrite,
+    session: SessionDependency,
+) -> AiModelTestRead:
+    return await ModelGateway(session).test_model(
+        AiModelSelection(provider_id=provider_id, model_id=command.model_id)
+    )
+
+
+@router.put("/provider-favorites", response_model=AiSettingsRead)
+def put_ai_provider_favorites(
+    command: AiProviderFavoritesWrite, session: SessionDependency
+) -> AiSettingsRead:
+    return settings.update_provider_favorites(session, command)
+
+
+@router.put("/model-favorites", response_model=AiSettingsRead)
+def put_ai_model_favorites(
+    command: AiModelFavoritesWrite, session: SessionDependency
+) -> AiSettingsRead:
+    return settings.update_model_favorites(session, command)
+
+
+@router.put("/defaults/{modality}", response_model=AiSettingsRead)
+def put_ai_default(
+    modality: Modality, command: AiDefaultWrite, session: SessionDependency
+) -> AiSettingsRead:
+    return settings.set_default(session, modality, command)
 
 
 @router.put("/roles/{role}", response_model=AiSettingsRead)
@@ -73,15 +132,13 @@ def put_ai_role(role: str, command: AiRoleWrite, session: SessionDependency) -> 
     return settings.update_role(session, role, command)
 
 
-@router.put("/favorites", response_model=AiSettingsRead)
-def put_ai_favorites(command: AiFavoritesWrite, session: SessionDependency) -> AiSettingsRead:
-    return settings.update_favorites(session, command)
-
-
 def _filtered_runs(
     session: Session,
     project_id: UUID | None,
+    provider_id: UUID | None,
+    model_id: str | None,
     role: str | None,
+    run_status: str | None,
     from_: datetime | None,
     to: datetime | None,
     limit: int | None = None,
@@ -89,8 +146,14 @@ def _filtered_runs(
     query = select(AiRun).order_by(AiRun.created_at.desc())
     if project_id is not None:
         query = query.where(AiRun.project_id == project_id)
+    if provider_id is not None:
+        query = query.where(AiRun.provider_id == provider_id)
+    if model_id is not None:
+        query = query.where(AiRun.requested_model_id == model_id)
     if role is not None:
         query = query.where(AiRun.role == role)
+    if run_status is not None:
+        query = query.where(AiRun.status == run_status)
     if from_ is not None:
         query = query.where(AiRun.created_at >= from_)
     if to is not None:
@@ -104,32 +167,43 @@ def _filtered_runs(
 def list_ai_runs(
     session: SessionDependency,
     project_id: UUID | None = None,
+    provider_id: UUID | None = None,
+    model_id: str | None = None,
     role: str | None = None,
+    run_status: Annotated[str | None, Query(alias="status")] = None,
     from_: Annotated[datetime | None, Query(alias="from")] = None,
     to: datetime | None = None,
 ) -> list[AiRunRead]:
-    return [
-        AiRunRead.model_validate(row)
-        for row in _filtered_runs(session, project_id, role, from_, to, limit=1000)
-    ]
+    rows = _filtered_runs(
+        session, project_id, provider_id, model_id, role, run_status, from_, to, limit=1000
+    )
+    return [AiRunRead.model_validate(row) for row in rows]
 
 
 @router.get("/usage", response_model=AiUsageRead)
 def get_ai_usage(
     session: SessionDependency,
     project_id: UUID | None = None,
+    provider_id: UUID | None = None,
+    model_id: str | None = None,
     from_: Annotated[datetime | None, Query(alias="from")] = None,
     to: datetime | None = None,
-    group_by: Literal["role"] = "role",
+    group_by: Literal["role", "provider", "model"] = "role",
 ) -> AiUsageRead:
-    del group_by
-    rows = _filtered_runs(session, project_id, None, from_, to)
+    rows = _filtered_runs(
+        session, project_id, provider_id, model_id, None, None, from_, to
+    )
     groups: dict[str, AiUsageGroup] = {}
     for row in rows:
+        key = {
+            "role": row.role,
+            "provider": row.provider_label_snapshot,
+            "model": row.requested_model_id,
+        }[group_by]
         group = groups.setdefault(
-            row.role,
+            key,
             AiUsageGroup(
-                key=row.role,
+                key=key,
                 runs=0,
                 cache_hits=0,
                 input_tokens=0,

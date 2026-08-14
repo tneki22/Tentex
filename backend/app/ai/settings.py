@@ -5,26 +5,31 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Literal
 from urllib.parse import urlsplit
+from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.ai.credentials import decrypt_secret, encrypt_secret
 from app.ai.roles import ROLE_SPECS, AiRoleSpec, get_role_spec, validate_role_parameters
 from app.ai.schemas import (
-    AiConnectionRead,
-    AiConnectionWrite,
-    AiFavoritesWrite,
+    AiDefaultWrite,
     AiGlobalSettingsWrite,
+    AiManualModelWrite,
+    AiModelFavoritesWrite,
     AiModelRead,
+    AiModelSelection,
+    AiProviderFavoritesWrite,
+    AiProviderRead,
+    AiProviderWrite,
     AiRoleRead,
     AiRoleWrite,
     AiSettingsRead,
     AiTodayUsage,
 )
 from app.models import (
-    AiConnection,
     AiModelCatalogEntry,
+    AiProviderConnection,
     AiRoleSetting,
     AiRun,
     AiSettings,
@@ -50,30 +55,23 @@ class AiGatewayError(ProjectDomainError):
 @dataclass(frozen=True)
 class ResolvedModel:
     role: AiRoleSpec
-    connection: AiConnection
-    model_id: str
+    provider: AiProviderConnection
+    model: AiModelCatalogEntry
     source: Literal["request", "role_override", "text_default", "speech_default"]
     parameters: dict[str, object]
 
+    @property
+    def model_id(self) -> str:
+        return self.model.model_id
 
-def _ensure_rows(session: Session) -> tuple[AiSettings, list[AiConnection]]:
+
+def _ensure_row(session: Session) -> AiSettings:
     row = session.get(AiSettings, 1)
     if row is None:
         row = AiSettings(id=1)
         session.add(row)
-    connections = []
-    defaults = {
-        "text": ("Текстовые модели", "https://openrouter.ai/api/v1"),
-        "speech": ("Распознавание речи", ""),
-    }
-    for modality, (label, base_url) in defaults.items():
-        connection = session.get(AiConnection, modality)
-        if connection is None:
-            connection = AiConnection(modality=modality, label=label, base_url=base_url)
-            session.add(connection)
-        connections.append(connection)
-    session.flush()
-    return row, connections
+        session.flush()
+    return row
 
 
 def validate_base_url(value: str) -> str:
@@ -94,24 +92,25 @@ def validate_base_url(value: str) -> str:
     return value
 
 
-def credential_status(session: Session, modality: Modality) -> bool:
-    connection = session.get(AiConnection, modality)
-    return bool(connection and connection.api_key_ciphertext)
+def credential_status(session: Session, provider_id: UUID) -> bool:
+    provider = session.get(AiProviderConnection, provider_id)
+    return bool(provider and provider.api_key_ciphertext)
 
 
-def credential(session: Session, modality: Modality) -> str:
-    connection = session.get(AiConnection, modality)
-    if connection is None or not connection.api_key_ciphertext:
+def credential(session: Session, provider_id: UUID) -> str:
+    provider = _provider(session, provider_id)
+    if not provider.api_key_ciphertext:
         raise AiGatewayError(
-            "Ключ внешней модели не настроен",
+            "Ключ провайдера не настроен",
             code="ai_credentials_missing",
+            context={"provider_id": str(provider_id)},
         )
-    return decrypt_secret(connection.api_key_ciphertext)
+    return decrypt_secret(provider.api_key_ciphertext)
 
 
 def update_global_settings(session: Session, command: AiGlobalSettingsWrite) -> AiSettingsRead:
     with session.begin():
-        row, _ = _ensure_rows(session)
+        row = _ensure_row(session)
         if (command.usd_rub_rate is None) != (command.usd_rub_rate_date is None):
             raise ProjectDomainError(
                 "Курс USD/RUB и дата снимка задаются вместе",
@@ -124,87 +123,203 @@ def update_global_settings(session: Session, command: AiGlobalSettingsWrite) -> 
     return read_settings(session)
 
 
-def update_connection(
-    session: Session, modality: Modality, command: AiConnectionWrite
-) -> AiConnectionRead:
+def create_provider(session: Session, command: AiProviderWrite) -> AiSettingsRead:
     with session.begin():
-        _, _ = _ensure_rows(session)
-        row = session.get(AiConnection, modality)
-        assert row is not None
-        if command.label is not None:
-            row.label = command.label
-        if command.base_url is not None:
-            row.base_url = validate_base_url(command.base_url)
+        _ensure_unique_provider_label(session, command.label)
+        provider = AiProviderConnection(
+            label=command.label,
+            catalog_profile=command.catalog_profile,
+            base_url=validate_base_url(command.base_url),
+            api_key_ciphertext=encrypt_secret(command.api_key) if command.api_key else None,
+        )
+        session.add(provider)
+    return read_settings(session)
+
+
+def update_provider(
+    session: Session, provider_id: UUID, command: AiProviderWrite
+) -> AiSettingsRead:
+    with session.begin():
+        provider = _provider(session, provider_id)
+        _ensure_unique_provider_label(session, command.label, provider_id)
+        provider.label = command.label
+        provider.catalog_profile = command.catalog_profile
+        provider.base_url = validate_base_url(command.base_url)
         if command.api_key:
-            row.api_key_ciphertext = encrypt_secret(command.api_key)
-        if "default_model_id" in command.model_fields_set:
-            row.default_model_id = command.default_model_id or None
-        row.updated_at = utc_now()
-    return connection_read(row)
+            provider.api_key_ciphertext = encrypt_secret(command.api_key)
+        provider.updated_at = utc_now()
+    return read_settings(session)
 
 
-def delete_credential(session: Session, modality: Modality) -> None:
+def delete_provider(session: Session, provider_id: UUID) -> AiSettingsRead:
     with session.begin():
-        _, _ = _ensure_rows(session)
-        row = session.get(AiConnection, modality)
-        assert row is not None
-        row.api_key_ciphertext = None
-        row.last_test_status = None
+        provider = _provider(session, provider_id)
+        global_row = _ensure_row(session)
+        defaults = []
+        if global_row.default_text_provider_id == provider_id:
+            defaults.append("text")
+        if global_row.default_speech_provider_id == provider_id:
+            defaults.append("speech")
+        roles = list(
+            session.scalars(
+                select(AiRoleSetting.role).where(AiRoleSetting.provider_override_id == provider_id)
+            )
+        )
+        if defaults or roles:
+            raise ProjectDomainError(
+                "Сначала уберите провайдера из настроек по умолчанию и функций",
+                status=409,
+                code="ai_provider_in_use",
+                context={"defaults": defaults, "roles": roles},
+            )
+        session.delete(provider)
+    return read_settings(session)
+
+
+def delete_credential(session: Session, provider_id: UUID) -> None:
+    with session.begin():
+        provider = _provider(session, provider_id)
+        provider.api_key_ciphertext = None
+        provider.last_test_status = None
+        provider.updated_at = utc_now()
+
+
+def set_default(
+    session: Session, modality: Modality, command: AiDefaultWrite
+) -> AiSettingsRead:
+    with session.begin():
+        row = _ensure_row(session)
+        selection = command.selection
+        if selection is not None:
+            _model_for_selection(session, selection, modality=modality)
+        setattr(
+            row,
+            f"default_{modality}_provider_id",
+            selection.provider_id if selection else None,
+        )
+        setattr(row, f"default_{modality}_model_id", selection.model_id if selection else None)
         row.updated_at = utc_now()
+    return read_settings(session)
 
 
 def update_role(session: Session, role: str, command: AiRoleWrite) -> AiSettingsRead:
+    spec = get_role_spec(role)
     validate_role_parameters(role, command.parameters)
-    get_role_spec(role)
+    if (command.provider_override_id is None) != (command.model_override is None):
+        raise ProjectDomainError(
+            "Провайдер и модель функции выбираются вместе",
+            status=422,
+            code="ai_role_selection_incomplete",
+        )
     with session.begin():
+        if command.provider_override_id is not None and command.model_override is not None:
+            _model_for_selection(
+                session,
+                AiModelSelection(
+                    provider_id=command.provider_override_id,
+                    model_id=command.model_override,
+                ),
+                modality=spec.modality,
+            )
         row = session.get(AiRoleSetting, role)
         if row is None:
             row = AiRoleSetting(role=role)
             session.add(row)
         row.enabled = command.enabled
-        row.model_override = command.model_override or None
+        row.provider_override_id = command.provider_override_id
+        row.model_override = command.model_override
         row.parameters = command.parameters
         row.updated_at = utc_now()
     return read_settings(session)
 
 
-def update_favorites(session: Session, command: AiFavoritesWrite) -> AiSettingsRead:
-    ids = list(dict.fromkeys(command.model_ids))
+def update_provider_favorites(
+    session: Session, command: AiProviderFavoritesWrite
+) -> AiSettingsRead:
+    ids = list(dict.fromkeys(command.provider_ids))
     with session.begin():
         existing = set(
             session.scalars(
-                select(AiModelCatalogEntry.model_id).where(
-                    AiModelCatalogEntry.modality == "text",
-                    AiModelCatalogEntry.model_id.in_(ids),
-                )
+                select(AiProviderConnection.id).where(AiProviderConnection.id.in_(ids))
             )
         )
-        missing = sorted(set(ids) - existing)
+        missing = [str(item) for item in ids if item not in existing]
         if missing:
             raise ProjectDomainError(
-                "В избранное передана модель вне локального каталога",
+                "В избранное передан неизвестный провайдер",
                 status=422,
-                code="ai_model_not_in_catalog",
-                context={"model_ids": missing},
+                code="ai_provider_not_found",
+                context={"provider_ids": missing},
             )
-        session.execute(update(AiModelCatalogEntry).values(is_favorite=False))
+        session.execute(update(AiProviderConnection).values(is_favorite=False))
         if ids:
             session.execute(
-                update(AiModelCatalogEntry)
-                .where(
-                    AiModelCatalogEntry.modality == "text",
-                    AiModelCatalogEntry.model_id.in_(ids),
-                )
+                update(AiProviderConnection)
+                .where(AiProviderConnection.id.in_(ids))
                 .values(is_favorite=True)
             )
     return read_settings(session)
 
 
+def update_model_favorites(
+    session: Session, command: AiModelFavoritesWrite
+) -> AiSettingsRead:
+    keys = list(dict.fromkeys((item.provider_id, item.model_id) for item in command.models))
+    with session.begin():
+        for provider_id, model_id in keys:
+            _model_for_selection(
+                session, AiModelSelection(provider_id=provider_id, model_id=model_id)
+            )
+        session.execute(update(AiModelCatalogEntry).values(favorite_order=None))
+        for order, (provider_id, model_id) in enumerate(keys):
+            session.execute(
+                update(AiModelCatalogEntry)
+                .where(
+                    AiModelCatalogEntry.provider_id == provider_id,
+                    AiModelCatalogEntry.model_id == model_id,
+                )
+                .values(favorite_order=order)
+            )
+    return read_settings(session)
+
+
+def upsert_manual_model(
+    session: Session, provider_id: UUID, command: AiManualModelWrite
+) -> AiSettingsRead:
+    with session.begin():
+        _provider(session, provider_id)
+        row = session.get(AiModelCatalogEntry, (provider_id, command.model_id))
+        now = utc_now()
+        is_new = row is None
+        if row is None:
+            row = AiModelCatalogEntry(
+                provider_id=provider_id,
+                model_id=command.model_id,
+                display_name=command.display_name,
+                pricing_snapshot_at=now,
+                catalog_snapshot_at=now,
+                is_manually_added=True,
+            )
+            session.add(row)
+        values = command.model_dump(exclude={"model_id"})
+        row.manual_overrides = command.model_dump(mode="json", exclude={"model_id"})
+        for field, value in values.items():
+            setattr(row, field, value)
+        if is_new:
+            row.is_manually_added = True
+        row.is_available = True
+        row.pricing_snapshot_at = now
+        row.catalog_snapshot_at = now
+    return read_settings(session)
+
+
 def resolve_model(
-    session: Session, role: str, request_override: str | None = None
+    session: Session,
+    role: str,
+    request_override: AiModelSelection | None = None,
 ) -> ResolvedModel:
     spec = get_role_spec(role)
-    global_row, _ = _ensure_rows(session)
+    global_row = _ensure_row(session)
     if not global_row.external_models_enabled:
         raise AiGatewayError("Внешние модели выключены", code="ai_disabled")
     role_row = session.get(AiRoleSetting, role)
@@ -215,32 +330,40 @@ def resolve_model(
             "Для этой функции нельзя выбрать модель в самом вызове",
             code="ai_model_override_forbidden",
         )
-    connection = session.get(AiConnection, spec.modality)
-    assert connection is not None
-    if request_override:
-        model_id, source = request_override, "request"
-    elif role_row is not None and role_row.model_override:
-        model_id, source = role_row.model_override, "role_override"
-    else:
-        model_id = connection.default_model_id
-        source = f"{spec.modality}_default"
-    if not model_id:
-        raise AiGatewayError(
-            "Модель для функции не настроена",
-            code="ai_model_not_configured",
-            context={"role": role},
+    if request_override is not None:
+        selection, source = request_override, "request"
+    elif role_row and role_row.provider_override_id and role_row.model_override:
+        selection = AiModelSelection(
+            provider_id=role_row.provider_override_id,
+            model_id=role_row.model_override,
         )
+        source = "role_override"
+    else:
+        provider_id = getattr(global_row, f"default_{spec.modality}_provider_id")
+        model_id = getattr(global_row, f"default_{spec.modality}_model_id")
+        if provider_id is None or model_id is None:
+            raise AiGatewayError(
+                "Модель для функции не настроена",
+                code="ai_model_not_configured",
+                context={"role": role},
+            )
+        selection = AiModelSelection(provider_id=provider_id, model_id=model_id)
+        source = f"{spec.modality}_default"
+    provider = _provider(session, selection.provider_id)
+    model = _model_for_selection(session, selection, modality=spec.modality)
     parameters = validate_role_parameters(role, role_row.parameters if role_row else {})
-    return ResolvedModel(spec, connection, model_id, source, parameters)  # type: ignore[arg-type]
+    return ResolvedModel(spec, provider, model, source, parameters)  # type: ignore[arg-type]
 
 
-def connection_read(row: AiConnection) -> AiConnectionRead:
-    return AiConnectionRead(
-        modality=row.modality,
+def provider_read(session: Session, row: AiProviderConnection, model_count: int) -> AiProviderRead:
+    return AiProviderRead(
+        id=row.id,
         label=row.label,
+        catalog_profile=row.catalog_profile,
         base_url=row.base_url,
         has_api_key=bool(row.api_key_ciphertext),
-        default_model_id=row.default_model_id,
+        is_favorite=row.is_favorite,
+        model_count=model_count,
         last_test_status=row.last_test_status,
         last_tested_at=row.last_tested_at,
         last_catalog_refresh_at=row.last_catalog_refresh_at,
@@ -266,24 +389,45 @@ def _today_usage(session: Session) -> AiTodayUsage:
 
 
 def read_settings(session: Session) -> AiSettingsRead:
-    row, connections = _ensure_rows(session)
+    row = _ensure_row(session)
+    providers = list(
+        session.scalars(
+            select(AiProviderConnection).order_by(
+                AiProviderConnection.is_favorite.desc(), AiProviderConnection.label
+            )
+        )
+    )
+    counts = dict(
+        session.execute(
+            select(AiModelCatalogEntry.provider_id, func.count())
+            .where(AiModelCatalogEntry.is_available.is_(True))
+            .group_by(AiModelCatalogEntry.provider_id)
+        ).all()
+    )
     models = list(
         session.scalars(
             select(AiModelCatalogEntry).order_by(
-                AiModelCatalogEntry.modality, AiModelCatalogEntry.display_name
+                AiModelCatalogEntry.favorite_order.is_(None),
+                AiModelCatalogEntry.favorite_order,
+                AiModelCatalogEntry.display_name,
             )
         )
     )
     roles = []
     for spec in ROLE_SPECS.values():
+        if not spec.visible:
+            continue
         role_row = session.get(AiRoleSetting, spec.key)
+        provider_override = role_row.provider_override_id if role_row else None
         model_override = role_row.model_override if role_row else None
-        connection = next(item for item in connections if item.modality == spec.modality)
-        resolved = model_override or connection.default_model_id
+        resolved_provider = provider_override or getattr(
+            row, f"default_{spec.modality}_provider_id"
+        )
+        resolved_model = model_override or getattr(row, f"default_{spec.modality}_model_id")
         source = (
             "role_override"
-            if model_override
-            else (f"{spec.modality}_default" if resolved else None)
+            if provider_override and model_override
+            else (f"{spec.modality}_default" if resolved_provider and resolved_model else None)
         )
         roles.append(
             AiRoleRead(
@@ -292,8 +436,10 @@ def read_settings(session: Session) -> AiSettingsRead:
                 description=spec.description,
                 modality=spec.modality,
                 enabled=role_row.enabled if role_row else True,
+                provider_override_id=provider_override,
                 model_override=model_override,
-                resolved_model=resolved,
+                resolved_provider_id=resolved_provider,
+                resolved_model=resolved_model,
                 model_source=source,
                 required_capabilities=sorted(spec.required_capabilities),
                 parameters=validate_role_parameters(
@@ -305,11 +451,78 @@ def read_settings(session: Session) -> AiSettingsRead:
         external_models_enabled=row.external_models_enabled,
         daily_limit_usd=row.daily_limit_usd,
         operation_limit_usd=row.operation_limit_usd,
+        confirm_cost_usd=row.confirm_cost_usd,
         confirm_input_tokens=row.confirm_input_tokens,
         usd_rub_rate=row.usd_rub_rate,
         usd_rub_rate_date=row.usd_rub_rate_date,
-        connections=[connection_read(item) for item in connections],
+        default_text=_selection(row.default_text_provider_id, row.default_text_model_id),
+        default_speech=_selection(row.default_speech_provider_id, row.default_speech_model_id),
+        providers=[provider_read(session, item, counts.get(item.id, 0)) for item in providers],
         roles=roles,
         models=[AiModelRead.model_validate(item) for item in models],
         today_usage=_today_usage(session),
     )
+
+
+def _selection(provider_id: UUID | None, model_id: str | None) -> AiModelSelection | None:
+    if provider_id is None or model_id is None:
+        return None
+    return AiModelSelection(provider_id=provider_id, model_id=model_id)
+
+
+def _provider(session: Session, provider_id: UUID) -> AiProviderConnection:
+    row = session.get(AiProviderConnection, provider_id)
+    if row is None:
+        raise ProjectDomainError(
+            "Провайдер не найден",
+            status=404,
+            code="ai_provider_not_found",
+            context={"provider_id": str(provider_id)},
+        )
+    return row
+
+
+def _model_for_selection(
+    session: Session,
+    selection: AiModelSelection,
+    *,
+    modality: Modality | None = None,
+) -> AiModelCatalogEntry:
+    row = session.get(AiModelCatalogEntry, (selection.provider_id, selection.model_id))
+    if row is None or not row.is_available:
+        raise ProjectDomainError(
+            "Модель не найдена в локальном каталоге провайдера",
+            status=422,
+            code="ai_model_not_in_catalog",
+            context={
+                "provider_id": str(selection.provider_id),
+                "model_id": selection.model_id,
+            },
+        )
+    if modality == "text" and row.output_modalities and "text" not in row.output_modalities:
+        raise ProjectDomainError(
+            "Модель не поддерживает текстовый ответ",
+            status=422,
+            code="ai_model_modality_unsupported",
+        )
+    if modality == "speech" and "audio" not in row.input_modalities:
+        raise ProjectDomainError(
+            "Модель не принимает аудио",
+            status=422,
+            code="ai_model_modality_unsupported",
+        )
+    return row
+
+
+def _ensure_unique_provider_label(
+    session: Session, label: str, provider_id: UUID | None = None
+) -> None:
+    existing = session.scalar(
+        select(AiProviderConnection).where(func.lower(AiProviderConnection.label) == label.lower())
+    )
+    if existing is not None and existing.id != provider_id:
+        raise ProjectDomainError(
+            "Провайдер с таким названием уже существует",
+            status=409,
+            code="ai_provider_label_exists",
+        )

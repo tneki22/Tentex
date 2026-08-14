@@ -34,6 +34,7 @@ import {
   OfflineNotice,
   PAGE_QUALITIES,
   ProjectChip,
+  ProviderModelPicker,
   QualityBadge,
   REFERENCE_ANSWER_STATUSES,
   ReferenceAnswerBadge,
@@ -45,6 +46,7 @@ import {
   goalLevelEffect,
 } from "../components/domain";
 import type { GoalLevelValue, ProjectColor } from "../components/domain";
+import type { AiModelRead, AiModelSelection, AiProviderRead } from "../api/ai";
 
 /** Поверхности и текст показываются парами «за что отвечает — как называется». */
 const SURFACE_TOKENS = [
@@ -68,6 +70,43 @@ const ACCENT_TOKENS = [
   ["--tone-danger", "необратимое"],
   ["--tone-info", "привязано"],
 ] as const;
+
+const PICKER_PROVIDERS: AiProviderRead[] = [{
+  id: "demo-provider",
+  label: "OpenRouter",
+  catalog_profile: "openrouter",
+  base_url: "https://openrouter.ai/api/v1",
+  has_api_key: true,
+  is_favorite: true,
+  model_count: 1,
+  last_test_status: "connected",
+  last_tested_at: null,
+  last_catalog_refresh_at: null,
+  updated_at: "2026-08-14T00:00:00Z",
+}];
+
+const PICKER_MODELS: AiModelRead[] = [{
+  provider_id: "demo-provider",
+  model_id: "openai/gpt-demo",
+  display_name: "GPT Demo",
+  context_length: 128_000,
+  max_completion_tokens: 16_000,
+  supported_parameters: ["response_format"],
+  input_modalities: ["text"],
+  output_modalities: ["text"],
+  reasoning: { supported_efforts: ["low", "high"] },
+  default_parameters: {},
+  manual_overrides: {},
+  prompt_price_usd: 0.000001,
+  completion_price_usd: 0.000004,
+  knowledge_cutoff: null,
+  expiration_date: null,
+  pricing_snapshot_at: "2026-08-14T00:00:00Z",
+  catalog_snapshot_at: "2026-08-14T00:00:00Z",
+  is_manually_added: false,
+  favorite_order: 0,
+  is_available: true,
+}];
 
 const TYPE_SCALE = [
   ["--text-3xl", "36 · заголовок экрана"],
@@ -112,6 +151,10 @@ export function UiKit() {
   const [confirm, setConfirm] = useState(false);
   const [minutes, setMinutes] = useState("40");
   const [suggested, setSuggested] = useState(true);
+  const [modelSelection, setModelSelection] = useState<AiModelSelection | null>({
+    provider_id: "demo-provider",
+    model_id: "openai/gpt-demo",
+  });
 
   return (
     <div className="kit-page">
@@ -491,6 +534,22 @@ export function UiKit() {
         <p className="goal-effect">
           «{GOAL_LEVELS.find((item) => item.value === level)?.label}»: {goalLevelEffect(level)}
         </p>
+      </section>
+
+      <section className="kit-section">
+        <h2>Выбор провайдера и модели</h2>
+        <p className="kit-hint">
+          Сначала сужает каталог по провайдеру, затем показывает только совместимые модели.
+          Звезда означает быстрый ярлык, а не значение по умолчанию.
+        </p>
+        <div className="kit-panel">
+          <ProviderModelPicker
+            providers={PICKER_PROVIDERS}
+            models={PICKER_MODELS}
+            value={modelSelection}
+            onChange={setModelSelection}
+          />
+        </div>
       </section>
 
       <section className="kit-section">

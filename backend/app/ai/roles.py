@@ -15,6 +15,13 @@ class TextRoleParameters(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_output_tokens: int = Field(ge=64, le=32_000)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+
+
+class ModelTestParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_output_tokens: int = Field(ge=1, le=64)
 
 
 class SpeechRoleParameters(BaseModel):
@@ -35,6 +42,7 @@ class AiRoleSpec:
     default_parameters: dict[str, object] = field(default_factory=dict)
     allow_request_model_override: bool = False
     parameter_model: type[BaseModel] = TextRoleParameters
+    visible: bool = True
 
 
 ROLE_SPECS = {
@@ -103,6 +111,18 @@ ROLE_SPECS = {
             {"language": "ru"},
             parameter_model=SpeechRoleParameters,
         ),
+        AiRoleSpec(
+            "settings_model_test",
+            "Проверка модели",
+            "Проверяет, отвечает ли явно выбранная модель.",
+            "text",
+            cache_policy="none",
+            prompt_version="settings-model-test-v1",
+            default_parameters={"max_output_tokens": 8},
+            allow_request_model_override=True,
+            parameter_model=ModelTestParameters,
+            visible=False,
+        ),
     )
 }
 
@@ -123,7 +143,7 @@ def validate_role_parameters(role: str, values: dict[str, object]) -> dict[str, 
     spec = get_role_spec(role)
     merged = spec.default_parameters | values
     try:
-        return spec.parameter_model.model_validate(merged).model_dump()
+        return spec.parameter_model.model_validate(merged).model_dump(exclude_none=True)
     except ValidationError as error:
         raise ProjectDomainError(
             "Параметры роли не прошли проверку",

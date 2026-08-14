@@ -23,11 +23,16 @@ class ProviderModel:
     model_id: str
     display_name: str
     context_length: int | None = None
+    max_completion_tokens: int | None = None
     supported_parameters: list[str] = field(default_factory=list)
     input_modalities: list[str] = field(default_factory=list)
     output_modalities: list[str] = field(default_factory=list)
+    reasoning: dict[str, Any] = field(default_factory=dict)
+    default_parameters: dict[str, Any] = field(default_factory=dict)
     prompt_price_usd: Decimal | None = None
     completion_price_usd: Decimal | None = None
+    knowledge_cutoff: str | None = None
+    expiration_date: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +77,7 @@ class OpenAICompatibleTransport(Protocol):
         messages: list[dict[str, str]],
         response_schema: dict[str, Any] | None,
         max_output_tokens: int,
+        parameters: dict[str, object],
     ) -> ProviderCompletion: ...
 
     def stream(
@@ -80,6 +86,7 @@ class OpenAICompatibleTransport(Protocol):
         model: str,
         messages: list[dict[str, str]],
         max_output_tokens: int,
+        parameters: dict[str, object],
     ) -> AsyncIterator[ProviderStreamEvent]: ...
 
 
@@ -147,11 +154,18 @@ class OpenAITransport:
                     model_id=item.id,
                     display_name=data.get("name") or item.id,
                     context_length=data.get("context_length"),
+                    max_completion_tokens=(data.get("top_provider") or {}).get(
+                        "max_completion_tokens"
+                    ),
                     supported_parameters=data.get("supported_parameters") or [],
                     input_modalities=architecture.get("input_modalities") or [],
                     output_modalities=architecture.get("output_modalities") or [],
+                    reasoning=data.get("reasoning") or {},
+                    default_parameters=data.get("default_parameters") or {},
                     prompt_price_usd=_decimal(pricing.get("prompt")),
                     completion_price_usd=_decimal(pricing.get("completion")),
+                    knowledge_cutoff=data.get("knowledge_cutoff"),
+                    expiration_date=data.get("expiration_date"),
                 )
             )
         return models
@@ -163,6 +177,7 @@ class OpenAITransport:
         messages: list[dict[str, str]],
         response_schema: dict[str, Any] | None,
         max_output_tokens: int,
+        parameters: dict[str, object],
     ) -> ProviderCompletion:
         kwargs: dict[str, Any] = {
             "model": model,
@@ -170,6 +185,7 @@ class OpenAITransport:
             "max_tokens": max_output_tokens,
             "extra_body": {"usage": {"include": True}},
         }
+        self._apply_parameters(kwargs, parameters)
         if response_schema is not None:
             kwargs["response_format"] = {
                 "type": "json_schema",
@@ -200,15 +216,18 @@ class OpenAITransport:
         model: str,
         messages: list[dict[str, str]],
         max_output_tokens: int,
+        parameters: dict[str, object],
     ) -> AsyncIterator[ProviderStreamEvent]:
         try:
-            result = await self.client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=max_output_tokens,
-                stream=True,
-                stream_options={"include_usage": True},
-            )
+            kwargs: dict[str, Any] = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_output_tokens,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+            self._apply_parameters(kwargs, parameters)
+            result = await self.client.chat.completions.create(**kwargs)
             async for item in result:
                 delta = item.choices[0].delta.content if item.choices else ""
                 yield ProviderStreamEvent(
@@ -219,6 +238,27 @@ class OpenAITransport:
                 )
         except Exception as error:
             raise normalize_provider_error(error) from error
+
+    @staticmethod
+    def _apply_parameters(kwargs: dict[str, Any], parameters: dict[str, object]) -> None:
+        direct = {
+            "temperature",
+            "top_p",
+            "seed",
+            "frequency_penalty",
+            "presence_penalty",
+            "stop",
+        }
+        extra = dict(kwargs.get("extra_body") or {})
+        for key, value in parameters.items():
+            if key == "max_output_tokens":
+                continue
+            if key in direct:
+                kwargs[key] = value
+            else:
+                extra[key] = value
+        if extra:
+            kwargs["extra_body"] = extra
 
 
 class FakeTransport:
@@ -248,6 +288,7 @@ class FakeTransport:
         messages: list[dict[str, str]],
         response_schema: dict[str, Any] | None,
         max_output_tokens: int,
+        parameters: dict[str, object],
     ) -> ProviderCompletion:
         self.complete_calls += 1
         self.complete_requests.append(
@@ -256,6 +297,7 @@ class FakeTransport:
                 "messages": messages,
                 "response_schema": response_schema,
                 "max_output_tokens": max_output_tokens,
+                "parameters": parameters,
             }
         )
         if not self.completions:
@@ -271,8 +313,9 @@ class FakeTransport:
         model: str,
         messages: list[dict[str, str]],
         max_output_tokens: int,
+        parameters: dict[str, object],
     ) -> AsyncIterator[ProviderStreamEvent]:
-        del model, messages, max_output_tokens
+        del model, messages, max_output_tokens, parameters
         self.stream_calls += 1
         if not self.streams:
             raise ProviderError("ai_provider_unavailable", "Fake stream queue is empty")

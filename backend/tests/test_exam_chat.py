@@ -128,8 +128,15 @@ async def test_stopped_stream_keeps_partial_text(
     chat = chat_service.create_session(session, project.id, topic.id)
 
     class SlowFake(FakeTransport):
-        async def stream(self, *, model: str, messages: list, max_output_tokens: int):
-            del model, messages, max_output_tokens
+        async def stream(
+            self,
+            *,
+            model: str,
+            messages: list,
+            max_output_tokens: int,
+            parameters: dict[str, object],
+        ):
+            del model, messages, max_output_tokens, parameters
             self.stream_calls += 1
             yield ProviderStreamEvent(delta="Часть ")
             await asyncio.sleep(5)

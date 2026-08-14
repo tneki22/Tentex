@@ -22,10 +22,16 @@ from app.ai.provider import (  # noqa: E402
     ProviderModel,
     ProviderUsage,
 )
-from app.ai.schemas import AiConnectionWrite, AiGlobalSettingsWrite  # noqa: E402
+from app.ai.schemas import (  # noqa: E402
+    AiDefaultWrite,
+    AiGlobalSettingsWrite,
+    AiModelSelection,
+    AiProviderWrite,
+)
 from app.ai.settings import (  # noqa: E402
+    create_provider,
     read_settings,
-    update_connection,
+    set_default,
     update_global_settings,
 )
 from app.config import settings  # noqa: E402
@@ -129,17 +135,19 @@ def _seed_project(session: Session) -> tuple[Project, Material, list[ProgramNode
 
 async def _run(session: Session) -> None:
     snapshot = read_settings(session)
-    assert len(snapshot.connections) == 2
+    assert len(snapshot.providers) == 0
     session.commit()
-    update_connection(
+    snapshot = create_provider(
         session,
-        "text",
-        AiConnectionWrite(
+        AiProviderWrite(
+            label="Fake provider",
+            catalog_profile="openai_compatible",
             base_url="https://fake.test/v1",
             api_key="not-a-real-key",
-            default_model_id=MODEL_ID,
         ),
     )
+    provider_id = snapshot.providers[0].id
+    session.commit()
     update_global_settings(
         session,
         AiGlobalSettingsWrite(
@@ -169,14 +177,14 @@ async def _run(session: Session) -> None:
     fake = FakeTransport(
         models=[
             ProviderModel(
-                MODEL_ID,
-                "Fake structured",
-                100_000,
-                ["response_format"],
-                ["text"],
-                ["text"],
-                Decimal("0.000001"),
-                Decimal("0.000002"),
+                model_id=MODEL_ID,
+                display_name="Fake structured",
+                context_length=100_000,
+                supported_parameters=["response_format"],
+                input_modalities=["text"],
+                output_modalities=["text"],
+                prompt_price_usd=Decimal("0.000001"),
+                completion_price_usd=Decimal("0.000002"),
             )
         ],
         completions=[
@@ -191,8 +199,16 @@ async def _run(session: Session) -> None:
             _completion(groups, "0.003"),
         ],
     )
-    catalog_result = await catalog.refresh_catalog(session, "text", fake)
+    catalog_result = await catalog.refresh_catalog(session, provider_id, fake)
     assert catalog_result[0].model_id == MODEL_ID
+    session.commit()
+    set_default(
+        session,
+        "text",
+        AiDefaultWrite(
+            selection=AiModelSelection(provider_id=provider_id, model_id=MODEL_ID)
+        ),
+    )
     gateway = ModelGateway(session, fake)
     cleanup_preview = await ai_cleanup.preflight(
         session,
@@ -257,6 +273,7 @@ async def _run(session: Session) -> None:
             external_models_enabled=True,
             daily_limit_usd=snapshot.daily_limit_usd,
             operation_limit_usd=Decimal("0.000001"),
+            confirm_cost_usd=snapshot.confirm_cost_usd,
             confirm_input_tokens=snapshot.confirm_input_tokens,
             usd_rub_rate=snapshot.usd_rub_rate,
             usd_rub_rate_date=snapshot.usd_rub_rate_date,
@@ -275,6 +292,7 @@ async def _run(session: Session) -> None:
             external_models_enabled=False,
             daily_limit_usd=snapshot.daily_limit_usd,
             operation_limit_usd=snapshot.operation_limit_usd,
+            confirm_cost_usd=snapshot.confirm_cost_usd,
             confirm_input_tokens=snapshot.confirm_input_tokens,
             usd_rub_rate=snapshot.usd_rub_rate,
             usd_rub_rate_date=snapshot.usd_rub_rate_date,

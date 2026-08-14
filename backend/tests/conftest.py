@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import Base
 from app.models import (
-    AiConnection,
     AiModelCatalogEntry,
+    AiProviderConnection,
     AiSettings,
     BlockClass,
     Material,
@@ -64,7 +64,17 @@ def session(tmp_path: Path) -> Iterator[Session]:
 def ai_config(session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     model_id = "test/structured-model"
+    provider_id = uuid4()
     now = utc_now()
+    session.add(
+        AiProviderConnection(
+            id=provider_id,
+            label="Test provider",
+            catalog_profile="openai_compatible",
+            base_url="https://example.test/v1",
+        )
+    )
+    session.flush()
     session.add_all(
         [
             AiSettings(
@@ -73,22 +83,11 @@ def ai_config(session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
                 confirm_input_tokens=100_000,
                 usd_rub_rate=Decimal("90"),
                 usd_rub_rate_date=now.date(),
-            ),
-            AiConnection(
-                modality="text",
-                label="Текстовые модели",
-                base_url="https://example.test/v1",
-                api_key_ciphertext=None,
-                default_model_id=model_id,
-            ),
-            AiConnection(
-                modality="speech",
-                label="Распознавание речи",
-                base_url="",
-                api_key_ciphertext=None,
+                default_text_provider_id=provider_id,
+                default_text_model_id=model_id,
             ),
             AiModelCatalogEntry(
-                modality="text",
+                provider_id=provider_id,
                 model_id=model_id,
                 display_name="Test structured model",
                 context_length=100_000,
@@ -106,9 +105,9 @@ def ai_config(session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     session.commit()
     from app.ai.credentials import encrypt_secret
 
-    connection = session.get(AiConnection, "text")
-    assert connection is not None
-    connection.api_key_ciphertext = encrypt_secret("test-secret")
+    provider = session.get(AiProviderConnection, provider_id)
+    assert provider is not None
+    provider.api_key_ciphertext = encrypt_secret("test-secret")
     session.commit()
     return model_id
 

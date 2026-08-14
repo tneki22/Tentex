@@ -747,6 +747,28 @@ class ProjectActionLog(Base):
     undone_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class AiProviderConnection(Base):
+    __tablename__ = "ai_provider_connections"
+    __table_args__ = (
+        CheckConstraint(
+            "catalog_profile IN ('openrouter', 'openai_compatible')",
+            name="catalog_profile",
+        ),
+        UniqueConstraint("label", name="label"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    label: Mapped[str] = mapped_column(String)
+    catalog_profile: Mapped[str] = mapped_column(String, default="openai_compatible")
+    base_url: Mapped[str] = mapped_column(String)
+    api_key_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_test_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_catalog_refresh_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
 class AiSettings(Base):
     __tablename__ = "ai_settings"
     __table_args__ = (
@@ -758,25 +780,23 @@ class AiSettings(Base):
     external_models_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     daily_limit_usd: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
     operation_limit_usd: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
+    confirm_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
     confirm_input_tokens: Mapped[int] = mapped_column(Integer, default=20_000)
     usd_rub_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
     usd_rub_rate_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    default_text_provider_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("ai_provider_connections.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    default_text_model_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    default_speech_provider_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("ai_provider_connections.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    default_speech_model_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
-
-
-class AiConnection(Base):
-    __tablename__ = "ai_connections"
-    __table_args__ = (CheckConstraint("modality IN ('text', 'speech')", name="modality"),)
-
-    modality: Mapped[str] = mapped_column(String, primary_key=True)
-    label: Mapped[str] = mapped_column(String)
-    base_url: Mapped[str] = mapped_column(String)
-    api_key_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-    default_model_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    last_test_status: Mapped[str | None] = mapped_column(String, nullable=True)
-    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    last_catalog_refresh_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
@@ -785,6 +805,11 @@ class AiRoleSetting(Base):
 
     role: Mapped[str] = mapped_column(String, primary_key=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    provider_override_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("ai_provider_connections.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     model_override: Mapped[str | None] = mapped_column(String, nullable=True)
     parameters: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
@@ -793,22 +818,32 @@ class AiRoleSetting(Base):
 class AiModelCatalogEntry(Base):
     __tablename__ = "ai_model_catalog"
     __table_args__ = (
-        CheckConstraint("modality IN ('text', 'speech')", name="modality"),
-        Index("ix_ai_model_catalog_modality_available", "modality", "is_available"),
+        Index("ix_ai_model_catalog_provider_available", "provider_id", "is_available"),
     )
 
-    modality: Mapped[str] = mapped_column(String, primary_key=True)
+    provider_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("ai_provider_connections.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
     model_id: Mapped[str] = mapped_column(String, primary_key=True)
     display_name: Mapped[str] = mapped_column(String)
     context_length: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     supported_parameters: Mapped[list[str]] = mapped_column(JSON, default=list)
     input_modalities: Mapped[list[str]] = mapped_column(JSON, default=list)
     output_modalities: Mapped[list[str]] = mapped_column(JSON, default=list)
+    reasoning: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    default_parameters: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    manual_overrides: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     prompt_price_usd: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
     completion_price_usd: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
+    knowledge_cutoff: Mapped[str | None] = mapped_column(String, nullable=True)
+    expiration_date: Mapped[str | None] = mapped_column(String, nullable=True)
     pricing_snapshot_at: Mapped[datetime] = mapped_column(DateTime)
     catalog_snapshot_at: Mapped[datetime] = mapped_column(DateTime)
-    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_manually_added: Mapped[bool] = mapped_column(Boolean, default=False)
+    favorite_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_available: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -828,6 +863,12 @@ class AiRun(Base):
     project_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
     )
+    provider_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("ai_provider_connections.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    provider_label_snapshot: Mapped[str] = mapped_column(String, default="Неизвестный провайдер")
     role: Mapped[str] = mapped_column(String)
     modality: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String)

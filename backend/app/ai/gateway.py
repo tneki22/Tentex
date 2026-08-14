@@ -23,7 +23,13 @@ from app.ai.provider import (
     ProviderError,
     ProviderUsage,
 )
-from app.ai.schemas import AiMessage, AiPreflight, AiUsage
+from app.ai.schemas import (
+    AiMessage,
+    AiModelSelection,
+    AiModelTestRead,
+    AiPreflight,
+    AiUsage,
+)
 from app.ai.settings import AiGatewayError, ResolvedModel, credential, resolve_model
 from app.models import (
     AiCacheEntry,
@@ -44,7 +50,7 @@ class AiTextRequest[T: BaseModel]:
     project_id: UUID | None = None
     context_manifest: list[dict[str, Any]] = field(default_factory=list)
     source_fingerprint: dict[str, Any] = field(default_factory=dict)
-    request_model_override: str | None = None
+    request_model_override: AiModelSelection | None = None
     confirmed: bool = False
     parameters: dict[str, object] = field(default_factory=dict)
 
@@ -92,10 +98,10 @@ class ModelGateway:
 
     async def preflight(self, request: AiTextRequest[Any]) -> AiPreflight:
         resolved = resolve_model(self.session, request.role, request.request_model_override)
-        credential(self.session, resolved.role.modality)
+        credential(self.session, resolved.provider.id)
         model = self._catalog_model(resolved)
         response_schema = self._response_schema(request)
-        parameters = resolved.parameters | request.parameters
+        parameters = self._parameters(resolved, request.parameters)
         input_tokens = self._estimate_input(request.messages, response_schema)
         output_tokens = int(parameters.get("max_output_tokens", 2000))
         request_hash = self._request_hash(request, resolved, parameters, response_schema)
@@ -108,6 +114,12 @@ class ModelGateway:
         confirmation_reasons = []
         if estimated_usd is None:
             confirmation_reasons.append("unknown_price")
+        if (
+            estimated_usd is not None
+            and settings.confirm_cost_usd is not None
+            and estimated_usd >= settings.confirm_cost_usd
+        ):
+            confirmation_reasons.append("cost_threshold")
         if input_tokens > settings.confirm_input_tokens:
             confirmation_reasons.append("large_context")
         if not cached:
@@ -120,6 +132,8 @@ class ModelGateway:
         return AiPreflight(
             role=request.role,
             modality=resolved.role.modality,
+            provider_id=resolved.provider.id,
+            provider_label=resolved.provider.label,
             model_id=resolved.model_id,
             model_source=resolved.source,
             request_hash=request_hash,
@@ -152,7 +166,7 @@ class ModelGateway:
         cache = self.session.get(AiCacheEntry, preflight.request_hash)
         if cache is not None and resolved.role.cache_policy != "none":
             return self._cached_result(request, resolved, preflight, cache)
-        transport = self.transport or production_transport(self.session, resolved.role.modality)
+        transport = self.transport or production_transport(self.session, resolved.provider.id)
         run = self._start_run(request, resolved, preflight)
         started = time.monotonic()
         try:
@@ -161,6 +175,7 @@ class ModelGateway:
                 messages=[item.model_dump() for item in request.messages],
                 response_schema=request.response_model.model_json_schema(),
                 max_output_tokens=preflight.estimated_output_tokens,
+                parameters=self._parameters(resolved, request.parameters),
             )
             value = request.response_model.model_validate_json(result.content)
         except (ValidationError, ValueError, json.JSONDecodeError) as error:
@@ -199,7 +214,7 @@ class ModelGateway:
                 context={"reasons": preflight.confirmation_reasons},
             )
         resolved = resolve_model(self.session, request.role, request.request_model_override)
-        transport = self.transport or production_transport(self.session, resolved.role.modality)
+        transport = self.transport or production_transport(self.session, resolved.provider.id)
         run = self._start_run(request, resolved, preflight)
         started = time.monotonic()
         final_usage = ProviderUsage()
@@ -211,6 +226,7 @@ class ModelGateway:
                 model=resolved.model_id,
                 messages=[item.model_dump() for item in request.messages],
                 max_output_tokens=preflight.estimated_output_tokens,
+                parameters=self._parameters(resolved, request.parameters),
             ):
                 if event.usage is not None:
                     final_usage = event.usage
@@ -235,6 +251,44 @@ class ModelGateway:
         )
         yield AiStreamEvent(kind="completed", run_id=run.id, usage=usage)
 
+    async def test_model(self, selection: AiModelSelection) -> AiModelTestRead:
+        request = AiTextRequest(
+            role="settings_model_test",
+            messages=[AiMessage(role="user", content="Ответь одним словом: работает")],
+            request_model_override=selection,
+            confirmed=True,
+        )
+        preflight = await self.preflight(request)
+        resolved = resolve_model(self.session, request.role, selection)
+        transport = self.transport or production_transport(self.session, resolved.provider.id)
+        run = self._start_run(request, resolved, preflight)
+        started = time.monotonic()
+        try:
+            result = await transport.complete(
+                model=resolved.model_id,
+                messages=[item.model_dump() for item in request.messages],
+                response_schema=None,
+                max_output_tokens=preflight.estimated_output_tokens,
+                parameters=self._parameters(resolved, request.parameters),
+            )
+        except ProviderError as error:
+            self._fail_run(run.id, error.code, started)
+            raise _gateway_error(error.code, error.detail) from error
+        self._finish_run(
+            run.id,
+            {},
+            result.actual_model_id,
+            result.request_id,
+            result.usage,
+            started,
+            cache=False,
+        )
+        return AiModelTestRead(
+            status="answered",
+            run_id=run.id,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+
     async def transcribe(self, _request: object) -> None:
         raise AiGatewayError(
             "Распознавание речи появится вместе с диктовкой",
@@ -242,8 +296,8 @@ class ModelGateway:
         )
 
     def _catalog_model(self, resolved: ResolvedModel) -> AiModelCatalogEntry:
-        row = self.session.get(AiModelCatalogEntry, (resolved.role.modality, resolved.model_id))
-        if row is None or not row.is_available:
+        row = resolved.model
+        if not row.is_available:
             raise AiGatewayError(
                 "Выбранной модели нет в актуальном локальном каталоге",
                 code="ai_capability_unsupported",
@@ -263,6 +317,12 @@ class ModelGateway:
                 context={"model_id": resolved.model_id, "missing": sorted(missing)},
             )
         return row
+
+    @staticmethod
+    def _parameters(
+        resolved: ResolvedModel, request_parameters: dict[str, object]
+    ) -> dict[str, object]:
+        return resolved.model.default_parameters | resolved.parameters | request_parameters
 
     @staticmethod
     def _response_schema(request: AiTextRequest[Any]) -> dict[str, Any] | None:
@@ -325,6 +385,7 @@ class ModelGateway:
             {
                 "role": request.role,
                 "modality": resolved.role.modality,
+                "provider_id": str(resolved.provider.id),
                 "model": resolved.model_id,
                 "parameters": parameters,
                 "prompt_version": resolved.role.prompt_version,
@@ -344,12 +405,14 @@ class ModelGateway:
         self, request: AiTextRequest[Any], resolved: ResolvedModel, preflight: AiPreflight
     ) -> AiRun:
         settings = self.session.get(AiSettings, 1)
-        model = self.session.get(AiModelCatalogEntry, (resolved.role.modality, resolved.model_id))
+        model = self.session.get(AiModelCatalogEntry, (resolved.provider.id, resolved.model_id))
         assert settings is not None and model is not None
         self.session.commit()
         with self.session.begin():
             run = AiRun(
                 project_id=request.project_id,
+                provider_id=resolved.provider.id,
+                provider_label_snapshot=resolved.provider.label,
                 role=request.role,
                 modality=resolved.role.modality,
                 status="running",
@@ -383,6 +446,8 @@ class ModelGateway:
             cache.last_used_at = utc_now()
             run = AiRun(
                 project_id=request.project_id,
+                provider_id=resolved.provider.id,
+                provider_label_snapshot=resolved.provider.label,
                 role=request.role,
                 modality=resolved.role.modality,
                 status="cached",
