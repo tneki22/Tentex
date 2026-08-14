@@ -198,9 +198,12 @@ export function Library() {
     review: materials.reduce((sum, material) => sum + material.ocr_low_page_count, 0),
   }), [materials]);
 
+  /* Возврат живёт в query, а не только в `location.state`: рабочая область
+     переписывает свой URL (версия, вкладка), и state при этом теряется. */
   function open(materialId: string) {
     sessionStorage.setItem(scrollKey, String(window.scrollY));
-    navigate(`/library/${materialId}`, {
+    const back = encodeURIComponent(`${location.pathname}${location.search}`);
+    navigate(`/library/${materialId}?returnTo=${back}`, {
       state: { libraryReturnTo: `${location.pathname}${location.search}` },
     });
   }
@@ -348,9 +351,8 @@ export function Library() {
         onOpenChange={setAddOpen}
         onCreated={(created) => {
           sessionStorage.setItem(scrollKey, "0");
-          navigate(`/library/${created.id}`, {
-            state: { libraryReturnTo: `${location.pathname}${location.search}` },
-          });
+          const back = encodeURIComponent(`${location.pathname}${location.search}`);
+          navigate(`/library/${created.id}?returnTo=${back}`);
         }}
       />
 

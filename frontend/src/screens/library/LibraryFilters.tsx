@@ -133,9 +133,13 @@ export function LibraryFilters({ value, total, shown, onChange, onReset }: Libra
           options={SORTS}
           onValueChange={(next) => onChange({ sort: (next ?? "created_desc") as LibrarySort })}
         />
-        <span className="lib-filter-count" aria-live="polite">
-          {dirty ? `${shown} из ${total}` : `${total}`}
-        </span>
+        {/* Счётчик показывается только при фильтрах: без них общее число уже
+            стоит в шапке экрана, и второй раз оно ничего не сообщает. */}
+        {dirty && (
+          <span className="lib-filter-count" aria-live="polite">
+            {shown} из {total}
+          </span>
+        )}
         {dirty && (
           <Button variant="ghost" onClick={onReset}>
             <X size={14} aria-hidden="true" /> Сбросить

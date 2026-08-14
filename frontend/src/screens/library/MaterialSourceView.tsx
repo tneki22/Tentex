@@ -52,6 +52,9 @@ interface MaterialSourceViewProps {
   focusedFragmentId: string | null;
   currentTime: number;
   onTimeUpdate: (seconds: number) => void;
+  /** Замер «вписать страницу» идёт по этой области, а не по всей сцене:
+      в режиме сравнения исходнику достаётся только половина ширины. */
+  scrollRef?: (node: HTMLDivElement | null) => void;
 }
 
 /**
@@ -68,6 +71,7 @@ export function MaterialSourceView({
   focusedFragmentId,
   currentTime,
   onTimeUpdate,
+  scrollRef,
 }: MaterialSourceViewProps) {
   const audio = useRef<HTMLAudioElement>(null);
   const kind = material.presentation_kind;
@@ -90,7 +94,7 @@ export function MaterialSourceView({
     case "pdf":
     case "image":
       return (
-        <div className="viewer-sheet-scroll">
+        <div className="viewer-sheet-scroll" ref={scrollRef}>
           <div className="viewer-sheet" style={{ "--viewer-zoom": zoom } as CSSProperties}>
             <img
               src={libraryPageImageUrl(material.id, page?.page_number ?? 1)}

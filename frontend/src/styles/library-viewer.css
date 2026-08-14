@@ -64,6 +64,25 @@
   gap: var(--space-2);
 }
 
+/* Селектор кита по умолчанию тянется на всю ширину формы: в строке фильтров он
+   должен быть ровно по своей подписи, иначе четыре штуки съедают весь экран.
+   Класс попадает на сам триггер, поэтому селектор одноуровневый. */
+.select-trigger.lib-filter-select {
+  width: auto;
+  min-height: 34px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  font-size: var(--text-sm);
+  background: var(--surface-sunken);
+  border-color: transparent;
+  border-radius: var(--radius-pill);
+}
+
+.select-trigger.lib-filter-select:hover:not(:disabled),
+.select-trigger.lib-filter-select[data-state="open"] {
+  background: var(--surface-hover);
+  border-color: var(--line-strong);
+}
+
 .lib-filter-tail {
   display: flex;
   align-items: center;
@@ -76,11 +95,6 @@
   font-variant-numeric: tabular-nums;
   font-size: var(--text-sm);
   white-space: nowrap;
-}
-
-.lib-filter-select .select-trigger {
-  min-width: 0;
-  font-size: var(--text-sm);
 }
 
 .lib-list {

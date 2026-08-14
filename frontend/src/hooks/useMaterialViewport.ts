@@ -4,7 +4,9 @@ import type { ViewerZoom } from "../components/domain/material-viewer";
 /** Размеры листа заданы в CSS сцены: держим их синхронно, иначе «вписать» промахнётся. */
 const SHEET_WIDTH = 680;
 const SHEET_HEIGHT = 900;
-const SHEET_PADDING = 72;
+/* Совпадает с padding области .viewer-sheet-scroll: если вычитать больше,
+   «вписать страницу» оставляет полосу пустоты по краям. */
+const SHEET_PADDING = 48;
 
 interface ViewportOptions {
   pageCount: number;

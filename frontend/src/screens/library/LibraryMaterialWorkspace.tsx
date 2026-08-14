@@ -63,9 +63,12 @@ export function LibraryMaterialWorkspace() {
   const inspectorTab = (searchParams.get("panel") as InspectorTab | null) ?? "processing";
 
   const [mode, setMode] = useState<MaterialViewMode | null>(null);
-  const [outlineOpen, setOutlineOpen] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
-  const [narrow, setNarrow] = useState(() => window.innerWidth < 900);
+  const wideEnough = () => window.innerWidth >= 900;
+  const [outlineOpen, setOutlineOpen] = useState(wideEnough);
+  /* На узком окне панели открываются слоем поверх сцены, поэтому по умолчанию
+     они закрыты: иначе документ прячется ровно в тот момент, когда его открыли. */
+  const [inspectorOpen, setInspectorOpen] = useState(wideEnough);
+  const [narrow, setNarrow] = useState(() => !wideEnough());
   const [focusedFragmentId, setFocusedFragmentId] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
@@ -77,7 +80,14 @@ export function LibraryMaterialWorkspace() {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    const onResize = () => setNarrow(window.innerWidth < 900);
+    const onResize = () => setNarrow((current) => {
+      const next = !wideEnough();
+      if (next !== current) {
+        setOutlineOpen(!next);
+        setInspectorOpen(!next);
+      }
+      return next;
+    });
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -160,7 +170,7 @@ export function LibraryMaterialWorkspace() {
      ту же страницу проектного просмотрщика. По прямой ссылке — просто в список. */
   function goBack() {
     const state = location.state as { libraryReturnTo?: string } | null;
-    navigate(state?.libraryReturnTo ?? searchParams.get("returnTo") ?? "/library");
+    navigate(returnTo ?? state?.libraryReturnTo ?? "/library");
   }
 
   const returnTo = searchParams.get("returnTo");
@@ -237,6 +247,7 @@ export function LibraryMaterialWorkspace() {
           focusedFragmentId={focusedFragmentId}
           currentTime={currentTime}
           onTimeUpdate={setCurrentTime}
+          scrollRef={view.attachScroll}
         />
       }
       text={
@@ -369,7 +380,7 @@ export function LibraryMaterialWorkspace() {
           />
         )}
 
-        <main className="library-workspace-main" ref={view.attachScroll}>
+        <main className="library-workspace-main">
           {!prepared && !building ? (
             <div className="library-stage-empty">
               <h2>Материал загружен</h2>
