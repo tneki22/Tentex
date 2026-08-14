@@ -14,6 +14,7 @@ from PIL import Image
 from app.materials.parsers.audio import parse_audio
 from app.materials.parsers.base import ElementKind, ParsedElement, ParsedPage
 from app.materials.parsers.paddle_fast import parse_image
+from app.materials.parsers.pdf_layout import parse_layout_page
 from app.materials.storage import store_material_asset
 from app.models import ParserMode
 
@@ -469,7 +470,44 @@ def iter_pages(path: Path, mode: ParserMode, start_page: int = 1) -> Iterator[Pa
         for page_index in range(start_page - 1, len(document)):
             page = document[page_index]
             if len(page.get_text("text").strip()) >= SCAN_TEXT_THRESHOLD:
-                yield _native_pdf_page(page, page_index + 1, owner)
+                try:
+                    parsed = parse_layout_page(document, page_index)
+                    legacy = _native_pdf_page(page, page_index + 1, owner)
+                    images = tuple(
+                        element for element in legacy.elements if element.kind == "image"
+                    )
+                    if images:
+                        elements = tuple(
+                            sorted(
+                                (*parsed.elements, *images),
+                                key=lambda element: (element.bbox[1], element.bbox[0]),
+                            )
+                        )
+                        parsed = ParsedPage(
+                            page_number=parsed.page_number,
+                            width=parsed.width,
+                            height=parsed.height,
+                            markdown=_markdown(list(elements)),
+                            plain_text=parsed.plain_text,
+                            quality=parsed.quality,
+                            elements=elements,
+                            diagnostics=parsed.diagnostics,
+                            confidence=parsed.confidence,
+                        )
+                    yield parsed
+                except Exception:
+                    fallback = _native_pdf_page(page, page_index + 1, owner)
+                    yield ParsedPage(
+                        page_number=fallback.page_number,
+                        width=fallback.width,
+                        height=fallback.height,
+                        markdown=fallback.markdown,
+                        plain_text=fallback.plain_text,
+                        quality=fallback.quality,
+                        elements=fallback.elements,
+                        diagnostics=(*fallback.diagnostics, "layout_fallback"),
+                        confidence=fallback.confidence,
+                    )
                 continue
             if mode == ParserMode.TEXTBOOK:
                 raise RuntimeError("Режим «Учебник» не настроен для этой установки")
