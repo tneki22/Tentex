@@ -20,7 +20,7 @@ export { ProjectChip, PROJECT_ICONS } from "./ProjectChip";
 export type { ProjectColor, ProjectIconName } from "./ProjectChip";
 export { ProjectNav } from "./ProjectNav";
 export type { ProjectNavKey } from "./ProjectNav";
-export { QualityBadge, PAGE_QUALITIES } from "./QualityBadge";
+export { QualityBadge, PAGE_QUALITIES, qualityHint, qualityLabel } from "./QualityBadge";
 export type { PageQuality } from "./QualityBadge";
 export { ReferenceAnswerBadge, REFERENCE_ANSWER_STATUSES, referenceAnswerStatusLabel } from "./ReferenceAnswerBadge";
 export { SourceChip } from "./SourceChip";

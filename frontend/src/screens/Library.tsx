@@ -1,36 +1,85 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, FileText, Globe, Image, Trash2, Upload, Video } from "lucide-react";
-import { Link } from "react-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AudioLines,
+  FileImage,
+  FileText,
+  FileType2,
+  Globe,
+  Plus,
+  Trash2,
+  Video,
+} from "lucide-react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import {
   deleteLibraryMaterial,
   getMaterialDeletePreview,
   listLibraryMaterials,
-  uploadMaterial,
   type LibraryMaterialRead,
   type MaterialDeletePreview,
+  type MaterialPresentationKind,
   type MaterialPurpose,
 } from "../api/materials";
-import { listProjects, type ProjectSummary } from "../api/projects";
 import { QualityBadge } from "../components/domain";
 import {
   Button,
-  Card,
   ConfirmDialog,
-  Dialog,
-  Disclosure,
   EmptyState,
   ErrorState,
-  Field,
   IconButton,
   LoadingState,
   PageHead,
   StatusBadge,
 } from "../components/ui";
+import { AddLibraryMaterialDialog } from "./library/AddLibraryMaterialDialog";
+import {
+  DEFAULT_FILTERS,
+  LibraryFilters,
+  type LibraryFilterState,
+  type LibraryKindFilter,
+  type LibraryQualityFilter,
+  type LibrarySort,
+  type LibraryStatusFilter,
+  type LibraryUsageFilter,
+} from "./library/LibraryFilters";
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "список вопросов",
   reference_answers: "эталонные ответы",
   study_source: "учебный источник",
+};
+
+const STATUS_LABEL: Record<LibraryMaterialRead["status"], string> = {
+  ready_to_process: "Не подготовлен",
+  queued: "В очереди",
+  processing: "Обрабатывается",
+  paused: "На паузе",
+  ready: "Готов",
+  failed: "Ошибка",
+};
+
+const SCROLL_KEY = "tentex-library-scroll";
+
+/** Тот же вывод, что у сервера, но по данным списка: отдельная ручка не нужна. */
+function kindOf(material: LibraryMaterialRead): MaterialPresentationKind {
+  if (material.source_kind === "youtube") return "youtube";
+  if (material.source_kind === "audio" || material.media_type.startsWith("audio/")) return "audio";
+  if (material.source_kind === "url") return "web";
+  if (material.media_type === "application/pdf") return "pdf";
+  if (material.media_type.startsWith("image/")) return "image";
+  if (material.media_type.includes("wordprocessingml") || material.media_type === "application/msword") {
+    return "document";
+  }
+  return "plain_text";
+}
+
+const KIND_ICON: Record<MaterialPresentationKind, typeof FileText> = {
+  pdf: FileText,
+  image: FileImage,
+  document: FileType2,
+  plain_text: FileText,
+  web: Globe,
+  youtube: Video,
+  audio: AudioLines,
 };
 
 function sizeLabel(bytes: number): string {
@@ -40,65 +89,131 @@ function sizeLabel(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} ГБ`;
 }
 
-function MaterialIcon({ material }: { material: LibraryMaterialRead }) {
-  if (material.source_kind === "youtube") return <Video size={16} aria-hidden="true" />;
-  if (material.source_kind === "url") return <Globe size={16} aria-hidden="true" />;
-  if (material.source_kind === "audio") return <AudioLines size={16} aria-hidden="true" />;
-  if (material.media_type.startsWith("image/")) return <Image size={16} aria-hidden="true" />;
-  return <FileText size={16} aria-hidden="true" />;
+function pageLabel(count: number | null): string {
+  if (count === null) return "";
+  const mod100 = count % 100;
+  const mod10 = count % 10;
+  if (mod100 >= 11 && mod100 <= 14) return `${count} страниц`;
+  if (mod10 === 1) return `${count} страница`;
+  if (mod10 >= 2 && mod10 <= 4) return `${count} страницы`;
+  return `${count} страниц`;
+}
+
+function readFilters(params: URLSearchParams): LibraryFilterState {
+  return {
+    q: params.get("q") ?? "",
+    kind: (params.get("kind") ?? "all") as LibraryKindFilter,
+    status: (params.get("status") ?? "all") as LibraryStatusFilter,
+    quality: (params.get("quality") ?? "all") as LibraryQualityFilter,
+    usage: (params.get("usage") ?? "all") as LibraryUsageFilter,
+    sort: (params.get("sort") ?? DEFAULT_FILTERS.sort) as LibrarySort,
+  };
 }
 
 export function Library() {
-  const input = useRef<HTMLInputElement>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [materials, setMaterials] = useState<LibraryMaterialRead[]>([]);
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [uploadOpen, setUploadOpen] = useState(false);
-  const [projectId, setProjectId] = useState("");
-  const [purpose, setPurpose] = useState<MaterialPurpose>("study_source");
+  const [addOpen, setAddOpen] = useState(false);
   const [deletePreview, setDeletePreview] = useState<MaterialDeletePreview | null>(null);
-  const [deleteLoading, setDeleteLoading] = useState(false);
+  const restored = useRef(false);
 
-  async function load(signal?: AbortSignal) {
+  const filters = useMemo(() => readFilters(searchParams), [searchParams]);
+  const scrollKey = `${SCROLL_KEY}:${searchParams.toString()}`;
+
+  const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError("");
     try {
-      const [nextMaterials, nextProjects] = await Promise.all([
-        listLibraryMaterials(signal),
-        listProjects(signal),
-      ]);
-      setMaterials(nextMaterials);
-      setProjects(nextProjects.filter((project) => project.status === "active"));
-      setProjectId((current) => current || nextProjects.find((project) => project.status === "active")?.id || "");
+      setMaterials(await listLibraryMaterials(signal));
     } catch (caught) {
-      if (!signal?.aborted) setError(caught instanceof Error ? caught.message : "Не удалось загрузить Библиотеку");
+      if (!signal?.aborted) {
+        setError(caught instanceof Error ? caught.message : "Не удалось загрузить Библиотеку");
+      }
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [load]);
+
+  /* Возврат из рабочей области должен вернуть и место в списке, иначе после
+     каждой проверки материала приходится искать строку заново. */
+  useEffect(() => {
+    if (loading || restored.current) return;
+    restored.current = true;
+    const stored = Number(sessionStorage.getItem(scrollKey));
+    if (Number.isFinite(stored) && stored > 0) {
+      window.requestAnimationFrame(() => window.scrollTo({ top: stored }));
+    }
+  }, [loading, scrollKey]);
+
+  function updateFilters(next: Partial<LibraryFilterState>) {
+    const merged = { ...filters, ...next };
+    const params = new URLSearchParams();
+    if (merged.q.trim()) params.set("q", merged.q);
+    if (merged.kind !== "all") params.set("kind", merged.kind);
+    if (merged.status !== "all") params.set("status", merged.status);
+    if (merged.quality !== "all") params.set("quality", merged.quality);
+    if (merged.usage !== "all") params.set("usage", merged.usage);
+    if (merged.sort !== DEFAULT_FILTERS.sort) params.set("sort", merged.sort);
+    setSearchParams(params, { replace: true });
+  }
+
+  const visible = useMemo(() => {
+    const needle = filters.q.trim().toLocaleLowerCase("ru");
+    const list = materials.filter((material) => {
+      if (needle && !material.original_name.toLocaleLowerCase("ru").includes(needle)) return false;
+      if (filters.kind !== "all" && kindOf(material) !== filters.kind) return false;
+      if (filters.status === "ready" && material.status !== "ready") return false;
+      if (filters.status === "processing"
+        && material.status !== "processing" && material.status !== "queued") return false;
+      if (filters.status === "paused" && material.status !== "paused") return false;
+      if (filters.status === "failed" && material.status !== "failed") return false;
+      if (filters.quality === "needs_review" && material.ocr_low_page_count === 0) return false;
+      if (filters.usage === "attached" && material.usage.length === 0) return false;
+      if (filters.usage === "unattached" && material.usage.length > 0) return false;
+      return true;
+    });
+    if (filters.sort === "name_asc") {
+      return [...list].sort((a, b) => a.original_name.localeCompare(b.original_name, "ru"));
+    }
+    if (filters.sort === "updated_desc") {
+      return [...list].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    }
+    return list;
+  }, [materials, filters]);
 
   const totals = useMemo(() => ({
     pages: materials.reduce((sum, material) => sum + (material.page_count ?? 0), 0),
     bytes: materials.reduce((sum, material) => sum + material.size_bytes, 0),
+    review: materials.reduce((sum, material) => sum + material.ocr_low_page_count, 0),
   }), [materials]);
 
+  function open(materialId: string) {
+    sessionStorage.setItem(scrollKey, String(window.scrollY));
+    navigate(`/library/${materialId}`, {
+      state: { libraryReturnTo: `${location.pathname}${location.search}` },
+    });
+  }
+
   async function chooseDelete(materialId: string) {
-    setDeleteLoading(true);
+    setBusy(true);
     setError("");
     try {
       setDeletePreview(await getMaterialDeletePreview(materialId));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Не удалось проверить последствия удаления");
     } finally {
-      setDeleteLoading(false);
+      setBusy(false);
     }
   }
 
@@ -116,97 +231,128 @@ export function Library() {
     }
   }
 
-  async function upload(file: File) {
-    if (!projectId) return;
-    setBusy(true);
-    setError("");
-    try {
-      await uploadMaterial(
-        projectId,
-        file,
-        purpose === "study_source" ? "main" : "reference",
-        [purpose],
-      );
-      setUploadOpen(false);
-      await load();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Не удалось загрузить материал");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   if (loading) return <LoadingState label="Загружаем Библиотеку" placement="page" />;
 
   return (
-    <div className="screen">
+    <div className="screen lib-screen">
       <PageHead
         placement="topbar"
         title="Библиотека"
-        lead={`${materials.length} файлов · ${totals.pages} страниц · ${sizeLabel(totals.bytes)}. Файл хранится один раз, проекты на него ссылаются.`}
-        actions={<Button variant="secondary" disabled={projects.length === 0} onClick={() => setUploadOpen(true)}><Upload size={15} aria-hidden="true" />Загрузить файл</Button>}
+        lead={
+          materials.length === 0
+            ? "Общие материалы установки. Файл хранится один раз, проекты на него ссылаются."
+            : `${materials.length} · ${totals.pages} стр. · ${sizeLabel(totals.bytes)}`
+            + (totals.review ? ` · нужно проверить: ${totals.review}` : "")
+        }
+        actions={
+          <Button onClick={() => setAddOpen(true)}>
+            <Plus size={15} aria-hidden="true" /> Добавить материал
+          </Button>
+        }
       />
       {error && <ErrorState message={error} />}
-      {deleteLoading && <LoadingState label="Проверяем последствия удаления" />}
+
+      {materials.length > 0 && (
+        <LibraryFilters
+          value={filters}
+          total={materials.length}
+          shown={visible.length}
+          onChange={updateFilters}
+          onReset={() => setSearchParams(new URLSearchParams(), { replace: true })}
+        />
+      )}
 
       {materials.length === 0 ? (
         <EmptyState title="Библиотека пока пуста">
-          <p>Добавьте материал в проект — общий файл появится здесь автоматически.</p>
-          {projects.length > 0 && <Button onClick={() => setUploadOpen(true)}>Загрузить первый файл</Button>}
+          <p>
+            Здесь живут общие материалы установки: файлы, вставленный текст,
+            сохранённые веб-страницы, субтитры и аудиозаписи. Проект не нужен —
+            подключить материал к нему можно позже.
+          </p>
+          <Button onClick={() => setAddOpen(true)}>Добавить первый материал</Button>
+        </EmptyState>
+      ) : visible.length === 0 ? (
+        <EmptyState title="Под фильтры ничего не подошло">
+          <p>Попробуйте другой запрос или сбросьте фильтры.</p>
+          <Button variant="secondary" onClick={() => setSearchParams(new URLSearchParams(), { replace: true })}>
+            Сбросить фильтры
+          </Button>
         </EmptyState>
       ) : (
-        <div className="lib-list">
-          {materials.map((material) => (
-            <Card className="lib-row" key={material.id}>
-              <div className="lib-row-main">
-                <span className="lib-row-icon"><MaterialIcon material={material} /></span>
-                <span className="lib-row-name">{material.original_name}</span>
-                <span className="lib-row-meta">{sizeLabel(material.size_bytes)}</span>
-                <span className="lib-row-meta">{material.page_count ?? "—"} стр.</span>
-                <span className="lib-row-quality">
-                  {material.native_page_count > 0 && <QualityBadge quality="native" count={material.native_page_count} />}
-                  {material.ocr_page_count > 0 && <QualityBadge quality="ocr" count={material.ocr_page_count} />}
-                  {material.ocr_low_page_count > 0 && <QualityBadge quality="ocr_low" count={material.ocr_low_page_count} />}
-                  {material.status !== "ready" && <StatusBadge>{material.status === "failed" ? "Ошибка" : "Не разобран"}</StatusBadge>}
-                </span>
-                <span className="lib-row-usage">
-                  {material.usage.length > 0 ? material.usage.map((usage, index) => (
-                    <span key={`${usage.project_id}-${index}`}>
-                      <Link to={`/projects/${usage.project_id}/materials/${material.id}`}>{usage.project_name}</Link>
-                      <small>{usage.display_name} · {usage.purposes.map((item) => PURPOSE[item]).join(", ")}</small>
+        <div className="lib-list" role="list">
+          {visible.map((material) => {
+            const Icon = KIND_ICON[kindOf(material)];
+            return (
+              <div className="lib-row" role="listitem" key={material.id}>
+                {/* Вся смысловая область строки — одна кнопка перехода;
+                    вложенные действия останавливают её своим onClick. */}
+                <button
+                  type="button"
+                  className="lib-row-open"
+                  onClick={() => open(material.id)}
+                >
+                  <span className="lib-row-icon"><Icon size={17} aria-hidden="true" /></span>
+                  <span className="lib-row-body">
+                    <span className="lib-row-name">{material.original_name}</span>
+                    <span className="lib-row-meta">
+                      <span>{sizeLabel(material.size_bytes)}</span>
+                      {material.page_count !== null && <span>{pageLabel(material.page_count)}</span>}
+                      {material.block_count > 0 && <span>блоков {material.block_count}</span>}
                     </span>
+                  </span>
+                  <span className="lib-row-quality">
+                    {material.status !== "ready" && (
+                      <StatusBadge tone={material.status === "failed" ? "danger" : "neutral"}>
+                        {STATUS_LABEL[material.status]}
+                      </StatusBadge>
+                    )}
+                    {material.native_page_count > 0 && (
+                      <QualityBadge quality="native" count={material.native_page_count} />
+                    )}
+                    {material.ocr_page_count > 0 && (
+                      <QualityBadge quality="ocr" count={material.ocr_page_count} />
+                    )}
+                    {material.ocr_low_page_count > 0 && (
+                      <QualityBadge quality="ocr_low" count={material.ocr_low_page_count} />
+                    )}
+                  </span>
+                </button>
+
+                <div className="lib-row-usage">
+                  {material.usage.length > 0 ? material.usage.map((usage) => (
+                    <Link
+                      key={`${usage.project_id}-${usage.display_name}`}
+                      to={`/projects/${usage.project_id}/materials/${material.id}`}
+                      title={`${usage.display_name} · ${usage.purposes.map((item) => PURPOSE[item]).join(", ")}`}
+                    >
+                      {usage.project_name}
+                    </Link>
                   )) : <span className="lib-unused">не используется</span>}
-                </span>
-                <IconButton label={`Удалить ${material.original_name}`} disabled={busy} onClick={() => void chooseDelete(material.id)}><Trash2 size={15} /></IconButton>
-              </div>
-              <Disclosure summary="Подробности файла">
-                <div className="lib-row-detail">
-                  <span className="lib-row-meta">Добавлен {new Date(material.created_at).toLocaleDateString("ru-RU")}</span>
-                  <span className="lib-row-meta">Хеш {material.sha256.slice(0, 8)}…{material.sha256.slice(-4)}</span>
-                  <span className="lib-row-meta">Блоков {material.block_count} · фрагментов {material.fragment_count}</span>
-                  {material.source_url && <a href={material.source_url} target="_blank" rel="noreferrer">Открыть исходную ссылку</a>}
                 </div>
-              </Disclosure>
-            </Card>
-          ))}
+
+                <IconButton
+                  label={`Удалить ${material.original_name}`}
+                  disabled={busy}
+                  onClick={() => void chooseDelete(material.id)}
+                >
+                  <Trash2 size={15} />
+                </IconButton>
+              </div>
+            );
+          })}
         </div>
       )}
 
-      <p className="lib-note">«Не используется» — нейтральный факт: файл мог остаться после проекта или быть загружен впрок.</p>
-
-      <Dialog
-        open={uploadOpen}
-        onOpenChange={setUploadOpen}
-        title="Загрузить материал"
-        description="Материал сразу связывается с выбранным проектом. Разбор запускается в разделе Материалы после проверки оценки."
-        footer={<><Button variant="ghost" onClick={() => setUploadOpen(false)}>Отменить</Button><Button disabled={busy || !projectId} onClick={() => input.current?.click()}>Выбрать файл</Button></>}
-      >
-        <input ref={input} className="materials-file-input" type="file" tabIndex={-1} aria-hidden="true" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.mp3,.wav,.m4a,.ogg,.flac" onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file); event.target.value = ""; }} />
-        <div className="materials-text-form">
-          <Field label="Проект" required><select value={projectId} onChange={(event) => setProjectId(event.target.value)}>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></Field>
-          <Field label="Использовать как" required><select value={purpose} onChange={(event) => setPurpose(event.target.value as MaterialPurpose)}><option value="study_source">Учебный источник</option><option value="exam_structure">Список вопросов</option><option value="reference_answers">Эталонные ответы</option></select></Field>
-        </div>
-      </Dialog>
+      <AddLibraryMaterialDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        onCreated={(created) => {
+          sessionStorage.setItem(scrollKey, "0");
+          navigate(`/library/${created.id}`, {
+            state: { libraryReturnTo: `${location.pathname}${location.search}` },
+          });
+        }}
+      />
 
       <ConfirmDialog
         open={deletePreview !== null}
@@ -218,16 +364,27 @@ export function Library() {
       >
         <p className="dialog-lead">Файл удалится из общей Библиотеки и отвяжется от всех проектов.</p>
         <ul className="consequences">
-          {deletePreview?.material.usage.map((usage) => <li key={usage.project_id}>{usage.project_name}: {usage.purposes.map((item) => PURPOSE[item]).join(", ")}</li>)}
-          {deletePreview?.reference_answer_count ? <li>Эталонов из файла: {deletePreview.reference_answer_count}. Текст сохранится, источник станет недоступен.</li> : null}
-          {deletePreview?.binding_count ? <li>Привязок к фрагментам: {deletePreview.binding_count}. Они уйдут вместе с файлом.</li> : null}
+          {deletePreview?.material.usage.map((usage) => (
+            <li key={usage.project_id}>
+              {usage.project_name}: {usage.purposes.map((item) => PURPOSE[item]).join(", ")}
+            </li>
+          ))}
+          {deletePreview?.reference_answer_count ? (
+            <li>Эталонов из файла: {deletePreview.reference_answer_count}. Текст сохранится, источник станет недоступен.</li>
+          ) : null}
+          {deletePreview?.binding_count ? (
+            <li>Привязок к фрагментам: {deletePreview.binding_count}. Они уйдут вместе с файлом.</li>
+          ) : null}
           {deletePreview?.affected_projects.map((affected) => (
             <li key={affected.project_id}>
               {affected.project_name}: без материала останутся — {affected.nodes_losing_material.join(", ")}.
             </li>
           ))}
           {deletePreview?.active_task && <li>Текущая обработка будет остановлена вместе с файлом.</li>}
-          {deletePreview?.material.usage.length === 0 && !deletePreview.reference_answer_count && !deletePreview.binding_count && <li>Файл не используется ни одним проектом.</li>}
+          {deletePreview?.material.usage.length === 0
+            && !deletePreview.reference_answer_count
+            && !deletePreview.binding_count
+            && <li>Файл не используется ни одним проектом.</li>}
         </ul>
       </ConfirmDialog>
     </div>

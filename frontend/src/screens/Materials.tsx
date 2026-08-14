@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
   FileImage,
   FileText,
   Globe,
@@ -36,7 +37,6 @@ import type { BindingFragmentRead, HeadingSuggestion, NodeBindingSummary } from 
 import { linkAnswersMaterial, listBindings, resolveAnswersHeading } from "../api/bindings";
 import {
   getMaterialPage,
-  getMaterialCapabilities,
   materialFragmentAssetUrl,
   importMaterialReferenceAnswers,
   materialPageImageUrl,
@@ -48,7 +48,6 @@ import type {
   MaterialPageRead,
   MaterialPurpose,
   MaterialRead,
-  MaterialCapabilities,
   MaterialUpdateCommand,
   SourceRole,
 } from "../api/materials";
@@ -706,25 +705,22 @@ const TAB_LABELS: Record<InspectorTab, string> = {
 function ProcessingTab({
   material,
   busy,
-  onStart,
+  libraryLink,
   onControl,
   onImport,
   onEdit,
-  onReparse,
   onLinkAnswers,
-  capabilities,
   notice,
   onDismissNotice,
 }: {
   material: MaterialRead;
   busy: boolean;
-  onStart: (mode: "fast" | "textbook") => void;
+  /** Канонический экран обработки этого файла с возвратом сюда. */
+  libraryLink: string;
   onControl: (action: "pause" | "resume" | "retry") => void;
   onImport: () => void;
   onEdit: () => void;
-  onReparse: () => void;
   onLinkAnswers: () => void;
-  capabilities: MaterialCapabilities | null;
   notice: NoticeState | null;
   onDismissNotice: () => void;
 }) {
@@ -740,35 +736,28 @@ function ProcessingTab({
           onRetry={() => onControl("retry")}
         />
       )}
-      {(material.status === "ready_to_process" || material.status === "ready") && (
-        <section className="materials-processing-section materials-ocr-section">
-          <div className="materials-selection-head">
-            <h3>OCR</h3>
-            <StatusBadge tone="neutral">Быстро · локально</StatusBadge>
-          </div>
-          <p>
-            Текстовый слой превращается в Markdown с заголовками, списками и таблицами.
-            Страницы-сканы распознаются локально через {capabilities?.fast_label ?? "PP-OCRv5"}.
-          </p>
-          <dl className="materials-ocr-summary">
-            <div><dt>Страниц</dt><dd>{material.page_count ?? 1}</dd></div>
-            <div><dt>Сканов</dt><dd>{material.scan_page_count}</dd></div>
-            <div><dt>Низкое качество</dt><dd>{material.ocr_low_page_count}</dd></div>
-          </dl>
-          <Button
-            disabled={busy || !capabilities?.fast_available}
-            onClick={material.status === "ready" ? onReparse : () => onStart("fast")}
-          >
-            {material.status === "ready" ? <><RotateCcw size={14} /> Запустить заново</> : "Запустить"}
-          </Button>
-          <div className="materials-button-stack" aria-label="Другие режимы OCR">
-            <Button variant="secondary" disabled title={capabilities?.textbook_reason}>Учебник · недоступно</Button>
-            <Button variant="ghost" disabled title={capabilities?.cloud_reason}>Облако · этап 7</Button>
-            <Button variant="ghost" disabled title={capabilities?.cloud_reason}>Максимум · этап 7</Button>
-            <Button variant="ghost" disabled title={capabilities?.cloud_reason}>Эксперт · этап 7</Button>
-          </div>
-        </section>
-      )}
+      {/* Разбор общий для всех проектов с этим файлом, поэтому запуск и повтор
+          живут в канонической рабочей области Библиотеки: делать их отсюда
+          молча — значит менять чужие проекты без предупреждения. Наблюдение за
+          задачей и состояние остаются здесь, они проектную работу не меняют. */}
+      <section className="materials-processing-section materials-ocr-section">
+        <div className="materials-selection-head">
+          <h3>Подготовка файла</h3>
+          <StatusBadge tone="neutral">общая для всех проектов</StatusBadge>
+        </div>
+        <dl className="materials-ocr-summary">
+          <div><dt>Страниц</dt><dd>{material.page_count ?? 1}</dd></div>
+          <div><dt>Сканов</dt><dd>{material.scan_page_count}</dd></div>
+          <div><dt>Нужно проверить</dt><dd>{material.ocr_low_page_count}</dd></div>
+        </dl>
+        <p>
+          Распознавание, версии и сведения о самом файле — в Библиотеке.
+          Изменение там увидят все проекты, где используется этот материал.
+        </p>
+        <Link className="secondary-button" to={libraryLink}>
+          <ExternalLink size={14} aria-hidden="true" /> Открыть обработку в Библиотеке
+        </Link>
+      </section>
       {material.status === "paused" && <Button disabled={busy} onClick={() => onControl("resume")}><Play size={14} /> Возобновить</Button>}
       {material.status === "processing" && <Button variant="secondary" disabled={busy} onClick={() => onControl("pause")}><Pause size={14} /> Поставить на паузу</Button>}
       {material.status === "failed" && <Button disabled={busy} onClick={() => onControl("retry")}><RotateCcw size={14} /> Повторить</Button>}
@@ -783,8 +772,17 @@ function ProcessingTab({
           <Button variant="ghost" disabled={busy} onClick={onImport}>Импортировать ответы текстом</Button>
         </section>
       )}
-      {material.status === "ready" && <Button variant="secondary" disabled={busy} onClick={onEdit}><Pencil size={14} />Исправить текст страницы</Button>}
-      {material.diagnostics.length > 0 && <section className="materials-processing-section"><h3>Диагностика</h3><ul>{material.diagnostics.map((item) => <li key={item}>{item === "formula_possible" ? "Возможны формулы — сверяйте с оригиналом" : item === "audio_transcription_required" ? "Нужна локальная транскрипция аудио" : item}</li>)}</ul>{material.ocr_low_page_count > 0 && <p>Есть страницы низкого качества. Проверьте оригинал или выберите следующий доступный режим.</p>}</section>}
+      {material.status === "ready" && (
+        <>
+          <Button variant="secondary" disabled={busy} onClick={onEdit}>
+            <Pencil size={14} />Исправить текст страницы
+          </Button>
+          <p className="materials-muted">
+            Изменение будет использоваться во всех проектах с этим материалом.
+          </p>
+        </>
+      )}
+      {material.diagnostics.length > 0 && <section className="materials-processing-section"><h3>Диагностика</h3><ul>{material.diagnostics.map((item) => <li key={item}>{item === "formula_possible" ? "Возможны формулы — сверяйте с оригиналом" : item === "audio_transcription_required" ? "Нужна локальная транскрипция аудио" : item}</li>)}</ul>{material.ocr_low_page_count > 0 && <p>Есть страницы, которые стоит сравнить с оригиналом.</p>}</section>}
       {material.error && <ErrorState title="Разбор остановился" message={material.error} />}
     </div>
   );
@@ -1177,16 +1175,14 @@ function MaterialInspector({
   onTabChange,
   busy,
   notice,
-  onStart,
+  libraryLink,
   onControl,
   onImport,
   onRemove,
   onEdit,
-  onReparse,
   onLinkAnswers,
   answersMaterial,
   onSaveFile,
-  capabilities,
   bindingsProps,
   examStructureProps,
   textbook,
@@ -1198,16 +1194,14 @@ function MaterialInspector({
   onTabChange: (tab: InspectorTab) => void;
   busy: boolean;
   notice: NoticeState | null;
-  onStart: (mode: "fast" | "textbook") => void;
+  libraryLink: string;
   onControl: (action: "pause" | "resume" | "retry") => void;
   onImport: () => void;
   onRemove: () => void;
   onEdit: () => void;
-  onReparse: () => void;
   onLinkAnswers: () => void;
   answersMaterial: MaterialRead | null;
   onSaveFile: (command: MaterialUpdateCommand) => Promise<MaterialRead | null>;
-  capabilities: MaterialCapabilities | null;
   bindingsProps: BindingsTabProps;
   examStructureProps: ExamStructureBindingsTabProps;
   textbook: boolean;
@@ -1236,7 +1230,7 @@ function MaterialInspector({
           : <BindingsTab {...bindingsProps} />
         )}
         {activeTab === "processing" && (
-          <ProcessingTab material={material} busy={busy} onStart={onStart} onControl={onControl} onImport={onImport} onEdit={onEdit} onReparse={onReparse} onLinkAnswers={onLinkAnswers} capabilities={capabilities} notice={notice} onDismissNotice={onDismissNotice} />
+          <ProcessingTab material={material} busy={busy} libraryLink={libraryLink} onControl={onControl} onImport={onImport} onEdit={onEdit} onLinkAnswers={onLinkAnswers} notice={notice} onDismissNotice={onDismissNotice} />
         )}
         {activeTab === "file" && (
           <div className="materials-inspector-content">
@@ -1264,13 +1258,11 @@ function MaterialSurface() {
   const [query, setQuery] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
-  const [reparseOpen, setReparseOpen] = useState(false);
   const [pageNumber, setPageNumber] = useState(1);
   const [page, setPage] = useState<MaterialPageRead | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"original" | "text">("text");
   const [notice, setNotice] = useState<NoticeState | null>(null);
-  const [capabilities, setCapabilities] = useState<MaterialCapabilities | null>(null);
   const [documentQuery, setDocumentQuery] = useState("");
   /** «fit» — вписать страницу целиком: с ним документ открывается, а не с обрезанного 100%. */
   const [zoom, setZoom] = useState<number | "fit">("fit");
@@ -1378,12 +1370,6 @@ function MaterialSurface() {
     void getProject(projectId, controller.signal).then(setProject).catch(() => undefined);
     return () => controller.abort();
   }, [projectId]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void getMaterialCapabilities(controller.signal).then(setCapabilities).catch(() => undefined);
-    return () => controller.abort();
-  }, []);
 
   useEffect(() => {
     if (!material || material.status !== "ready") {
@@ -1851,6 +1837,13 @@ function MaterialSurface() {
     return null;
   }
 
+  const libraryLink = material
+    ? `/library/${material.id}?returnTo=${encodeURIComponent(
+      `/projects/${projectId}/materials/${material.id}?page=${pageNumber}`
+        + (focusedFragmentId ? `&focus=${focusedFragmentId}` : ""),
+    )}`
+    : "/library";
+
   if (store.loading) return <LoadingState label="Загружаем материалы" placement="page" />;
 
   return (
@@ -1999,16 +1992,14 @@ function MaterialSurface() {
           onTabChange={setInspectorTab}
           busy={store.busy}
           notice={notice}
-          onStart={(mode) => void store.start(material.id, mode)}
+          libraryLink={libraryLink}
           onControl={(action) => void store.control(material.id, action)}
           onImport={() => void importAnswers()}
           onRemove={() => setRemoveOpen(true)}
           onEdit={() => { if (page) { setEditText(page.text); setEditOpen(true); } }}
-          onReparse={() => setReparseOpen(true)}
           onLinkAnswers={() => void linkAnswers()}
           answersMaterial={answersMaterial}
           onSaveFile={saveFileSettings}
-          capabilities={capabilities}
           textbook={Boolean(textbook)}
           isExamStructureFile={isExamStructureFile}
           onDismissNotice={() => setNotice(null)}
@@ -2121,28 +2112,6 @@ function MaterialSurface() {
             });
           }}
         />
-      )}
-      {material && (
-        <ConfirmDialog
-          open={reparseOpen}
-          onOpenChange={setReparseOpen}
-          title={`Разобрать «${material.display_name}» заново?`}
-          confirmLabel="Разобрать заново"
-          onConfirm={() => {
-            void store.start(material.id, "fast");
-            setInspectorTab("processing");
-            say("Разбор запущен заново. Списки и отступы появятся после его окончания.", "info");
-          }}
-        >
-          <p>
-            Страницы соберутся текущим разбором: абзацы перестанут рваться по строкам,
-            списки получат отступы. Исходный файл не меняется, эталонные ответы остаются.
-          </p>
-          <p>
-            Привязки переедут на новые фрагменты по совпадению текста. Те, чей текст
-            изменился, станут осиротевшими — их придётся поставить заново.
-          </p>
-        </ConfirmDialog>
       )}
       {material && (
         <ConfirmDialog

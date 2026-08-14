@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { Cards } from "../screens/cards/Cards";
 import { CoverageMap } from "../screens/CoverageMap";
 import { Library } from "../screens/Library";
+import { LibraryMaterialWorkspace } from "../screens/library/LibraryMaterialWorkspace";
 import { Lessons } from "../screens/lessons/Lessons";
 import { Materials, SourceViewer } from "../screens/Materials";
 import { Plan } from "../screens/Plan";
@@ -34,6 +35,7 @@ export const SCREEN_VIEWS: Record<string, ComponentType> = {
   "coverage-map": CoverageMap,
   settings: ProjectSettings,
   library: Library,
+  "library-material": LibraryMaterialWorkspace,
   setup: Setup,
   "ui-kit": UiKit,
 };

@@ -3,13 +3,15 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { isAiApiError, type AiPreflight, type DecimalValue } from "../api/ai";
 import {
+  applyLibraryPageCleanup,
   applyMaterialPageCleanup,
+  preflightLibraryPageCleanup,
   preflightMaterialPageCleanup,
+  runLibraryPageCleanup,
   runMaterialPageCleanup,
   type CleanupPreflightRead,
   type CleanupRunRead,
   type MaterialPageRead,
-  type MaterialRead,
   type PageCorrectionRead,
 } from "../api/materials";
 import { ProjectApiError } from "../api/projects";
@@ -31,10 +33,19 @@ interface CleanupUndoSnapshot {
   appliedSourceHash: string;
 }
 
+/** Уборка одинаково работает из проекта и из Библиотеки: ей нужны только
+    материал и страница, а роль шлюза, кэш и учёт расхода общие. */
+export interface CleanupMaterial {
+  id: string;
+  display_name: string;
+  active_parse_revision: number;
+}
+
 interface AiCleanupPanelProps {
   open: boolean;
-  projectId: string;
-  material: MaterialRead;
+  /** null — уборка запущена из Библиотеки: проекта у общего материала нет. */
+  projectId: string | null;
+  material: CleanupMaterial;
   page: MaterialPageRead;
   onOpenChange: (open: boolean) => void;
   onManualEdit: () => void;
@@ -137,7 +148,9 @@ export function AiCleanupPanel({
     setBusy("preflight");
     setError(null);
     const timer = window.setTimeout(() => {
-      void preflightMaterialPageCleanup(projectId, material.id, page.page_number, instruction, controller.signal)
+      void (projectId === null
+        ? preflightLibraryPageCleanup(material.id, page.page_number, instruction, controller.signal)
+        : preflightMaterialPageCleanup(projectId, material.id, page.page_number, instruction, controller.signal))
         .then((value) => {
           if (controller.signal.aborted) return;
           setPreflight(value);
@@ -174,7 +187,12 @@ export function AiCleanupPanel({
     setError(null);
     setConflict(false);
     try {
-      const result = await runMaterialPageCleanup(projectId, material.id, page.page_number, {
+      const send = projectId === null
+        ? (command: Parameters<typeof runLibraryPageCleanup>[2], signal: AbortSignal) =>
+          runLibraryPageCleanup(material.id, page.page_number, command, signal)
+        : (command: Parameters<typeof runLibraryPageCleanup>[2], signal: AbortSignal) =>
+          runMaterialPageCleanup(projectId, material.id, page.page_number, command, signal);
+      const result = await send({
         instruction,
         expected_revision: preflight.revision,
         expected_source_hash: preflight.source_hash,
@@ -198,7 +216,12 @@ export function AiCleanupPanel({
     setError(null);
     setConflict(false);
     try {
-      const result = await applyMaterialPageCleanup(projectId, material.id, page.page_number, {
+      const send = projectId === null
+        ? (command: Parameters<typeof applyLibraryPageCleanup>[2], signal: AbortSignal) =>
+          applyLibraryPageCleanup(material.id, page.page_number, command, signal)
+        : (command: Parameters<typeof applyLibraryPageCleanup>[2], signal: AbortSignal) =>
+          applyMaterialPageCleanup(projectId, material.id, page.page_number, command, signal);
+      const result = await send({
         run_id: runResult.run_id,
         expected_revision: runResult.revision,
         expected_source_hash: runResult.source_hash,

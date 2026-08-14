@@ -73,6 +73,9 @@ export interface MaterialFragmentRead {
   structure_level: number | null;
   degraded_structure: boolean;
   quality: PageQuality;
+  /** Границы сегмента у расшифровки аудио и субтитров; у остальных — null. */
+  time_from: number | null;
+  time_to: number | null;
 }
 
 export interface MaterialBlockRead {
@@ -141,6 +144,94 @@ export interface LibraryMaterialRead {
   sha256: string;
   created_at: string;
   usage: LibraryUsageRead[];
+}
+
+/* ── Глобальная Библиотека. Общий материал не знает про проект: роли,
+   назначения и привязки живут в `ProjectMaterial` и остаются проектными. ── */
+
+export type MaterialPresentationKind =
+  | "pdf"
+  | "image"
+  | "document"
+  | "plain_text"
+  | "web"
+  | "youtube"
+  | "audio";
+
+export type OutlineSource = "embedded" | "recognized" | "none";
+
+export type RevisionOrigin =
+  | "imported"
+  | "parse"
+  | "manual_edit"
+  | "ai_cleanup"
+  | "source_refresh"
+  | "restore";
+
+export type ProcessingScope = "all" | "needs_review" | "range";
+
+export interface LibraryMaterialCapabilities {
+  can_compare: boolean;
+  can_view_original: boolean;
+  can_edit_text: boolean;
+  can_run_ocr: boolean;
+  can_refresh_source: boolean;
+  has_outline: boolean;
+  has_timeline: boolean;
+}
+
+export interface OutlineItem {
+  level: number;
+  title: string;
+  page: number;
+}
+
+export interface MaterialRevisionRead {
+  revision: number;
+  origin: RevisionOrigin;
+  parser_mode: ParserMode | null;
+  parent_revision: number | null;
+  scope: Record<string, unknown>;
+  summary: Record<string, unknown>;
+  created_at: string;
+  is_current: boolean;
+}
+
+export interface LibraryMaterialDetailRead extends LibraryMaterialRead {
+  presentation_kind: MaterialPresentationKind;
+  capabilities: LibraryMaterialCapabilities;
+  outline: OutlineItem[];
+  outline_source: OutlineSource;
+  active_parse_revision: number;
+  parser_mode: ParserMode | null;
+  scan_page_count: number;
+  estimated_seconds: number | null;
+  diagnostics: string[];
+  error: string | null;
+  task: ProcessingTaskRead | null;
+  retrieved_at: string | null;
+  updated_at: string;
+}
+
+export interface LibrarySearchHit {
+  fragment_id: string;
+  page_number: number;
+  block_title: string | null;
+  bbox: number[];
+  text: string;
+  rank: number;
+}
+
+export interface LibrarySearchResult {
+  query: string;
+  revision: number;
+  hits: LibrarySearchHit[];
+}
+
+export interface SourceRefreshResult {
+  material: LibraryMaterialDetailRead;
+  revision: number;
+  changed: boolean;
 }
 
 export interface AffectedProjectPreview {
@@ -411,6 +502,180 @@ export const getMaterialDeletePreview = (
 export const deleteLibraryMaterial = (materialId: string): Promise<void> => request(
   `/api/materials/${encodeURIComponent(materialId)}`,
   { method: "DELETE" },
+);
+
+/* ── Глобальные операции над общим материалом ── */
+
+const libraryPath = (materialId: string): string =>
+  `/api/materials/${encodeURIComponent(materialId)}`;
+
+export const getLibraryMaterial = (
+  materialId: string,
+  signal?: AbortSignal,
+): Promise<LibraryMaterialDetailRead> => request(libraryPath(materialId), { signal });
+
+export async function uploadLibraryMaterial(file: File): Promise<LibraryMaterialDetailRead> {
+  const form = new FormData();
+  form.set("file", file);
+  return uploadResponse(await fetch("/api/materials/upload", {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    body: form,
+  })) as unknown as LibraryMaterialDetailRead;
+}
+
+export const createLibraryTextMaterial = (
+  command: { name: string; text: string },
+): Promise<LibraryMaterialDetailRead> => request("/api/materials/text", {
+  method: "POST",
+  body: JSON.stringify(command),
+});
+
+export const createLibraryExternalMaterial = (
+  command: { kind: "url" | "youtube"; url: string },
+): Promise<LibraryMaterialDetailRead> => request("/api/materials/external", {
+  method: "POST",
+  body: JSON.stringify(command),
+});
+
+export const attachLibraryMaterial = (
+  materialId: string,
+  command: {
+    project_id: string;
+    display_name?: string | null;
+    source_role: SourceRole;
+    purposes: MaterialPurpose[];
+  },
+): Promise<LibraryMaterialDetailRead> => request(`${libraryPath(materialId)}/project-links`, {
+  method: "POST",
+  body: JSON.stringify(command),
+});
+
+export const getLibraryPage = (
+  materialId: string,
+  page: number,
+  options: { revision?: number; taskId?: string; signal?: AbortSignal } = {},
+): Promise<MaterialPageRead> => {
+  const query = new URLSearchParams();
+  if (options.revision !== undefined) query.set("revision", String(options.revision));
+  if (options.taskId) query.set("task_id", options.taskId);
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return request(`${libraryPath(materialId)}/pages/${page}${suffix}`, { signal: options.signal });
+};
+
+export const libraryPageImageUrl = (materialId: string, page: number): string =>
+  `${libraryPath(materialId)}/pages/${page}/image`;
+
+export const libraryFragmentAssetUrl = (materialId: string, fragmentId: string): string =>
+  `${libraryPath(materialId)}/fragments/${encodeURIComponent(fragmentId)}/asset`;
+
+export const librarySourceUrl = (materialId: string, revision?: number): string =>
+  revision === undefined
+    ? `${libraryPath(materialId)}/source`
+    : `${libraryPath(materialId)}/source?revision=${revision}`;
+
+export const searchLibraryMaterial = (
+  materialId: string,
+  query: string,
+  options: { revision?: number; limit?: number; signal?: AbortSignal } = {},
+): Promise<LibrarySearchResult> => {
+  const params = new URLSearchParams({ q: query });
+  if (options.revision !== undefined) params.set("revision", String(options.revision));
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  return request(`${libraryPath(materialId)}/search?${params.toString()}`, {
+    signal: options.signal,
+  });
+};
+
+export const listMaterialRevisions = (
+  materialId: string,
+  signal?: AbortSignal,
+): Promise<MaterialRevisionRead[]> => request(`${libraryPath(materialId)}/revisions`, { signal });
+
+export const restoreMaterialRevision = (
+  materialId: string,
+  revision: number,
+): Promise<LibraryMaterialDetailRead> => request(
+  `${libraryPath(materialId)}/revisions/${revision}/restore`,
+  { method: "POST" },
+);
+
+export const startLibraryProcessing = (
+  materialId: string,
+  command: {
+    parser_mode: ParserMode;
+    scope: ProcessingScope;
+    page_from?: number | null;
+    page_to?: number | null;
+  },
+): Promise<LibraryMaterialDetailRead> => request(`${libraryPath(materialId)}/processing`, {
+  method: "POST",
+  body: JSON.stringify(command),
+});
+
+export const controlLibraryProcessing = (
+  materialId: string,
+  action: "pause" | "resume" | "retry",
+): Promise<LibraryMaterialDetailRead> => request(
+  `${libraryPath(materialId)}/processing/${action}`,
+  { method: "POST" },
+);
+
+export const updateLibraryPageText = (
+  materialId: string,
+  page: number,
+  text: string,
+  expected?: { revision: number; sourceHash?: string },
+): Promise<PageCorrectionRead> => request(`${libraryPath(materialId)}/pages/${page}`, {
+  method: "PUT",
+  body: JSON.stringify({
+    text,
+    expected_revision: expected?.revision,
+    expected_source_hash: expected?.sourceHash,
+  }),
+});
+
+export const refreshLibrarySource = (materialId: string): Promise<SourceRefreshResult> =>
+  request(`${libraryPath(materialId)}/source/refresh`, { method: "POST" });
+
+export const preflightLibraryPageCleanup = (
+  materialId: string,
+  page: number,
+  instruction: string,
+  signal?: AbortSignal,
+): Promise<CleanupPreflightRead> => request(
+  `${libraryPath(materialId)}/pages/${page}/ai-cleanup/preflight`,
+  { method: "POST", body: JSON.stringify({ instruction }), signal },
+);
+
+export const runLibraryPageCleanup = (
+  materialId: string,
+  page: number,
+  command: {
+    instruction: string;
+    expected_revision: number;
+    expected_source_hash: string;
+    confirmed: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<CleanupRunRead> => request(
+  `${libraryPath(materialId)}/pages/${page}/ai-cleanup`,
+  { method: "POST", body: JSON.stringify(command), signal },
+);
+
+export const applyLibraryPageCleanup = (
+  materialId: string,
+  page: number,
+  command: {
+    run_id: string;
+    expected_revision: number;
+    expected_source_hash: string;
+    markdown: string;
+  },
+  signal?: AbortSignal,
+): Promise<PageCorrectionRead> => request(
+  `${libraryPath(materialId)}/pages/${page}/ai-cleanup/apply`,
+  { method: "POST", body: JSON.stringify(command), signal },
 );
 
 export const previewExamProgram = (

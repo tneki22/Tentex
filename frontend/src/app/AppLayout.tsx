@@ -104,7 +104,14 @@ export function AppLayout() {
     );
   }
 
-  if (/^\/projects\/[^/]+(?:\/.*)?$/.test(location.pathname)) {
+  /* Рабочая область материала Библиотеки — такая же полноразмерная поверхность,
+     как проектные: оглавление, две половины документа и панель обработки не
+     помещаются в контентную колонку обычной оболочки. Сам список `/library`
+     остаётся в ней. */
+  if (
+    /^\/projects\/[^/]+(?:\/.*)?$/.test(location.pathname)
+    || /^\/library\/[^/]+$/.test(location.pathname)
+  ) {
     return (
       <TooltipProvider>
         <Outlet />
