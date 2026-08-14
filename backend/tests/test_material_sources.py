@@ -1,11 +1,16 @@
 from pathlib import Path
 
 import pytest
+from conftest import link_material, make_exam_project, make_material
+from pydantic import ValidationError
+from sqlalchemy.orm import Session
 
+from app.materials import service
 from app.materials.external import _ReadableHtml, _validate_public_url, _youtube_id
 from app.materials.parsers.native import inspect
-from app.models import ExamFormat
-from app.projects.errors import ProjectDomainError
+from app.materials.schemas import MaterialPurpose, MaterialUpdate
+from app.models import ExamFormat, ProjectMaterial, SourceRole
+from app.projects.errors import ProjectConflictError, ProjectDomainError
 from app.projects.importer import parse_exam_program
 
 
@@ -40,3 +45,86 @@ def test_exam_import_accepts_ocr_number_without_space() -> None:
     parsed = parse_exam_program("40) Первый вопрос\n41)Второй вопрос", ExamFormat.QUESTIONS)
     assert parsed.questions == 2
     assert [node.title for node in parsed.nodes] == ["Первый вопрос", "Второй вопрос"]
+
+
+def test_material_settings_update_all_project_fields(session: Session) -> None:
+    project = make_exam_project(session)
+    material = make_material(session, "f1")
+    link = link_material(session, project, material)
+
+    result = service.update_material(
+        session,
+        project.id,
+        material.id,
+        MaterialUpdate(
+            display_name="Ответы по предмету",
+            source_role=SourceRole.MAIN,
+            priority=3,
+            instruction="Использовать таблицы как приложения",
+            purposes=[MaterialPurpose.STUDY_SOURCE],
+        ),
+    )
+
+    assert result.display_name == "Ответы по предмету"
+    assert result.source_role == SourceRole.MAIN
+    assert result.priority == 3
+    assert result.instruction == "Использовать таблицы как приложения"
+    assert result.attached_at == link.created_at
+    assert session.get(ProjectMaterial, (project.id, material.id)).affects_program is True
+
+
+def test_second_answers_file_requires_explicit_replacement(session: Session) -> None:
+    project = make_exam_project(session)
+    current = make_material(session, "f2")
+    candidate = make_material(session, "f3")
+    current_link = link_material(session, project, current)
+    current_link.purposes = [MaterialPurpose.REFERENCE_ANSWERS.value]
+    link_material(session, project, candidate)
+    session.commit()
+
+    with pytest.raises(ProjectConflictError) as caught:
+        service.update_material(
+            session,
+            project.id,
+            candidate.id,
+            MaterialUpdate(purposes=[MaterialPurpose.REFERENCE_ANSWERS]),
+        )
+
+    assert caught.value.code == "reference_answers_already_set"
+
+
+def test_confirmed_answers_replacement_is_atomic(session: Session) -> None:
+    project = make_exam_project(session)
+    current = make_material(session, "f4")
+    candidate = make_material(session, "f5")
+    current_link = link_material(session, project, current)
+    current_link.purposes = [MaterialPurpose.REFERENCE_ANSWERS.value]
+    link_material(session, project, candidate)
+    session.commit()
+
+    result = service.update_material(
+        session,
+        project.id,
+        candidate.id,
+        MaterialUpdate(
+            display_name="Новый эталон",
+            source_role=SourceRole.REFERENCE,
+            purposes=[MaterialPurpose.REFERENCE_ANSWERS],
+            replace_reference_answers=True,
+        ),
+    )
+
+    previous = session.get(ProjectMaterial, (project.id, current.id))
+    assert previous.purposes == [MaterialPurpose.STUDY_SOURCE.value]
+    assert result.purposes == [MaterialPurpose.REFERENCE_ANSWERS]
+    assert result.display_name == "Новый эталон"
+    assert result.source_role == SourceRole.REFERENCE
+    assert session.get(ProjectMaterial, (project.id, candidate.id)).affects_program is False
+
+
+def test_replacement_flag_requires_answers_purpose() -> None:
+    with pytest.raises(ValidationError):
+        MaterialUpdate(
+            purposes=[MaterialPurpose.STUDY_SOURCE],
+            replace_reference_answers=True,
+        )

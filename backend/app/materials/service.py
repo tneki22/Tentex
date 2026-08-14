@@ -160,6 +160,7 @@ def _read(link: ProjectMaterial, material: Material, task: ProcessingTask | None
         diagnostics=material.diagnostics,
         error=material.error,
         task=_task_read(task),
+        attached_at=link.created_at,
         created_at=material.created_at,
         updated_at=material.updated_at,
     )
@@ -186,6 +187,21 @@ def _guard_single_answers_file(
         code="reference_answers_already_set",
         context={"material_id": str(existing.material_id), "display_name": name},
     )
+
+
+def _release_existing_answers_file(
+    session: Session, project_id: UUID, material_id: UUID
+) -> None:
+    """Снимает назначение со старого эталона внутри транзакции обновления нового."""
+    existing = answers_link.find_answers_material(session, project_id)
+    if existing is None or existing.material_id == material_id:
+        return
+    purposes = [
+        purpose
+        for purpose in existing.purposes
+        if purpose != MaterialPurpose.REFERENCE_ANSWERS.value
+    ]
+    existing.purposes = purposes or [MaterialPurpose.STUDY_SOURCE.value]
 
 
 def _inspect(path: Path) -> tuple[int, int, int, list[str]]:
@@ -398,7 +414,10 @@ def update_material(
         if material is None:
             raise ProjectNotFoundError("Материал не найден")
         values = command.model_dump(exclude_unset=True)
+        replace_reference_answers = values.pop("replace_reference_answers", False)
         if "purposes" in values:
+            if replace_reference_answers:
+                _release_existing_answers_file(session, project_id, material_id)
             _guard_single_answers_file(session, project_id, values["purposes"], material_id)
             values["purposes"] = [purpose.value for purpose in values["purposes"]]
         for field, value in values.items():

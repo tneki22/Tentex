@@ -3,7 +3,14 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from app.bindings.schemas import AffectedProjectPreview
 from app.models import (
@@ -36,6 +43,7 @@ class MaterialUpdate(ApiModel):
     priority: int | None = Field(default=None, ge=0)
     instruction: str | None = None
     purposes: list[MaterialPurpose] | None = None
+    replace_reference_answers: bool = False
 
     @field_validator("purposes")
     @classmethod
@@ -45,6 +53,17 @@ class MaterialUpdate(ApiModel):
         if purposes is None:
             return None
         return list(dict.fromkeys(purposes)) or [MaterialPurpose.STUDY_SOURCE]
+
+    @model_validator(mode="after")
+    def replacement_requires_answers_purpose(self) -> "MaterialUpdate":
+        if self.replace_reference_answers and (
+            self.purposes is None
+            or MaterialPurpose.REFERENCE_ANSWERS not in self.purposes
+        ):
+            raise ValueError(
+                "Подтверждение замены допустимо только для файла эталонных ответов"
+            )
+        return self
 
 
 class TextMaterialCreate(ApiModel):
@@ -102,6 +121,7 @@ class MaterialRead(ApiModel):
     diagnostics: list[str]
     error: str | None
     task: ProcessingTaskRead | None
+    attached_at: datetime
     created_at: datetime
     updated_at: datetime
 
