@@ -212,7 +212,15 @@ async function uploadResponse(response: Response): Promise<MaterialRead> {
     const detail = typeof record.detail === "string"
       ? record.detail
       : `Загрузка завершилась с ошибкой ${response.status}`;
-    throw new ProjectApiError(response.status, detail);
+    const context = record.context && typeof record.context === "object"
+      ? record.context as Record<string, unknown>
+      : {};
+    throw new ProjectApiError(
+      response.status,
+      detail,
+      typeof record.code === "string" ? record.code : null,
+      context,
+    );
   }
   return payload as MaterialRead;
 }
@@ -414,4 +422,20 @@ export const importExamProgramFromMaterial = (
 ): Promise<ProgramChangeResult> => request(
   `${materialPath(projectId, materialId)}/exam-program-import`,
   { method: "POST", body: JSON.stringify({ expected_program_revision: expectedProgramRevision }) },
+);
+
+export const importExamDraftProgramFromMaterial = (
+  projectId: string,
+  materialId: string,
+  expectedDraftRevision: number,
+  expectedProgramRevision: number,
+): Promise<ProgramChangeResult> => request(
+  `${materialPath(projectId, materialId)}/exam-draft-import`,
+  {
+    method: "POST",
+    body: JSON.stringify({
+      expected_draft_revision: expectedDraftRevision,
+      expected_program_revision: expectedProgramRevision,
+    }),
+  },
 );

@@ -69,6 +69,7 @@ export function ProjectWizard() {
   const [draftDeleteError, setDraftDeleteError] = useState("");
   const [requestedStep, setRequestedStep] = useState<number | null>(null);
   const [activatedProject, setActivatedProject] = useState<ProjectDetail | null>(null);
+  const [activationWarning, setActivationWarning] = useState("");
   const templateKey: TemplateKey = track ?? "exam";
   const controller = useWizardDraft({ templateKey, projectId: resumeId });
 
@@ -179,10 +180,12 @@ export function ProjectWizard() {
         <Card className="wizard-success-card">
           <h1>Создан проект: {activatedProject.project.name || (textbook ? "Учебниковый проект" : "Экзаменационный проект")}</h1>
           <p>{first ? "Паспорт цели и программа сохранены." : textbook ? "Паспорт цели и источники сохранены. Программу можно составить позже." : "Паспорт цели сохранён. Вопросы можно импортировать позже."}</p>
+          {activationWarning && <p className="inline-warning" role="status">{activationWarning}</p>}
           <p className="wizard-success-next">Следующий шаг — {textbook ? "открыть Программу и добавить первую тему, когда будете готовы" : "открыть проект, проверить программу и начать готовиться"}.</p>
           <div className="wizard-success-actions">
             <Button onClick={() => navigate(destination)}>{textbook ? "Открыть программу" : "Открыть проект"}</Button>
-            <Button variant="ghost" onClick={() => setActivatedProject(null)}>Вернуться к проверке</Button>
+            {activationWarning && <Button variant="secondary" onClick={() => navigate(`/projects/${activatedProject.project.id}/materials`)}>Открыть Материалы</Button>}
+            <Button variant="ghost" onClick={() => { setActivatedProject(null); setActivationWarning(""); }}>Вернуться к проверке</Button>
           </div>
         </Card>
       </div>
@@ -277,7 +280,9 @@ export function ProjectWizard() {
         onSaveAndExit={controller.detail ? () => void saveAndExit() : undefined}
         onDiscard={controller.detail ? () => setDiscardOpen(true) : undefined}
       >
-        {track === "exam" ? <ExamWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} /> : <TextbookWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} />}
+        {track === "exam"
+          ? <ExamWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={(project, warning) => { setActivationWarning(warning ?? ""); setActivatedProject(project); }} />
+          : <TextbookWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={(project) => { setActivationWarning(""); setActivatedProject(project); }} />}
       </WizardChrome>
       <ConfirmDialog open={discardOpen} onOpenChange={setDiscardOpen} title="Удалить черновик?" confirmLabel="Удалить черновик" destructive onConfirm={discard}>
         <p>Паспорт и ручная программа этого черновика будут удалены. Общие материалы других проектов не затрагиваются.</p>
