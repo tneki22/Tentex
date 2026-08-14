@@ -24,6 +24,9 @@ export interface AnswersLinkRead {
   created_answers: number;
   updated_answers: number;
   kept_answers: number;
+  numbered_sections: number;
+  extra_sections: number;
+  ordinal_rejected_reason: string | null;
   fuzzy_headings: string[];
   unmatched_headings: string[];
   duplicate_headings: string[];

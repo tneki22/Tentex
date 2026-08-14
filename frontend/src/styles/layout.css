@@ -6695,11 +6695,16 @@ button.wizard-back-projects {
   font-size: revert;
 }
 
-.materials-pages.is-text .materials-document-block h2 {
+.materials-pages.is-text .materials-document-block h2,
+.materials-pages.is-text .materials-document-block h3,
+.materials-pages.is-text .materials-document-block h4 {
   margin: 0;
-  font-size: 1em;
   line-height: var(--leading-relaxed);
 }
+
+.materials-pages.is-text .materials-document-block h2 { font-size: 1.2em; }
+.materials-pages.is-text .materials-document-block h3 { font-size: 1.08em; }
+.materials-pages.is-text .materials-document-block h4 { font-size: 1em; }
 
 /* Картинка из документа стоит на своём месте в потоке текста. */
 .materials-document-image {
@@ -6719,6 +6724,45 @@ button.wizard-back-projects {
   padding-inline-start: 1.5em;
   text-indent: -1.5em;
 }
+
+.materials-document-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.materials-document-table-scroll:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.materials-document-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-sans);
+  font-size: 0.88em;
+}
+
+.materials-document-table th,
+.materials-document-table td {
+  min-width: 8rem;
+  padding: var(--space-2) var(--space-3);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.materials-document-table th {
+  background: var(--paper-strong);
+  color: var(--ink);
+  font-weight: var(--weight-semibold);
+}
+
+.materials-document-table tr:last-child td { border-bottom: 0; }
+.materials-document-table th:last-child,
+.materials-document-table td:last-child { border-right: 0; }
 
 .materials-marker-rail {
   position: relative;
@@ -7434,6 +7478,38 @@ button.wizard-back-projects {
   color: var(--ink-soft);
   font-size: var(--text-sm);
   line-height: var(--leading-normal);
+}
+
+.materials-ocr-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.materials-ocr-summary > div {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2);
+  border-right: 1px solid var(--line);
+}
+
+.materials-ocr-summary > div:last-child { border-right: 0; }
+
+.materials-ocr-summary dt {
+  color: var(--muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.materials-ocr-summary dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
 }
 
 .materials-provenance {

@@ -579,7 +579,11 @@ function FragmentBody({
       />
     );
   }
-  if (fragment.element_kind === "heading") return <h2>{highlight(fragment.text, query)}</h2>;
+  if (fragment.element_kind === "heading") {
+    if ((fragment.structure_level ?? 1) <= 1) return <h2>{highlight(fragment.text, query)}</h2>;
+    if (fragment.structure_level === 2) return <h3>{highlight(fragment.text, query)}</h3>;
+    return <h4>{highlight(fragment.text, query)}</h4>;
+  }
   if (fragment.element_kind === "list") {
     return (
       <p
@@ -590,7 +594,50 @@ function FragmentBody({
       </p>
     );
   }
+  if (fragment.element_kind === "table") {
+    return <MarkdownTable markdown={fragment.text} />;
+  }
   return <p>{highlight(fragment.text, query)}</p>;
+}
+
+function splitMarkdownRow(row: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  let escaped = false;
+  for (const character of row.trim().replace(/^\|/, "").replace(/\|$/, "")) {
+    if (escaped) {
+      cell += character;
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function MarkdownTable({ markdown }: { markdown: string }) {
+  const lines = markdown.split("\n").filter((line) => line.trim().startsWith("|"));
+  const rows = lines.map(splitMarkdownRow);
+  const divider = rows.findIndex((row) => row.every((cell) => /^:?-{3,}:?$/.test(cell)));
+  if (divider !== 1 || rows.length < 2) return <p>{markdown}</p>;
+  const [head] = rows;
+  const body = rows.slice(2);
+  return (
+    <div className="materials-document-table-scroll" role="region" aria-label="Таблица из документа" tabIndex={0}>
+      <table className="materials-document-table">
+        <thead><tr>{head.map((cell, index) => <th scope="col" key={`${index}-${cell}`}>{cell}</th>)}</tr></thead>
+        <tbody>{body.map((row, rowIndex) => (
+          <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
 }
 
 function highlight(text: string, query: string) {
@@ -697,35 +744,50 @@ function ProcessingTab({
           onRetry={() => onControl("retry")}
         />
       )}
-      {material.status === "ready_to_process" && <section className="materials-processing-section">
-        <h3>Оценка обработки</h3>
-        <p>{material.page_count ?? 1} стр. · OCR: {material.scan_page_count} · примерно {material.estimated_seconds ?? 1} сек. · локально, 0 ₽.</p>
-        <Button disabled={busy} onClick={() => onStart("fast")}>Быстро · PP-OCRv5</Button>
-        <Button variant="secondary" disabled={busy || !capabilities?.textbook_available} title={capabilities?.textbook_reason} onClick={() => onStart("textbook")}>Учебник · PaddleOCR-VL</Button>
-        <Button variant="ghost" disabled title={capabilities?.cloud_reason}>Облако · этап 7</Button>
-        <Button variant="ghost" disabled title={capabilities?.cloud_reason}>Максимум · этап 7</Button>
-        <Button variant="ghost" disabled title={capabilities?.cloud_reason}>Эксперт · этап 7</Button>
-      </section>}
+      {(material.status === "ready_to_process" || material.status === "ready") && (
+        <section className="materials-processing-section materials-ocr-section">
+          <div className="materials-selection-head">
+            <h3>OCR</h3>
+            <StatusBadge tone="neutral">Быстро · локально</StatusBadge>
+          </div>
+          <p>
+            Текстовый слой превращается в Markdown с заголовками, списками и таблицами.
+            Страницы-сканы распознаются локально через {capabilities?.fast_label ?? "PP-OCRv5"}.
+          </p>
+          <dl className="materials-ocr-summary">
+            <div><dt>Страниц</dt><dd>{material.page_count ?? 1}</dd></div>
+            <div><dt>Сканов</dt><dd>{material.scan_page_count}</dd></div>
+            <div><dt>Низкое качество</dt><dd>{material.ocr_low_page_count}</dd></div>
+          </dl>
+          <Button
+            disabled={busy || !capabilities?.fast_available}
+            onClick={material.status === "ready" ? onReparse : () => onStart("fast")}
+          >
+            {material.status === "ready" ? <><RotateCcw size={14} /> Запустить заново</> : "Запустить"}
+          </Button>
+          <div className="materials-button-stack" aria-label="Другие режимы OCR">
+            <Button variant="secondary" disabled title={capabilities?.textbook_reason}>Учебник · недоступно</Button>
+            <Button variant="ghost" disabled title={capabilities?.cloud_reason}>Облако · этап 7</Button>
+            <Button variant="ghost" disabled title={capabilities?.cloud_reason}>Максимум · этап 7</Button>
+            <Button variant="ghost" disabled title={capabilities?.cloud_reason}>Эксперт · этап 7</Button>
+          </div>
+        </section>
+      )}
       {material.status === "paused" && <Button disabled={busy} onClick={() => onControl("resume")}><Play size={14} /> Возобновить</Button>}
       {material.status === "processing" && <Button variant="secondary" disabled={busy} onClick={() => onControl("pause")}><Pause size={14} /> Поставить на паузу</Button>}
       {material.status === "failed" && <Button disabled={busy} onClick={() => onControl("retry")}><RotateCcw size={14} /> Повторить</Button>}
       {material.status === "ready" && material.purposes.includes("reference_answers") && (
         <section className="materials-processing-section">
-          <h3>Эталонные ответы</h3>
+          <h3>Ответы из файла</h3>
           <p>
-            Разделы этого файла ложатся на вопросы программы сами — по совпадению
-            заголовка с формулировкой вопроса. Из тех же разделов заполняются эталоны.
+            Сопоставляем точный или близкий заголовок. Если формулировки другие,
+            используем проверенную нумерацию разделов. Неуверенные разделы можно связать вручную.
           </p>
-          <Button disabled={busy} onClick={onLinkAnswers}><Link2 size={14} /> Привязать заново</Button>
-          <Button variant="ghost" disabled={busy} onClick={onImport}>Импортировать эталоны текстом</Button>
+          <Button disabled={busy} onClick={onLinkAnswers}><Link2 size={14} /> Связать с вопросами</Button>
+          <Button variant="ghost" disabled={busy} onClick={onImport}>Импортировать ответы текстом</Button>
         </section>
       )}
       {material.status === "ready" && <Button variant="secondary" disabled={busy} onClick={onEdit}><Pencil size={14} />Исправить текст страницы</Button>}
-      {material.status === "ready" && (
-        <Tooltip label="Пересобрать страницы, списки и отступы текущим разбором">
-          <Button variant="ghost" disabled={busy} onClick={onReparse}><RotateCcw size={14} /> Разобрать заново</Button>
-        </Tooltip>
-      )}
       {material.diagnostics.length > 0 && <section className="materials-processing-section"><h3>Диагностика</h3><ul>{material.diagnostics.map((item) => <li key={item}>{item === "formula_possible" ? "Возможны формулы — сверяйте с оригиналом" : item === "audio_transcription_required" ? "Нужна локальная транскрипция аудио" : item}</li>)}</ul>{material.ocr_low_page_count > 0 && <p>Есть страницы низкого качества. Проверьте оригинал или выберите следующий доступный режим.</p>}</section>}
       {material.error && <ErrorState title="Разбор остановился" message={material.error} />}
     </div>
@@ -1736,25 +1798,28 @@ function MaterialSurface() {
       void bindings.refreshSummary();
       setAnswersSuggestions({ materialId: material.id, items: result.suggestions });
       const parts = [
-        `Разделов привязано: ${result.linked_sections}`,
+        `Связано с вопросами: ${result.linked_sections}`,
         `фрагментов: ${result.linked_fragments}`,
         `эталонов создано: ${result.created_answers}`,
       ];
+      if (result.numbered_sections) parts.push(`по порядку номеров: ${result.numbered_sections}`);
+      if (result.extra_sections) parts.push(`вне текущей программы: ${result.extra_sections}`);
       if (result.fuzzy_headings.length) {
         parts.push(`по близкой формулировке: ${result.fuzzy_headings.length}`);
       }
       if (result.updated_answers) parts.push(`обновлено: ${result.updated_answers}`);
       if (result.kept_answers) parts.push(`оставлено своих: ${result.kept_answers}`);
       if (result.unmatched_headings.length) {
-        parts.push(`не нашлось вопросов для ${result.unmatched_headings.length} заголовков`);
+        parts.push(`нужно выбрать вопрос вручную: ${result.unmatched_headings.length}`);
       }
       if (result.duplicate_headings.length) {
         parts.push(`формулировка повторяется в программе: ${result.duplicate_headings.length}`);
       }
+      if (result.ordinal_rejected_reason) parts.push(result.ordinal_rejected_reason);
       say(`${parts.join(", ")}.`, result.linked_sections > 0 ? "success" : "danger");
       if (result.suggestions.length) setInspectorTab("bindings");
     } catch (caught) {
-      say(caught instanceof Error ? caught.message : "Привязать не удалось", "danger");
+      say(caught instanceof Error ? caught.message : "Не удалось связать ответы с вопросами", "danger");
     }
   }
 
