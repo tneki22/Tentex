@@ -10,6 +10,7 @@ from app.ai.gateway import ModelGateway
 from app.db import get_session
 from app.materials import ai_cleanup, service
 from app.materials.schemas import (
+    ExamProgramDraftImportWrite,
     ExamProgramImportWrite,
     ExamProgramPreview,
     ExternalMaterialCreate,
@@ -289,3 +290,16 @@ def import_exam_program(
     session: SessionDependency,
 ) -> ProgramChangeResult:
     return service.import_exam_program_from_material(session, project_id, material_id, command)
+
+
+@router.post(
+    "/projects/{project_id}/materials/{material_id}/exam-draft-import",
+    response_model=ProgramChangeResult,
+)
+def import_exam_draft_program(
+    project_id: UUID,
+    material_id: UUID,
+    command: ExamProgramDraftImportWrite,
+    session: SessionDependency,
+) -> ProgramChangeResult:
+    return service.import_exam_draft_from_material(session, project_id, material_id, command)

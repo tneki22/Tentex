@@ -610,6 +610,8 @@ def replace_draft_program(
     expected_draft_revision: int,
     expected_program_revision: int,
     parsed: ParsedExamProgram,
+    material_id: UUID | None = None,
+    material_name: str | None = None,
 ) -> ProgramChangeResult:
     with session.begin():
         project = _require_writable_project(session, project_id)
@@ -653,7 +655,10 @@ def replace_draft_program(
                 needs_material=False,
                 is_archived=False,
                 origin_kind=OriginKind.IMPORT,
-                origin_note="Вставленный текст",
+                origin_note=(
+                    f"Материал: {material_name}" if material_name else "Вставленный текст"
+                ),
+                origin_material_id=material_id,
             )
             session.add(node)
             session.flush()

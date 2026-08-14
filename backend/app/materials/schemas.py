@@ -213,6 +213,11 @@ class ExamProgramImportWrite(ApiModel):
     expected_program_revision: int = Field(ge=0)
 
 
+class ExamProgramDraftImportWrite(ApiModel):
+    expected_draft_revision: int = Field(ge=0)
+    expected_program_revision: int = Field(ge=0)
+
+
 class MaterialCapabilities(ApiModel):
     fast_available: bool
     fast_label: str

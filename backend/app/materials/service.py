@@ -24,6 +24,7 @@ from app.materials.parsers.base import ParsedElement, ParsedPage
 from app.materials.parsers.native import inspect, parse_text_page
 from app.materials.schemas import (
     BlockRead,
+    ExamProgramDraftImportWrite,
     ExamProgramImportWrite,
     ExamProgramPreview,
     ExamProgramPreviewNode,
@@ -940,7 +941,7 @@ def delete_library_material(session: Session, material_id: UUID) -> None:
 def _parsed_exam_from_material(
     session: Session, project_id: UUID, material_id: UUID
 ) -> tuple[ParsedExamProgram, Material, ProjectMaterial]:
-    project = _project(session, project_id, writable=False, allow_draft=False)
+    project = _project(session, project_id, writable=False)
     if project.workspace_variant.value != "exam":
         raise ProjectConflictError("Список вопросов относится только к экзаменационному проекту")
     link = _link(session, project_id, material_id)
@@ -1014,6 +1015,26 @@ def import_exam_program_from_material(
     return program.replace_active_exam_program(
         session,
         project_id,
+        expected_program_revision=command.expected_program_revision,
+        parsed=parsed,
+        material_id=material_id,
+        material_name=material_name,
+    )
+
+
+def import_exam_draft_from_material(
+    session: Session,
+    project_id: UUID,
+    material_id: UUID,
+    command: ExamProgramDraftImportWrite,
+):
+    parsed, material, link = _parsed_exam_from_material(session, project_id, material_id)
+    material_name = link.display_name or material.original_name
+    session.rollback()
+    return program.replace_draft_program(
+        session,
+        project_id,
+        expected_draft_revision=command.expected_draft_revision,
         expected_program_revision=command.expected_program_revision,
         parsed=parsed,
         material_id=material_id,
