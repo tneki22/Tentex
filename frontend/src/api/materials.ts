@@ -51,9 +51,16 @@ export interface MaterialRead {
   diagnostics: string[];
   error: string | null;
   task: ProcessingTaskRead | null;
+  attached_at: string;
   created_at: string;
   updated_at: string;
 }
+
+export type MaterialUpdateCommand = Partial<
+  Pick<MaterialRead, "display_name" | "source_role" | "priority" | "instruction" | "purposes">
+> & {
+  replace_reference_answers?: boolean;
+};
 
 export interface MaterialFragmentRead {
   id: string;
@@ -269,7 +276,7 @@ export const createExternalMaterial = (
 export const updateMaterial = (
   projectId: string,
   materialId: string,
-  command: Partial<Pick<MaterialRead, "display_name" | "source_role" | "priority" | "instruction" | "purposes">>,
+  command: MaterialUpdateCommand,
 ): Promise<MaterialRead> => request(materialPath(projectId, materialId), {
   method: "PATCH",
   body: JSON.stringify(command),
