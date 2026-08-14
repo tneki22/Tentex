@@ -116,6 +116,7 @@ export function UiKit() {
   return (
     <div className="kit-page">
       <PageHead
+        placement="topbar"
         eyebrow="Служебное"
         title="Дизайн-система"
         lead="Два слоя: примитивы кита и доменные виджеты Tentex. Поведение всплывашек, диалогов, тумблеров и радиогрупп — Radix Primitives; вид — наши токены. Полное описание системы — DESIGN.md."

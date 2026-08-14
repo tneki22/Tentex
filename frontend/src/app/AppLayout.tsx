@@ -9,7 +9,14 @@ import {
   PanelLeftOpen,
   PieChart,
 } from "lucide-react";
-import { Disclosure, Popover, Tooltip, TooltipProvider } from "../components/ui";
+import {
+  Disclosure,
+  PageHeadSlotProvider,
+  Popover,
+  Tooltip,
+  TooltipProvider,
+} from "../components/ui";
+import { BrandMark } from "./BrandMark";
 import { CommandPalette } from "./CommandPalette";
 import { screenById } from "./screens";
 import { SCREEN_VIEWS } from "./views";
@@ -32,12 +39,17 @@ const COLLAPSE_KEY = "tentex-panel-collapsed";
 /** В навигацию попадают только сверстанные экраны: ссылка в никуда бесполезна. */
 const NAV_SCREENS = GLOBAL_NAV_IDS.filter((id) => id in SCREEN_VIEWS).map(screenById);
 
+/** Знак ведёт на входной экран — как и положено логотипу. */
+const HOME_PATH = screenById("projects").navPath;
+
 export function AppLayout() {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === "1");
   const [scrolled, setScrolled] = useState(false);
   const [aiSnapshot, setAiSnapshot] = useState<AiSettingsRead | null>(null);
   const [aiSnapshotFailed, setAiSnapshotFailed] = useState(false);
+  const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
+  const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -104,18 +116,29 @@ export function AppLayout() {
     <TooltipProvider>
       <div className={`app-shell ${collapsed ? "is-collapsed" : ""}`.trim()}>
         <nav className="app-nav" aria-label="Навигация">
-          <div className="app-brand">
-            <strong>{collapsed ? "T" : "Tentex"}</strong>
-            <small>локально</small>
-          </div>
+          <Link className="app-brand" to={HOME_PATH} aria-label="Tentex — к проектам">
+            <BrandMark />
+            {!collapsed && <span className="app-brand-word">Tentex</span>}
+          </Link>
 
           <div className="app-nav-group">
             {NAV_SCREENS.map((screen) => {
+              /*
+               * className строкой, а не функцией: в свёрнутой панели ссылку
+               * оборачивает Tooltip, а Radix Slot склеивает className строками —
+               * функция попала бы в атрибут своим исходным текстом, и класс
+               * app-nav-link не применился бы вовсе.
+               */
+              const isActive =
+                screen.id === "projects"
+                  ? location.pathname === screen.navPath
+                  : location.pathname === screen.navPath ||
+                    location.pathname.startsWith(`${screen.navPath}/`);
               const link = (
                 <NavLink
                   to={screen.navPath}
                   end={screen.id === "projects"}
-                  className={({ isActive }) => `app-nav-link ${isActive ? "is-active" : ""}`.trim()}
+                  className={`app-nav-link ${isActive ? "is-active" : ""}`.trim()}
                 >
                   <screen.icon size={15} aria-hidden="true" />
                   <span className="nav-text">
@@ -225,19 +248,23 @@ export function AppLayout() {
           </div>
         </nav>
 
-        <div className="app-frame">
-          <header className={`app-topbar ${scrolled ? "is-scrolled" : ""}`.trim()}>
-            <div className="app-topbar-inner">
-              {/* Слева — место чипа «следующий шаг»: появится с проектным контекстом */}
-              <span />
-              <CommandPalette />
-            </div>
-          </header>
+        <PageHeadSlotProvider title={titleSlot} actions={actionsSlot}>
+          <div className="app-frame">
+            <header className={`app-topbar ${scrolled ? "is-scrolled" : ""}`.trim()}>
+              {/* Одна строка на экран: заголовок, поиск по центру, действие
+                  справа. По краям сюда переезжает PageHead текущего экрана. */}
+              <div className="app-topbar-inner">
+                <div className="topbar-lead" ref={setTitleSlot} />
+                <CommandPalette />
+                <div className="topbar-actions" ref={setActionsSlot} />
+              </div>
+            </header>
 
-          <main className="app-main">
-            <Outlet />
-          </main>
-        </div>
+            <main className="app-main">
+              <Outlet />
+            </main>
+          </div>
+        </PageHeadSlotProvider>
       </div>
     </TooltipProvider>
   );

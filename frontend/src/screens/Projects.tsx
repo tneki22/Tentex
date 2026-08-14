@@ -1,29 +1,100 @@
 import { useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { Link, useNavigate } from "react-router";
-import { Archive, ArrowDown, ArrowUp, GripVertical, RotateCcw, Trash2 } from "lucide-react";
+import {
+  Archive,
+  ArrowDown,
+  ArrowUp,
+  GripVertical,
+  MoreHorizontal,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 import {
   archiveProject,
   deleteProject,
+  listProjectStats,
   listProjects,
   restoreProject,
   saveProjectOrder,
+  type ProjectStats,
   type ProjectSummary,
 } from "../api/projects";
-import { ProjectChip } from "../components/domain";
-import type { ProjectColor, ProjectIconName } from "../components/domain";
+import { MetricList, ProjectChip } from "../components/domain";
+import type { Metric, ProjectColor, ProjectIconName } from "../components/domain";
 import {
   Button,
   Card,
   ConfirmDialog,
   Disclosure,
   ErrorState,
+  IconButton,
   LoadingState,
+  Menu,
   PageHead,
+  Tooltip,
 } from "../components/ui";
 
 const icon = (value: ProjectSummary["icon"]): ProjectIconName => value ?? "graduation-cap";
 const color = (value: number | null): ProjectColor => (value && value >= 1 && value <= 8 ? value : 1) as ProjectColor;
+
+const dayFormat = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long" });
+
+/** Дата без времени: `2026-08-21` без суффикса разобралась бы как UTC-полночь. */
+const asLocalDate = (isoDay: string): Date => new Date(`${isoDay}T00:00:00`);
+
+/**
+ * Считаем по локальным полуночам, а не по разнице таймстампов: иначе «7 дней»
+ * превращается в «6» посреди рабочего дня.
+ */
+function daysUntil(isoDay: string): number {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((asLocalDate(isoDay).getTime() - today.getTime()) / 86_400_000);
+}
+
+function plural(count: number, one: string, few: string, many: string): string {
+  const tail = count % 100;
+  if (tail >= 11 && tail <= 14) return many;
+  const last = count % 10;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+}
+
+/**
+ * Метрики карточки. Всё, что не считается для этого типа проекта, приходит
+ * `null` и по FR-P3 просто не показывается — нулём не подменяется.
+ */
+function cardMetrics(project: ProjectSummary, stats: ProjectStats | undefined): Metric[] {
+  if (!stats) return [];
+  const nodes = stats.program_nodes;
+  if (project.template_key === "exam") {
+    return [
+      { label: "Вопросов", value: nodes === null ? null : String(nodes) },
+      {
+        label: "Эталонов",
+        value:
+          stats.reference_answers === null || nodes === null
+            ? null
+            : `${stats.reference_answers} из ${nodes}`,
+      },
+      { label: "Материалов", value: String(stats.materials) },
+    ];
+  }
+  if (project.template_key === "textbook") {
+    return [
+      { label: "Тем", value: nodes === null ? null : String(nodes) },
+      { label: "Материалов", value: String(stats.materials) },
+      {
+        label: "Страниц",
+        value: stats.material_pages === null ? null : String(stats.material_pages),
+      },
+    ];
+  }
+  /* Свободное изучение приезжает на этапе 7: считать по нему пока нечего. */
+  return [];
+}
 
 type ProjectTemplate = {
   id: "exam" | "textbook";
@@ -67,9 +138,42 @@ const statusLabel: Record<ProjectSummary["status"], string> = {
   completed: "Завершён",
 };
 
+/** Крупная строка карточки: у экзамена — отсчёт, у учебника — размер программы. */
+function CardHeadline({ project, stats }: { project: ProjectSummary; stats?: ProjectStats }) {
+  if (project.template_key === "textbook") {
+    if (stats?.program_nodes === null || stats?.program_nodes === undefined) return null;
+    return (
+      <p className="dash-card-headline">
+        <b>{stats.program_nodes}</b> {plural(stats.program_nodes, "тема", "темы", "тем")} в программе
+      </p>
+    );
+  }
+  if (project.template_key !== "exam") return null;
+
+  if (project.deadline === null) {
+    return (
+      <p className="dash-card-headline is-quiet">
+        Дата экзамена не задана,{" "}
+        <Link to={`/projects/${project.id}/settings`}>укажите в настройках</Link>
+      </p>
+    );
+  }
+
+  const days = daysUntil(project.deadline);
+  const date = dayFormat.format(asLocalDate(project.deadline));
+  if (days < 0) return <p className="dash-card-headline is-quiet">Экзамен прошёл, {date}</p>;
+  if (days === 0) return <p className="dash-card-headline is-quiet">Экзамен сегодня, {date}</p>;
+  return (
+    <p className="dash-card-headline">
+      <b>{days}</b> {plural(days, "день", "дня", "дней")} до экзамена, {date}
+    </p>
+  );
+}
+
 export function Projects() {
   const navigate = useNavigate();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [stats, setStats] = useState<Record<string, ProjectStats>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [operationError, setOperationError] = useState("");
@@ -83,6 +187,7 @@ export function Projects() {
   async function load(signal?: AbortSignal) {
     setLoading(true);
     setLoadError("");
+    void loadStats(signal);
     try {
       setProjects(await listProjects(signal));
     } catch (error) {
@@ -90,6 +195,18 @@ export function Projects() {
       setLoadError(error instanceof Error ? error.message : "Не удалось загрузить проекты");
     } finally {
       if (!signal?.aborted) setLoading(false);
+    }
+  }
+
+  /* Сводка грузится отдельно и экран не задерживает: список пришёл — карточки
+     уже видны. Если сводка не доехала, метрик просто нет (FR-P3), а не нули. */
+  async function loadStats(signal?: AbortSignal) {
+    try {
+      const rows = await listProjectStats(signal);
+      if (signal?.aborted) return;
+      setStats(Object.fromEntries(rows.map((row) => [row.project_id, row])));
+    } catch {
+      if (!signal?.aborted) setStats({});
     }
   }
 
@@ -197,7 +314,7 @@ export function Projects() {
 
   return (
     <div className="screen">
-      <PageHead title="Проекты" actions={<Link className="primary-button" to="/projects/new">Новый проект</Link>} />
+      <PageHead placement="topbar" title="Проекты" actions={<Link className="primary-button" to="/projects/new">Новый проект</Link>} />
 
       {operationError && <p className="inline-error" role="alert">{operationError}</p>}
 
@@ -231,14 +348,8 @@ export function Projects() {
               <div className="dash-card-id">
                 <ProjectChip icon={icon(project.icon)} color={color(project.color)} />
                 <h2 className="dash-card-name">{project.name}</h2>
-              </div>
-              <div className="dash-card-details">
-                <span>{statusLabel[project.status]}</span>
-                <p>Показатели появятся после материалов и занятий</p>
-              </div>
-              <div className="dash-card-actions" aria-label={`Действия для проекта «${project.name}»`}>
                 <span
-                  className="dash-card-action dash-drag-handle"
+                  className="dash-drag-handle"
                   draggable
                   title="Перетащить проект мышью"
                   aria-hidden="true"
@@ -249,11 +360,39 @@ export function Projects() {
                     setDraggedId(project.id);
                   }}
                 ><GripVertical size={15} /></span>
-                <Link className="dash-card-action" to={`/projects/${project.id}`}>Открыть</Link>
-                <button className="dash-card-action" disabled={index === 0} onClick={() => moveProject(project.id, index - 1)}><ArrowUp size={15} />Вверх</button>
-                <button className="dash-card-action" disabled={index === active.length - 1} onClick={() => moveProject(project.id, index + 1)}><ArrowDown size={15} />Вниз</button>
-                <button className="dash-card-action" onClick={() => setArchiveCandidate(project)}><Archive size={15} />Архивировать</button>
-                <button className="dash-card-action" onClick={() => setDeleteCandidate(project)}><Trash2 size={15} />Удалить навсегда</button>
+              </div>
+
+              <CardHeadline project={project} stats={stats[project.id]} />
+              <MetricList metrics={cardMetrics(project, stats[project.id])} />
+
+              <div className="dash-card-foot">
+                <p className="dash-card-last">
+                  {stats[project.id]?.last_activity_at
+                    ? `Последняя работа — ${dayFormat.format(new Date(stats[project.id].last_activity_at as string))}`
+                    : "Занятий пока не было"}
+                </p>
+                <div className="dash-card-cta" aria-label={`Действия для проекта «${project.name}»`}>
+                  <Link className="primary-button" to={`/projects/${project.id}`}>Продолжить</Link>
+                  <Tooltip label="Повторения появятся на этапе 9" side="top">
+                    <span className="dash-card-later">
+                      <Button variant="secondary" disabled>Повторить</Button>
+                    </span>
+                  </Tooltip>
+                  <Menu
+                    label={`Ещё для проекта «${project.name}»`}
+                    trigger={
+                      <IconButton label="Ещё" className="dash-card-more">
+                        <MoreHorizontal size={15} aria-hidden="true" />
+                      </IconButton>
+                    }
+                    items={[
+                      { label: "Вверх", icon: <ArrowUp size={15} />, disabled: index === 0, onSelect: () => moveProject(project.id, index - 1) },
+                      { label: "Вниз", icon: <ArrowDown size={15} />, disabled: index === active.length - 1, onSelect: () => moveProject(project.id, index + 1) },
+                      { label: "Архивировать", icon: <Archive size={15} />, onSelect: () => setArchiveCandidate(project) },
+                      { label: "Удалить навсегда", icon: <Trash2 size={15} />, destructive: true, onSelect: () => setDeleteCandidate(project) },
+                    ]}
+                  />
+                </div>
               </div>
             </article>
           ))}
@@ -266,7 +405,7 @@ export function Projects() {
             <div className="dash-archive-row" key={project.id}>
               <ProjectChip icon={icon(project.icon)} color={color(project.color)} size="sm" />
               <span className="dash-archive-name">{project.name}</span>
-              <span className="dash-archive-note">{project.status === "completed" ? "Завершён" : "В архиве"}</span>
+              <span className="dash-archive-note">{statusLabel[project.status]}</span>
               <Button variant="ghost" disabled={project.status === "completed" || busyId === project.id} onClick={() => void restore(project)}>
                 <RotateCcw size={15} />Вернуть в работу
               </Button>

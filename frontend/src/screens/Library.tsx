@@ -141,6 +141,7 @@ export function Library() {
   return (
     <div className="screen">
       <PageHead
+        placement="topbar"
         title="Библиотека"
         lead={`${materials.length} файлов · ${totals.pages} страниц · ${sizeLabel(totals.bytes)}. Файл хранится один раз, проекты на него ссылаются.`}
         actions={<Button variant="secondary" disabled={projects.length === 0} onClick={() => setUploadOpen(true)}><Upload size={15} aria-hidden="true" />Загрузить файл</Button>}

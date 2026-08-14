@@ -472,6 +472,21 @@ class ProjectSummary(ApiModel):
     updated_at: datetime
 
 
+class ProjectStats(ApiModel):
+    """Сводка для карточки проекта на главном экране.
+
+    `None` означает «метрика не считается для этого типа проекта»: по FR-P3 она
+    не показывается и не подменяется нулём. Ноль здесь — настоящий ноль.
+    """
+
+    project_id: UUID
+    program_nodes: int | None
+    reference_answers: int | None
+    materials: int
+    material_pages: int | None
+    last_activity_at: datetime | None
+
+
 class ProjectDetail(ApiModel):
     project: ProjectRead
     goal_passport: GoalPassportRead | None

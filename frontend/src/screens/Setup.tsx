@@ -46,7 +46,7 @@ export function Setup() {
 
   return (
     <div className="screen setup-screen">
-      <PageHead title="Параметры" />
+      <PageHead placement="topbar" title="Параметры" />
       <div className="setup-layout">
         <nav className="setup-nav" aria-label="Разделы параметров">
           {SECTIONS.map((section) => {

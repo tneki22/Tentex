@@ -1,14 +1,20 @@
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.models import (
+    Attempt,
+    ChatSession,
     GoalPassport,
+    Material,
     NodeType,
     ProgramNode,
     Project,
+    ProjectMaterial,
     ProjectStatus,
+    ReferenceAnswer,
     TemplateKey,
     WizardDraft,
     WorkspaceState,
@@ -16,6 +22,7 @@ from app.models import (
     utc_now,
 )
 from app.projects import program
+from app.projects.answers import STUDY_NODE_TYPES
 from app.projects.errors import (
     ProjectConflictError,
     ProjectInvariantError,
@@ -32,6 +39,7 @@ from app.projects.schemas import (
     ProjectRead,
     ProjectSettingsResult,
     ProjectSettingsWrite,
+    ProjectStats,
     ProjectSummary,
     WizardDraftCreate,
     WizardDraftDetail,
@@ -308,6 +316,100 @@ def list_projects(session: Session) -> list[ProjectSummary]:
         .order_by(Project.status, Project.sort_order, Project.name, Project.id)
     )
     return [ProjectSummary.model_validate(project) for project in projects]
+
+
+def list_project_stats(session: Session) -> list[ProjectStats]:
+    """Сводка для карточек главного экрана.
+
+    Пять сгруппированных запросов на все проекты сразу: карточек может быть
+    сколько угодно, но обращений к базе от этого не прибавляется.
+    """
+    projects = list(
+        session.scalars(select(Project).where(Project.status != ProjectStatus.DRAFT))
+    )
+    if not projects:
+        return []
+
+    study_node = (
+        ProgramNode.node_type.in_(STUDY_NODE_TYPES),
+        ProgramNode.is_in_current_program.is_(True),
+        ProgramNode.is_archived.is_(False),
+    )
+    node_counts = dict(
+        session.execute(
+            select(ProgramNode.project_id, func.count())
+            .where(*study_node)
+            .group_by(ProgramNode.project_id)
+        ).all()
+    )
+    # Граница «с эталоном» — та же, что у with_answer в карте покрытия: активная
+    # строка ответа у узла текущей программы. Пустой текст запрещён констрейнтом.
+    answer_counts = dict(
+        session.execute(
+            select(ReferenceAnswer.project_id, func.count())
+            .join(
+                ProgramNode,
+                (ProgramNode.project_id == ReferenceAnswer.project_id)
+                & (ProgramNode.id == ReferenceAnswer.program_node_id),
+            )
+            .where(ReferenceAnswer.is_active.is_(True), *study_node)
+            .group_by(ReferenceAnswer.project_id)
+        ).all()
+    )
+    material_counts = {
+        project_id: (count, pages)
+        for project_id, count, pages in session.execute(
+            select(
+                ProjectMaterial.project_id,
+                func.count(),
+                func.sum(Material.page_count),
+            )
+            .join(Material, Material.id == ProjectMaterial.material_id)
+            .group_by(ProjectMaterial.project_id)
+        ).all()
+    }
+    attempt_activity = dict(
+        session.execute(
+            select(Attempt.project_id, func.max(Attempt.created_at)).group_by(Attempt.project_id)
+        ).all()
+    )
+    chat_activity = dict(
+        session.execute(
+            select(ChatSession.project_id, func.max(ChatSession.updated_at)).group_by(
+                ChatSession.project_id
+            )
+        ).all()
+    )
+
+    stats: list[ProjectStats] = []
+    for item in projects:
+        materials, pages = material_counts.get(item.id, (0, None))
+        is_exam = item.template_key == TemplateKey.EXAM
+        is_textbook = item.template_key == TemplateKey.TEXTBOOK
+        # Свободное изучение приезжает на этапе 7: считать по нему нечего, и ноль
+        # вместо метрики был бы неправдой (FR-P3).
+        touched = [
+            moment
+            for moment in (attempt_activity.get(item.id), chat_activity.get(item.id))
+            if moment is not None
+        ]
+        stats.append(
+            ProjectStats(
+                project_id=item.id,
+                program_nodes=(node_counts.get(item.id, 0) if is_exam or is_textbook else None),
+                reference_answers=(answer_counts.get(item.id, 0) if is_exam else None),
+                materials=materials,
+                material_pages=(pages if is_textbook else None),
+                last_activity_at=_latest(touched),
+            )
+        )
+    return stats
+
+
+def _latest(moments: list[datetime]) -> datetime | None:
+    """Пусто — значит занятий ещё не было. `Project.updated_at` сюда не годится:
+    он сдвигается от перестановки карточек мышью."""
+    return max(moments) if moments else None
 
 
 def get_project(session: Session, project_id: UUID) -> ProjectDetail:

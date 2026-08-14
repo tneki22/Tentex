@@ -22,7 +22,7 @@ export { Kbd } from "./Kbd";
 export { LoadingState } from "./LoadingState";
 export { Menu } from "./Menu";
 export type { MenuItem } from "./Menu";
-export { PageHead } from "./PageHead";
+export { PageHead, PageHeadSlotProvider } from "./PageHead";
 export { PanelResizeHandle } from "./PanelResizeHandle";
 export { Popover } from "./Popover";
 export { Progress } from "./Progress";

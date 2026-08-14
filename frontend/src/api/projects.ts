@@ -54,6 +54,20 @@ export interface ProjectSummary {
   updated_at: string;
 }
 
+/**
+ * Сводка для карточки проекта. `null` — метрика не считается для этого типа
+ * проекта: по FR-P3 она не показывается и не заменяется нулём. Ноль здесь
+ * означает настоящий ноль.
+ */
+export interface ProjectStats {
+  project_id: string;
+  program_nodes: number | null;
+  reference_answers: number | null;
+  materials: number;
+  material_pages: number | null;
+  last_activity_at: string | null;
+}
+
 export interface GoalPassportWrite {
   subject: string | null;
   purpose: GoalPurpose | null;
@@ -371,6 +385,9 @@ export const getProject = (projectId: string, signal?: AbortSignal): Promise<Pro
 
 export const listProjects = (signal?: AbortSignal): Promise<ProjectSummary[]> =>
   request("/api/projects", { signal });
+
+export const listProjectStats = (signal?: AbortSignal): Promise<ProjectStats[]> =>
+  request("/api/projects/stats", { signal });
 
 export const saveProjectOrder = (projectIds: string[]): Promise<ProjectSummary[]> =>
   request("/api/projects/order", { method: "PUT", body: JSON.stringify({ project_ids: projectIds }) });

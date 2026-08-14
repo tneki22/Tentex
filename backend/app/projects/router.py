@@ -26,6 +26,7 @@ from app.projects.schemas import (
     ProjectOrderWrite,
     ProjectSettingsResult,
     ProjectSettingsWrite,
+    ProjectStats,
     ProjectSummary,
     ReferenceAnswerAttachmentRead,
     ReferenceAnswerConfirm,
@@ -104,6 +105,12 @@ def list_all_projects(session: SessionDependency) -> list[ProjectSummary]:
 @projects.put("/order", response_model=list[ProjectSummary])
 def save_order(command: ProjectOrderWrite, session: SessionDependency) -> list[ProjectSummary]:
     return service.save_project_order(session, command)
+
+
+# Объявлено до «/{project_id}»: иначе FastAPI разберёт «stats» как UUID.
+@projects.get("/stats", response_model=list[ProjectStats])
+def list_stats(session: SessionDependency) -> list[ProjectStats]:
+    return service.list_project_stats(session)
 
 
 @projects.get("/{project_id}", response_model=ProjectDetail)
