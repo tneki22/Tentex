@@ -3,7 +3,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 NUMBERED_ITEM_RE = re.compile(
-    r"^\s*(?:(?P<delimited>\d{1,4})[.)]\s*|(?P<spaced>\d{1,4})\s+)(?P<text>\S.*?)\s*$"
+    r"^\s*(?:(?P<delimited>\d{1,4})[.)](?!\d)\s*|"
+    r"(?P<spaced>\d{1,4})\s+)(?P<text>\S.*?)\s*$"
 )
 
 
@@ -21,6 +22,7 @@ class NumberedSeriesSelection:
     ignored_after: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     ambiguous: bool = False
+    source_end: int = 0
 
 
 @dataclass(slots=True)
@@ -105,4 +107,5 @@ def select_numbered_series(
         ignored_before=ignored_before,
         ignored_after=ignored_after,
         warnings=tuple(warnings),
+        source_end=end,
     )

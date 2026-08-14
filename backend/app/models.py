@@ -144,6 +144,8 @@ class ReferenceAnswerMatchMethod(StrEnum):
     FUZZY_TITLE = "fuzzy_title"
     # Пользователь сам указал вопрос для заголовка, который система не опознала.
     RESOLVED_TITLE = "resolved_title"
+    # Номер раздела совпал с порядком вопросов; до проверки пользователем не подтверждаем.
+    NUMBERED_ORDER = "numbered_order"
 
 
 class MaterialState(StrEnum):

@@ -73,23 +73,24 @@ def _duplicate_warnings(nodes: list[ParsedNode]) -> list[str]:
 def _parse_flat(
     lines: list[str], exam_format: ExamFormat, expected_item_count: int | None
 ) -> tuple[list[ParsedNode], list[str]]:
-    selection = select_numbered_series(lines, expected_item_count)
-    if selection.ambiguous:
-        raise ExamImportError("Не удалось однозначно выбрать основной нумерованный список")
-    if selection.items:
-        nodes = []
-        for item in selection.items:
-            kind, title = _kind_and_title(item.text, ExamKind.QUESTION)
-            nodes.append(
-                ParsedNode(
-                    parent_index=None,
-                    node_type=NodeType.TOPIC,
-                    exam_kind=kind,
-                    title=title,
-                    position=len(nodes),
+    if exam_format == ExamFormat.QUESTIONS:
+        selection = select_numbered_series(lines, expected_item_count)
+        if selection.ambiguous:
+            raise ExamImportError("Не удалось однозначно выбрать основной нумерованный список")
+        if selection.items:
+            nodes = []
+            for item in selection.items:
+                kind, title = _kind_and_title(item.text, ExamKind.QUESTION)
+                nodes.append(
+                    ParsedNode(
+                        parent_index=None,
+                        node_type=NodeType.TOPIC,
+                        exam_kind=kind,
+                        title=title,
+                        position=len(nodes),
+                    )
                 )
-            )
-        return nodes, list(selection.warnings)
+            return nodes, list(selection.warnings)
 
     marker_present = any(ITEM_RE.match(line) for line in lines)
     nodes: list[ParsedNode] = []

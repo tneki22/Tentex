@@ -42,6 +42,7 @@ from app.models import (
 )
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.projects.heading_match import HeadingIndex, normalize_answer_heading
+from app.projects.numbered_series import select_numbered_series
 
 STUDY_NODE_TYPES = {NodeType.TOPIC, NodeType.SUBPOINT}
 PREVIEW_LIMIT = 180
@@ -81,6 +82,9 @@ class AnswersLinkResult:
     created_answers: int = 0
     updated_answers: int = 0
     kept_answers: int = 0
+    numbered_sections: int = 0
+    extra_sections: int = 0
+    ordinal_rejected_reason: str | None = None
     fuzzy_headings: list[str] = field(default_factory=list)
     unmatched_headings: list[str] = field(default_factory=list)
     duplicate_headings: list[str] = field(default_factory=list)
@@ -108,6 +112,13 @@ class _Section:
     def answer_text(self) -> str:
         body = [fragment.text for fragment in self.bindable_fragments()]
         return "\n".join(text for text in body if text.strip()).strip()
+
+
+@dataclass(slots=True)
+class _OrdinalSections:
+    sections: list[_Section] = field(default_factory=list)
+    extra_sections: int = 0
+    rejected_reason: str | None = None
 
 
 def find_answers_material(session: Session, project_id: UUID) -> ProjectMaterial | None:
@@ -141,32 +152,62 @@ def _resolution_index(session: Session, project_id: UUID, material: Material) ->
     return index
 
 
-def _sections(
-    session: Session, project_id: UUID, material: Material
-) -> tuple[list[_Section], list[HeadingSuggestion], list[str]]:
+def _ordered_study_nodes(session: Session, project_id: UUID) -> list[ProgramNode]:
     nodes = list(
         session.scalars(
             select(ProgramNode).where(
                 ProgramNode.project_id == project_id,
-                ProgramNode.node_type.in_(STUDY_NODE_TYPES),
                 ProgramNode.is_in_current_program.is_(True),
                 ProgramNode.is_archived.is_(False),
             )
         )
     )
+    children: dict[UUID | None, list[ProgramNode]] = defaultdict(list)
+    for node in nodes:
+        children[node.parent_id].append(node)
+    for siblings in children.values():
+        siblings.sort(key=lambda node: (node.sort_order, str(node.id)))
+
+    ordered: list[ProgramNode] = []
+
+    def visit(parent_id: UUID | None) -> None:
+        for node in children.get(parent_id, []):
+            if node.node_type in STUDY_NODE_TYPES:
+                ordered.append(node)
+            visit(node.id)
+
+    visit(None)
+    return ordered
+
+
+def _ordered_fragments(
+    session: Session, material: Material
+) -> list[tuple[MaterialFragment, int]]:
+    return list(
+        session.execute(
+            select(MaterialFragment, MaterialPage.page_number)
+            .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+            .where(
+                MaterialFragment.material_id == material.id,
+                MaterialPage.revision == material.active_parse_revision,
+            )
+            .order_by(MaterialPage.page_number, MaterialFragment.sort_order)
+        ).all()
+    )
+
+
+def _title_sections(
+    session: Session,
+    project_id: UUID,
+    material: Material,
+    nodes: list[ProgramNode],
+    ordered_fragments: list[tuple[MaterialFragment, int]],
+) -> tuple[list[_Section], list[HeadingSuggestion], list[str]]:
     index = HeadingIndex((node.id, node.title) for node in nodes)
     resolved = _resolution_index(session, project_id, material)
 
     fragments_by_block: dict[UUID, list[MaterialFragment]] = defaultdict(list)
-    for fragment, _page in session.execute(
-        select(MaterialFragment, MaterialPage.page_number)
-        .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
-        .where(
-            MaterialFragment.material_id == material.id,
-            MaterialPage.revision == material.active_parse_revision,
-        )
-        .order_by(MaterialPage.page_number, MaterialFragment.sort_order)
-    ).all():
+    for fragment, _page in ordered_fragments:
         fragments_by_block[fragment.block_id].append(fragment)
 
     sections: list[_Section] = []
@@ -223,6 +264,67 @@ def _sections(
             _Section(node_ids, block.title, fragments, block.page_from, block.page_to, method)
         )
     return sections, suggestions, duplicates
+
+
+def _ordinal_sections(
+    nodes: list[ProgramNode],
+    ordered_fragments: list[tuple[MaterialFragment, int]],
+) -> _OrdinalSections:
+    if not nodes:
+        return _OrdinalSections(rejected_reason="В программе нет вопросов для связывания")
+    headings = [
+        (index, fragment, page_number)
+        for index, (fragment, page_number) in enumerate(ordered_fragments)
+        if fragment.element_kind == "heading"
+    ]
+    selection = select_numbered_series([fragment.text for _, fragment, _ in headings])
+    if selection.ambiguous:
+        return _OrdinalSections(
+            rejected_reason="В файле найдено несколько равноправных нумерованных серий"
+        )
+    if not selection.items:
+        return _OrdinalSections(rejected_reason="В файле не найдена основная нумерация ответов")
+    if selection.items[0].number != 1:
+        return _OrdinalSections(rejected_reason="Основная нумерация ответов начинается не с 1")
+    if len(selection.items) < len(nodes):
+        return _OrdinalSections(
+            rejected_reason=(
+                f"В основной серии {len(selection.items)} ответов, "
+                f"а в программе {len(nodes)} вопросов"
+            )
+        )
+
+    starts = [headings[item.source_index][0] for item in selection.items]
+    if selection.source_end < len(headings):
+        series_end = headings[selection.source_end][0]
+    else:
+        series_end = len(ordered_fragments)
+
+    sections: list[_Section] = []
+    for ordinal, (_item, start) in enumerate(zip(selection.items, starts, strict=True)):
+        end = starts[ordinal + 1] if ordinal + 1 < len(starts) else series_end
+        if ordinal >= len(nodes):
+            continue
+        rows = ordered_fragments[start:end]
+        if not rows:
+            continue
+        fragments = [fragment for fragment, _page in rows]
+        pages = [page for _fragment, page in rows]
+        title = ordered_fragments[start][0].text.strip()
+        sections.append(
+            _Section(
+                node_ids=[nodes[ordinal].id],
+                title=title,
+                fragments=fragments,
+                page_from=min(pages),
+                page_to=max(pages),
+                method=ReferenceAnswerMatchMethod.NUMBERED_ORDER,
+            )
+        )
+    return _OrdinalSections(
+        sections=sections,
+        extra_sections=max(0, len(selection.items) - len(nodes)),
+    )
 
 
 def _bind_section(
@@ -321,7 +423,14 @@ def _fill_answers(
                 created += 1
                 continue
             ours = answer.source_material_id == material.id
-            if not ours or answer.is_confirmed or answer.text.strip() == text:
+            same_import = (
+                answer.text.strip() == text
+                and answer.match_method == section.method
+                and answer.matched_title == section.title
+                and answer.source_page_from == section.page_from
+                and answer.source_page_to == section.page_to
+            )
+            if not ours or answer.is_confirmed or same_import:
                 kept += 1
                 continue
             answer.text = text
@@ -366,7 +475,25 @@ def link_answers_material(
     """Вызывается из воркера после разбора и кнопкой «Привязать заново»."""
     material, label = _require_answers_material(session, project_id, material_id)
 
-    sections, suggestions, duplicates = _sections(session, project_id, material)
+    nodes = _ordered_study_nodes(session, project_id)
+    ordered_fragments = _ordered_fragments(session, material)
+    title_sections, suggestions, duplicates = _title_sections(
+        session, project_id, material, nodes, ordered_fragments
+    )
+    ordinal = _ordinal_sections(nodes, ordered_fragments)
+    title_node_ids = {
+        node_id for section in title_sections for node_id in section.node_ids
+    }
+    numbered_sections = [
+        section
+        for section in ordinal.sections
+        if section.node_ids[0] not in title_node_ids
+    ]
+    sections = [*title_sections, *numbered_sections]
+    if ordinal.rejected_reason is None:
+        # Уверенная серия уже объясняет внутренние подзаголовки; не выдаём их
+        # за сотни якобы не найденных вопросов.
+        suggestions = []
     linked_fragments, created_ids = _rebind(session, project_id, material, sections)
     created, updated, kept = _fill_answers(session, project_id, material, label, sections)
 
@@ -388,6 +515,9 @@ def link_answers_material(
         created_answers=created,
         updated_answers=updated,
         kept_answers=kept,
+        numbered_sections=len(numbered_sections),
+        extra_sections=ordinal.extra_sections,
+        ordinal_rejected_reason=ordinal.rejected_reason,
         fuzzy_headings=[
             section.title
             for section in sections

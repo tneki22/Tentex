@@ -1,3 +1,5 @@
+from app.models import ExamFormat
+from app.projects.importer import parse_exam_program
 from app.projects.numbered_series import select_numbered_series
 
 
@@ -25,3 +27,18 @@ def test_keeps_ocr_number_without_space_and_continuation() -> None:
         (40, "First continued"),
         (41, "Second"),
     ]
+
+
+def test_nested_decimal_heading_is_not_a_top_level_marker() -> None:
+    result = select_numbered_series(["1. First", "1.1 Nested", "2. Second"])
+
+    assert [item.number for item in result.items] == [1, 2]
+
+
+def test_questions_tasks_keeps_separate_numbered_sections() -> None:
+    parsed = parse_exam_program(
+        "Вопросы\n1. Первый вопрос\nЗадачи\n1. Первая задача",
+        ExamFormat.QUESTIONS_TASKS,
+    )
+
+    assert (parsed.questions, parsed.tasks) == (1, 1)

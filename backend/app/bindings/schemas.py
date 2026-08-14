@@ -55,6 +55,9 @@ class AnswersLinkRead(ApiModel):
     created_answers: int
     updated_answers: int
     kept_answers: int
+    numbered_sections: int = 0
+    extra_sections: int = 0
+    ordinal_rejected_reason: str | None = None
     fuzzy_headings: list[str] = Field(default_factory=list)
     unmatched_headings: list[str]
     duplicate_headings: list[str]
