@@ -81,7 +81,7 @@ interface LibraryMaterialPickerDialogProps {
   answersMaterial?: { display_name: string } | null;
   onReplaceAnswers?: () => Promise<boolean>;
   onOpenChange: (open: boolean) => void;
-  onAttached: (materialIds: string[]) => void | Promise<void>;
+  onAttached: (materials: LibraryMaterialRead[]) => void | Promise<void>;
   onCreateNew?: () => void;
   /** Dependency overrides keep the UI-kit example local and deterministic. */
   loadMaterials?: LoadMaterials;
@@ -188,26 +188,48 @@ export function LibraryMaterialPickerDialog({
   async function performAttach() {
     setBusy(true);
     setError("");
-    const attached: string[] = [];
+    const attached: LibraryMaterialRead[] = [];
     const failures: Record<string, string> = {};
     for (const materialId of selected) {
+      const material = materials?.find((item) => item.id === materialId);
+      if (!material) continue;
       try {
         await attachMaterial(materialId, {
           project_id: projectId,
           source_role: roleFor(attached.length),
           purposes: [purpose],
         });
-        attached.push(materialId);
+        attached.push(material);
       } catch (caught) {
         failures[materialId] = caught instanceof Error ? caught.message : "Не удалось подключить материал";
       }
     }
-    if (attached.length > 0) await onAttached(attached);
-    setSelected((current) => current.filter((id) => !attached.includes(id)));
+    if (attached.length > 0) {
+      try {
+        await onAttached(attached);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "Материалы подключены, но список не обновился");
+      }
+      const attachedIds = new Set(attached.map((material) => material.id));
+      setMaterials((current) => current?.map((material) => attachedIds.has(material.id)
+        ? {
+            ...material,
+            usage: [...material.usage, {
+              project_id: projectId,
+              project_name: "Текущий проект",
+              project_status: "active",
+              display_name: material.original_name,
+              source_role: roleFor(attached.findIndex((item) => item.id === material.id)),
+              purposes: [purpose],
+            }],
+          }
+        : material) ?? current);
+    }
+    const attachedIds = new Set(attached.map((material) => material.id));
+    setSelected((current) => current.filter((id) => !attachedIds.has(id)));
     setRowErrors(failures);
     setBusy(false);
     if (Object.keys(failures).length === 0) onOpenChange(false);
-    else setReloadKey((current) => current + 1);
   }
 
   function requestAttach() {
@@ -273,7 +295,12 @@ export function LibraryMaterialPickerDialog({
           />
         </label>
 
-        {error && <ErrorState message={error} />}
+        {error && (
+          <div className="library-picker-error">
+            <ErrorState message={error} />
+            {materials?.length === 0 && <Button variant="secondary" onClick={() => setReloadKey((current) => current + 1)}>Повторить</Button>}
+          </div>
+        )}
         {materials === null ? (
           <LoadingState label="Загружаем Библиотеку" />
         ) : materials.length === 0 ? (

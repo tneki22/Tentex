@@ -70,6 +70,9 @@ const DEMO_LIBRARY_MATERIAL: LibraryMaterialRead = {
   usage: [],
 };
 
+const loadDemoLibraryMaterials = async () => [DEMO_LIBRARY_MATERIAL];
+const attachDemoLibraryMaterial = async () => ({ ...DEMO_LIBRARY_MATERIAL } as LibraryMaterialDetailRead);
+
 /** Поверхности и текст показываются парами «за что отвечает — как называется». */
 const SURFACE_TOKENS = [
   ["--canvas", "фон приложения"],
@@ -654,8 +657,8 @@ export function UiKit() {
           studyRoleMode="first-main"
           onOpenChange={setLibraryPicker}
           onAttached={() => undefined}
-          loadMaterials={async () => [DEMO_LIBRARY_MATERIAL]}
-          attachMaterial={async () => ({ ...DEMO_LIBRARY_MATERIAL } as LibraryMaterialDetailRead)}
+          loadMaterials={loadDemoLibraryMaterials}
+          attachMaterial={attachDemoLibraryMaterial}
         />
       </section>
 

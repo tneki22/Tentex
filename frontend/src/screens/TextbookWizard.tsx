@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { useNavigate } from "react-router";
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, Copy, Filter, MessageSquare, Pencil, Plus, Search, Trash2, Undo2, UploadCloud, WandSparkles } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, Copy, Filter, LibraryBig, MessageSquare, Pencil, Plus, Search, Trash2, Undo2, UploadCloud, WandSparkles } from "lucide-react";
 import {
   createProgramNode,
   moveProgramNode,
@@ -18,7 +18,7 @@ import {
 import type { WizardDraftController } from "../hooks/useWizardDraft";
 import { Button, Card, ContextMenu, Disclosure, Field, IconButton, LoadingState, PageHead, SegmentedTabs, StatusBadge, Switch } from "../components/ui";
 import type { ContextMenuItem } from "../components/ui";
-import { QualityBadge, TaskRow } from "../components/domain";
+import { LibraryMaterialPickerDialog, QualityBadge, TaskRow } from "../components/domain";
 import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTreeNode } from "./programTree";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 
@@ -78,6 +78,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [actionError, setActionError] = useState("");
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const initializedKey = useRef<string | null>(null);
   const materialInput = useRef<HTMLInputElement>(null);
   const materials = useProjectMaterials(controller.detail?.project.id);
@@ -393,7 +394,10 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
             <Card className="textbook-dropzone">
               <UploadCloud size={24} aria-hidden="true" />
               <span><b>Перетащите учебники, методички, конспекты, статьи или аудио</b><small>PDF, DOCX, TXT, MD, изображения и аудио. До 100 МБ и 500 страниц на файл.</small></span>
-              <Button disabled={materials.busy || !controller.detail} variant="secondary" onClick={() => materialInput.current?.click()}>Добавить материал</Button>
+              <span className="material-entry-actions">
+                <Button disabled={materials.busy || !controller.detail} variant="secondary" onClick={() => materialInput.current?.click()}>Добавить материал</Button>
+                <Button disabled={materials.busy || !controller.detail} variant="secondary" onClick={() => setLibraryOpen(true)}><LibraryBig size={15} aria-hidden="true" />Из Библиотеки</Button>
+              </span>
             </Card>
           </div>
 
@@ -619,6 +623,23 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
           <Card className="textbook-summary-card"><h3>После создания</h3><p>Проект станет активным, а источники сохранят свои роли и настройки. {nodes.length === 0 ? "Программа останется пустой — её можно составить позже в разделе «Программа»." : "Программа сразу откроется для ручной работы."} Автоматическое составление можно будет запустить позже.</p></Card>
           <div className="wizard-actions"><Button variant="ghost" onClick={() => void go(4)}>Вернуться к программе</Button><Button disabled={busy} onClick={() => void activate()}>Создать проект</Button></div>
         </section>
+      )}
+      {controller.detail && (
+        <LibraryMaterialPickerDialog
+          open={libraryOpen}
+          projectId={controller.detail.project.id}
+          title="Выбрать учебные материалы из Библиотеки"
+          purpose="study_source"
+          multiple
+          existingStudySourceCount={materials.materials.length}
+          studyRoleMode="first-main"
+          onOpenChange={setLibraryOpen}
+          onAttached={() => materials.refresh()}
+          onCreateNew={() => {
+            setLibraryOpen(false);
+            window.setTimeout(() => materialInput.current?.click(), 0);
+          }}
+        />
       )}
     </div>
   );

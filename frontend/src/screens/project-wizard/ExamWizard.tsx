@@ -9,6 +9,7 @@ import {
   previewExamProgram,
   startMaterialProcessing,
   uploadMaterial,
+  type LibraryMaterialRead,
   type MaterialPurpose,
   type MaterialRead,
 } from "../../api/materials";
@@ -27,6 +28,7 @@ import type { WizardDraftController } from "../../hooks/useWizardDraft";
 import { useProjectMaterials } from "../../hooks/useProjectMaterials";
 import { Button, Card, Checkbox, Field, IconButton, LoadingState, PageHead, RadioCards, SegmentedTabs } from "../../components/ui";
 import type { RadioCardOption } from "../../components/ui";
+import { LibraryMaterialPickerDialog } from "../../components/domain";
 import {
   ExamMaterialUploadPanel,
   type ExamMaterialInputMode,
@@ -202,6 +204,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
   const [warnings, setWarnings] = useState<string[]>([]);
   const [counts, setCounts] = useState({ tickets: 0, questions: 0, tasks: 0 });
   const [actionError, setActionError] = useState("");
+  const [libraryPurpose, setLibraryPurpose] = useState<MaterialPurpose | null>(null);
   const initializedKey = useRef<string | null>(null);
   const projectMaterials = useProjectMaterials(controller.detail?.project.id);
 
@@ -350,6 +353,19 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
       const material = await uploadMaterial(draft.project.id, file, sourceRole, [purpose]);
       if (purpose === "exam_structure" && material.status === "ready_to_process") {
         await startMaterialProcessing(draft.project.id, material.id, "fast");
+      }
+    }
+    await projectMaterials.refresh();
+  }
+
+  async function attachedLibraryMaterials(materials: LibraryMaterialRead[]) {
+    const projectId = controller.detail?.project.id;
+    if (!projectId || !libraryPurpose) return;
+    if (libraryPurpose === "exam_structure") {
+      for (const material of materials) {
+        if (material.status === "ready_to_process") {
+          await startMaterialProcessing(projectId, material.id, "fast");
+        }
       }
     }
     await projectMaterials.refresh();
@@ -584,6 +600,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                 text={form.rawText}
                 onTextChange={(rawText) => setForm((current) => ({ ...current, rawText }))}
                 onFiles={(files) => addFiles("exam_structure", files)}
+                onChooseLibrary={() => setLibraryPurpose("exam_structure")}
                 onRemove={removeMaterial}
                 onRetry={retryMaterial}
               />
@@ -600,6 +617,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                 text={form.answersText}
                 onTextChange={(answersText) => setForm((current) => ({ ...current, answersText }))}
                 onFiles={(files) => addFiles("reference_answers", files)}
+                onChooseLibrary={() => setLibraryPurpose("reference_answers")}
                 onRemove={removeMaterial}
                 onRetry={retryMaterial}
               />
@@ -616,6 +634,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                 text=""
                 onTextChange={() => undefined}
                 onFiles={(files) => addFiles("study_source", files)}
+                onChooseLibrary={() => setLibraryPurpose("study_source")}
                 onRemove={removeMaterial}
                 onRetry={retryMaterial}
               />
@@ -805,6 +824,24 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
             <Button disabled={busy} onClick={() => void activate()}>Создать проект</Button>
           </div>
         </section>
+      )}
+      {controller.detail && libraryPurpose && (
+        <LibraryMaterialPickerDialog
+          open
+          projectId={controller.detail.project.id}
+          title={libraryPurpose === "exam_structure"
+            ? "Выбрать список вопросов из Библиотеки"
+            : libraryPurpose === "reference_answers"
+              ? "Выбрать эталонные ответы из Библиотеки"
+              : "Выбрать учебные материалы из Библиотеки"}
+          purpose={libraryPurpose}
+          multiple={libraryPurpose === "study_source"}
+          existingStudySourceCount={materialsFor("study_source").length}
+          studyRoleMode="first-main"
+          onOpenChange={(open) => { if (!open) setLibraryPurpose(null); }}
+          onAttached={attachedLibraryMaterials}
+          onCreateNew={() => setLibraryPurpose(null)}
+        />
       )}
     </div>
   );

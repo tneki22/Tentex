@@ -5,7 +5,7 @@ import {
   useId,
   useState,
 } from "react";
-import { FileText, RotateCcw, UploadCloud, X } from "lucide-react";
+import { FileText, LibraryBig, RotateCcw, UploadCloud, X } from "lucide-react";
 import type { MaterialRead } from "../../api/materials";
 import { Button, Card, SegmentedTabs } from "../../components/ui";
 
@@ -23,6 +23,7 @@ interface ExamMaterialUploadPanelProps {
   text: string;
   onTextChange: (text: string) => void;
   onFiles: (files: File[]) => Promise<void>;
+  onChooseLibrary?: () => void;
   onRemove: (material: MaterialRead) => Promise<void>;
   onRetry?: (material: MaterialRead) => Promise<void>;
 }
@@ -48,6 +49,7 @@ export function ExamMaterialUploadPanel({
   text,
   onTextChange,
   onFiles,
+  onChooseLibrary,
   onRemove,
   onRetry,
 }: ExamMaterialUploadPanelProps) {
@@ -110,7 +112,14 @@ export function ExamMaterialUploadPanel({
                 <b>{uploading ? "Загружаем…" : "Перетащите файлы сюда"}</b>
                 <small>PDF, DOCX, TXT, MD или изображения — до 100 МБ и 500 страниц</small>
               </span>
-              <label className="secondary-button" htmlFor={inputId}>Выбрать файлы</label>
+              <span className="material-entry-actions">
+                <label className="secondary-button" htmlFor={inputId}>Выбрать файлы</label>
+                {onChooseLibrary && (
+                  <Button variant="secondary" disabled={uploading} onClick={onChooseLibrary}>
+                    <LibraryBig size={15} aria-hidden="true" />Из Библиотеки
+                  </Button>
+                )}
+              </span>
               <input
                 id={inputId}
                 className="wizard-file-input"
