@@ -323,6 +323,48 @@ async function uploadResponse(response: Response): Promise<MaterialRead> {
   return payload as MaterialRead;
 }
 
+/** POST через XHR вместо fetch: только у него есть событие прогресса отправки —
+ *  для стомегабайтных файлов индикатор нужен, иначе окно выглядит зависшим. */
+function uploadFormWithProgress<T>(
+  url: string,
+  form: FormData,
+  onProgress?: (percent: number) => void,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.responseType = "json";
+    xhr.setRequestHeader("Accept", "application/json");
+    xhr.upload.onprogress = (event) => {
+      if (onProgress && event.lengthComputable) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    xhr.onerror = () => reject(new ProjectApiError(0, "Не удалось подключиться к серверу"));
+    xhr.onload = () => {
+      const payload = xhr.response as unknown;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(payload as T);
+        return;
+      }
+      const record = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+      const detail = typeof record.detail === "string"
+        ? record.detail
+        : `Загрузка завершилась с ошибкой ${xhr.status}`;
+      const context = record.context && typeof record.context === "object"
+        ? record.context as Record<string, unknown>
+        : {};
+      reject(new ProjectApiError(
+        xhr.status,
+        detail,
+        typeof record.code === "string" ? record.code : null,
+        context,
+      ));
+    };
+    xhr.send(form);
+  });
+}
+
 export const listMaterials = (projectId: string, signal?: AbortSignal): Promise<MaterialRead[]> =>
   request(projectMaterialsPath(projectId), { signal });
 
@@ -514,14 +556,13 @@ export const getLibraryMaterial = (
   signal?: AbortSignal,
 ): Promise<LibraryMaterialDetailRead> => request(libraryPath(materialId), { signal });
 
-export async function uploadLibraryMaterial(file: File): Promise<LibraryMaterialDetailRead> {
+export function uploadLibraryMaterial(
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<LibraryMaterialDetailRead> {
   const form = new FormData();
   form.set("file", file);
-  return uploadResponse(await fetch("/api/materials/upload", {
-    method: "POST",
-    headers: { Accept: "application/json" },
-    body: form,
-  })) as unknown as LibraryMaterialDetailRead;
+  return uploadFormWithProgress<LibraryMaterialDetailRead>("/api/materials/upload", form, onProgress);
 }
 
 export const createLibraryTextMaterial = (

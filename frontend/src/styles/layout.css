@@ -8399,6 +8399,30 @@ button.wizard-back-projects {
 .materials-add-grid button strong { font-size: var(--text-sm); }
 .materials-add-grid button small { color: var(--muted); font-size: var(--text-xs); }
 
+.materials-upload-progress {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--muted);
+}
+
+.materials-upload-progress > svg { color: var(--muted); }
+.materials-upload-progress > span { display: grid; gap: 2px; min-width: 0; }
+.materials-upload-progress strong {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.materials-upload-progress small { font-size: var(--text-xs); }
+.materials-upload-progress .progress { grid-column: 1 / -1; }
+
 .materials-manual-answer {
   width: 100%;
   min-height: 260px;
@@ -8481,7 +8505,10 @@ button.wizard-back-projects {
   gap: var(--space-4);
 }
 
-.materials-text-form label {
+/* Только для голых `<label>Название<input/></label>` — прямых детей формы.
+   Обычный селектор задел бы и вложенный label из Field (там своя вёрстка),
+   разорвав подпись и звёздочку обязательности на две строки. */
+.materials-text-form > label {
   display: grid;
   gap: var(--space-2);
   color: var(--muted);

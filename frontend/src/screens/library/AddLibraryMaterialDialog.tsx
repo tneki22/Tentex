@@ -6,7 +6,7 @@ import {
   uploadLibraryMaterial,
   type LibraryMaterialDetailRead,
 } from "../../api/materials";
-import { Button, Dialog, ErrorState, Field } from "../../components/ui";
+import { Button, Dialog, ErrorState, Field, Progress } from "../../components/ui";
 
 type Mode = "choose" | "text" | "link";
 
@@ -14,6 +14,13 @@ const ACCEPT = ".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.mp3,.wav,.m4a,.ogg,.flac";
 
 function looksLikeYoutube(url: string): boolean {
   return /(?:^|\.)youtube\.com|youtu\.be/i.test(url);
+}
+
+function sizeLabel(bytes: number): string {
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 ** 2) return `${Math.round(bytes / 1024)} КБ`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} МБ`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} ГБ`;
 }
 
 interface AddLibraryMaterialDialogProps {
@@ -38,6 +45,8 @@ export function AddLibraryMaterialDialog({
   const [name, setName] = useState("Заметка.md");
   const [text, setText] = useState("");
   const [url, setUrl] = useState("");
+  const [uploadingFile, setUploadingFile] = useState<File | null>(null);
+  const [uploadPercent, setUploadPercent] = useState(0);
 
   function reset() {
     setMode("choose");
@@ -45,6 +54,8 @@ export function AddLibraryMaterialDialog({
     setName("Заметка.md");
     setText("");
     setUrl("");
+    setUploadingFile(null);
+    setUploadPercent(0);
   }
 
   async function submit(action: () => Promise<LibraryMaterialDetailRead>) {
@@ -57,9 +68,16 @@ export function AddLibraryMaterialDialog({
       onCreated(created);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Материал не добавился");
+      setUploadingFile(null);
     } finally {
       setBusy(false);
     }
+  }
+
+  function submitFile(file: File) {
+    setUploadingFile(file);
+    setUploadPercent(0);
+    void submit(() => uploadLibraryMaterial(file, setUploadPercent));
   }
 
   const titles: Record<Mode, string> = {
@@ -119,13 +137,24 @@ export function AddLibraryMaterialDialog({
         onChange={(event) => {
           const file = event.target.files?.[0];
           event.target.value = "";
-          if (file) void submit(() => uploadLibraryMaterial(file));
+          if (file) submitFile(file);
         }}
       />
 
       {error && <ErrorState message={error} />}
 
-      {mode === "choose" && (
+      {mode === "choose" && uploadingFile && (
+        <div className="materials-upload-progress">
+          <FileUp size={18} />
+          <span>
+            <strong>{uploadingFile.name}</strong>
+            <small>{sizeLabel(uploadingFile.size)}</small>
+          </span>
+          <Progress value={uploadPercent} max={100} label="Загрузка файла" />
+        </div>
+      )}
+
+      {mode === "choose" && !uploadingFile && (
         <div className="materials-add-grid">
           <button type="button" disabled={busy} onClick={() => fileInput.current?.click()}>
             <FileUp size={18} />

@@ -166,6 +166,7 @@ export function LibraryMaterialWorkspace() {
   const hasOutline = Boolean(detail && detail.outline_source !== "none" && detail.outline.length > 0);
   const showOutline = hasOutline && outlineOpen && !narrow;
   const showInspector = inspectorOpen && !narrow;
+  const inspectorVisible = showInspector || (narrow && inspectorOpen);
 
   function setParam(key: string, value: string | null) {
     const next = new URLSearchParams(searchParams);
@@ -393,9 +394,18 @@ export function LibraryMaterialWorkspace() {
             <div className="library-stage-empty">
               <h2>Материал загружен</h2>
               <p>Подготовьте текст, чтобы сравнивать его с исходником.</p>
-              <Button onClick={() => setParam("panel", "processing")}>
-                Открыть панель обработки
-              </Button>
+              {inspectorVisible ? (
+                <p className="library-stage-hint">Запустите обработку в панели справа.</p>
+              ) : (
+                <Button
+                  onClick={() => {
+                    setInspectorOpen(true);
+                    setParam("panel", "processing");
+                  }}
+                >
+                  Открыть панель обработки
+                </Button>
+              )}
             </div>
           ) : store.pageError && !store.pageLoading ? (
             <div className="library-stage-empty">
