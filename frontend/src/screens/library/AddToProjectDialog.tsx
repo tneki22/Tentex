@@ -92,7 +92,7 @@ export function AddToProjectDialog({
       const detail = await attachLibraryMaterial(materialId, {
         project_id: projectId,
         display_name: displayName.trim() || null,
-        source_role: role,
+        source_role: purpose === "study_source" ? role : "reference",
         purposes: [purpose],
       });
       setDisplayName("");
@@ -109,12 +109,12 @@ export function AddToProjectDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title="Добавить в проект"
+      title="Подключить к проекту"
       description="Создаётся только связь: файл не копируется и обработка не запускается заново."
       footer={
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Отменить</Button>
-          <Button disabled={busy || !projectId} onClick={() => void attach()}>Добавить</Button>
+          <Button disabled={busy || !projectId} onClick={() => void attach()}>Подключить</Button>
         </>
       }
     >
@@ -149,17 +149,23 @@ export function AddToProjectDialog({
                 label: item.label,
                 description: item.description,
               }))}
-              onValueChange={(next) => setPurpose((next ?? "study_source") as MaterialPurpose)}
+              onValueChange={(next) => {
+                const nextPurpose = (next ?? "study_source") as MaterialPurpose;
+                setPurpose(nextPurpose);
+                setRole(nextPurpose === "study_source" ? "additional" : "reference");
+              }}
             />
           </Field>
-          <Field label="Роль источника">
-            <Select
-              ariaLabel="Роль источника"
-              value={role}
-              options={ROLES}
-              onValueChange={(next) => setRole((next ?? "additional") as SourceRole)}
-            />
-          </Field>
+          {purpose === "study_source" && (
+            <Field label="Роль источника">
+              <Select
+                ariaLabel="Роль источника"
+                value={role}
+                options={ROLES}
+                onValueChange={(next) => setRole((next ?? "additional") as SourceRole)}
+              />
+            </Field>
+          )}
           <Field label="Имя в проекте" hint={`По умолчанию — «${materialName}»`}>
             <input
               value={displayName}

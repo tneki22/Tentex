@@ -111,7 +111,7 @@ export function LibraryMaterialFilePanel({
           </ul>
         )}
         <Button variant="secondary" disabled={busy} onClick={onAddToProject}>
-          <Plus size={14} aria-hidden="true" /> Добавить в проект
+          <Plus size={14} aria-hidden="true" /> Подключить к проекту
         </Button>
       </section>
 
