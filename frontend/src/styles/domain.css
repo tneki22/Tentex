@@ -392,7 +392,11 @@
 }
 
 .library-picker-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(680px, calc(100vw - var(--space-6)));
+  height: min(720px, calc(100vh - var(--space-8)));
+  overflow: hidden;
 }
 
 .library-picker-settings {
@@ -430,7 +434,8 @@
 
 .library-picker-list {
   display: grid;
-  max-height: min(440px, 52vh);
+  min-height: 0;
+  flex: 1;
   margin-top: var(--space-3);
   overflow-y: auto;
   border: 1px solid var(--line);
