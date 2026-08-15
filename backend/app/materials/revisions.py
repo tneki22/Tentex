@@ -158,8 +158,14 @@ def revision_summary(session: Session, material_id: UUID, revision: int) -> dict
     return {
         "page_count": len(pages),
         "native_page_count": sum(page.quality == PageQuality.NATIVE for page in pages),
-        "ocr_page_count": sum(page.quality == PageQuality.OCR for page in pages),
-        "review_page_count": sum(page.quality == PageQuality.OCR_LOW for page in pages),
+        "ocr_page_count": sum(
+            page.quality == PageQuality.OCR
+            or (page.quality == PageQuality.OCR_LOW and page.reviewed_at is not None)
+            for page in pages
+        ),
+        "review_page_count": sum(
+            page.quality == PageQuality.OCR_LOW and page.reviewed_at is None for page in pages
+        ),
         "diagnostics_count": len({item for page in pages for item in page.diagnostics}),
     }
 

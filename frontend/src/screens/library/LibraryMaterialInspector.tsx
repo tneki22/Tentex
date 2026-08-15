@@ -31,6 +31,7 @@ interface LibraryMaterialInspectorProps {
   onControl: (action: "pause" | "resume" | "retry") => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
+  onConfirmPageReview: () => void;
   onRestore: (revision: number) => void;
   onAddToProject: () => void;
   onRefreshSource: () => void;
@@ -56,6 +57,7 @@ export function LibraryMaterialInspector({
   onControl,
   onEditPage,
   onCleanupPage,
+  onConfirmPageReview,
   onRestore,
   onAddToProject,
   onRefreshSource,
@@ -90,6 +92,7 @@ export function LibraryMaterialInspector({
               onControl={onControl}
               onEditPage={onEditPage}
               onCleanupPage={onCleanupPage}
+              onConfirmPageReview={onConfirmPageReview}
             />
           </Tabs.Content>
           <Tabs.Content value="revisions">

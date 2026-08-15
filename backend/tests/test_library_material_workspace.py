@@ -16,6 +16,7 @@ from app.materials import revisions as revision_registry
 from app.materials.schemas import (
     LibraryMaterialAttachWrite,
     MaterialPurpose,
+    ProcessingStart,
     TextMaterialCreate,
 )
 from app.models import (
@@ -330,3 +331,111 @@ def test_detail_reports_quality_counters_for_active_revision(session: Session) -
     assert detail.native_page_count == 1
     assert detail.ocr_low_page_count == 1
     assert isinstance(detail.updated_at, datetime)
+
+
+def test_confirming_low_ocr_page_clears_review_warning_without_changing_quality(
+    session: Session,
+) -> None:
+    material = make_material(session, "c11")
+    page = MaterialPage(
+        id=uuid4(),
+        material_id=material.id,
+        revision=1,
+        page_number=1,
+        width=595,
+        height=842,
+        text="Распознанный текст",
+        markdown="Распознанный текст",
+        quality=PageQuality.OCR_LOW,
+        confidence=0.61,
+        elements=[],
+        diagnostics=["low_confidence"],
+    )
+    session.add(page)
+    material.ocr_low_page_count = 1
+    session.commit()
+    revision_registry.record_revision(
+        session,
+        material.id,
+        1,
+        origin=MaterialRevisionOrigin.IMPORTED,
+        summary=revision_registry.revision_summary(session, material.id, 1),
+    )
+    session.commit()
+
+    first = library.confirm_library_page_review(session, material.id, 1)
+    confirmed_at = session.get(MaterialPage, page.id).reviewed_at
+    second = library.confirm_library_page_review(session, material.id, 1)
+
+    assert confirmed_at is not None
+    assert session.get(MaterialPage, page.id).reviewed_at == confirmed_at
+    assert session.get(MaterialPage, page.id).quality == PageQuality.OCR_LOW
+    assert first.ocr_low_page_count == 0
+    assert first.ocr_page_count == 1
+    assert second.page_states[0].reviewed_at == confirmed_at
+    assert library.list_library_revisions(session, material.id)[0].summary[
+        "review_page_count"
+    ] == 0
+
+
+def test_confirmed_page_is_excluded_from_needs_review_scope(session: Session) -> None:
+    material = make_material(session, "c12")
+    page = MaterialPage(
+        id=uuid4(),
+        material_id=material.id,
+        revision=1,
+        page_number=1,
+        width=595,
+        height=842,
+        text="Распознанный текст",
+        markdown="Распознанный текст",
+        quality=PageQuality.OCR_LOW,
+        elements=[],
+        diagnostics=[],
+    )
+    session.add(page)
+    session.commit()
+
+    library.confirm_library_page_review(session, material.id, 1)
+
+    with pytest.raises(ProjectConflictError) as error:
+        library._selected_pages(
+            session,
+            material,
+            ProcessingStart(parser_mode="fast", scope="needs_review"),
+        )
+    assert error.value.code == "material_has_no_review_pages"
+
+
+def test_copying_unchanged_page_preserves_review_confirmation(session: Session) -> None:
+    material = make_material(session, "c13")
+    page = MaterialPage(
+        id=uuid4(),
+        material_id=material.id,
+        revision=1,
+        page_number=1,
+        width=595,
+        height=842,
+        text="Проверенный текст",
+        markdown="Проверенный текст",
+        quality=PageQuality.OCR_LOW,
+        reviewed_at=utc_now(),
+        elements=[],
+        diagnostics=[],
+    )
+    session.add(page)
+    session.commit()
+
+    copied = library.copy_page(session, page, 2)
+
+    assert copied.reviewed_at == page.reviewed_at
+
+
+def test_native_page_cannot_be_confirmed_as_low_ocr(session: Session) -> None:
+    material = make_material(session, "c14")
+    add_page_with_fragments(session, material, page_number=1, revision=1, fragments=["Текст"])
+
+    with pytest.raises(ProjectConflictError) as error:
+        library.confirm_library_page_review(session, material.id, 1)
+
+    assert error.value.code == "page_review_not_required"

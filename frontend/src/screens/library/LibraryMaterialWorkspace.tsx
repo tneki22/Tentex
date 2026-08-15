@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import {
+  confirmLibraryPageReview,
   deleteLibraryMaterial,
   getMaterialDeletePreview,
   refreshLibrarySource,
@@ -384,6 +385,7 @@ export function LibraryMaterialWorkspace() {
             outlineSource={detail.outline_source}
             page={activePage}
             pageCount={pageCount}
+            pageStates={readOnly ? [] : detail.page_states}
             storageKey={detail.id}
             onPageChange={view.goToPage}
           />
@@ -444,6 +446,10 @@ export function LibraryMaterialWorkspace() {
               setEditOpen(true);
             }}
             onCleanupPage={() => setCleanupOpen(true)}
+            onConfirmPageReview={() => {
+              if (!page) return;
+              void store.run(() => confirmLibraryPageReview(detail.id, page.page_number));
+            }}
             onRestore={(revision) => void store.run(async () => {
               const restored = await restoreMaterialRevision(detail.id, revision);
               setParam("revision", null);
@@ -487,6 +493,7 @@ export function LibraryMaterialWorkspace() {
             outlineSource={detail.outline_source}
             page={activePage}
             pageCount={pageCount}
+            pageStates={readOnly ? [] : detail.page_states}
             storageKey={detail.id}
             onPageChange={(next) => {
               view.goToPage(next);
@@ -525,6 +532,10 @@ export function LibraryMaterialWorkspace() {
               setEditOpen(true);
             }}
             onCleanupPage={() => setCleanupOpen(true)}
+            onConfirmPageReview={() => {
+              if (!page) return;
+              void store.run(() => confirmLibraryPageReview(detail.id, page.page_number));
+            }}
             onRestore={(revision) => void store.run(() => restoreMaterialRevision(detail.id, revision))}
             onAddToProject={() => setAttachOpen(true)}
             onRefreshSource={() => void store.run(() => refreshLibrarySource(detail.id))}

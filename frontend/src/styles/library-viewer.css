@@ -840,10 +840,26 @@
   box-shadow: var(--focus-ring);
 }
 
+.outline-link.is-recognized {
+  color: var(--tone-info);
+  background: color-mix(in srgb, var(--tone-info) 10%, transparent);
+}
+
+.outline-link.needs-review {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--tone-warning) 18%, transparent);
+}
+
 .outline-link.is-active {
   color: var(--accent);
   font-weight: var(--weight-medium);
   background: var(--accent-wash);
+}
+
+.outline-link.needs-review.is-active {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--tone-warning) 24%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .outline-title {
@@ -886,9 +902,28 @@
   background: var(--surface-hover);
 }
 
+.viewer-page-chip.is-recognized {
+  color: var(--tone-info);
+  background: color-mix(in srgb, var(--tone-info) 12%, var(--surface-sunken));
+  border-color: color-mix(in srgb, var(--tone-info) 28%, transparent);
+}
+
+.viewer-page-chip.needs-review {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--tone-warning) 22%, var(--surface-sunken));
+  border-color: color-mix(in srgb, var(--tone-warning) 42%, transparent);
+}
+
 .viewer-page-chip.is-active {
   color: var(--on-accent);
   background: var(--accent);
+}
+
+.viewer-page-chip.needs-review.is-active {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--tone-warning) 30%, var(--surface-sunken));
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 /* ── Расшифровка по времени ──────────────────────────────────────────────── */
@@ -1319,6 +1354,23 @@
   line-height: var(--leading-normal);
   background: color-mix(in srgb, var(--tone-warning) 14%, transparent);
   border-radius: var(--radius-md);
+}
+
+.inspector-page-review {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: color-mix(in srgb, var(--tone-warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone-warning) 32%, transparent);
+  border-radius: var(--radius-md);
+}
+
+.inspector-page-review p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
 }
 
 .inspector-error {

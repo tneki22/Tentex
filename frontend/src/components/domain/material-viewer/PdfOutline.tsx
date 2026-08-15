@@ -1,13 +1,23 @@
 import { ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import type { OutlineItem, OutlineSource } from "../../../api/materials";
+import type { OutlineItem, OutlineSource, PageStateRead } from "../../../api/materials";
 import { SegmentedTabs } from "../../ui";
 
 interface OutlineNode {
   key: string;
   item: OutlineItem;
   children: OutlineNode[];
+}
+
+function pageMark(state: PageStateRead | undefined): { className: string; label: string | null } {
+  if (state?.quality === "ocr_low" && state.reviewed_at === null) {
+    return { className: "needs-review", label: "нужно проверить" };
+  }
+  if (state?.quality === "ocr") {
+    return { className: "is-recognized", label: "распознано" };
+  }
+  return { className: "", label: null };
 }
 
 function buildTree(items: OutlineItem[]): OutlineNode[] {
@@ -28,6 +38,7 @@ interface PdfOutlineProps {
   outlineSource: OutlineSource;
   page: number;
   pageCount: number;
+  pageStates: PageStateRead[];
   /** Ключ материала: раскрытые ветви и вкладка запоминаются для него. */
   storageKey: string;
   onPageChange(page: number): void;
@@ -44,10 +55,15 @@ export function PdfOutline({
   outlineSource,
   page,
   pageCount,
+  pageStates,
   storageKey,
   onPageChange,
 }: PdfOutlineProps) {
   const tree = useMemo(() => buildTree(outline), [outline]);
+  const stateByPage = useMemo(
+    () => new Map(pageStates.map((item) => [item.page_number, item])),
+    [pageStates],
+  );
   const [tab, setTab] = useState<"outline" | "pages">(() =>
     outline.length ? (localStorage.getItem(`tentex-outline-tab:${storageKey}`) as "outline" | "pages" | null) ?? "outline" : "pages");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -104,6 +120,7 @@ export function PdfOutline({
       const containsActive = hasChildren && subtreeKeys(node).includes(activeKey ?? "");
       const isCollapsed = hasChildren && collapsed.has(node.key) && !containsActive;
       const isActive = node.key === activeKey;
+      const mark = pageMark(stateByPage.get(node.item.page));
       return (
         <div className="outline-branch" key={node.key} role="none">
           <div className="outline-row" role="treeitem" aria-expanded={hasChildren ? !isCollapsed : undefined} aria-selected={isActive}>
@@ -128,9 +145,14 @@ export function PdfOutline({
                 if (element) focusable.current.push(element);
                 if (isActive) activeRef.current = element;
               }}
-              className={`outline-link ${isActive ? "is-active" : ""}`.trim()}
+              className={[
+                "outline-link",
+                mark.className,
+                isActive ? "is-active" : "",
+              ].filter(Boolean).join(" ")}
               style={{ paddingInlineStart: `${depth * 12}px` }}
-              title={node.item.title}
+              title={mark.label ? `${node.item.title} · ${mark.label}` : node.item.title}
+              aria-label={`${node.item.title}, страница ${node.item.page}${mark.label ? `, ${mark.label}` : ""}`}
               tabIndex={isActive || (!activeKey && depth === 0) ? 0 : -1}
               onClick={() => onPageChange(node.item.page)}
             >
@@ -171,18 +193,27 @@ export function PdfOutline({
         </>
       ) : (
         <div className="viewer-outline-pages" role="list" aria-label="Страницы">
-          {Array.from({ length: pageCount }, (_, index) => index + 1).map((number) => (
-            <button
-              type="button"
-              role="listitem"
-              key={number}
-              className={`viewer-page-chip ${number === page ? "is-active" : ""}`.trim()}
-              aria-current={number === page ? "page" : undefined}
-              onClick={() => onPageChange(number)}
-            >
-              {number}
-            </button>
-          ))}
+          {Array.from({ length: pageCount }, (_, index) => index + 1).map((number) => {
+            const mark = pageMark(stateByPage.get(number));
+            return (
+              <button
+                type="button"
+                role="listitem"
+                key={number}
+                className={[
+                  "viewer-page-chip",
+                  mark.className,
+                  number === page ? "is-active" : "",
+                ].filter(Boolean).join(" ")}
+                aria-current={number === page ? "page" : undefined}
+                aria-label={`Страница ${number}${mark.label ? `, ${mark.label}` : ""}`}
+                title={mark.label ?? undefined}
+                onClick={() => onPageChange(number)}
+              >
+                {number}
+              </button>
+            );
+          })}
         </div>
       )}
     </nav>

@@ -54,6 +54,7 @@ from app.materials.schemas import (
     OutlineSource,
     PageCorrectionRead,
     PageRead,
+    PageStateRead,
     PageTextUpdate,
     ProcessingStart,
     ProcessingTaskRead,
@@ -244,16 +245,28 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
         return {}
 
     quality_counts: dict[UUID, dict[PageQuality, int]] = defaultdict(dict)
-    for material_id, quality, count in session.execute(
-        select(MaterialPage.material_id, MaterialPage.quality, func.count())
+    for material_id, quality, reviewed_at, count in session.execute(
+        select(
+            MaterialPage.material_id,
+            MaterialPage.quality,
+            MaterialPage.reviewed_at,
+            func.count(),
+        )
         .join(Material, Material.id == MaterialPage.material_id)
         .where(
             MaterialPage.material_id.in_(material_ids),
             MaterialPage.revision == Material.active_parse_revision,
         )
-        .group_by(MaterialPage.material_id, MaterialPage.quality)
+        .group_by(MaterialPage.material_id, MaterialPage.quality, MaterialPage.reviewed_at)
     ).all():
-        quality_counts[material_id][quality] = count
+        display_quality = (
+            PageQuality.OCR
+            if quality == PageQuality.OCR_LOW and reviewed_at is not None
+            else quality
+        )
+        quality_counts[material_id][display_quality] = (
+            quality_counts[material_id].get(display_quality, 0) + count
+        )
 
     block_counts: dict[UUID, int] = dict(
         session.execute(
@@ -360,6 +373,17 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
         ),
         outline=outline,
         outline_source=outline_source,
+        page_states=[
+            PageStateRead.model_validate(page)
+            for page in session.scalars(
+                select(MaterialPage)
+                .where(
+                    MaterialPage.material_id == material.id,
+                    MaterialPage.revision == material.active_parse_revision,
+                )
+                .order_by(MaterialPage.page_number)
+            )
+        ],
         active_parse_revision=material.active_parse_revision,
         parser_mode=material.parser_mode,
         scan_page_count=material.scan_page_count,
@@ -437,6 +461,7 @@ def _page_read(session: Session, page: MaterialPage) -> PageRead:
         markdown=page.markdown,
         quality=page.quality,
         confidence=page.confidence,
+        reviewed_at=page.reviewed_at,
         diagnostics=page.diagnostics,
         fragments=[
             FragmentRead.model_validate(fragment).model_copy(
@@ -468,6 +493,43 @@ def read_library_page(
     if page is None:
         raise ProjectNotFoundError("Страница не найдена", code="material_page_not_found")
     return _page_read(session, page)
+
+
+def confirm_library_page_review(
+    session: Session, material_id: UUID, page_number: int
+) -> LibraryMaterialDetailRead:
+    """Подтвердить сверку слабого OCR, не меняя техническое качество страницы."""
+    session.rollback()
+    with session.begin():
+        material = material_or_404(session, material_id)
+        if material.active_parse_revision == 0:
+            raise ProjectNotFoundError("Материал ещё не разобран", code="material_not_parsed")
+        page = session.scalar(
+            select(MaterialPage).where(
+                MaterialPage.material_id == material.id,
+                MaterialPage.revision == material.active_parse_revision,
+                MaterialPage.page_number == page_number,
+            )
+        )
+        if page is None:
+            raise ProjectNotFoundError("Страница не найдена", code="material_page_not_found")
+        if page.quality != PageQuality.OCR_LOW:
+            raise ProjectConflictError(
+                "Эту страницу подтверждать не требуется",
+                code="page_review_not_required",
+            )
+        if page.reviewed_at is None:
+            page.reviewed_at = utc_now()
+            material.updated_at = page.reviewed_at
+            refresh_material_counters(session, material, material.active_parse_revision)
+            registered = revision_registry.get_revision(
+                session, material.id, material.active_parse_revision
+            )
+            if registered is not None:
+                registered.summary = revision_registry.revision_summary(
+                    session, material.id, material.active_parse_revision
+                )
+    return read_library_material(session, material_id)
 
 
 def library_fragment_asset_path(session: Session, material_id: UUID, fragment_id: UUID) -> Path:
@@ -905,6 +967,7 @@ def _selected_pages(session: Session, material: Material, command: ProcessingSta
                     MaterialPage.material_id == material.id,
                     MaterialPage.revision == material.active_parse_revision,
                     MaterialPage.quality == PageQuality.OCR_LOW,
+                    MaterialPage.reviewed_at.is_(None),
                 )
                 .order_by(MaterialPage.page_number)
             )
@@ -1091,6 +1154,7 @@ def copy_page(session: Session, page: MaterialPage, revision: int) -> MaterialPa
         elements=list(page.elements),
         diagnostics=list(page.diagnostics),
         image_path=page.image_path,
+        reviewed_at=page.reviewed_at,
         created_at=utc_now(),
     )
     session.add(row)
@@ -1215,7 +1279,9 @@ def refresh_material_counters(session: Session, material: Material, revision: in
             )
         )
     )
-    material.ocr_low_page_count = sum(page.quality == PageQuality.OCR_LOW for page in pages)
+    material.ocr_low_page_count = sum(
+        page.quality == PageQuality.OCR_LOW and page.reviewed_at is None for page in pages
+    )
     material.diagnostics = sorted({item for page in pages for item in page.diagnostics})
     material.error = None
 

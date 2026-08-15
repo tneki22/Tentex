@@ -179,6 +179,7 @@ class PageRead(ApiModel):
     markdown: str
     quality: PageQuality
     confidence: float | None
+    reviewed_at: datetime | None
     diagnostics: list[str]
     fragments: list[FragmentRead]
     blocks: list[BlockRead]
@@ -245,6 +246,12 @@ class OutlineItem(ApiModel):
     page: int
 
 
+class PageStateRead(ApiModel):
+    page_number: int
+    quality: PageQuality
+    reviewed_at: datetime | None
+
+
 class MaterialRevisionRead(ApiModel):
     revision: int
     origin: Literal[
@@ -263,6 +270,7 @@ class LibraryMaterialDetailRead(LibraryMaterialRead):
     capabilities: LibraryMaterialCapabilities
     outline: list[OutlineItem]
     outline_source: OutlineSource
+    page_states: list[PageStateRead]
     active_parse_revision: int
     parser_mode: ParserMode | None
     scan_page_count: int

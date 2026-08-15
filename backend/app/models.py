@@ -475,6 +475,7 @@ class MaterialPage(Base):
     elements: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     diagnostics: Mapped[list[str]] = mapped_column(JSON, default=list)
     image_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 

@@ -88,6 +88,7 @@ interface LibraryProcessingPanelProps {
   onControl: (action: "pause" | "resume" | "retry") => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
+  onConfirmPageReview: () => void;
 }
 
 export function LibraryProcessingPanel({
@@ -99,6 +100,7 @@ export function LibraryProcessingPanel({
   onControl,
   onEditPage,
   onCleanupPage,
+  onConfirmPageReview,
 }: LibraryProcessingPanelProps) {
   const presentation = getMaterialPresentation(material.presentation_kind);
   const [mode, setMode] = useState<string>("fast");
@@ -111,6 +113,11 @@ export function LibraryProcessingPanel({
   const reviewPages = material.ocr_low_page_count;
   const pageCount = material.page_count ?? 1;
   const canScope = material.capabilities.can_run_ocr && prepared && pageCount > 1;
+  const currentPageState = page
+    ? material.page_states.find((item) => item.page_number === page.page_number)
+    : null;
+  const currentNeedsReview = page?.quality === "ocr_low"
+    && currentPageState?.reviewed_at === null;
 
   const backgroundTask: BackgroundTask | null = useMemo(() => {
     if (!task || task.state === "completed") return null;
@@ -154,6 +161,20 @@ export function LibraryProcessingPanel({
             : `На ${reviewPages} страницах распознавание могло ошибиться.`}
           {" "}Откройте их рядом с оригиналом.
         </p>
+      )}
+
+      {currentNeedsReview && !readOnly && (
+        <div className="inspector-page-review" role="status">
+          <p>
+            Страница {page.page_number} требует сверки с оригиналом.
+            {page.confidence !== null
+              ? ` Уверенность распознавания — ${Math.round(page.confidence * 100)}%.`
+              : ""}
+          </p>
+          <Button variant="secondary" disabled={busy} onClick={onConfirmPageReview}>
+            Подтвердить текст
+          </Button>
+        </div>
       )}
 
       {backgroundTask && (

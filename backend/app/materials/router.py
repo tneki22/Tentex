@@ -176,6 +176,16 @@ def update_library_page_text(
 
 
 @router.post(
+    "/materials/{material_id}/pages/{page_number}/confirm-review",
+    response_model=LibraryMaterialDetailRead,
+)
+def confirm_library_page_review(
+    material_id: UUID, page_number: int, session: SessionDependency
+) -> LibraryMaterialDetailRead:
+    return library.confirm_library_page_review(session, material_id, page_number)
+
+
+@router.post(
     "/materials/{material_id}/pages/{page_number}/ai-cleanup/preflight",
     response_model=ai_cleanup.CleanupPreflightRead,
 )

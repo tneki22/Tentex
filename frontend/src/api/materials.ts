@@ -97,6 +97,7 @@ export interface MaterialPageRead {
   markdown: string;
   quality: PageQuality;
   confidence: number | null;
+  reviewed_at: string | null;
   diagnostics: string[];
   fragments: MaterialFragmentRead[];
   blocks: MaterialBlockRead[];
@@ -186,6 +187,12 @@ export interface OutlineItem {
   page: number;
 }
 
+export interface PageStateRead {
+  page_number: number;
+  quality: PageQuality;
+  reviewed_at: string | null;
+}
+
 export interface MaterialRevisionRead {
   revision: number;
   origin: RevisionOrigin;
@@ -202,6 +209,7 @@ export interface LibraryMaterialDetailRead extends LibraryMaterialRead {
   capabilities: LibraryMaterialCapabilities;
   outline: OutlineItem[];
   outline_source: OutlineSource;
+  page_states: PageStateRead[];
   active_parse_revision: number;
   parser_mode: ParserMode | null;
   scan_page_count: number;
@@ -675,6 +683,14 @@ export const updateLibraryPageText = (
     expected_source_hash: expected?.sourceHash,
   }),
 });
+
+export const confirmLibraryPageReview = (
+  materialId: string,
+  page: number,
+): Promise<LibraryMaterialDetailRead> => request(
+  `${libraryPath(materialId)}/pages/${page}/confirm-review`,
+  { method: "POST" },
+);
 
 export const refreshLibrarySource = (materialId: string): Promise<SourceRefreshResult> =>
   request(`${libraryPath(materialId)}/source/refresh`, { method: "POST" });
