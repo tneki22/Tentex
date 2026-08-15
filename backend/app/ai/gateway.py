@@ -80,6 +80,7 @@ def _error_status(code: str) -> int:
         "ai_provider_unavailable": 503,
         "ai_timeout": 504,
         "ai_cancelled": 499,
+        "ai_empty_response": 502,
     }.get(code, 422)
 
 
@@ -287,6 +288,10 @@ class ModelGateway:
             status="answered",
             run_id=run.id,
             duration_ms=round((time.monotonic() - started) * 1000),
+            answer=result.content.strip()[:400],
+            actual_model_id=result.actual_model_id,
+            input_tokens=result.usage.input_tokens,
+            output_tokens=result.usage.output_tokens,
         )
 
     async def transcribe(self, _request: object) -> None:

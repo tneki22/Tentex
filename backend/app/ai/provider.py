@@ -112,19 +112,65 @@ def _usage(value: object) -> ProviderUsage:
     )
 
 
+def _empty_response_error(choice: object, usage: object) -> ProviderError:
+    """Пустой ответ бывает по разным причинам, и лечатся они по-разному."""
+    finish_reason = getattr(choice, "finish_reason", None)
+    message = getattr(choice, "message", None)
+    reasoning = getattr(message, "reasoning", None) if message is not None else None
+    reasoning_tokens = _usage(usage).reasoning_tokens
+    if finish_reason == "length" or reasoning or reasoning_tokens:
+        return ProviderError(
+            "ai_empty_response",
+            "Модель потратила весь лимит токенов на рассуждение и не успела ответить. "
+            "Увеличьте максимум токенов ответа или выберите модель без рассуждения",
+        )
+    if finish_reason == "content_filter":
+        return ProviderError(
+            "ai_empty_response", "Провайдер заблокировал ответ фильтром содержимого"
+        )
+    return ProviderError("ai_empty_response", "Модель вернула пустой ответ")
+
+
+def _provider_message(error: APIStatusError) -> str:
+    """Объяснение провайдера: без него «Провайдер отклонил запрос» ничем не помогает."""
+    body: object = getattr(error, "body", None)
+    for _ in range(2):
+        if isinstance(body, dict):
+            message = body.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+            body = body.get("error")
+            continue
+        break
+    return ""
+
+
+def _with_reason(base: str, error: APIStatusError) -> str:
+    message = _provider_message(error)
+    return f"{base}: {message}" if message else base
+
+
 def normalize_provider_error(error: Exception) -> ProviderError:
     if isinstance(error, AuthenticationError):
-        return ProviderError("ai_invalid_credentials", "Провайдер отклонил ключ")
+        return ProviderError(
+            "ai_invalid_credentials", _with_reason("Провайдер отклонил ключ", error)
+        )
     if isinstance(error, RateLimitError):
-        return ProviderError("ai_rate_limited", "Провайдер временно ограничил запросы")
+        return ProviderError(
+            "ai_rate_limited", _with_reason("Провайдер временно ограничил запросы", error)
+        )
     if isinstance(error, APITimeoutError):
         return ProviderError("ai_timeout", "Провайдер не ответил вовремя")
     if isinstance(error, APIConnectionError):
         return ProviderError("ai_provider_unavailable", "Не удалось подключиться к провайдеру")
     if isinstance(error, APIStatusError):
         if error.status_code >= 500:
-            return ProviderError("ai_provider_unavailable", "Провайдер временно недоступен")
-        return ProviderError("ai_provider_unavailable", "Провайдер отклонил запрос")
+            return ProviderError(
+                "ai_provider_unavailable", _with_reason("Провайдер временно недоступен", error)
+            )
+        return ProviderError(
+            "ai_provider_unavailable", _with_reason("Провайдер отклонил запрос", error)
+        )
     if isinstance(error, ProviderError):
         return error
     return ProviderError("ai_provider_unavailable", "Вызов внешней модели завершился ошибкой")
@@ -200,9 +246,10 @@ class OpenAITransport:
             result = await self.client.chat.completions.create(**kwargs)
         except Exception as error:
             raise normalize_provider_error(error) from error
-        content = result.choices[0].message.content if result.choices else None
-        if not isinstance(content, str):
-            raise ProviderError("ai_invalid_structured_output", "Модель вернула пустой ответ")
+        choice = result.choices[0] if result.choices else None
+        content = choice.message.content if choice is not None else None
+        if not isinstance(content, str) or not content.strip():
+            raise _empty_response_error(choice, result.usage)
         return ProviderCompletion(
             content=content,
             actual_model_id=result.model,

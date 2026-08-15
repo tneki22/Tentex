@@ -7,6 +7,9 @@ interface DisclosureProps {
   /** Заголовок с числом: «Архив и завершённые (2)». */
   summary: string;
   defaultOpen?: boolean;
+  /** Управляемое состояние — когда раскрыть блок решает экран, а не пользователь. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   className?: string;
 }
 
@@ -17,15 +20,21 @@ interface DisclosureProps {
 export function Disclosure({
   summary,
   defaultOpen = false,
+  open: controlledOpen,
+  onOpenChange,
   className = "",
   children,
 }: PropsWithChildren<DisclosureProps>) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+  const open = controlledOpen ?? uncontrolledOpen;
 
   return (
     <Collapsible.Root
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(next) => {
+        setUncontrolledOpen(next);
+        onOpenChange?.(next);
+      }}
       className={`disclosure ${className}`.trim()}
     >
       <Collapsible.Trigger className="disclosure-trigger">

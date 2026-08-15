@@ -1388,9 +1388,70 @@
 }
 
 .ai-save-state {
-  min-height: 1.4em;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 1.6em;
   color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.ai-save-state svg {
+  flex: none;
+}
+
+.ai-save-state.is-success {
+  color: var(--tone-success);
+  font-weight: var(--weight-medium);
+}
+
+.ai-save-state.is-danger {
+  color: var(--tone-danger);
+  font-weight: var(--weight-medium);
+}
+
+.ai-test-result {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+.ai-test-result > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.ai-test-result > div {
+  min-width: 0;
+}
+
+.ai-test-result strong {
+  font-weight: var(--weight-medium);
+}
+
+.ai-test-result p {
+  margin: var(--space-1) 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-soft);
   font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+}
+
+.ai-test-result.is-ok {
+  border-color: color-mix(in srgb, var(--tone-success) 32%, transparent);
+  background: color-mix(in srgb, var(--tone-success) 9%, var(--paper));
+  color: var(--tone-success);
+}
+
+.ai-test-result.is-fail {
+  border-color: color-mix(in srgb, var(--tone-danger) 32%, transparent);
+  background: color-mix(in srgb, var(--tone-danger) 9%, var(--paper));
+  color: var(--tone-danger);
 }
 
 .ai-overview-grid,
@@ -1403,7 +1464,7 @@
 }
 
 .ai-overview-grid button,
-.ai-default-summary > div,
+.ai-default-summary > button,
 .ai-usage-summary > div {
   display: grid;
   gap: var(--space-1);
@@ -1416,15 +1477,21 @@
   text-align: left;
 }
 
-.ai-overview-grid button {
+.ai-overview-grid button,
+.ai-default-summary > button {
   cursor: pointer;
   font: inherit;
   transition: border-color var(--ease-fast), background-color var(--ease-fast);
 }
 
-.ai-overview-grid button:hover {
+.ai-overview-grid button:hover,
+.ai-default-summary > button:not(:disabled):hover {
   border-color: var(--line-strong);
   background: var(--surface-hover);
+}
+
+.ai-default-summary > button:disabled {
+  cursor: default;
 }
 
 .ai-overview-grid span,
@@ -1570,7 +1637,7 @@
 }
 
 .ai-table code {
-  max-width: 240px;
+  max-width: 100%;
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -1579,8 +1646,30 @@
   opacity: 0.62;
 }
 
-.ai-model-table {
-  min-width: 1040px;
+/* Журнал использования влезает по ширине: по бокам раздела места хватает,
+   а горизонтальная прокрутка ради шести колонок читать мешала. */
+.ai-usage-table {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.ai-usage-table th {
+  white-space: normal;
+}
+
+.ai-usage-table th:nth-child(1) { width: 14%; }
+.ai-usage-table th:nth-child(2) { width: 17%; }
+.ai-usage-table th:nth-child(3) { width: 27%; }
+.ai-usage-table th:nth-child(4) { width: 13%; }
+.ai-usage-table th:nth-child(5) { width: 15%; }
+.ai-usage-table th:nth-child(6) { width: 14%; }
+
+.ai-usage-table td {
+  overflow-wrap: anywhere;
+}
+
+.ai-usage-table td > small {
+  color: var(--faint);
 }
 
 .ai-star-button,
@@ -1679,20 +1768,24 @@
   width: auto;
 }
 
+/* Ширина списка зависит от боковой панели, а не от окна: карточки должны
+   реагировать на свой контейнер, иначе при развёрнутой панели кнопки строки
+   уезжают за край даже на широком мониторе. */
 .ai-provider-list,
 .ai-model-list {
   display: grid;
   gap: var(--space-3);
+  container-type: inline-size;
 }
 
-.ai-provider-row {
+/* Карточка провайдера: шапка с названием и действиями, под ней — факты.
+   Прежняя раскладка в четыре колонки в одну строку не помещалась, и длинный
+   базовый URL выдавливал кнопки за край. */
+.ai-provider-card {
   display: grid;
-  grid-template-areas: "identity details models actions";
-  grid-template-columns: minmax(190px, 0.75fr) minmax(330px, 1.35fr) minmax(125px, 0.5fr) auto;
   gap: var(--space-4);
-  align-items: center;
   min-width: 0;
-  padding: var(--space-4);
+  padding: var(--space-4) var(--space-5);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--paper);
@@ -1702,7 +1795,7 @@
     box-shadow var(--motion-fast) var(--motion-ease);
 }
 
-.ai-provider-row:hover,
+.ai-provider-card:hover,
 .ai-model-row:hover,
 .ai-catalog-row:hover {
   border-color: var(--line-strong);
@@ -1710,7 +1803,56 @@
   box-shadow: var(--shadow-sm);
 }
 
-.ai-provider-identity,
+.ai-provider-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.ai-provider-card-title {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ai-provider-card-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ai-provider-card-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-3) var(--space-5);
+  min-width: 0;
+  margin: 0;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+.ai-provider-card-facts > div {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.ai-provider-card-facts dt {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.ai-provider-card-facts dd {
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+}
+
 .ai-model-identity {
   display: flex;
   align-items: flex-start;
@@ -1718,19 +1860,15 @@
   min-width: 0;
 }
 
-.ai-provider-identity {
-  grid-area: identity;
-}
-
-.ai-provider-identity > div,
 .ai-model-identity > div,
 .ai-catalog-row > div:first-child {
   display: grid;
   min-width: 0;
   gap: var(--space-1);
+  justify-items: start;
 }
 
-.ai-provider-identity strong,
+.ai-provider-card-title strong,
 .ai-model-identity strong,
 .ai-catalog-row strong {
   overflow-wrap: anywhere;
@@ -1738,21 +1876,12 @@
   font-size: var(--text-base);
 }
 
-.ai-provider-identity small,
+.ai-provider-card-title small,
 .ai-model-identity small {
   color: var(--muted);
   font-size: var(--text-xs);
 }
 
-.ai-provider-details {
-  grid-area: details;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3) var(--space-5);
-  min-width: 0;
-}
-
-.ai-provider-details > div,
 .ai-model-facts > div {
   display: grid;
   align-content: start;
@@ -1761,13 +1890,12 @@
   gap: var(--space-1);
 }
 
-.ai-provider-details span,
 .ai-model-facts > div > span {
   color: var(--muted);
   font-size: var(--text-xs);
 }
 
-.ai-provider-details small,
+.ai-provider-card-facts small,
 .ai-model-facts small {
   color: var(--faint);
   font-size: var(--text-xs);
@@ -1780,42 +1908,13 @@
 .ai-provider-url code,
 .ai-model-identity code,
 .ai-catalog-row code {
+  display: block;
   max-width: 100%;
   overflow-wrap: anywhere;
   color: var(--muted);
   font-size: var(--text-xs);
 }
 
-.ai-model-count-button {
-  grid-area: models;
-  display: grid;
-  gap: var(--space-1);
-  min-height: 58px;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: var(--surface-sunken);
-  color: var(--ink-soft);
-  text-align: start;
-  cursor: pointer;
-  transition:
-    border-color var(--motion-fast) var(--motion-ease),
-    background-color var(--motion-fast) var(--motion-ease),
-    color var(--motion-fast) var(--motion-ease);
-}
-
-.ai-model-count-button:hover {
-  border-color: var(--accent-edge);
-  background: var(--accent-wash);
-  color: var(--accent);
-}
-
-.ai-model-count-button small {
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
-
-.ai-provider-actions,
 .ai-model-actions {
   display: flex;
   align-items: center;
@@ -1823,14 +1922,10 @@
   gap: var(--space-2);
 }
 
-.ai-provider-actions {
-  grid-area: actions;
-}
-
 .ai-model-row {
   display: grid;
   grid-template-columns: minmax(220px, 0.75fr) minmax(380px, 1.25fr) auto;
-  gap: var(--space-5);
+  gap: var(--space-4) var(--space-5);
   align-items: center;
   min-width: 0;
   padding: var(--space-4);
@@ -1847,6 +1942,24 @@
   opacity: 0.65;
 }
 
+/* Подсветка после перехода из избранного: видно, куда именно тебя привели. */
+.ai-model-row.is-focused {
+  border-color: var(--accent-edge);
+  background: var(--accent-wash);
+  box-shadow: var(--shadow-sm);
+}
+
+.ai-model-row > .ai-test-result,
+.ai-model-warning {
+  grid-column: 1 / -1;
+}
+
+.ai-model-warning {
+  margin: 0;
+  color: var(--tone-warning);
+  font-size: var(--text-xs);
+}
+
 .ai-model-facts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1858,6 +1971,81 @@
   color: var(--ink-soft);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
+}
+
+@container (max-width: 880px) {
+  .ai-model-row {
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  }
+
+  .ai-model-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+@container (max-width: 560px) {
+  .ai-model-row,
+  .ai-model-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container (max-width: 420px) {
+  .ai-provider-card-head {
+    flex-wrap: wrap;
+  }
+}
+
+/* Возможности: две метки на виду, остальное — во всплывашке по кнопке. */
+.ai-tag-more {
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
+}
+
+.ai-tag-more:hover {
+  border-color: var(--accent-edge);
+  color: var(--accent);
+}
+
+.popover.ai-capability-popover {
+  max-width: 320px;
+}
+
+.ai-capability-empty {
+  color: var(--faint);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+}
+
+.ai-capability-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ai-capability-fieldset legend {
+  padding: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.ai-capability-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--space-2) var(--space-5);
+  margin-top: var(--space-3);
 }
 
 .dialog.ai-model-search-dialog {
@@ -1884,10 +2072,23 @@
   padding-inline-start: var(--space-10);
 }
 
+.ai-search-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
 .ai-search-count {
-  margin-top: var(--space-3);
   color: var(--muted);
   font-size: var(--text-xs);
+}
+
+.ai-catalog-row.is-added {
+  border-color: color-mix(in srgb, var(--tone-success) 30%, transparent);
+  background: color-mix(in srgb, var(--tone-success) 6%, var(--paper));
 }
 
 .ai-catalog-results {
@@ -2046,28 +2247,6 @@
 }
 
 @media (max-width: 1120px) {
-  .ai-provider-row {
-    grid-template-areas:
-      "identity actions"
-      "details details"
-      "models models";
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .ai-model-count-button {
-    grid-template-columns: auto 1fr;
-    align-items: baseline;
-    min-height: 44px;
-  }
-
-  .ai-model-row {
-    grid-template-columns: minmax(200px, 0.7fr) minmax(320px, 1.3fr);
-  }
-
-  .ai-model-actions {
-    grid-column: 1 / -1;
-  }
-
   .ai-catalog-row {
     grid-template-columns: minmax(180px, 0.65fr) minmax(260px, 1.35fr);
   }
@@ -2165,35 +2344,17 @@
     padding: var(--space-8) 0;
   }
 
-  .ai-provider-row,
-  .ai-model-row,
   .ai-catalog-row {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .ai-provider-row {
-    grid-template-areas:
-      "identity"
-      "details"
-      "models"
-      "actions";
-  }
-
-  .ai-provider-details,
-  .ai-model-facts {
+  .ai-provider-card-facts {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .ai-provider-url,
-  .ai-model-actions,
   .ai-catalog-row > .secondary-button,
   .ai-catalog-row > .text-button {
     grid-column: 1;
-  }
-
-  .ai-provider-actions,
-  .ai-model-actions {
-    justify-content: flex-start;
   }
 
   .ai-catalog-row > .secondary-button,

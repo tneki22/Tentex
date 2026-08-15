@@ -183,6 +183,10 @@ class AiModelTestRead(ApiModel):
     status: Literal["answered"]
     run_id: UUID
     duration_ms: int
+    answer: str
+    actual_model_id: str
+    input_tokens: int
+    output_tokens: int
 
 
 class AiMessage(ApiModel):

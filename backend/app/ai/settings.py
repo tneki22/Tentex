@@ -313,6 +313,42 @@ def upsert_manual_model(
     return read_settings(session)
 
 
+def delete_model(session: Session, provider_id: UUID, model_id: str) -> AiSettingsRead:
+    with session.begin():
+        row = session.get(AiModelCatalogEntry, (provider_id, model_id))
+        if row is None:
+            raise ProjectDomainError(
+                "Модель не найдена в локальном каталоге провайдера",
+                status=404,
+                code="ai_model_not_in_catalog",
+                context={"provider_id": str(provider_id), "model_id": model_id},
+            )
+        global_row = _ensure_row(session)
+        defaults = [
+            modality
+            for modality in ("text", "speech")
+            if getattr(global_row, f"default_{modality}_provider_id") == provider_id
+            and getattr(global_row, f"default_{modality}_model_id") == model_id
+        ]
+        roles = list(
+            session.scalars(
+                select(AiRoleSetting.role).where(
+                    AiRoleSetting.provider_override_id == provider_id,
+                    AiRoleSetting.model_override == model_id,
+                )
+            )
+        )
+        if defaults or roles:
+            raise ProjectDomainError(
+                "Сначала уберите модель из настроек по умолчанию и функций",
+                status=409,
+                code="ai_model_in_use",
+                context={"defaults": defaults, "roles": roles},
+            )
+        session.delete(row)
+    return read_settings(session)
+
+
 def resolve_model(
     session: Session,
     role: str,

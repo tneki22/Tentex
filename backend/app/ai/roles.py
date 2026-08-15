@@ -21,7 +21,9 @@ class TextRoleParameters(BaseModel):
 class ModelTestParameters(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_output_tokens: int = Field(ge=1, le=64)
+    # Рассуждающая модель тратит бюджет на размышление раньше, чем напишет первое
+    # слово ответа. Тесный лимит здесь давал пустой ответ у любой такой модели.
+    max_output_tokens: int = Field(ge=64, le=8_000)
 
 
 class SpeechRoleParameters(BaseModel):
@@ -118,7 +120,7 @@ ROLE_SPECS = {
             "text",
             cache_policy="none",
             prompt_version="settings-model-test-v1",
-            default_parameters={"max_output_tokens": 8},
+            default_parameters={"max_output_tokens": 1500},
             allow_request_model_override=True,
             parameter_model=ModelTestParameters,
             visible=False,

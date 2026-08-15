@@ -105,6 +105,16 @@ def put_manual_ai_model(
     return settings.upsert_manual_model(session, provider_id, command)
 
 
+@router.delete("/providers/{provider_id}/models", response_model=AiSettingsRead)
+def delete_ai_model(
+    provider_id: UUID,
+    # ID модели содержит «/», поэтому он приходит параметром запроса, а не частью пути.
+    model_id: Annotated[str, Query(min_length=1)],
+    session: SessionDependency,
+) -> AiSettingsRead:
+    return settings.delete_model(session, provider_id, model_id)
+
+
 @router.post("/providers/{provider_id}/models/test", response_model=AiModelTestRead)
 async def test_ai_model(
     provider_id: UUID,

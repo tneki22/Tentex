@@ -19,6 +19,7 @@ export type AiErrorCode =
   | "ai_provider_unavailable"
   | "ai_timeout"
   | "ai_invalid_structured_output"
+  | "ai_empty_response"
   | "ai_cancelled"
   | "ai_connection_not_configured"
   | "ai_base_url_invalid"
@@ -26,6 +27,7 @@ export type AiErrorCode =
   | "ai_fx_snapshot_incomplete"
   | "ai_model_not_in_catalog"
   | "ai_model_modality_unsupported"
+  | "ai_model_in_use"
   | "ai_provider_not_found"
   | "ai_provider_in_use"
   | "ai_provider_label_exists"
@@ -41,10 +43,10 @@ const AI_ERROR_CODES = new Set<AiErrorCode>([
   "ai_disabled", "ai_role_disabled", "ai_credentials_missing", "ai_model_not_configured",
   "ai_capability_unsupported", "ai_confirmation_required", "ai_operation_limit",
   "ai_daily_limit", "ai_invalid_credentials", "ai_rate_limited", "ai_provider_unavailable",
-  "ai_timeout", "ai_invalid_structured_output", "ai_cancelled",
+  "ai_timeout", "ai_invalid_structured_output", "ai_empty_response", "ai_cancelled",
   "ai_connection_not_configured", "ai_base_url_invalid", "ai_base_url_credentials_forbidden",
   "ai_fx_snapshot_incomplete", "ai_model_not_in_catalog", "ai_model_modality_unsupported",
-  "ai_provider_not_found", "ai_provider_in_use", "ai_provider_label_exists",
+  "ai_model_in_use", "ai_provider_not_found", "ai_provider_in_use", "ai_provider_label_exists",
   "ai_role_selection_incomplete", "ai_role_not_found", "ai_role_parameters_invalid",
   "ai_model_override_forbidden", "ai_secret_mismatch",
 ]);
@@ -175,6 +177,10 @@ export interface AiModelTestRead {
   status: "answered";
   run_id: string;
   duration_ms: number;
+  answer: string;
+  actual_model_id: string;
+  input_tokens: number;
+  output_tokens: number;
 }
 
 export interface AiRunRead {
@@ -326,6 +332,13 @@ export const upsertManualAiModel = (
 ): Promise<AiSettingsRead> => request(`${AI_PATH}/providers/${providerId}/models/manual`, {
   method: "PUT", body: JSON.stringify(command), signal,
 });
+
+export const deleteAiModel = (
+  selection: AiModelSelection, signal?: AbortSignal,
+): Promise<AiSettingsRead> => request(
+  `${AI_PATH}/providers/${selection.provider_id}/models?model_id=${encodeURIComponent(selection.model_id)}`,
+  { method: "DELETE", signal },
+);
 
 export const testAiModel = (
   selection: AiModelSelection, signal?: AbortSignal,
