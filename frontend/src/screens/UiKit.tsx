@@ -30,6 +30,7 @@ import {
   CostEstimate,
   GOAL_LEVELS,
   GoalLevelPicker,
+  LibraryMaterialPickerDialog,
   MachineMark,
   MetricList,
   OfflineNotice,
@@ -48,6 +49,26 @@ import {
 } from "../components/domain";
 import type { GoalLevelValue, ProjectColor } from "../components/domain";
 import type { AiModelRead, AiModelSelection, AiProviderRead } from "../api/ai";
+import type { LibraryMaterialDetailRead, LibraryMaterialRead } from "../api/materials";
+
+const DEMO_LIBRARY_MATERIAL: LibraryMaterialRead = {
+  id: "demo-library-material",
+  original_name: "Основы реляционных баз данных.pdf",
+  media_type: "application/pdf",
+  source_kind: "file",
+  source_url: null,
+  size_bytes: 2_400_000,
+  page_count: 184,
+  status: "ready",
+  native_page_count: 180,
+  ocr_page_count: 4,
+  ocr_low_page_count: 0,
+  block_count: 96,
+  fragment_count: 832,
+  sha256: "demo",
+  created_at: "2026-08-15T00:00:00Z",
+  usage: [],
+};
 
 /** Поверхности и текст показываются парами «за что отвечает — как называется». */
 const SURFACE_TOKENS = [
@@ -150,6 +171,7 @@ export function UiKit() {
   const [excluded, setExcluded] = useState(false);
   const [dialog, setDialog] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [libraryPicker, setLibraryPicker] = useState(false);
   const [minutes, setMinutes] = useState("40");
   const [suggested, setSuggested] = useState(true);
   const [selectValue, setSelectValue] = useState<string | null>("openrouter");
@@ -615,6 +637,26 @@ export function UiKit() {
             </p>
           </Disclosure>
         </div>
+      </section>
+
+      <section className="kit-section">
+        <h2>Выбор материала из Библиотеки</h2>
+        <p className="kit-hint">
+          Доменный диалог подключает общий Материал к проекту без копирования файла и повторного разбора.
+        </p>
+        <Button variant="secondary" onClick={() => setLibraryPicker(true)}>Открыть выбор Библиотеки</Button>
+        <LibraryMaterialPickerDialog
+          open={libraryPicker}
+          projectId="demo-project"
+          title="Выбрать учебные материалы из Библиотеки"
+          purpose="study_source"
+          multiple
+          studyRoleMode="first-main"
+          onOpenChange={setLibraryPicker}
+          onAttached={() => undefined}
+          loadMaterials={async () => [DEMO_LIBRARY_MATERIAL]}
+          attachMaterial={async () => ({ ...DEMO_LIBRARY_MATERIAL } as LibraryMaterialDetailRead)}
+        />
       </section>
 
       <section className="kit-section">

@@ -11,6 +11,7 @@ export { CostEstimate } from "./CostEstimate";
 export { GoalLevelPicker, GOAL_LEVELS, goalLevelEffect } from "./GoalLevel";
 export type { GoalLevelValue } from "./GoalLevel";
 export { MachineMark } from "./MachineMark";
+export { LibraryMaterialPickerDialog } from "./LibraryMaterialPickerDialog";
 export { MetricList } from "./MetricList";
 export type { Metric } from "./MetricList";
 export { OfflineNotice } from "./OfflineNotice";
