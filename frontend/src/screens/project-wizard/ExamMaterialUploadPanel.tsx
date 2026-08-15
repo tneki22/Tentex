@@ -112,14 +112,14 @@ export function ExamMaterialUploadPanel({
                 <b>{uploading ? "Загружаем…" : "Перетащите файлы сюда"}</b>
                 <small>PDF, DOCX, TXT, MD или изображения — до 100 МБ и 500 страниц</small>
               </span>
-              <span className="material-entry-actions">
+              <div className="material-entry-actions">
                 <label className="secondary-button" htmlFor={inputId}>Выбрать файлы</label>
                 {onChooseLibrary && (
                   <Button variant="secondary" disabled={uploading} onClick={onChooseLibrary}>
                     <LibraryBig size={15} aria-hidden="true" />Из Библиотеки
                   </Button>
                 )}
-              </span>
+              </div>
               <input
                 id={inputId}
                 className="wizard-file-input"

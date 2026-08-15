@@ -11,6 +11,7 @@ import {
   Copy,
   Files,
   GripVertical,
+  LibraryBig,
   Pencil,
   Plus,
   RotateCcw,
@@ -25,6 +26,7 @@ import {
   importExamProgramFromMaterial,
   previewExamProgram,
   type ExamProgramPreview,
+  type LibraryMaterialRead,
 } from "../api/materials";
 import {
   createProgramNode,
@@ -43,7 +45,7 @@ import {
   type ProjectDetail,
   type TargetOutcome,
 } from "../api/projects";
-import { GOAL_LEVELS, GoalLevelPicker, ProjectNav } from "../components/domain";
+import { GOAL_LEVELS, GoalLevelPicker, LibraryMaterialPickerDialog, ProjectNav } from "../components/domain";
 import type { GoalLevelValue } from "../components/domain";
 import {
   Button,
@@ -140,6 +142,7 @@ export function Program() {
   const titleInput = useRef<HTMLInputElement>(null);
   const focusTitleAfterMenu = useRef(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
   const [importMaterialId, setImportMaterialId] = useState("");
   const [importPreview, setImportPreview] = useState<ExamProgramPreview | null>(null);
   const [importBusy, setImportBusy] = useState(false);
@@ -242,6 +245,14 @@ export function Program() {
     if (!created) return;
     setImportMaterialId(created.id);
     setImportPreview(null);
+  }
+
+  async function attachExamMaterial(selected: LibraryMaterialRead[]) {
+    const material = selected[0];
+    if (!material) return;
+    setImportMaterialId(material.id);
+    setImportPreview(null);
+    await materials.refresh();
   }
 
   async function confirmImport() {
@@ -782,9 +793,14 @@ export function Program() {
               <Upload size={24} aria-hidden="true" />
               <h3>Список вопросов ещё не загружен</h3>
               <p>Подойдут PDF, DOCX, текстовый файл или фотография. Ограничение — 100 МБ и 500 страниц.</p>
-              <Button variant="secondary" disabled={materials.busy} onClick={() => importInput.current?.click()}>
-                Загрузить список вопросов
-              </Button>
+              <div className="material-entry-actions">
+                <Button variant="secondary" disabled={materials.busy} onClick={() => importInput.current?.click()}>
+                  Загрузить список вопросов
+                </Button>
+                <Button variant="secondary" disabled={materials.busy} onClick={() => setLibraryPickerOpen(true)}>
+                  <LibraryBig size={15} aria-hidden="true" />Из Библиотеки
+                </Button>
+              </div>
             </section>
           ) : (
             <div className="program-import-layout">
@@ -810,7 +826,10 @@ export function Program() {
                 </fieldset>
               )}
               {examMaterials.length === 1 && <p className="program-import-source"><strong>Источник:</strong> {examMaterials[0].display_name}</p>}
-              <Button variant="ghost" disabled={materials.busy} onClick={() => importInput.current?.click()}><Upload size={14} />Загрузить другой материал</Button>
+              <div className="material-entry-actions is-start">
+                <Button variant="ghost" disabled={materials.busy} onClick={() => importInput.current?.click()}><Upload size={14} />Загрузить другой материал</Button>
+                <Button variant="ghost" disabled={materials.busy} onClick={() => setLibraryPickerOpen(true)}><LibraryBig size={14} />Выбрать из Библиотеки</Button>
+              </div>
               {importMaterial?.status === "ready_to_process" && (
                 <section className="program-import-estimate">
                   <h3>Перед разбором</h3>
@@ -842,6 +861,21 @@ export function Program() {
             </div>
           )}
         </Dialog>
+      )}
+
+      {!textbook && (
+        <LibraryMaterialPickerDialog
+          open={libraryPickerOpen}
+          projectId={projectId}
+          title="Выбрать список вопросов из Библиотеки"
+          purpose="exam_structure"
+          onOpenChange={setLibraryPickerOpen}
+          onAttached={attachExamMaterial}
+          onCreateNew={() => {
+            setLibraryPickerOpen(false);
+            window.setTimeout(() => importInput.current?.click(), 0);
+          }}
+        />
       )}
 
       {!textbook && (

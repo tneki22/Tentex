@@ -371,6 +371,26 @@
   gap: var(--space-2);
 }
 
+.material-entry-actions.is-start {
+  justify-content: flex-start;
+}
+
+.material-entry-actions.is-end {
+  justify-content: flex-end;
+}
+
+.materials-catalog .materials-catalog-actions {
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+}
+
+.materials-catalog .materials-catalog-actions .secondary-button {
+  min-width: 0;
+  min-height: 34px;
+  padding-inline: var(--space-2);
+  justify-content: center;
+  font-size: var(--text-xs);
+}
+
 .library-picker-dialog {
   width: min(680px, calc(100vw - var(--space-6)));
 }

@@ -394,10 +394,10 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
             <Card className="textbook-dropzone">
               <UploadCloud size={24} aria-hidden="true" />
               <span><b>Перетащите учебники, методички, конспекты, статьи или аудио</b><small>PDF, DOCX, TXT, MD, изображения и аудио. До 100 МБ и 500 страниц на файл.</small></span>
-              <span className="material-entry-actions">
+              <div className="material-entry-actions">
                 <Button disabled={materials.busy || !controller.detail} variant="secondary" onClick={() => materialInput.current?.click()}>Добавить материал</Button>
                 <Button disabled={materials.busy || !controller.detail} variant="secondary" onClick={() => setLibraryOpen(true)}><LibraryBig size={15} aria-hidden="true" />Из Библиотеки</Button>
-              </span>
+              </div>
             </Card>
           </div>
 

@@ -12,6 +12,7 @@ import {
   Files,
   Info,
   Link2,
+  LibraryBig,
   Maximize2,
   Minimize2,
   Pause,
@@ -52,7 +53,7 @@ import type {
   SourceRole,
 } from "../api/materials";
 import { getProject, undoProjectAction, type LatestUndoableAction, type ProjectDetail } from "../api/projects";
-import { ProjectNav, QualityBadge, TaskRow } from "../components/domain";
+import { LibraryMaterialPickerDialog, ProjectNav, QualityBadge, TaskRow } from "../components/domain";
 import type { BackgroundTask } from "../components/domain";
 import {
   Button,
@@ -132,6 +133,7 @@ interface CatalogProps {
   query: string;
   onQuery: (value: string) => void;
   onAdd: () => void;
+  onChooseLibrary: () => void;
 }
 
 function MaterialCatalog({
@@ -142,6 +144,7 @@ function MaterialCatalog({
   query,
   onQuery,
   onAdd,
+  onChooseLibrary,
 }: CatalogProps) {
   const textbook = project?.project.workspace_variant === "textbook";
   const visible = materials.filter((material) =>
@@ -185,6 +188,7 @@ function MaterialCatalog({
       </header>
       <div className="materials-catalog-actions">
         <Button onClick={onAdd}><Plus size={15} /> Добавить</Button>
+        <Button variant="secondary" onClick={onChooseLibrary}><LibraryBig size={15} /> Из Библиотеки</Button>
       </div>
       <label className="materials-catalog-search">
         <Search size={14} />
@@ -219,10 +223,12 @@ function MaterialOverview({
   materials,
   onOpen,
   onAdd,
+  onChooseLibrary,
 }: {
   materials: MaterialRead[];
   onOpen: (id: string) => void;
   onAdd: () => void;
+  onChooseLibrary: () => void;
 }) {
   return (
     <div className="materials-document-stage">
@@ -234,14 +240,20 @@ function MaterialOverview({
               <h1>Материалы экзамена</h1>
               <p>Загрузите список вопросов, эталонные ответы и учебные источники.</p>
             </div>
-            <Button onClick={onAdd}><Upload size={15} /> Добавить материал</Button>
+            <div className="material-entry-actions is-end">
+              <Button onClick={onAdd}><Upload size={15} /> Добавить материал</Button>
+              <Button variant="secondary" onClick={onChooseLibrary}><LibraryBig size={15} /> Из Библиотеки</Button>
+            </div>
           </header>
           {materials.length === 0 ? (
             <section className="materials-empty-state">
               <Files size={28} />
               <h2>Материалов пока нет</h2>
               <p>Начните с фотографии списка вопросов — быстрый OCR разберёт её в фоне.</p>
-              <Button onClick={onAdd}>Выбрать файл</Button>
+              <div className="material-entry-actions">
+                <Button onClick={onAdd}>Выбрать файл</Button>
+                <Button variant="secondary" onClick={onChooseLibrary}><LibraryBig size={15} /> Из Библиотеки</Button>
+              </div>
             </section>
           ) : (
             <div className="materials-overview-table" role="table" aria-label="Материалы проекта">
@@ -1257,6 +1269,7 @@ function MaterialSurface() {
   const bindings = useBindings(projectId);
   const [query, setQuery] = useState("");
   const [addOpen, setAddOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
   const [pageNumber, setPageNumber] = useState(1);
   const [page, setPage] = useState<MaterialPageRead | null>(null);
@@ -1864,11 +1877,17 @@ function MaterialSurface() {
         query={query}
         onQuery={setQuery}
         onAdd={() => setAddOpen(true)}
+        onChooseLibrary={() => setLibraryOpen(true)}
       />
       <main className="materials-document-area">
         {store.error && <p className="materials-action-note" role="alert">{store.error}</p>}
         {!material ? (
-          <MaterialOverview materials={store.materials} onOpen={(id) => navigate(`/projects/${projectId}/materials/${id}`)} onAdd={() => setAddOpen(true)} />
+          <MaterialOverview
+            materials={store.materials}
+            onOpen={(id) => navigate(`/projects/${projectId}/materials/${id}`)}
+            onAdd={() => setAddOpen(true)}
+            onChooseLibrary={() => setLibraryOpen(true)}
+          />
         ) : (
           <>
             <header className="materials-document-toolbar">
@@ -2068,6 +2087,27 @@ function MaterialSurface() {
         onText={(name, text) => void addText(name, text)}
         onExternal={(kind, url) => void addExternal(kind, url)}
         onReplaceAnswers={releaseAnswersMaterial}
+      />
+      <LibraryMaterialPickerDialog
+        open={libraryOpen}
+        projectId={projectId}
+        title="Выбрать материалы из Библиотеки"
+        multiple
+        allowPurposeSelection
+        existingStudySourceCount={store.materials.filter((item) => item.purposes.includes("study_source")).length}
+        defaultStudyRole="main"
+        answersMaterial={answersMaterial}
+        onReplaceAnswers={releaseAnswersMaterial}
+        onOpenChange={setLibraryOpen}
+        onAttached={async (selected) => {
+          await store.refresh();
+          const first = selected[0];
+          if (first) navigate(`/projects/${projectId}/materials/${first.id}`);
+        }}
+        onCreateNew={() => {
+          setLibraryOpen(false);
+          setAddOpen(true);
+        }}
       />
       <Dialog
         open={editOpen}
