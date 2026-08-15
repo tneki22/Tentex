@@ -1454,6 +1454,52 @@
   color: var(--tone-danger);
 }
 
+.ai-test-result.is-pending {
+  border-color: var(--line);
+  background: var(--surface-sunken);
+  color: var(--ink-soft);
+}
+
+.ai-test-result-spinner {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 2px solid color-mix(in srgb, var(--ink-soft) 25%, transparent);
+  border-top-color: var(--ink-soft);
+  border-radius: var(--radius-pill);
+  animation: loading-orbit 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-test-result-spinner { animation: none; }
+}
+
+.ai-test-result-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: var(--space-2) 0 0;
+}
+
+.ai-test-result-facts > div {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.ai-test-result-facts dt {
+  opacity: 0.72;
+  font-size: var(--text-xs);
+}
+
+.ai-test-result-facts dd {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
 .ai-overview-grid,
 .ai-default-summary,
 .ai-usage-summary {
@@ -1670,6 +1716,16 @@
 
 .ai-usage-table td > small {
   color: var(--faint);
+}
+
+.ai-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-sm);
 }
 
 .ai-star-button,

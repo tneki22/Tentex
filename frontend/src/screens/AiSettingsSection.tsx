@@ -76,9 +76,10 @@ interface Note {
 }
 
 interface TestOutcome {
-  ok: boolean;
+  status: "pending" | "ok" | "fail";
   title: string;
   detail: string;
+  facts?: { label: string; value: string }[];
 }
 
 const MODALITY_LABELS: Record<string, string> = {
@@ -203,13 +204,20 @@ function StatusNote({ note }: { note: Note | null }) {
 function TestResult({ result }: { result: TestOutcome | null }) {
   if (!result) return null;
   return (
-    <div className={`ai-test-result is-${result.ok ? "ok" : "fail"}`} role="status" aria-live="polite">
-      {result.ok
-        ? <CircleCheck size={20} aria-hidden="true" />
-        : <CircleAlert size={20} aria-hidden="true" />}
+    <div className={`ai-test-result is-${result.status}`} role="status" aria-live="polite">
+      {result.status === "pending" && <span className="ai-test-result-spinner" aria-hidden="true" />}
+      {result.status === "ok" && <CircleCheck size={20} aria-hidden="true" />}
+      {result.status === "fail" && <CircleAlert size={20} aria-hidden="true" />}
       <div>
         <strong>Результат теста: {result.title}</strong>
         {result.detail && <p>{result.detail}</p>}
+        {result.facts && result.facts.length > 0 && (
+          <dl className="ai-test-result-facts">
+            {result.facts.map((fact) => (
+              <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>
+            ))}
+          </dl>
+        )}
       </div>
     </div>
   );
@@ -424,20 +432,20 @@ function ProvidersPanel({
     setBusy(provider.id);
     setNote(null);
     setTests((current) => ({ ...current, [provider.id]: {
-      ok: true, title: "проверяем подключение…", detail: "",
+      status: "pending", title: "проверяем подключение…", detail: "",
     } }));
     try {
       const result = await testAiProvider(provider.id);
       onSettings(await getAiSettings());
       setTests((current) => ({ ...current, [provider.id]: {
-        ok: true,
+        status: "ok",
         title: "провайдер отвечает",
         detail: `В каталоге провайдера доступно ${modelCountText(result.model_count)}.`,
       } }));
     } catch (caught) {
       onSettings(await getAiSettings());
       setTests((current) => ({ ...current, [provider.id]: {
-        ok: false,
+        status: "fail",
         title: "провайдер не ответил",
         detail: errorText(caught, "Подключение не удалось"),
       } }));
@@ -698,6 +706,7 @@ function ModelsPanel({
   const [deleteTarget, setDeleteTarget] = useState<AiModelRead | null>(null);
   const [restOpen, setRestOpen] = useState(false);
   const [highlighted, setHighlighted] = useState<string | null>(null);
+  const lastFocusNonce = useRef<number | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [catalog, setCatalog] = useState<AiCatalogModelRead[]>([]);
   const [catalogQuery, setCatalogQuery] = useState("");
@@ -714,7 +723,8 @@ function ModelsPanel({
   const splitByFavorites = favoriteModels.length > 0;
 
   useEffect(() => {
-    if (!focusRequest) return;
+    if (!focusRequest || focusRequest.nonce === lastFocusNonce.current) return;
+    lastFocusNonce.current = focusRequest.nonce;
     const { selection } = focusRequest;
     const isFavorite = settings.models.some((model) => (
       sameModel(model, selection) && model.favorite_order !== null
@@ -757,21 +767,26 @@ function ModelsPanel({
     const key = modelKey(model);
     setBusy(key);
     setNote(null);
-    setTests((current) => ({ ...current, [key]: { ok: true, title: "спрашиваем модель…", detail: "" } }));
+    setTests((current) => ({ ...current, [key]: { status: "pending", title: "спрашиваем модель…", detail: "" } }));
     try {
       const result = await testAiModel({ provider_id: model.provider_id, model_id: model.model_id });
-      const routed = result.actual_model_id && result.actual_model_id !== model.model_id
-        ? ` · провайдер ответил моделью ${result.actual_model_id}`
-        : "";
+      const facts = [
+        { label: "Время ответа", value: duration(result.duration_ms) },
+        { label: "Токены", value: `${result.input_tokens} → ${result.output_tokens}` },
+      ];
+      if (result.actual_model_id && result.actual_model_id !== model.model_id) {
+        facts.push({ label: "Ответила модель", value: result.actual_model_id });
+      }
       setTests((current) => ({ ...current, [key]: {
-        ok: true,
+        status: "ok",
         title: "модель ответила",
-        detail: `«${result.answer}» · ${duration(result.duration_ms)} · токенов ${result.input_tokens} → ${result.output_tokens}${routed}`,
+        detail: `«${result.answer}»`,
+        facts,
       } }));
       onSettings(await getAiSettings());
     } catch (caught) {
       setTests((current) => ({ ...current, [key]: {
-        ok: false,
+        status: "fail",
         title: "модель не ответила",
         detail: errorText(caught, "Запрос к модели не прошёл"),
       } }));
@@ -1146,11 +1161,14 @@ function LimitsPanel({ settings, onSettings }: { settings: AiSettingsRead; onSet
   </div><div className="ai-group-actions"><Button onClick={() => void save()}>Сохранить настройки расходов</Button><StatusNote note={note} /></div></section>;
 }
 
+const USAGE_PAGE_SIZE = 20;
+
 function UsagePanel({ settings, runs }: { settings: AiSettingsRead; runs: AiRunRead[] }) {
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [role, setRole] = useState("");
   const [status, setStatus] = useState("");
+  const [page, setPage] = useState(1);
   const filtered = runs.filter((run) => (
     (!provider || run.provider_id === provider)
     && (!model || run.requested_model_id === model)
@@ -1159,13 +1177,28 @@ function UsagePanel({ settings, runs }: { settings: AiSettingsRead; runs: AiRunR
   ));
   const total = filtered.reduce((sum, run) => sum + (numberValue(run.actual_cost_usd) ?? 0), 0);
   const providerModels = settings.models.filter((item) => !provider || item.provider_id === provider);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / USAGE_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const pageRuns = filtered.slice((currentPage - 1) * USAGE_PAGE_SIZE, currentPage * USAGE_PAGE_SIZE);
+
+  function setFilter(setter: (value: string) => void, value: string) {
+    setter(value);
+    setPage(1);
+  }
 
   return <section className="ai-settings-group is-first"><header className="ai-group-head"><div><h2>Использование</h2><p>История запросов к ИИ: какая функция работала, сколько токенов потратила и сколько это стоило.</p></div></header><div className="ai-usage-summary"><div><span>Запросов</span><strong>{filtered.length}</strong></div><div><span>Стоимость</span><strong>{money(total)}</strong></div><div><span>Входные токены</span><strong>{filtered.reduce((sum, run) => sum + (run.input_tokens ?? 0), 0).toLocaleString("ru-RU")}</strong></div><div><span>Выходные токены</span><strong>{filtered.reduce((sum, run) => sum + (run.output_tokens ?? 0), 0).toLocaleString("ru-RU")}</strong></div></div><div className="ai-filter-row">
-    <Select ariaLabel="Фильтр по провайдеру" value={provider || null} emptyOption="Все провайдеры" onValueChange={(value) => { setProvider(value ?? ""); setModel(""); }} options={settings.providers.map((item) => ({ value: item.id, label: item.label }))} />
-    <Select ariaLabel="Фильтр по модели" value={model || null} emptyOption="Все модели" onValueChange={(value) => setModel(value ?? "")} options={providerModels.map((item) => ({ value: item.model_id, label: item.display_name, description: item.model_id }))} />
-    <Select ariaLabel="Фильтр по функции" value={role || null} emptyOption="Все функции" onValueChange={(value) => setRole(value ?? "")} options={settings.roles.map((item) => ({ value: item.role, label: item.title }))} />
-    <Select ariaLabel="Фильтр по статусу" value={status || null} emptyOption="Все статусы" onValueChange={(value) => setStatus(value ?? "")} options={[{ value: "succeeded", label: "Готово" }, { value: "failed", label: "Ошибка" }, { value: "cached", label: "Из кэша" }, { value: "cancelled", label: "Отменено" }]} />
-  </div>{filtered.length ? <div className="ai-table-wrap"><table className="ai-table ai-usage-table"><thead><tr><th>Время</th><th>Функция</th><th>Провайдер и модель</th><th>Токены</th><th>Стоимость</th><th>Статус</th></tr></thead><tbody>{filtered.map((run) => <tr key={run.id}><td>{dateTime(run.created_at)}</td><td>{settings.roles.find((item) => item.role === run.role)?.title ?? run.role}</td><td><strong>{run.provider_label_snapshot}</strong><code>{run.requested_model_id}</code></td><td>{(run.input_tokens ?? 0).toLocaleString("ru-RU")} → {(run.output_tokens ?? 0).toLocaleString("ru-RU")}</td><td>{money(run.actual_cost_usd)}</td><td><StatusBadge tone={run.status === "succeeded" || run.status === "cached" ? "success" : run.status === "failed" ? "danger" : "neutral"}>{runStatusLabel(run.status)}</StatusBadge>{run.error_code && <small>{run.error_code}</small>}</td></tr>)}</tbody></table></div> : <div className="ai-empty-card"><strong>Подходящих запросов нет</strong><p>Измените фильтры или вернитесь сюда после первого обращения к модели.</p></div>}<Disclosure summary="Какие данные сохраняются"><p className="ai-muted">В журнал попадают провайдер, модель, функция, токены, стоимость и результат. API-ключи, вопросы, ответы модели и полный текст материалов не сохраняются.</p></Disclosure></section>;
+    <Select ariaLabel="Фильтр по провайдеру" value={provider || null} emptyOption="Все провайдеры" onValueChange={(value) => { setFilter(setProvider, value ?? ""); setModel(""); }} options={settings.providers.map((item) => ({ value: item.id, label: item.label }))} />
+    <Select ariaLabel="Фильтр по модели" value={model || null} emptyOption="Все модели" onValueChange={(value) => setFilter(setModel, value ?? "")} options={providerModels.map((item) => ({ value: item.model_id, label: item.display_name, description: item.model_id }))} />
+    <Select ariaLabel="Фильтр по функции" value={role || null} emptyOption="Все функции" onValueChange={(value) => setFilter(setRole, value ?? "")} options={settings.roles.map((item) => ({ value: item.role, label: item.title }))} />
+    <Select ariaLabel="Фильтр по статусу" value={status || null} emptyOption="Все статусы" onValueChange={(value) => setFilter(setStatus, value ?? "")} options={[{ value: "succeeded", label: "Готово" }, { value: "failed", label: "Ошибка" }, { value: "cached", label: "Из кэша" }, { value: "cancelled", label: "Отменено" }]} />
+  </div>{filtered.length ? <>
+    <div className="ai-table-wrap"><table className="ai-table ai-usage-table"><thead><tr><th>Время</th><th>Функция</th><th>Провайдер и модель</th><th>Токены</th><th>Стоимость</th><th>Статус</th></tr></thead><tbody>{pageRuns.map((run) => <tr key={run.id}><td>{dateTime(run.created_at)}</td><td>{settings.roles.find((item) => item.role === run.role)?.title ?? run.role}</td><td><strong>{run.provider_label_snapshot}</strong><code>{run.requested_model_id}</code></td><td>{(run.input_tokens ?? 0).toLocaleString("ru-RU")} → {(run.output_tokens ?? 0).toLocaleString("ru-RU")}</td><td>{money(run.actual_cost_usd)}</td><td><StatusBadge tone={run.status === "succeeded" || run.status === "cached" ? "success" : run.status === "failed" ? "danger" : "neutral"}>{runStatusLabel(run.status)}</StatusBadge>{run.error_code && <small>{run.error_code}</small>}</td></tr>)}</tbody></table></div>
+    {pageCount > 1 && <div className="ai-pagination">
+      <Button variant="secondary" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>Назад</Button>
+      <span>Страница {currentPage} из {pageCount}</span>
+      <Button variant="secondary" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}>Дальше</Button>
+    </div>}
+  </> : <div className="ai-empty-card"><strong>Подходящих запросов нет</strong><p>Измените фильтры или вернитесь сюда после первого обращения к модели.</p></div>}<Disclosure summary="Какие данные сохраняются"><p className="ai-muted">В журнал попадают провайдер, модель, функция, токены, стоимость и результат. API-ключи, вопросы, ответы модели и полный текст материалов не сохраняются.</p></Disclosure></section>;
 }
 
 export function AiSettingsSection({
