@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { Brain, CalendarDays, Check, FileCheck2, FileText, Files, LibraryBig, ListChecks, Pencil, TicketCheck, Upload } from "lucide-react";
+import { Brain, CalendarDays, Check, FileCheck2, FileText, Files, LibraryBig, ListChecks, Pencil, Sparkles, TicketCheck, Upload } from "lucide-react";
 import {
   controlMaterialProcessing,
   createTextMaterial,
@@ -29,6 +29,7 @@ import { useProjectMaterials } from "../../hooks/useProjectMaterials";
 import { Button, Card, Checkbox, Field, IconButton, LoadingState, PageHead, RadioCards, SegmentedTabs } from "../../components/ui";
 import type { RadioCardOption } from "../../components/ui";
 import { LibraryMaterialPickerDialog } from "../../components/domain";
+import { AiImportRepairDialog } from "../AiImportRepairDialog";
 import {
   ExamMaterialUploadPanel,
   type ExamMaterialInputMode,
@@ -204,6 +205,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
   const [warnings, setWarnings] = useState<string[]>([]);
   const [counts, setCounts] = useState({ tickets: 0, questions: 0, tasks: 0 });
   const [actionError, setActionError] = useState("");
+  const [reviewRepairOpen, setReviewRepairOpen] = useState(false);
   const [libraryPurpose, setLibraryPurpose] = useState<MaterialPurpose | null>(null);
   const initializedKey = useRef<string | null>(null);
   const projectMaterials = useProjectMaterials(controller.detail?.project.id);
@@ -521,6 +523,8 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
 
   const busy = controller.status === "saving";
   const studyCount = (controller.detail?.program.nodes ?? []).filter((node) => node.node_type !== "section").length;
+  const repairNodes = (controller.detail?.program.nodes ?? [])
+    .filter((node) => node.is_in_current_program && !node.is_archived && node.node_type !== "section");
   const expectedCount = positive(form.expectedCount);
   const countMismatch = expectedCount !== null && expectedCount !== studyCount;
   const dailyLoad = getDailyLoad(form.deadline);
@@ -798,9 +802,20 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                 <span>!</span>
                 <div><b>Количество отличается</b><p>Вы указали {expectedCount}, а предварительно найдено {studyCount}. Создать проект всё равно можно.</p></div>
                 <button type="button" onClick={() => changeStep(4)}>Проверить</button>
+                {repairNodes.length > 0 && <button type="button" onClick={() => setReviewRepairOpen(true)}><Sparkles size={13} aria-hidden="true" /> Исправить формулировки</button>}
               </div>
             )}
           </Card>
+
+          {controller.detail && (
+            <AiImportRepairDialog
+              open={reviewRepairOpen}
+              projectId={controller.detail.project.id}
+              nodes={repairNodes}
+              onOpenChange={setReviewRepairOpen}
+              onApplied={(result) => { void controller.enqueueProgramCommand(async () => result); }}
+            />
+          )}
 
           <Card className="wizard-review-card wizard-sources-card">
             <h3>Источники</h3>

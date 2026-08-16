@@ -911,6 +911,12 @@ def undo_last_project_action(
                     node.is_in_current_program = value["is_in_current_program"]
             case "binding_create" | "binding_remove":
                 apply_binding_undo(session, project_id, action.action_type, data)
+            case "ai_import_repair":
+                for item in data["titles"]:
+                    node = nodes_by_id.get(UUID(item["id"]))
+                    if node is None:
+                        raise ProjectInvariantError("Переименованный узел для undo не найден")
+                    node.title = item["title"]
             case "ai_program_grouping":
                 section_ids = {UUID(item["id"]) for item in data["sections"]}
                 sections_by_id = {

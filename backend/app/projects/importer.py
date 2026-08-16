@@ -7,6 +7,10 @@ from app.projects.numbered_series import select_numbered_series
 ITEM_RE = re.compile(
     r"^\s*(?:(?:\d+(?:\.\d+)*[.)])\s*|(?:\d+(?:\.\d+)*)\s+|[-—*•]\s+)(.+?)\s*$"
 )
+# Разметчик PDF иногда сливает несколько нумерованных пунктов в один текстовый
+# блок (конец предложения одного пункта и начало следующего попадают в одну
+# строку). Режем по границе «конец предложения» + «следующий номер».
+INLINE_ITEM_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+(?=\d{1,4}[.)]\s)")
 TICKET_RE = re.compile(
     r"^\s*Билет\s*(?:№|#)?\s*(\d+)?\s*(?:[.:—-]\s*)?(.*?)\s*$",
     re.IGNORECASE,
@@ -43,6 +47,14 @@ def _lines(raw_text: str) -> list[str]:
     return [line.strip() for line in normalized.split("\n") if line.strip()]
 
 
+def _split_inline_items(lines: list[str]) -> list[str]:
+    """Разрезает строки, в которых слиплось несколько нумерованных пунктов."""
+    result: list[str] = []
+    for line in lines:
+        result.extend(part for part in INLINE_ITEM_SPLIT_RE.split(line) if part)
+    return result
+
+
 def _kind_and_title(text: str, default_kind: ExamKind) -> tuple[ExamKind, str]:
     task_match = TASK_PREFIX_RE.match(text)
     if task_match:
@@ -73,6 +85,7 @@ def _duplicate_warnings(nodes: list[ParsedNode]) -> list[str]:
 def _parse_flat(
     lines: list[str], exam_format: ExamFormat, expected_item_count: int | None
 ) -> tuple[list[ParsedNode], list[str]]:
+    lines = _split_inline_items(lines)
     if exam_format == ExamFormat.QUESTIONS:
         selection = select_numbered_series(lines, expected_item_count)
         if selection.ambiguous:

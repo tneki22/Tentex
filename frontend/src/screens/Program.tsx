@@ -16,6 +16,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Sparkles,
   Target,
   Trash2,
   Undo2,
@@ -73,6 +74,7 @@ import {
 import { useBindings } from "../hooks/useBindings";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { AiGroupingDialog } from "./AiGroupingDialog";
+import { AiImportRepairDialog } from "./AiImportRepairDialog";
 
 type AddKind = "section" | "ticket" | "question" | "task" | "topic" | "subpoint";
 type OutlineFilter = "all" | "sections" | "ungrouped";
@@ -149,6 +151,8 @@ export function Program() {
   const [importError, setImportError] = useState("");
   const [groupingOpen, setGroupingOpen] = useState(false);
   const [groupingNotice, setGroupingNotice] = useState(false);
+  const [importRepairOpen, setImportRepairOpen] = useState(false);
+  const [importRepairNotice, setImportRepairNotice] = useState(false);
 
   async function load(signal?: AbortSignal) {
     setLoading(true);
@@ -267,6 +271,7 @@ export function Program() {
       );
       acceptResult(result);
       setGroupingNotice(false);
+      setImportRepairNotice(false);
       setImportOpen(false);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "Импорт не выполнен");
@@ -281,6 +286,7 @@ export function Program() {
     try {
       acceptResult(await command);
       setGroupingNotice(false);
+      setImportRepairNotice(false);
     } catch (error) {
       if (error instanceof ProjectApiError && ["stale_program_revision", "stale_action_sequence"].includes(error.code ?? "")) {
         setConflict(true);
@@ -443,6 +449,7 @@ export function Program() {
         const visible = result.program.nodes.filter((node) => node.is_in_current_program && !node.is_archived);
         setSelectedId((current) => current && visible.some((node) => node.id === current) ? current : visible[0]?.id ?? null);
         setGroupingNotice(false);
+        setImportRepairNotice(false);
       }
     } catch (error) {
       if (error instanceof ProjectApiError && error.code === "stale_action_sequence") setConflict(true);
@@ -479,6 +486,12 @@ export function Program() {
           : groupingNodes.length !== currentFlat.length
             ? "В плоском списке должны остаться только вопросы и задачи"
             : null;
+  const repairNodes = currentFlat.filter((node) => node.node_type !== "section");
+  const repairProblem = detail.project.status !== "active"
+    ? "Исправить формулировки можно только в активном проекте"
+    : repairNodes.length === 0
+      ? "В программе нет вопросов, задач или тем"
+      : null;
   const filteredNodes = shown.filter((node) => {
     if (filter === "sections") return node.node_type === "section";
     if (filter === "ungrouped") return node.parent_id === null && node.node_type !== "section";
@@ -689,6 +702,7 @@ export function Program() {
           actions={<>
             {!textbook && <Button variant="secondary" disabled={busy} onClick={openImport}><Files size={15} />Импорт</Button>}
             {!textbook && <Tooltip label={groupingProblem ?? "Предложить смысловые разделы без изменения формулировок"}><Button variant="secondary" disabled={busy || Boolean(groupingProblem)} onClick={() => setGroupingOpen(true)}><WandSparkles size={15} />Разложить по разделам</Button></Tooltip>}
+            <Tooltip label={repairProblem ?? "Переписать формулировки, если разбор файла что-то склеил или порвал"}><Button variant="secondary" disabled={busy || Boolean(repairProblem)} onClick={() => setImportRepairOpen(true)}><Sparkles size={15} />Исправить список</Button></Tooltip>
             <Button variant="secondary" disabled={busy || !detail.latest_undoable_action} onClick={() => void undo()}><Undo2 size={15} />Отменить</Button>
             <Button disabled={busy} onClick={() => openAddDialog()}><Plus size={15} />Добавить</Button>
           </>}
@@ -697,6 +711,12 @@ export function Program() {
           <section className="program-plan-notice" role="status">
             <span>Вопросы разложены по разделам. Стабильные id и связанные данные сохранены.</span>
             <Button variant="secondary" disabled={busy} onClick={() => void undo()}><Undo2 size={14} />Отменить раскладку</Button>
+          </section>
+        )}
+        {importRepairNotice && detail.latest_undoable_action?.action_type === "ai_import_repair" && (
+          <section className="program-plan-notice" role="status">
+            <span>Формулировки исправлены. Число и порядок пунктов не изменились.</span>
+            <Button variant="secondary" disabled={busy} onClick={() => void undo()}><Undo2 size={14} />Отменить исправление</Button>
           </section>
         )}
         {conflict && <section className="program-plan-notice" role="alert"><span>Программа изменилась в другой вкладке.</span><Button onClick={() => void load()}>Загрузить серверную версию</Button></section>}
@@ -894,6 +914,17 @@ export function Program() {
           }}
         />
       )}
+
+      <AiImportRepairDialog
+        open={importRepairOpen}
+        projectId={projectId}
+        nodes={repairNodes}
+        onOpenChange={setImportRepairOpen}
+        onApplied={(result) => {
+          acceptResult(result);
+          setImportRepairNotice(true);
+        }}
+      />
 
       <Dialog open={addOpen} onOpenChange={setAddOpen} title="Добавить в программу" description="Укажите формулировку, тип и место в дереве. Вложенность можно изменить и после добавления." footer={<><Button variant="ghost" onClick={() => setAddOpen(false)}>Отменить</Button><Button disabled={!newTitle.trim()} onClick={() => addNode(false)}>Добавить узел</Button></>}>
         <Field label="Формулировка" required><input autoFocus value={newTitle} onChange={(event) => { setNewTitle(event.target.value); setDuplicateWarning(false); }} placeholder="Например, индексы и B-деревья" /></Field>

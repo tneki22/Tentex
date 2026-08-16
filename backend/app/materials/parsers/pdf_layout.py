@@ -1,6 +1,6 @@
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 import pymupdf as fitz
 
@@ -9,6 +9,9 @@ from app.materials.parsers.base import ElementKind, ParsedElement, ParsedPage
 INDENT_STEP = 18
 MAX_LIST_LEVEL = 4
 BULLET_RE = re.compile(r"^\s*[•▪◦‣·*+\-–—]\s+")
+# Мягкий и обычный дефис на конце строки — перенос слова, который PDF-вёрстка
+# ломает на пробел при склейке строк обратно в абзац.
+SOFT_HYPHEN_RE = re.compile(r"(\w)[-‐­]$")
 
 
 def _normalized_bbox(
@@ -26,6 +29,52 @@ def _normalized_bbox(
     )
 
 
+def _span_bbox(span: dict[str, object]) -> tuple[float, float] | None:
+    bbox = span.get("bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) < 3:
+        return None
+    try:
+        return float(bbox[0]), float(bbox[2])
+    except (TypeError, ValueError):
+        return None
+
+
+def _line_text(raw_line: dict[str, object]) -> str:
+    """Склеивает спаны строки, вставляя пробел там, где между ними есть просвет.
+
+    PDF-вёрстка (особенно LaTeX с выключкой по ширине) часто отдаёт каждое слово
+    отдельным спаном без символа пробела — пробел выражен только зазором между
+    координатами соседних спанов.
+    """
+    spans = raw_line.get("spans")
+    if not isinstance(spans, list):
+        return ""
+    parts: list[str] = []
+    previous_x1: float | None = None
+    previous_size = 10.0
+    for span in spans:
+        if not isinstance(span, dict):
+            continue
+        text = str(span.get("text", ""))
+        if not text:
+            continue
+        span_bbox = _span_bbox(span)
+        size = float(span.get("size") or previous_size)
+        if parts and previous_x1 is not None and span_bbox is not None:
+            gap = span_bbox[0] - previous_x1
+            if (
+                gap > 0.2 * max(size, previous_size)
+                and not parts[-1].endswith(" ")
+                and not text.startswith(" ")
+            ):
+                parts.append(" ")
+        parts.append(text)
+        if span_bbox is not None:
+            previous_x1 = span_bbox[1]
+            previous_size = size
+    return "".join(parts).strip()
+
+
 def _text_lines(box: dict[str, object]) -> list[str]:
     result: list[str] = []
     raw_lines = box.get("textlines")
@@ -34,14 +83,23 @@ def _text_lines(box: dict[str, object]) -> list[str]:
     for raw_line in raw_lines:
         if not isinstance(raw_line, dict):
             continue
-        spans = raw_line.get("spans")
-        if not isinstance(spans, list):
-            continue
-        text = "".join(
-            str(span.get("text", "")) for span in spans if isinstance(span, dict)
-        ).strip()
+        text = _line_text(raw_line)
         if text:
             result.append(text)
+    return result
+
+
+def _join_box_lines(lines: Sequence[str]) -> str:
+    """Склеивает строки-обёртки абзаца в блоке, снимая перенос слова по дефису."""
+    if not lines:
+        return ""
+    result = lines[0]
+    for line in lines[1:]:
+        match = SOFT_HYPHEN_RE.search(result)
+        if match and line[:1].islower():
+            result = result[: match.end(1)] + line
+        else:
+            result = f"{result} {line}"
     return result
 
 
@@ -150,7 +208,7 @@ def parse_layout_page(document: fitz.Document, page_index: int) -> ParsedPage:
             table_count += 1
             level = None
         else:
-            text = " ".join(_text_lines(box)).strip()
+            text = _join_box_lines(_text_lines(box)).strip()
             if not text:
                 continue
             kind = _box_kind(box_class, text)

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
 from app.db import get_session
-from app.projects import answers, program, program_ai, service
+from app.projects import answers, import_repair, program, program_ai, service
 from app.projects.schemas import (
     ActionUndoResult,
     ActivateWizardDraft,
@@ -302,6 +302,43 @@ def apply_program_grouping(
     session: SessionDependency,
 ) -> ProgramChangeResult:
     return program_ai.apply(session, project_id, command)
+
+
+@projects.post(
+    "/{project_id}/program/ai-import-repair/preflight",
+    response_model=import_repair.ProgramRepairPreflightRead,
+)
+async def preflight_program_import_repair(
+    project_id: UUID,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> import_repair.ProgramRepairPreflightRead:
+    return await import_repair.preflight_program_repair(session, gateway, project_id)
+
+
+@projects.post(
+    "/{project_id}/program/ai-import-repair",
+    response_model=import_repair.ProgramRepairRunRead,
+)
+async def run_program_import_repair(
+    project_id: UUID,
+    command: import_repair.ProgramRepairRunWrite,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> import_repair.ProgramRepairRunRead:
+    return await import_repair.run_program_repair(session, gateway, project_id, command)
+
+
+@projects.post(
+    "/{project_id}/program/ai-import-repair/apply",
+    response_model=ProgramChangeResult,
+)
+def apply_program_import_repair(
+    project_id: UUID,
+    command: import_repair.ProgramRepairApplyWrite,
+    session: SessionDependency,
+) -> ProgramChangeResult:
+    return import_repair.apply_program_repair(session, project_id, command)
 
 
 @projects.patch("/{project_id}/program-nodes/{node_id}", response_model=ProgramChangeResult)

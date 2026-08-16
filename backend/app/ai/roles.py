@@ -71,6 +71,17 @@ ROLE_SPECS = {
             {"max_output_tokens": 4000},
         ),
         AiRoleSpec(
+            "exam_import_repair",
+            "Исправление списка вопросов",
+            "Восстанавливает нумерованный список после сбоя разбора файла: сшивает "
+            "разорванные пункты, снимает переносы и склейки слов.",
+            "text",
+            frozenset({"structured_output"}),
+            "exact",
+            "import-repair-v1",
+            {"max_output_tokens": 6000},
+        ),
+        AiRoleSpec(
             "exam_chat_reply",
             "Ответ экзаменатора",
             "Отвечает в чате и помогает разобраться в теме.",

@@ -243,6 +243,26 @@ export interface ProgramGroupingRunRead {
   cached: boolean;
 }
 
+export interface ProgramImportRepairPreflightRead {
+  program_revision: number;
+  source_hash: string;
+  node_count: number;
+  preflight: import("./ai").AiPreflight;
+}
+
+export interface ProgramImportRepairRunRead {
+  run_id: string;
+  program_revision: number;
+  source_hash: string;
+  items: string[];
+  changes: string[];
+  warnings: string[];
+  usage: import("./ai").AiUsage;
+  requested_model_id: string;
+  actual_model_id: string;
+  cached: boolean;
+}
+
 export interface ActionUndoResult {
   undone_action_type: string;
   program: ProgramState | null;
@@ -650,6 +670,46 @@ export const applyProgramGrouping = (
   },
   signal?: AbortSignal,
 ): Promise<ProgramChangeResult> => request(`${projectPath(projectId)}/program/ai-grouping/apply`, {
+  method: "POST",
+  body: JSON.stringify(command),
+  signal,
+});
+
+export const preflightProgramImportRepair = (
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ProgramImportRepairPreflightRead> =>
+  request(`${projectPath(projectId)}/program/ai-import-repair/preflight`, {
+    method: "POST",
+    body: JSON.stringify({}),
+    signal,
+  });
+
+export const runProgramImportRepair = (
+  projectId: string,
+  command: {
+    instruction: string;
+    expected_program_revision: number;
+    expected_source_hash: string;
+    confirmed: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<ProgramImportRepairRunRead> => request(`${projectPath(projectId)}/program/ai-import-repair`, {
+  method: "POST",
+  body: JSON.stringify(command),
+  signal,
+});
+
+export const applyProgramImportRepair = (
+  projectId: string,
+  command: {
+    run_id: string;
+    expected_program_revision: number;
+    expected_source_hash: string;
+    items: string[];
+  },
+  signal?: AbortSignal,
+): Promise<ProgramChangeResult> => request(`${projectPath(projectId)}/program/ai-import-repair/apply`, {
   method: "POST",
   body: JSON.stringify(command),
   signal,

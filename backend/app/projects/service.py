@@ -224,8 +224,12 @@ def delete_wizard_draft(session: Session, project_id: UUID, expected_revision: i
 def import_exam_program(
     session: Session, project_id: UUID, command: ExamImportWrite
 ) -> ExamImportResult:
+    passport = session.get(GoalPassport, project_id)
+    expected_item_count = passport.expected_item_count if passport else None
     try:
-        parsed = parse_exam_program(command.raw_text, command.exam_format)
+        parsed = parse_exam_program(
+            command.raw_text, command.exam_format, expected_item_count=expected_item_count
+        )
     except ExamImportError as error:
         raise ProjectInvariantError(str(error)) from error
     result = program.replace_draft_program(

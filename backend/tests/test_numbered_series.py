@@ -42,3 +42,34 @@ def test_questions_tasks_keeps_separate_numbered_sections() -> None:
     )
 
     assert (parsed.questions, parsed.tasks) == (1, 1)
+
+
+def test_stitches_series_across_a_missed_number_when_expected_count_given() -> None:
+    result = select_numbered_series(
+        ["1. First", "2. Second", "4. Fourth", "5. Fifth"], expected_count=4
+    )
+
+    assert [item.number for item in result.items] == [1, 2, 4, 5]
+    assert any("сшит" in warning for warning in result.warnings)
+
+
+def test_does_not_stitch_across_a_gap_without_expected_count() -> None:
+    # Без ориентира по числу пунктов сшивка выключена: у сопоставления эталонных
+    # ответов по заголовкам сшитый через пропуск номер сдвинул бы привязку.
+    result = select_numbered_series(["1. First", "4. Fourth", "5. Fifth", "6. Sixth"])
+
+    assert [item.number for item in result.items] == [4, 5, 6]
+
+
+def test_split_inline_items_recovers_a_box_merged_pair() -> None:
+    parsed = parse_exam_program(
+        "1. Первый вопрос. 2. Второй вопрос.\n3. Третий вопрос.",
+        ExamFormat.QUESTIONS,
+        expected_item_count=3,
+    )
+
+    assert [node.title for node in parsed.nodes] == [
+        "Первый вопрос.",
+        "Второй вопрос.",
+        "Третий вопрос.",
+    ]

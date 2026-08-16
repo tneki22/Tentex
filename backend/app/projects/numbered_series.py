@@ -65,32 +65,17 @@ def _series(lines: Sequence[str]) -> list[_Series]:
     return result
 
 
-def select_numbered_series(
-    lines: Sequence[str], expected_count: int | None = None
+def _build_selection(
+    lines: Sequence[str],
+    chain: list[_Series],
+    dropped: list[_Series],
+    expected_count: int | None,
 ) -> NumberedSeriesSelection:
-    """Выбирает одну непрерывную нумерованную серию и не склеивает её через сброс."""
-    candidates = [candidate for candidate in _series(lines) if candidate.items]
-    if not candidates:
-        return NumberedSeriesSelection()
-
-    if expected_count is not None:
-        best = [candidate for candidate in candidates if len(candidate.items) == expected_count]
-        if not best:
-            longest = max(len(candidate.items) for candidate in candidates)
-            best = [candidate for candidate in candidates if len(candidate.items) == longest]
-    else:
-        longest = max(len(candidate.items) for candidate in candidates)
-        best = [candidate for candidate in candidates if len(candidate.items) == longest]
-
-    if len(best) != 1:
-        return NumberedSeriesSelection(
-            warnings=("Найдено несколько равноправных нумерованных списков",),
-            ambiguous=True,
-        )
-
-    selected = best[0]
-    start = selected.items[0].source_index
-    end = selected.source_end
+    items: list[NumberedItem] = []
+    for candidate in chain:
+        items.extend(candidate.items)
+    start = chain[0].items[0].source_index
+    end = chain[-1].source_end
     ignored_before = tuple(line.strip() for line in lines[:start] if line.strip())
     ignored_after = tuple(line.strip() for line in lines[end:] if line.strip())
     warnings: list[str] = []
@@ -98,14 +83,95 @@ def select_numbered_series(
         warnings.append(f"Перед списком пропущено строк: {len(ignored_before)}")
     if ignored_after:
         warnings.append(f"После списка пропущено строк: {len(ignored_after)}")
-    if expected_count is not None and len(selected.items) != expected_count:
+    if len(chain) > 1:
+        gap_lines = 0
+        for index in range(len(chain) - 1):
+            gap_start = chain[index].source_end
+            gap_end = chain[index + 1].items[0].source_index
+            gap_lines += len([line for line in lines[gap_start:gap_end] if line.strip()])
         warnings.append(
-            f"Ожидалось пунктов: {expected_count}; найдено в основной серии: {len(selected.items)}"
+            f"Список сшит из {len(chain)} частей после разрыва нумерации; "
+            f"между частями пропущено строк: {gap_lines}"
         )
+    if dropped:
+        dropped_count = sum(len(candidate.items) for candidate in dropped)
+        warnings.append(f"Не удалось пристроить к списку пунктов: {dropped_count}")
+    if expected_count is not None and len(items) != expected_count:
+        warnings.append(f"Ожидалось пунктов: {expected_count}; найдено: {len(items)}")
     return NumberedSeriesSelection(
-        items=tuple(selected.items),
+        items=tuple(items),
         ignored_before=ignored_before,
         ignored_after=ignored_after,
         warnings=tuple(warnings),
         source_end=end,
     )
+
+
+def _stitch_chain(candidates: list[_Series]) -> tuple[list[_Series], list[_Series]]:
+    """Сшивает кандидатов, идущих вперёд по номеру, начиная с первого по тексту.
+
+    Кандидат с номером, который не продолжает цепочку вперёд (перезапуск,
+    приложение, повтор), в цепочку не попадает — это защищает случай
+    «список, а за ним отдельное приложение с 1» от склеивания.
+    """
+    chain = [candidates[0]]
+    dropped: list[_Series] = []
+    for candidate in candidates[1:]:
+        if candidate.items[0].number > chain[-1].items[-1].number:
+            chain.append(candidate)
+        else:
+            dropped.append(candidate)
+    return chain, dropped
+
+
+def _longest_candidate_selection(
+    lines: Sequence[str], candidates: list[_Series], expected_count: int | None
+) -> NumberedSeriesSelection:
+    longest = max(len(candidate.items) for candidate in candidates)
+    best = [candidate for candidate in candidates if len(candidate.items) == longest]
+    if len(best) != 1:
+        return NumberedSeriesSelection(
+            warnings=("Найдено несколько равноправных нумерованных списков",),
+            ambiguous=True,
+        )
+    return _build_selection(lines, best, [], expected_count)
+
+
+def select_numbered_series(
+    lines: Sequence[str], expected_count: int | None = None
+) -> NumberedSeriesSelection:
+    """Выбирает основную нумерованную серию.
+
+    Без ожидаемого числа пунктов ведёт себя как раньше — берёт единственного
+    самого длинного кандидата и не гадает через разрывы нумерации: у вызовов
+    без ориентира (например, сопоставление эталонных ответов по заголовкам)
+    сшивка через пропущенный номер опаснее, чем отказ.
+
+    С ожидаемым числом пунктов вначале ищет кандидата с точным совпадением
+    длины, а если не находит — сшивает кандидатов, идущих вперёд по номеру,
+    пока сумма пунктов не сойдётся с ожиданием.
+    """
+    candidates = [candidate for candidate in _series(lines) if candidate.items]
+    if not candidates:
+        return NumberedSeriesSelection()
+
+    if expected_count is None:
+        return _longest_candidate_selection(lines, candidates, expected_count)
+
+    exact = [candidate for candidate in candidates if len(candidate.items) == expected_count]
+    if len(exact) == 1:
+        return _build_selection(lines, [exact[0]], [], expected_count)
+    if len(exact) > 1:
+        return NumberedSeriesSelection(
+            warnings=("Найдено несколько равноправных нумерованных списков",),
+            ambiguous=True,
+        )
+
+    chain, dropped = _stitch_chain(candidates)
+    stitched_count = sum(len(candidate.items) for candidate in chain)
+    if stitched_count == expected_count or len(chain) > 1:
+        return _build_selection(lines, chain, dropped, expected_count)
+
+    # Сшить нечего и точное совпадение не найдено — берём самого длинного
+    # кандидата целиком, даже если он не первый по тексту.
+    return _longest_candidate_selection(lines, candidates, expected_count)
