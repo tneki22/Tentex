@@ -873,6 +873,7 @@
   font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
+  pointer-events: none;
   transition: opacity var(--ease-fast);
 }
 
@@ -2886,6 +2887,96 @@
   resize: vertical;
 }
 
+.ai-repair-item-list .ai-repair-question {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.ai-repair-question > header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ai-repair-question > header .segmented-tabs {
+  margin-inline-start: auto;
+}
+
+.ai-repair-subpoint-list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-inline-start: 2.25rem;
+  list-style: none;
+}
+
+.ai-repair-subpoint-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ai-repair-subpoint-list input {
+  flex: 1;
+}
+
+.ai-repair-ticket-list {
+  display: grid;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-repair-ticket {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.ai-repair-ticket > header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ai-repair-ticket > header input {
+  flex: 1;
+  font-weight: var(--weight-medium);
+}
+
+.ai-repair-dropped-list {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.ai-repair-dropped-list ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-repair-dropped-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
 @media (max-width: 760px) {
   .ai-grouping-intro,
   .ai-grouping-result > header,
@@ -4811,6 +4902,11 @@ button.wizard-back-projects {
 .wizard-context-note > svg { flex: none; color: var(--accent); }
 .wizard-context-note span { display: grid; gap: var(--space-1); }
 .wizard-context-note b { color: var(--ink); }
+
+/* Спокойная подсказка вместо громкого блока «Мнение системы»: нейтральный
+   фон, приглушённая иконка — совет, а не вердикт. */
+.wizard-context-note.is-hint { padding: var(--space-3) var(--space-4); border-color: var(--line); background: var(--surface-sunken); }
+.wizard-context-note.is-hint > svg { color: var(--muted); }
 .wizard-quiet-note,
 .wizard-required-note { padding: var(--space-3) var(--space-4); border: 1px dashed var(--line-strong); background: var(--surface-sunken); text-align: center; }
 
@@ -5055,35 +5151,38 @@ button.wizard-back-projects {
 
 .wizard-review-summary {
   display: grid;
-  justify-items: center;
-  gap: var(--space-4);
+  gap: var(--space-5);
   margin-bottom: var(--space-4);
-  padding: var(--space-10) var(--space-8) var(--space-8);
+  padding: var(--space-8);
   border: 1px solid var(--accent-edge);
   border-radius: var(--radius-xl);
   background: linear-gradient(135deg, var(--paper), var(--accent-wash));
   box-shadow: var(--shadow-sm);
+}
+
+.wizard-review-hero {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
   text-align: center;
 }
 
 .wizard-review-summary h2 {
   display: grid;
-  gap: var(--space-2);
-  max-width: 30ch;
+  gap: var(--space-1);
   margin: 0;
-  font-size: var(--text-2xl);
   line-height: var(--leading-tight);
 }
 
-.wizard-review-summary h2 span { color: var(--ink); font-size: var(--text-xl); font-weight: var(--weight-semibold); }
-.wizard-review-summary h2 strong { color: var(--accent); font-weight: var(--weight-bold); }
+.wizard-review-summary h2 span { color: var(--ink-soft); font-size: var(--text-md); font-weight: var(--weight-medium); }
+.wizard-review-summary h2 strong { color: var(--accent); font-size: var(--text-3xl); font-weight: var(--weight-bold); }
 
 .wizard-review-countdown {
   display: flex;
   justify-content: center;
   flex-wrap: wrap;
   gap: 0 var(--space-2);
-  margin: var(--space-2) 0;
+  margin: 0;
   color: var(--ink-soft);
   font-size: var(--text-lg);
 }
@@ -5093,11 +5192,51 @@ button.wizard-back-projects {
 .wizard-review-countdown.is-danger b { color: var(--tone-danger); }
 .wizard-review-countdown.is-muted { color: var(--muted); }
 
-.wizard-review-story { width: min(760px, 100%); display: grid; gap: var(--space-2); justify-items: center; }
-.wizard-review-story p { margin: 0; color: var(--ink-soft); }
-.wizard-review-story b { color: var(--ink); font-weight: var(--weight-semibold); }
-.wizard-review-story .wizard-review-goal { color: var(--ink); font-size: var(--text-md); }
-.wizard-review-personal { max-width: 72ch; font-size: var(--text-sm); line-height: var(--leading-relaxed); }
+.wizard-review-lead {
+  max-width: 58ch;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+}
+
+.wizard-review-lead b { color: var(--accent); font-weight: var(--weight-semibold); }
+
+/* Личные ответы — аккуратный список «подпись → значение», а не центрированные
+   обрывки строк мелким кеглем. Текст крупнее и выровнен по левому краю. */
+.wizard-review-facts {
+  display: grid;
+  margin: 0;
+  padding: 0 var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--canvas) 55%, transparent);
+}
+
+.wizard-review-facts > div {
+  display: grid;
+  grid-template-columns: minmax(0, 210px) minmax(0, 1fr);
+  gap: var(--space-1) var(--space-6);
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--line);
+}
+
+.wizard-review-facts > div:first-child { border-top: 0; }
+.wizard-review-facts dt { color: var(--muted); font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.wizard-review-facts dd { margin: 0; color: var(--ink); font-size: var(--text-base); line-height: var(--leading-normal); }
+
+.wizard-review-forecast {
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--accent-wash);
+  color: var(--ink-soft);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  text-align: center;
+}
+
+.wizard-review-forecast b { color: var(--accent); font-weight: var(--weight-semibold); }
 
 .wizard-review-card {
   margin-top: var(--space-4);
@@ -5268,6 +5407,9 @@ button.wizard-back-projects {
   .wizard-file-row { flex-wrap: wrap; }
   .wizard-file-name { flex-basis: calc(100% - 80px); }
   .wizard-review-summary { padding: var(--space-5); }
+  .wizard-review-facts { padding: 0 var(--space-4); }
+  .wizard-review-facts > div { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+  .wizard-review-summary h2 strong { font-size: var(--text-2xl); }
   .wizard-review-block-head { align-items: flex-start; flex-direction: column; }
   .wizard-review-block-head .text-button { width: 100%; }
   .wizard-review-row { align-items: flex-start; padding-right: var(--space-3); padding-left: var(--space-3); }
@@ -5284,6 +5426,17 @@ button.wizard-back-projects {
 
 .wizard-flow { width: min(920px, 100%); margin: 0 auto; }
 .wizard-flow .wizard-step { display: grid; gap: var(--space-5); }
+
+/* Меньше пустоты под шапкой шага: ритм держит сетка, а собственный отступ
+   PageHead только раздувал разрыв до заголовка. Вводный абзац — чуть крупнее. */
+.wizard-flow .wizard-step > .page-head { margin-bottom: 0; }
+.wizard-flow .wizard-step > .page-head + p {
+  margin-top: calc(var(--space-1) * -1);
+  max-width: 68ch;
+  color: var(--ink-soft);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+}
 .wizard-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 .wizard-resume { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: var(--space-3); margin: var(--space-8) 0 0; }
 .wizard-resume-head { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }

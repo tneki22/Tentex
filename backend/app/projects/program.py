@@ -840,35 +840,6 @@ def undo_last_project_action(
         match action.action_type:
             case "exam_import":
                 _restore_snapshot(session, project_id, data["nodes"])
-            case "active_exam_import":
-                old_ids = {UUID(item["id"]) for item in data["nodes"]}
-                for item in data["nodes"]:
-                    node = nodes_by_id.get(UUID(item["id"]))
-                    if node is None:
-                        raise ProjectInvariantError("Узел до импорта для undo не найден")
-                    node.parent_id = UUID(item["parent_id"]) if item["parent_id"] else None
-                    node.node_type = NodeType(item["node_type"])
-                    node.exam_kind = ExamKind(item["exam_kind"]) if item["exam_kind"] else None
-                    node.sort_order = item["sort_order"]
-                    node.title = item["title"]
-                    node.section_purpose = item["section_purpose"]
-                    node.goal_role = GoalRole(item["goal_role"]) if item["goal_role"] else None
-                    node.target_level = (
-                        TargetOutcome(item["target_level"]) if item["target_level"] else None
-                    )
-                    node.is_in_current_program = item["is_in_current_program"]
-                    node.needs_material = item["needs_material"]
-                    node.is_archived = item["is_archived"]
-                    node.origin_kind = OriginKind(item["origin_kind"])
-                    node.origin_note = item["origin_note"]
-                    node.origin_material_id = (
-                        UUID(item["origin_material_id"]) if item.get("origin_material_id") else None
-                    )
-                for node_id in map(UUID, data["created_ids"]):
-                    node = nodes_by_id.get(node_id)
-                    if node is not None and node.id not in old_ids:
-                        node.is_in_current_program = False
-                        node.is_archived = True
             case "node_create":
                 node_id = UUID(data["node_id"])
                 node = nodes_by_id.get(node_id)
@@ -911,12 +882,35 @@ def undo_last_project_action(
                     node.is_in_current_program = value["is_in_current_program"]
             case "binding_create" | "binding_remove":
                 apply_binding_undo(session, project_id, action.action_type, data)
-            case "ai_import_repair":
-                for item in data["titles"]:
+            case "active_exam_import" | "ai_import_repair":
+                old_ids = {UUID(item["id"]) for item in data["nodes"]}
+                for item in data["nodes"]:
                     node = nodes_by_id.get(UUID(item["id"]))
                     if node is None:
-                        raise ProjectInvariantError("Переименованный узел для undo не найден")
+                        raise ProjectInvariantError("Узел до импорта для undo не найден")
+                    node.parent_id = UUID(item["parent_id"]) if item["parent_id"] else None
+                    node.node_type = NodeType(item["node_type"])
+                    node.exam_kind = ExamKind(item["exam_kind"]) if item["exam_kind"] else None
+                    node.sort_order = item["sort_order"]
                     node.title = item["title"]
+                    node.section_purpose = item["section_purpose"]
+                    node.goal_role = GoalRole(item["goal_role"]) if item["goal_role"] else None
+                    node.target_level = (
+                        TargetOutcome(item["target_level"]) if item["target_level"] else None
+                    )
+                    node.is_in_current_program = item["is_in_current_program"]
+                    node.needs_material = item["needs_material"]
+                    node.is_archived = item["is_archived"]
+                    node.origin_kind = OriginKind(item["origin_kind"])
+                    node.origin_note = item["origin_note"]
+                    node.origin_material_id = (
+                        UUID(item["origin_material_id"]) if item.get("origin_material_id") else None
+                    )
+                for node_id in map(UUID, data["created_ids"]):
+                    node = nodes_by_id.get(node_id)
+                    if node is not None and node.id not in old_ids:
+                        node.is_in_current_program = False
+                        node.is_archived = True
             case "ai_program_grouping":
                 section_ids = {UUID(item["id"]) for item in data["sections"]}
                 sections_by_id = {

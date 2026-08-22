@@ -12,7 +12,9 @@ from app.models import (
     SourceRole,
     WizardDraft,
 )
+from app.projects import service as projects_service
 from app.projects.errors import ProjectConflictError
+from app.projects.schemas import ExamImportWrite
 
 
 def make_ready_exam_draft(session: Session, text: str, *, expected_item_count: int | None = None):
@@ -56,6 +58,24 @@ def test_ready_exam_material_replaces_draft_program(session: Session) -> None:
     assert [node.title for node in result.program.nodes] == ["Индексы", "Транзакции"]
     assert {node.origin_material_id for node in result.program.nodes} == {material.id}
     assert result.draft_revision == 3
+
+
+def test_text_exam_import_replaces_draft_program(session: Session) -> None:
+    project, draft, _material = make_ready_exam_draft(session, "1. Индексы\n2. Транзакции")
+
+    result = projects_service.import_exam_program(
+        session,
+        project.id,
+        ExamImportWrite(
+            expected_revision=draft.revision,
+            expected_program_revision=project.program_revision,
+            exam_format=ExamFormat.QUESTIONS,
+            raw_text="1. Индексы\n2. Транзакции",
+        ),
+    )
+
+    assert [node.title for node in result.program.nodes] == ["Индексы", "Транзакции"]
+    assert result.revision == 3
 
 
 def test_exam_material_import_rejects_stale_draft_revision(session: Session) -> None:

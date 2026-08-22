@@ -575,9 +575,9 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
               action="Добавить материалы"
             />
           </div>
-          <div className="wizard-context-note">
+          <div className="wizard-context-note is-hint">
             <Brain size={18} aria-hidden="true" />
-            <span><b>Мнение системы</b>{getMaterialOpinion(form)}</span>
+            <span>{getMaterialOpinion(form)}</span>
           </div>
           {form.format === "unknown" && <p className="wizard-quiet-note">Если ваша цель — изучать конкретную методичку, удобнее соседний маршрут «Изучение по учебнику».</p>}
           <div className="wizard-actions"><Button variant="ghost" onClick={() => changeStep(1)}>Назад</Button><Button onClick={() => void go(3)}>Продолжить</Button></div>
@@ -757,21 +757,39 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
           <PageHead eyebrow="Проверка" title="Всё готово к созданию" />
           <p>Проверьте вопросы или билеты и заполненную информацию об экзамене, затем проект можно будет создать.</p>
           <section className="wizard-review-summary">
-            <h2>
-              <span>Вы готовитесь к экзамену по предмету:</span>
-              <strong>{form.subject || "Без названия"}</strong>
-            </h2>
-            <p className={`wizard-review-countdown${examCountdown ? "" : " is-muted"}`}>
-              {examCountdown ?? "Дата экзамена пока не указана."}
-            </p>
-            <div className="wizard-review-story">
-              <p className="wizard-review-goal">{OUTCOME_SUMMARIES[form.targetOutcome]}</p>
-              <p>На подготовку — <b>{form.minutesPerDay || "—"} минут в день</b>.</p>
-              <p className="wizard-review-personal"><b>Текущий уровень:</b> {form.currentKnowledge.trim() || STARTING_SUMMARIES[form.startingLevel]}</p>
-              {form.important.trim() && <p className="wizard-review-personal"><b>Особый фокус:</b> {form.important}</p>}
-              {form.instructorRequirements.trim() && <p className="wizard-review-personal"><b>О преподавателе:</b> {form.instructorRequirements}</p>}
-              <p className="wizard-review-personal">Системе кажется, что <b>{preparationForecast.title}</b>: {preparationForecast.text}</p>
+            <div className="wizard-review-hero">
+              <h2>
+                <span>Вы готовитесь к экзамену по предмету</span>
+                <strong>{form.subject || "Без названия"}</strong>
+              </h2>
+              <p className={`wizard-review-countdown${examCountdown ? "" : " is-muted"}`}>
+                {examCountdown ?? "Дата экзамена пока не указана."}
+              </p>
+              <p className="wizard-review-lead">
+                {OUTCOME_SUMMARIES[form.targetOutcome]} На подготовку — <b>{form.minutesPerDay || "—"} минут в день</b>.
+              </p>
             </div>
+            <dl className="wizard-review-facts">
+              <div>
+                <dt>Текущий уровень</dt>
+                <dd>{form.currentKnowledge.trim() || STARTING_SUMMARIES[form.startingLevel]}</dd>
+              </div>
+              {form.important.trim() && (
+                <div>
+                  <dt>Особый фокус</dt>
+                  <dd>{form.important}</dd>
+                </div>
+              )}
+              {form.instructorRequirements.trim() && (
+                <div>
+                  <dt>О преподавателе</dt>
+                  <dd>{form.instructorRequirements}</dd>
+                </div>
+              )}
+            </dl>
+            <p className="wizard-review-forecast">
+              Системе кажется, что <b>{preparationForecast.title}</b>: {preparationForecast.text}
+            </p>
           </section>
 
           <Card className="wizard-review-card wizard-structure-card">
@@ -801,7 +819,6 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
               <div className="wizard-warning-card">
                 <span>!</span>
                 <div><b>Количество отличается</b><p>Вы указали {expectedCount}, а предварительно найдено {studyCount}. Создать проект всё равно можно.</p></div>
-                <button type="button" onClick={() => changeStep(4)}>Проверить</button>
                 {repairNodes.length > 0 && <button type="button" onClick={() => setReviewRepairOpen(true)}><Sparkles size={13} aria-hidden="true" /> Исправить формулировки</button>}
               </div>
             )}

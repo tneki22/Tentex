@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { DragEvent } from "react";
+import type { CSSProperties, DragEvent, ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import {
   Archive,
@@ -20,8 +20,8 @@ import {
   type ProjectStats,
   type ProjectSummary,
 } from "../api/projects";
-import { MetricList, ProjectChip } from "../components/domain";
-import type { Metric, ProjectColor, ProjectIconName } from "../components/domain";
+import { ProjectChip } from "../components/domain";
+import type { ProjectColor, ProjectIconName } from "../components/domain";
 import {
   Button,
   Card,
@@ -62,38 +62,62 @@ function plural(count: number, one: string, few: string, many: string): string {
   return many;
 }
 
+/** Число сверху, склонённая подпись снизу — для ячейки сводки в подвале карточки. */
+interface StripCell {
+  value: ReactNode;
+  label: string;
+}
+
+function sourcesCell(materials: number): StripCell {
+  return { value: materials, label: plural(materials, "источник", "источника", "источников") };
+}
+
 /**
- * Метрики карточки. Всё, что не считается для этого типа проекта, приходит
- * `null` и по FR-P3 просто не показывается — нулём не подменяется.
+ * Ячейки сводки карточки. Всё, что не считается для этого типа проекта,
+ * приходит `null` и по FR-P3 не показывается — нулём не подменяется.
  */
-function cardMetrics(project: ProjectSummary, stats: ProjectStats | undefined): Metric[] {
+function cardStrip(project: ProjectSummary, stats: ProjectStats | undefined): StripCell[] {
   if (!stats) return [];
   const nodes = stats.program_nodes;
   if (project.template_key === "exam") {
-    return [
-      { label: "Вопросов", value: nodes === null ? null : String(nodes) },
-      {
-        label: "Эталонов",
-        value:
-          stats.reference_answers === null || nodes === null
-            ? null
-            : `${stats.reference_answers} из ${nodes}`,
-      },
-      { label: "Материалов", value: String(stats.materials) },
-    ];
+    const cells: StripCell[] = [];
+    if (nodes !== null) cells.push({ value: nodes, label: plural(nodes, "вопрос", "вопроса", "вопросов") });
+    if (stats.reference_answers !== null && nodes !== null) {
+      cells.push({
+        value: (
+          <>
+            {stats.reference_answers}
+            <span className="of"> из {nodes}</span>
+          </>
+        ),
+        label: plural(stats.reference_answers, "ответ", "ответа", "ответов"),
+      });
+    }
+    cells.push(sourcesCell(stats.materials));
+    return cells;
   }
   if (project.template_key === "textbook") {
-    return [
-      { label: "Тем", value: nodes === null ? null : String(nodes) },
-      { label: "Материалов", value: String(stats.materials) },
-      {
-        label: "Страниц",
-        value: stats.material_pages === null ? null : String(stats.material_pages),
-      },
-    ];
+    /* «Тем» уже стоит крупной строкой headline — в сводке не дублируем. */
+    const cells: StripCell[] = [sourcesCell(stats.materials)];
+    if (stats.material_pages !== null) {
+      cells.push({
+        value: String(stats.material_pages),
+        label: plural(stats.material_pages, "страница", "страницы", "страниц"),
+      });
+    }
+    return cells;
   }
   /* Свободное изучение приезжает на этапе 7: считать по нему пока нечего. */
   return [];
+}
+
+type Urgency = "danger" | "warning" | "success";
+
+/** Порог тревоги для отсчёта до экзамена: неделя — жёлтый, три дня — красный. */
+function urgency(days: number): Urgency {
+  if (days <= 3) return "danger";
+  if (days <= 7) return "warning";
+  return "success";
 }
 
 type ProjectTemplate = {
@@ -138,14 +162,20 @@ const statusLabel: Record<ProjectSummary["status"], string> = {
   completed: "Завершён",
 };
 
-/** Крупная строка карточки: у экзамена — отсчёт, у учебника — размер программы. */
-function CardHeadline({ project, stats }: { project: ProjectSummary; stats?: ProjectStats }) {
+/**
+ * Крупная строка карточки: у экзамена — отсчёт, у учебника — размер программы.
+ * Число дней до экзамена красится по срочности (правка пользователя поверх
+ * FR-D17: запрет красить касается метрик покрытия, а не самого дедлайна).
+ * Прошедший срок и незаданная дата остаются фактом без тревожного тона.
+ */
+function CardCount({ project, stats }: { project: ProjectSummary; stats?: ProjectStats }) {
   if (project.template_key === "textbook") {
     if (stats?.program_nodes === null || stats?.program_nodes === undefined) return null;
     return (
-      <p className="dash-card-headline">
-        <b>{stats.program_nodes}</b> {plural(stats.program_nodes, "тема", "темы", "тем")} в программе
-      </p>
+      <div className="b-count">
+        <span className="b-days">{stats.program_nodes}</span>
+        <span className="b-cap">{plural(stats.program_nodes, "тема", "темы", "тем")} в программе</span>
+      </div>
     );
   }
   if (project.template_key !== "exam") return null;
@@ -162,11 +192,13 @@ function CardHeadline({ project, stats }: { project: ProjectSummary; stats?: Pro
   const days = daysUntil(project.deadline);
   const date = dayFormat.format(asLocalDate(project.deadline));
   if (days < 0) return <p className="dash-card-headline is-quiet">Экзамен прошёл, {date}</p>;
-  if (days === 0) return <p className="dash-card-headline is-quiet">Экзамен сегодня, {date}</p>;
+  if (days === 0) return <p className="dash-card-headline is-danger">Экзамен сегодня, {date}</p>;
   return (
-    <p className="dash-card-headline">
-      <b>{days}</b> {plural(days, "день", "дня", "дней")} до экзамена, {date}
-    </p>
+    <div className="b-count">
+      <span className={`b-days is-${urgency(days)}`}>{days}</span>
+      <span className="b-cap">{plural(days, "день", "дня", "дней")} до экзамена</span>
+      <span className="b-date">{date}</span>
+    </div>
   );
 }
 
@@ -339,7 +371,8 @@ export function Projects() {
         <div className="dash-grid">
           {active.map((project, index) => (
             <article
-              className={`dash-card ${draggedId === project.id ? "is-dragging" : ""}`.trim()}
+              className={`dash-card v-b ${draggedId === project.id ? "is-dragging" : ""}`.trim()}
+              style={{ "--proj": `var(--project-color-${color(project.color)})` } as CSSProperties}
               key={project.id}
               onDragEnd={() => setDraggedId(null)}
               onDragOver={(event) => event.preventDefault()}
@@ -362,37 +395,53 @@ export function Projects() {
                 ><GripVertical size={15} /></span>
               </div>
 
-              <CardHeadline project={project} stats={stats[project.id]} />
-              <MetricList metrics={cardMetrics(project, stats[project.id])} />
+              <CardCount project={project} stats={stats[project.id]} />
+
+              {(() => {
+                const cells = cardStrip(project, stats[project.id]);
+                if (cells.length === 0) return null;
+                return (
+                  <ul className="b-strip">
+                    {cells.map((cell, cellIndex) => (
+                      <li className="b-cell" key={cellIndex}>
+                        <b>{cell.value}</b>
+                        <span>{cell.label}</span>
+                      </li>
+                    ))}
+                  </ul>
+                );
+              })()}
 
               <div className="dash-card-foot">
-                <p className="dash-card-last">
-                  {stats[project.id]?.last_activity_at
-                    ? `Последняя работа — ${dayFormat.format(new Date(stats[project.id].last_activity_at as string))}`
-                    : "Занятий пока не было"}
-                </p>
-                <div className="dash-card-cta" aria-label={`Действия для проекта «${project.name}»`}>
-                  <Link className="primary-button" to={`/projects/${project.id}`}>Продолжить</Link>
-                  <Tooltip label="Повторения появятся на этапе 9" side="top">
-                    <span className="dash-card-later">
-                      <Button variant="secondary" disabled>Повторить</Button>
-                    </span>
-                  </Tooltip>
-                  <Menu
-                    label={`Ещё для проекта «${project.name}»`}
-                    trigger={
-                      <IconButton label="Ещё" className="dash-card-more">
-                        <MoreHorizontal size={15} aria-hidden="true" />
-                      </IconButton>
-                    }
-                    items={[
-                      { label: "Вверх", icon: <ArrowUp size={15} />, disabled: index === 0, onSelect: () => moveProject(project.id, index - 1) },
-                      { label: "Вниз", icon: <ArrowDown size={15} />, disabled: index === active.length - 1, onSelect: () => moveProject(project.id, index + 1) },
-                      { label: "Архивировать", icon: <Archive size={15} />, onSelect: () => setArchiveCandidate(project) },
-                      { label: "Удалить навсегда", icon: <Trash2 size={15} />, destructive: true, onSelect: () => setDeleteCandidate(project) },
-                    ]}
-                  />
+                <div className="b-swap">
+                  <p className="dash-card-last">
+                    {stats[project.id]?.last_activity_at
+                      ? `Последняя работа — ${dayFormat.format(new Date(stats[project.id].last_activity_at as string))}`
+                      : "Занятий пока не было"}
+                  </p>
+                  <div className="b-extra" aria-label={`Действия для проекта «${project.name}»`}>
+                    <Tooltip label="Повторения появятся на этапе 9" side="top">
+                      <span className="dash-card-later">
+                        <Button variant="secondary" disabled>Повторить</Button>
+                      </span>
+                    </Tooltip>
+                    <Menu
+                      label={`Ещё для проекта «${project.name}»`}
+                      trigger={
+                        <IconButton label="Ещё" className="dash-card-more">
+                          <MoreHorizontal size={15} aria-hidden="true" />
+                        </IconButton>
+                      }
+                      items={[
+                        { label: "Вверх", icon: <ArrowUp size={15} />, disabled: index === 0, onSelect: () => moveProject(project.id, index - 1) },
+                        { label: "Вниз", icon: <ArrowDown size={15} />, disabled: index === active.length - 1, onSelect: () => moveProject(project.id, index + 1) },
+                        { label: "Архивировать", icon: <Archive size={15} />, onSelect: () => setArchiveCandidate(project) },
+                        { label: "Удалить навсегда", icon: <Trash2 size={15} />, destructive: true, onSelect: () => setDeleteCandidate(project) },
+                      ]}
+                    />
+                  </div>
                 </div>
+                <Link className="primary-button" to={`/projects/${project.id}`}>Продолжить</Link>
               </div>
             </article>
           ))}

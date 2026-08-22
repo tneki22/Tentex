@@ -247,14 +247,39 @@ export interface ProgramImportRepairPreflightRead {
   program_revision: number;
   source_hash: string;
   node_count: number;
+  has_tickets: boolean;
   preflight: import("./ai").AiPreflight;
+}
+
+export interface RepairedQuestion {
+  kind: "question" | "task";
+  title: string;
+  subpoints: string[];
+  source_indices: number[];
+}
+
+export interface RepairedTicket {
+  kind: "ticket";
+  title: string;
+  source_indices: number[];
+  items: RepairedQuestion[];
+}
+
+export type RepairedItem = RepairedQuestion | RepairedTicket;
+
+export interface DroppedItem {
+  source_indices: number[];
+  reason: string;
 }
 
 export interface ProgramImportRepairRunRead {
   run_id: string;
   program_revision: number;
   source_hash: string;
-  items: string[];
+  has_tickets: boolean;
+  source_texts: string[];
+  items: RepairedItem[];
+  dropped: DroppedItem[];
   changes: string[];
   warnings: string[];
   usage: import("./ai").AiUsage;
@@ -706,7 +731,7 @@ export const applyProgramImportRepair = (
     run_id: string;
     expected_program_revision: number;
     expected_source_hash: string;
-    items: string[];
+    items: RepairedItem[];
   },
   signal?: AbortSignal,
 ): Promise<ProgramChangeResult> => request(`${projectPath(projectId)}/program/ai-import-repair/apply`, {

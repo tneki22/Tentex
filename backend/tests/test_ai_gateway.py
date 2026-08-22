@@ -189,11 +189,19 @@ async def test_disabled_missing_credentials_and_capability(
     settings.default_text_model_id = "test/structured-model"
     model = session.get(AiModelCatalogEntry, (provider.id, settings.default_text_model_id))
     assert model is not None
-    model.supported_parameters = []
+    # Непустой список параметров без response_format — положительное свидетельство,
+    # что структурный ответ не поддерживается: гейт срабатывает.
+    model.supported_parameters = ["temperature", "max_tokens"]
     session.commit()
     with pytest.raises(ProjectDomainError) as caught:
         await ModelGateway(session, FakeTransport()).preflight(_request())
     assert caught.value.code == "ai_capability_unsupported"
+    # Пустой список — «каталог параметров не заполнен» (модель добавлена вручную),
+    # а не «не умеет». Не блокируем на отсутствии данных: вызов решит сам.
+    model.supported_parameters = []
+    session.commit()
+    preflight = await ModelGateway(session, FakeTransport()).preflight(_request())
+    assert preflight.model_id == "test/structured-model"
 
 
 @pytest.mark.asyncio
@@ -266,4 +274,4 @@ async def test_model_test_uses_selected_provider_and_writes_safe_run(
     assert run.provider_id == provider.id
     assert run.role == "settings_model_test"
     assert run.context_manifest == []
-    assert fake.complete_requests[0]["max_output_tokens"] == 8
+    assert fake.complete_requests[0]["max_output_tokens"] == 1500

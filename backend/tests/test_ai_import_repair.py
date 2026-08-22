@@ -1,5 +1,6 @@
 import json
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from conftest import make_exam_project
@@ -33,11 +34,74 @@ def _nodes(session: Session, project_id, titles: list[str]) -> list[ProgramNode]
     return nodes
 
 
-def _completion(items: list[str]) -> ProviderCompletion:
+def _ticket_with_questions(
+    session: Session, project_id, ticket_title: str, question_titles: list[str]
+) -> tuple[ProgramNode, list[ProgramNode]]:
+    ticket = ProgramNode(
+        id=uuid4(),
+        project_id=project_id,
+        parent_id=None,
+        node_type=NodeType.SECTION,
+        exam_kind=ExamKind.TICKET,
+        sort_order=0,
+        title=ticket_title,
+        is_in_current_program=True,
+        is_archived=False,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    session.add(ticket)
+    session.flush()
+    children = []
+    for index, title in enumerate(question_titles):
+        node = ProgramNode(
+            id=uuid4(),
+            project_id=project_id,
+            parent_id=ticket.id,
+            node_type=NodeType.TOPIC,
+            exam_kind=ExamKind.QUESTION,
+            sort_order=index,
+            title=title,
+            is_in_current_program=True,
+            is_archived=False,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        session.add(node)
+        children.append(node)
+    session.commit()
+    return ticket, children
+
+
+def _question_payload(
+    text: str,
+    *,
+    source_indices: list[int],
+    subpoints: list[str] | None = None,
+    kind: str = "question",
+) -> dict:
+    return {
+        "kind": kind,
+        "title": text,
+        "subpoints": subpoints or [],
+        "source_indices": source_indices,
+    }
+
+
+def _completion(
+    items: list[dict],
+    *,
+    dropped: list[dict] | None = None,
+    changes: list[str] | None = None,
+    warnings: list[str] | None = None,
+) -> ProviderCompletion:
     payload = {
-        "items": [{"text": text} for text in items],
-        "changes": ["Расставлены пробелы между слипшимися словами"],
-        "warnings": [],
+        "items": items,
+        "dropped": dropped or [],
+        "changes": (
+            changes if changes is not None else ["Расставлены пробелы между слипшимися словами"]
+        ),
+        "warnings": warnings or [],
     }
     return ProviderCompletion(
         content=json.dumps(payload),
@@ -53,10 +117,20 @@ async def test_program_repair_run_apply_and_undo(session: Session, ai_config: st
     mangled = ["Датьопределениенезависимости.", "Второйвопрос."]
     fixed = ["Дать определение независимости.", "Второй вопрос."]
     nodes = _nodes(session, project.id, mangled)
-    fake = FakeTransport(completions=[_completion(fixed)])
+    fake = FakeTransport(
+        completions=[
+            _completion(
+                [
+                    _question_payload(fixed[0], source_indices=[1]),
+                    _question_payload(fixed[1], source_indices=[2]),
+                ]
+            )
+        ]
+    )
     gateway = ModelGateway(session, fake)
 
     preview = await import_repair.preflight_program_repair(session, gateway, project.id)
+    assert preview.has_tickets is False
     run = await import_repair.run_program_repair(
         session,
         gateway,
@@ -66,7 +140,7 @@ async def test_program_repair_run_apply_and_undo(session: Session, ai_config: st
             expected_source_hash=preview.source_hash,
         ),
     )
-    assert run.items == fixed
+    assert [item.title for item in run.items] == fixed
 
     result = import_repair.apply_program_repair(
         session,
@@ -103,7 +177,8 @@ async def test_program_repair_works_on_draft_project_during_wizard_review(
     mangled = ["Датьопределение."]
     fixed = ["Дать определение."]
     nodes = _nodes(session, project.id, mangled)
-    fake = FakeTransport(completions=[_completion(fixed)])
+    completion = _completion([_question_payload(fixed[0], source_indices=[1])])
+    fake = FakeTransport(completions=[completion])
     gateway = ModelGateway(session, fake)
 
     preview = await import_repair.preflight_program_repair(session, gateway, project.id)
@@ -128,41 +203,6 @@ async def test_program_repair_works_on_draft_project_during_wizard_review(
     )
     titles_by_id = {node.id: node.title for node in result.program.nodes}
     assert titles_by_id[nodes[0].id] == "Дать определение."
-
-
-@pytest.mark.asyncio
-async def test_program_repair_apply_rejects_item_count_mismatch(
-    session: Session, ai_config: str
-) -> None:
-    del ai_config
-    project = make_exam_project(session)
-    nodes = _nodes(session, project.id, ["Первый.", "Второй."])
-    fake = FakeTransport(completions=[_completion(["Первый.", "Второй."])])
-    gateway = ModelGateway(session, fake)
-
-    preview = await import_repair.preflight_program_repair(session, gateway, project.id)
-    run = await import_repair.run_program_repair(
-        session,
-        gateway,
-        project.id,
-        import_repair.ProgramRepairRunWrite(
-            expected_program_revision=preview.program_revision,
-            expected_source_hash=preview.source_hash,
-        ),
-    )
-
-    with pytest.raises(ProjectDomainError):
-        import_repair.apply_program_repair(
-            session,
-            project.id,
-            import_repair.ProgramRepairApplyWrite(
-                run_id=run.run_id,
-                expected_program_revision=preview.program_revision,
-                expected_source_hash=preview.source_hash,
-                items=["Только один пункт вместо двух"],
-            ),
-        )
-    assert nodes[0].title == "Первый."
 
 
 @pytest.mark.asyncio
@@ -240,7 +280,17 @@ async def test_program_repair_orders_nodes_by_tree_not_flat_sort_order(
     session.commit()
     # Фейковая модель просто возвращает три позиционные метки — реальная
     # проверка тут в том, какому узлу какая позиция достанется при apply.
-    fake = FakeTransport(completions=[_completion(["Первый.", "Второй.", "Третий."])])
+    fake = FakeTransport(
+        completions=[
+            _completion(
+                [
+                    _question_payload("Первый.", source_indices=[1]),
+                    _question_payload("Второй.", source_indices=[2]),
+                    _question_payload("Третий.", source_indices=[3]),
+                ]
+            )
+        ]
+    )
     gateway = ModelGateway(session, fake)
 
     preview = await import_repair.preflight_program_repair(session, gateway, project.id)
@@ -271,13 +321,297 @@ async def test_program_repair_orders_nodes_by_tree_not_flat_sort_order(
 
 
 @pytest.mark.asyncio
-async def test_program_repair_model_reply_with_wrong_count_is_rejected(
+async def test_program_repair_rejects_position_missing_from_response(
     session: Session, ai_config: str
 ) -> None:
     del ai_config
     project = make_exam_project(session)
     _nodes(session, project.id, ["Первый.", "Второй.", "Третий."])
-    fake = FakeTransport(completions=[_completion(["Только один"])])
+    # Позиция 3 не упомянута ни в items, ни в dropped — модель потеряла пункт молча.
+    fake = FakeTransport(
+        completions=[
+            _completion(
+                [
+                    _question_payload("Первый.", source_indices=[1]),
+                    _question_payload("Второй.", source_indices=[2]),
+                ]
+            )
+        ]
+    )
+    gateway = ModelGateway(session, fake)
+
+    preview = await import_repair.preflight_program_repair(session, gateway, project.id)
+    with pytest.raises(ProjectDomainError):
+        await import_repair.run_program_repair(
+            session,
+            gateway,
+            project.id,
+            import_repair.ProgramRepairRunWrite(
+                expected_program_revision=preview.program_revision,
+                expected_source_hash=preview.source_hash,
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_program_repair_splits_one_position_into_two(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    project = make_exam_project(session)
+    nodes = _nodes(
+        session, project.id, ["Вопрос один.Вопрос два слипшиеся.", "Отдельный вопрос."]
+    )
+    fake = FakeTransport(
+        completions=[
+            _completion(
+                [
+                    _question_payload("Вопрос один.", source_indices=[1]),
+                    _question_payload("Вопрос два слипшиеся.", source_indices=[1]),
+                    _question_payload("Отдельный вопрос.", source_indices=[2]),
+                ]
+            )
+        ]
+    )
+    gateway = ModelGateway(session, fake)
+
+    preview = await import_repair.preflight_program_repair(session, gateway, project.id)
+    run = await import_repair.run_program_repair(
+        session,
+        gateway,
+        project.id,
+        import_repair.ProgramRepairRunWrite(
+            expected_program_revision=preview.program_revision,
+            expected_source_hash=preview.source_hash,
+        ),
+    )
+    result = import_repair.apply_program_repair(
+        session,
+        project.id,
+        import_repair.ProgramRepairApplyWrite(
+            run_id=run.run_id,
+            expected_program_revision=preview.program_revision,
+            expected_source_hash=preview.source_hash,
+            items=run.items,
+        ),
+    )
+    active_titles = {
+        node.title
+        for node in result.program.nodes
+        if node.is_in_current_program and not node.is_archived
+    }
+    assert active_titles == {"Вопрос один.", "Вопрос два слипшиеся.", "Отдельный вопрос."}
+    # Позиция 1 разбита на два новых узла — исходный архивирован, а не удалён.
+    split_source = session.get(ProgramNode, nodes[0].id)
+    assert split_source is not None and split_source.is_archived is True
+    # Позиция 2 переиспользована как есть — тот же узел, привязки не потеряны.
+    reused = session.get(ProgramNode, nodes[1].id)
+    assert reused is not None and reused.title == "Отдельный вопрос." and not reused.is_archived
+
+
+@pytest.mark.asyncio
+async def test_program_repair_drops_spurious_heading(session: Session, ai_config: str) -> None:
+    del ai_config
+    project = make_exam_project(session)
+    nodes = _nodes(session, project.id, ["Заголовок раздела", "Настоящий вопрос."])
+    fake = FakeTransport(
+        completions=[
+            _completion(
+                [_question_payload("Настоящий вопрос.", source_indices=[2])],
+                dropped=[{"source_indices": [1], "reason": "Это заголовок раздела, не вопрос"}],
+            )
+        ]
+    )
+    gateway = ModelGateway(session, fake)
+
+    preview = await import_repair.preflight_program_repair(session, gateway, project.id)
+    run = await import_repair.run_program_repair(
+        session,
+        gateway,
+        project.id,
+        import_repair.ProgramRepairRunWrite(
+            expected_program_revision=preview.program_revision,
+            expected_source_hash=preview.source_hash,
+        ),
+    )
+    assert len(run.dropped) == 1
+    result = import_repair.apply_program_repair(
+        session,
+        project.id,
+        import_repair.ProgramRepairApplyWrite(
+            run_id=run.run_id,
+            expected_program_revision=preview.program_revision,
+            expected_source_hash=preview.source_hash,
+            items=run.items,
+        ),
+    )
+    active_titles = {
+        node.title
+        for node in result.program.nodes
+        if node.is_in_current_program and not node.is_archived
+    }
+    assert active_titles == {"Настоящий вопрос."}
+    archived = session.get(ProgramNode, nodes[0].id)
+    assert archived is not None and archived.is_archived is True
+
+
+@pytest.mark.asyncio
+async def test_program_repair_adds_subpoints_and_shrinks_them_on_second_run(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    project = make_exam_project(session)
+    _nodes(session, project.id, ["Платформы МК и IoT STM32 ESP32 сравнение"])
+    fake = FakeTransport(
+        completions=[
+            _completion(
+                [
+                    _question_payload(
+                        "Платформы МК и IoT",
+                        subpoints=["STM32: Cortex-M", "ESP32: Wi-Fi/BLE", "Сравнение платформ"],
+                        source_indices=[1],
+                    )
+                ]
+            )
+        ]
+    )
+    gateway = ModelGateway(session, fake)
+
+    preview = await import_repair.preflight_program_repair(session, gateway, project.id)
+    run = await import_repair.run_program_repair(
+        session,
+        gateway,
+        project.id,
+        import_repair.ProgramRepairRunWrite(
+            expected_program_revision=preview.program_revision,
+            expected_source_hash=preview.source_hash,
+        ),
+    )
+    applied = import_repair.apply_program_repair(
+        session,
+        project.id,
+        import_repair.ProgramRepairApplyWrite(
+            run_id=run.run_id,
+            expected_program_revision=preview.program_revision,
+            expected_source_hash=preview.source_hash,
+            items=run.items,
+        ),
+    )
+    subpoints = [
+        node
+        for node in applied.program.nodes
+        if node.node_type == "subpoint" and node.is_in_current_program and not node.is_archived
+    ]
+    expected_subpoints = {"STM32: Cortex-M", "ESP32: Wi-Fi/BLE", "Сравнение платформ"}
+    assert {node.title for node in subpoints} == expected_subpoints
+    kept_subpoint_id = next(node.id for node in subpoints if node.title == "STM32: Cortex-M")
+
+    # Второй запуск: у вопроса остаётся один подпункт — лишние должны уйти в архив,
+    # а не потеряться (их можно будет восстановить вручную).
+    second = _completion(
+        [_question_payload("Платформы МК и IoT", subpoints=["STM32: Cortex-M"], source_indices=[1])]
+    )
+    fake.completions.append(second)
+    preview2 = await import_repair.preflight_program_repair(session, gateway, project.id)
+    run2 = await import_repair.run_program_repair(
+        session,
+        gateway,
+        project.id,
+        import_repair.ProgramRepairRunWrite(
+            expected_program_revision=preview2.program_revision,
+            expected_source_hash=preview2.source_hash,
+        ),
+    )
+    applied2 = import_repair.apply_program_repair(
+        session,
+        project.id,
+        import_repair.ProgramRepairApplyWrite(
+            run_id=run2.run_id,
+            expected_program_revision=preview2.program_revision,
+            expected_source_hash=preview2.source_hash,
+            items=run2.items,
+        ),
+    )
+    active_subpoints = [
+        node
+        for node in applied2.program.nodes
+        if node.node_type == "subpoint" and node.is_in_current_program and not node.is_archived
+    ]
+    assert [node.id for node in active_subpoints] == [kept_subpoint_id]
+
+
+@pytest.mark.asyncio
+async def test_program_repair_supports_ticket_format(session: Session, ai_config: str) -> None:
+    del ai_config
+    project = make_exam_project(session)
+    ticket, children = _ticket_with_questions(
+        session, project.id, "Билет", ["Вопрос а.", "Вопрос б."]
+    )
+    fake = FakeTransport(
+        completions=[
+            _completion(
+                [
+                    {
+                        "kind": "ticket",
+                        "title": "Билет 1",
+                        "source_indices": [1],
+                        "items": [
+                            _question_payload("Вопрос А (исправлено).", source_indices=[2]),
+                            _question_payload("Вопрос Б (исправлено).", source_indices=[3]),
+                        ],
+                    }
+                ]
+            )
+        ]
+    )
+    gateway = ModelGateway(session, fake)
+
+    preview = await import_repair.preflight_program_repair(session, gateway, project.id)
+    assert preview.has_tickets is True
+    assert preview.node_count == 3
+    run = await import_repair.run_program_repair(
+        session,
+        gateway,
+        project.id,
+        import_repair.ProgramRepairRunWrite(
+            expected_program_revision=preview.program_revision,
+            expected_source_hash=preview.source_hash,
+        ),
+    )
+    result = import_repair.apply_program_repair(
+        session,
+        project.id,
+        import_repair.ProgramRepairApplyWrite(
+            run_id=run.run_id,
+            expected_program_revision=preview.program_revision,
+            expected_source_hash=preview.source_hash,
+            items=run.items,
+        ),
+    )
+    titles_by_id = {node.id: node.title for node in result.program.nodes}
+    assert titles_by_id[ticket.id] == "Билет 1"
+    assert titles_by_id[children[0].id] == "Вопрос А (исправлено)."
+    assert titles_by_id[children[1].id] == "Вопрос Б (исправлено)."
+
+
+@pytest.mark.asyncio
+async def test_program_repair_rejects_flat_response_when_project_has_tickets(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    project = make_exam_project(session)
+    _ticket_with_questions(session, project.id, "Билет", ["Вопрос а.", "Вопрос б."])
+    fake = FakeTransport(
+        completions=[
+            _completion(
+                [
+                    _question_payload("Билет 1", source_indices=[1]),
+                    _question_payload("Вопрос а.", source_indices=[2]),
+                    _question_payload("Вопрос б.", source_indices=[3]),
+                ]
+            )
+        ]
+    )
     gateway = ModelGateway(session, fake)
 
     preview = await import_repair.preflight_program_repair(session, gateway, project.id)

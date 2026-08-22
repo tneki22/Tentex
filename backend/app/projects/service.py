@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
+from app.materials.schemas import MaterialPurpose
 from app.models import (
     Attempt,
     ChatSession,
@@ -226,6 +227,7 @@ def import_exam_program(
 ) -> ExamImportResult:
     passport = session.get(GoalPassport, project_id)
     expected_item_count = passport.expected_item_count if passport else None
+    session.rollback()
     try:
         parsed = parse_exam_program(
             command.raw_text, command.exam_format, expected_item_count=expected_item_count
@@ -360,18 +362,23 @@ def list_project_stats(session: Session) -> list[ProjectStats]:
             .group_by(ReferenceAnswer.project_id)
         ).all()
     )
-    material_counts = {
-        project_id: (count, pages)
-        for project_id, count, pages in session.execute(
-            select(
-                ProjectMaterial.project_id,
-                func.count(),
-                func.sum(Material.page_count),
-            )
-            .join(Material, Material.id == ProjectMaterial.material_id)
-            .group_by(ProjectMaterial.project_id)
-        ).all()
-    }
+    # Документ, из которого только импортированы вопросы (exam_structure),
+    # источником для занятий не считается — это служебный файл, а не то,
+    # что разносится по темам. Материал с ещё одним назначением всё же
+    # учитывается: в источники не входит только «чистый» вопросник.
+    material_rows = session.execute(
+        select(ProjectMaterial.project_id, ProjectMaterial.purposes, Material.page_count).join(
+            Material, Material.id == ProjectMaterial.material_id
+        )
+    ).all()
+    material_counts: dict[UUID, tuple[int, int | None]] = {}
+    for project_id, purposes, page_count in material_rows:
+        if purposes == [MaterialPurpose.EXAM_STRUCTURE.value]:
+            continue
+        count, pages = material_counts.get(project_id, (0, None))
+        if page_count is not None:
+            pages = (pages or 0) + page_count
+        material_counts[project_id] = (count + 1, pages)
     attempt_activity = dict(
         session.execute(
             select(Attempt.project_id, func.max(Attempt.created_at)).group_by(Attempt.project_id)

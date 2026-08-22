@@ -7,6 +7,7 @@
  * Тон и формулировка выбираются один раз — иначе «освоен» окажется зелёным на
  * карте покрытия и синим в среде темы.
  */
+export { AiFailureNotice } from "./AiFailureNotice";
 export { CostEstimate } from "./CostEstimate";
 export { GoalLevelPicker, GOAL_LEVELS, goalLevelEffect } from "./GoalLevel";
 export type { GoalLevelValue } from "./GoalLevel";

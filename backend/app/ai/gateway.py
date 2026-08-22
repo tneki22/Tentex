@@ -41,6 +41,14 @@ from app.models import (
 
 ZERO = Decimal("0")
 
+# Человекочитаемые названия возможностей модели: попадают в текст ошибки,
+# когда выбранная модель не умеет то, что нужно функции.
+_CAPABILITY_LABELS = {
+    "structured_output": "структурированный ответ (response_format)",
+    "streaming": "потоковый вывод",
+    "audio_transcription": "приём аудио",
+}
+
 
 @dataclass(frozen=True)
 class AiTextRequest[T: BaseModel]:
@@ -308,16 +316,24 @@ class ModelGateway:
                 code="ai_capability_unsupported",
                 context={"model_id": resolved.model_id},
             )
-        capabilities = set()
-        if "response_format" in row.supported_parameters:
+        capabilities = {"streaming"}
+        # Пустой supported_parameters — «каталог параметров не заполнен» (так у
+        # добавленных вручную моделей), а не «модель не умеет». Блокировать по
+        # отсутствию данных нельзя: гейт срабатывает только на положительном
+        # свидетельстве — непустом списке, где response_format реально нет.
+        # Тот же принцип, что у output_modalities в _model_for_selection; реальную
+        # способность проверит сам вызов (ответ не пройдёт разбор — честная ошибка).
+        if not row.supported_parameters or "response_format" in row.supported_parameters:
             capabilities.add("structured_output")
-        capabilities.add("streaming")
         if "audio" in row.input_modalities:
             capabilities.add("audio_transcription")
         missing = resolved.role.required_capabilities - capabilities
         if missing:
+            labels = ", ".join(_CAPABILITY_LABELS.get(item, item) for item in sorted(missing))
             raise AiGatewayError(
-                "Модель не поддерживает возможности этой функции",
+                f"Модель «{resolved.model_id}» не поддерживает: {labels}. "
+                "Выберите для этой функции другую модель или включите нужные "
+                "возможности у модели в Параметрах ИИ.",
                 code="ai_capability_unsupported",
                 context={"model_id": resolved.model_id, "missing": sorted(missing)},
             )

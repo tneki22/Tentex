@@ -57,6 +57,39 @@ export function isAiApiError(error: unknown): error is AiApiError {
     && AI_ERROR_CODES.has(error.code as AiErrorCode);
 }
 
+/**
+ * Почему вызов ИИ не удался — с точки зрения того, что показать пользователю:
+ * - `disabled` — внешние модели выключены глобально (законный офлайн-режим);
+ * - `unreachable` — провайдер не отвечает (сеть, ключ, лимит скорости);
+ * - `misconfigured` — ИИ включён, но модель функции не может выполнить вызов
+ *   (не выбрана, нет ключа, не тянет структурный ответ, превышен лимит).
+ *   Раньше всё, кроме `unreachable`, показывалось как «модели выключены» —
+ *   и пользователь с включённым ИИ шёл выключать то, что и так включено.
+ */
+export type AiFailureKind = "disabled" | "unreachable" | "misconfigured";
+
+export interface AiFailureInfo {
+  kind: AiFailureKind;
+  title: string;
+  message: string;
+}
+
+const AI_UNREACHABLE_CODES = new Set<AiErrorCode>([
+  "ai_provider_unavailable", "ai_timeout", "ai_rate_limited", "ai_invalid_credentials",
+]);
+
+export function describeAiFailure(error: unknown): AiFailureInfo | null {
+  if (!isAiApiError(error)) return null;
+  const message = error.message || "Вызов не выполнен.";
+  if (error.code === "ai_disabled") {
+    return { kind: "disabled", title: "Внешние модели выключены", message };
+  }
+  if (AI_UNREACHABLE_CODES.has(error.code as AiErrorCode)) {
+    return { kind: "unreachable", title: "Провайдер не отвечает", message };
+  }
+  return { kind: "misconfigured", title: "Модель функции не готова", message };
+}
+
 export interface AiModelSelection {
   provider_id: string;
   model_id: string;

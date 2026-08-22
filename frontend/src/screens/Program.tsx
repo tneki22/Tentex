@@ -486,7 +486,9 @@ export function Program() {
           : groupingNodes.length !== currentFlat.length
             ? "В плоском списке должны остаться только вопросы и задачи"
             : null;
-  const repairNodes = currentFlat.filter((node) => node.node_type !== "section");
+  const hasTicketNodes = currentFlat.some((node) => node.exam_kind === "ticket");
+  const repairNodes = currentFlat.filter((node) => node.node_type !== "subpoint"
+    && (node.node_type !== "section" || (hasTicketNodes && node.exam_kind === "ticket")));
   const repairProblem = detail.project.status !== "active"
     ? "Исправить формулировки можно только в активном проекте"
     : repairNodes.length === 0

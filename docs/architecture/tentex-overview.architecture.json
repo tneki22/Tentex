@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Tentex: как устроен локальный тренажёр подготовки к экзамену",
+    "output": "tentex-overview.html",
+    "quality_profile": "showcase",
+    "viewBox": [1280, 720],
+    "views": [
+      {
+        "id": "learner-path",
+        "label": "Путь пользователя",
+        "focus": ["learner", "frontend", "api", "sqlite"],
+        "note": "Пользователь работает в браузере, а интерфейс обращается к локальному API и учебной базе."
+      },
+      {
+        "id": "material-path",
+        "label": "Разбор материалов",
+        "focus": ["frontend", "api", "files", "worker", "sqlite"],
+        "note": "Загруженные файлы сохраняются, разбираются фоновым воркером и становятся доступными для поиска и привязки к темам."
+      },
+      {
+        "id": "exam-path",
+        "label": "Экзамен и обучение",
+        "focus": ["learner", "frontend", "api", "sqlite", "models"],
+        "note": "Экзамен использует программу, материалы и эталонные ответы; внешняя модель остаётся необязательной."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "learner",
+      "type": "external",
+      "label": "Учащийся",
+      "sublabel": "работает в браузере",
+      "pos": [40, 290],
+      "size": [150, 72]
+    },
+    {
+      "id": "frontend",
+      "type": "frontend",
+      "label": "Интерфейс Tentex",
+      "sublabel": "React + TypeScript + Vite",
+      "tag": "localhost:5173",
+      "pos": [270, 290],
+      "size": [180, 72]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "Локальный API",
+      "sublabel": "Программа · материалы · экзамен",
+      "tag": "localhost:8000",
+      "pos": [530, 290],
+      "size": [180, 72]
+    },
+    {
+      "id": "sqlite",
+      "type": "database",
+      "label": "Учебная база",
+      "sublabel": "SQLite + FTS5 / BM25",
+      "tag": "программа, фрагменты, попытки, задачи",
+      "pos": [800, 290],
+      "size": [210, 78]
+    },
+    {
+      "id": "files",
+      "type": "database",
+      "label": "Файловое хранилище",
+      "sublabel": "исходники и результаты разбора",
+      "tag": "локально на диске",
+      "pos": [800, 500],
+      "size": [210, 78]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Воркер материалов",
+      "sublabel": "OCR · блоки · индекс",
+      "tag": "берёт ProcessingTask из SQLite",
+      "pos": [1070, 500],
+      "size": [170, 78]
+    },
+    {
+      "id": "models",
+      "type": "external",
+      "label": "Провайдеры моделей",
+      "sublabel": "только через ModelGateway",
+      "tag": "можно выключить",
+      "pos": [800, 90],
+      "size": [210, 78]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Локальная установка; внешние вызовы происходят только при включённой модели",
+      "wraps": ["frontend", "api", "sqlite", "files", "worker"],
+      "pad": 28
+    }
+  ],
+  "connections": [
+    {
+      "id": "learner-ui",
+      "from": "learner",
+      "to": "frontend",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ui-api",
+      "from": "frontend",
+      "to": "api",
+      "label": "HTTP / JSON",
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-db",
+      "from": "api",
+      "to": "sqlite",
+      "label": "SQL",
+      "labelDx": 25,
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-files",
+      "from": "api",
+      "to": "files",
+      "label": "загружает файлы"
+    },
+    {
+      "id": "worker-files",
+      "from": "worker",
+      "to": "files",
+      "label": "читает",
+      "labelDy": 32
+    },
+    {
+      "id": "worker-db",
+      "from": "worker",
+      "to": "sqlite",
+      "label": "lease + результат"
+    },
+    {
+      "id": "api-models",
+      "from": "api",
+      "to": "models",
+      "label": "явно разрешённый запрос",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Главная идея",
+      "items": [
+        "Программа экзамена задаёт цель: что именно нужно выучить",
+        "Фрагменты материалов связываются с темами, а не остаются просто файлами"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Что уже работает",
+      "items": [
+        "Проекты, Программа, материалы, эталонные ответы и экзаменационный чат",
+        "Локальный OCR, FTS5/BM25, ручные привязки, Попытки и Оценки"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Что появится следующим",
+      "items": [
+        "Повторения и План будут использовать накопленные свидетельства знаний",
+        "Проход 2 добавит измеримое покрытие программы и материала в обе стороны"
+      ]
+    }
+  ]
+}

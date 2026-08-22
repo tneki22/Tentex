@@ -185,6 +185,56 @@
   text-underline-offset: 2px;
 }
 
+/* ИИ включён, но модель функции не может выполнить вызов: не «выключено», а
+   «настройте модель». Предупреждающий тон, но штатное состояние. */
+.ai-failure-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--tone-warning) 28%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--tone-warning) 8%, transparent);
+}
+
+.ai-failure-notice > svg {
+  flex: none;
+  transform: translateY(2px);
+  color: var(--tone-warning);
+}
+
+.ai-failure-notice strong {
+  display: block;
+  font-size: var(--text-sm);
+}
+
+.ai-failure-notice p {
+  margin: var(--space-1) 0 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.ai-failure-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  align-items: baseline;
+}
+
+.ai-failure-notice-actions a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: var(--weight-medium);
+}
+
+.ai-failure-notice-actions span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
 /* --- Опознавательный знак проекта --- */
 
 .project-chip {

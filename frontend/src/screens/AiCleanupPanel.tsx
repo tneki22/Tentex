@@ -1,7 +1,7 @@
 import { AlertTriangle, RotateCcw, Sparkles, Square, WandSparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { isAiApiError, type AiPreflight, type DecimalValue } from "../api/ai";
+import { describeAiFailure, type AiPreflight, type DecimalValue } from "../api/ai";
 import {
   applyLibraryPageCleanup,
   applyMaterialPageCleanup,
@@ -15,7 +15,7 @@ import {
   type PageCorrectionRead,
 } from "../api/materials";
 import { ProjectApiError } from "../api/projects";
-import { OfflineNotice } from "../components/domain";
+import { AiFailureNotice } from "../components/domain";
 import {
   Button,
   Checkbox,
@@ -88,12 +88,6 @@ function PreflightSummary({ value }: { value: AiPreflight }) {
       {value.cached && <StatusBadge tone="info">результат есть в кэше</StatusBadge>}
     </section>
   );
-}
-
-function aiFailureCopy(error: unknown): { unreachable: boolean; text: string } | null {
-  if (!isAiApiError(error)) return null;
-  const unreachable = ["ai_provider_unavailable", "ai_timeout", "ai_rate_limited", "ai_invalid_credentials"].includes(error.code);
-  return { unreachable, text: error.message };
 }
 
 export function AiCleanupPanel({
@@ -251,7 +245,7 @@ export function AiCleanupPanel({
     setError(new DOMException("Ожидание остановлено пользователем", "AbortError"));
   }
 
-  const aiFailure = aiFailureCopy(error);
+  const aiFailure = describeAiFailure(error);
   const preflightValue = preflight?.preflight ?? null;
 
   return (
@@ -311,10 +305,7 @@ export function AiCleanupPanel({
 
           {aiFailure && (
             <>
-              <OfflineNotice
-                reason={aiFailure.unreachable ? "unreachable" : "disabled"}
-                alternative={aiFailure.unreachable ? `${aiFailure.text} Страницу можно исправить вручную.` : "Страницу можно исправить вручную."}
-              />
+              <AiFailureNotice error={error} manualAlternative="Страницу можно исправить вручную." />
               <Button variant="secondary" onClick={() => { onManualEdit(); onOpenChange(false); }}>Исправить текст вручную</Button>
             </>
           )}

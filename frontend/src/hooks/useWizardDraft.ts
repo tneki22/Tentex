@@ -121,7 +121,23 @@ export function useWizardDraft({
   }, [accept, fail, projectId]);
 
   const ensureDraft = useCallback(async () => {
-    if (detailRef.current) return detailRef.current;
+    const current = detailRef.current;
+    if (current && (!projectId || current.project.id === projectId)) return current;
+
+    // `projectId` means that the user chose an existing draft. The child wizard may
+    // mount before the effect above starts its GET request, so it must never create
+    // a new draft during that short interval.
+    if (projectId) {
+      setStatus("loading");
+      try {
+        const next = await getWizardDraft(projectId);
+        accept(next, { hydrated: true });
+        return next;
+      } catch (caught) {
+        return fail(caught) as never;
+      }
+    }
+
     if (createRequestRef.current) return createRequestRef.current;
     setStatus("saving");
     const request = createWizardDraft(templateKey)
@@ -135,7 +151,7 @@ export function useWizardDraft({
       });
     createRequestRef.current = request;
     return request;
-  }, [accept, fail, templateKey]);
+  }, [accept, fail, projectId, templateKey]);
 
   const enqueue = useCallback(<T,>(task: () => Promise<T>): Promise<T> => {
     const run = queueRef.current.then(async () => {
@@ -249,5 +265,24 @@ export function useWizardDraft({
     }
   }), [enqueue, fail]);
 
-  return { detail, hydrationVersion, status, error, conflict, ensureDraft, queueSave, enqueueProgramCommand, undo, importExam, activate, discard, flush, reload };
+  const awaitingRequestedDraft = Boolean(
+    projectId && detail?.project.id !== projectId && status !== "error",
+  );
+
+  return {
+    detail,
+    hydrationVersion,
+    status: awaitingRequestedDraft ? "loading" : status,
+    error,
+    conflict,
+    ensureDraft,
+    queueSave,
+    enqueueProgramCommand,
+    undo,
+    importExam,
+    activate,
+    discard,
+    flush,
+    reload,
+  };
 }

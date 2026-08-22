@@ -2,7 +2,7 @@ import { AlertTriangle, ArrowDown, ArrowUp, GripVertical, RotateCcw, Square, Wan
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { Link } from "react-router";
-import { isAiApiError, type AiPreflight, type DecimalValue } from "../api/ai";
+import { describeAiFailure, type AiPreflight, type DecimalValue } from "../api/ai";
 import {
   applyProgramGrouping,
   preflightProgramGrouping,
@@ -14,7 +14,7 @@ import {
   type ProgramGroupingRunRead,
   type ProgramNodeRead,
 } from "../api/projects";
-import { OfflineNotice } from "../components/domain";
+import { AiFailureNotice } from "../components/domain";
 import {
   Button,
   Checkbox,
@@ -83,14 +83,6 @@ function validation(groups: ProgramGroupingItem[], expectedIds: string[]): strin
   if (assigned.length !== new Set(assigned).size) return "Один вопрос оказался в нескольких разделах.";
   if (assigned.length !== expectedIds.length || expectedIds.some((id) => !assigned.includes(id))) return "Распределите каждый исходный вопрос ровно один раз.";
   return "";
-}
-
-function aiFailure(error: unknown): { unreachable: boolean; message: string } | null {
-  if (!isAiApiError(error)) return null;
-  return {
-    unreachable: ["ai_provider_unavailable", "ai_timeout", "ai_rate_limited", "ai_invalid_credentials"].includes(error.code),
-    message: error.message,
-  };
 }
 
 export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenChange, onApplied }: AiGroupingDialogProps) {
@@ -232,7 +224,7 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
     setDraggedNodeId(null);
   }
 
-  const failure = aiFailure(error);
+  const failure = describeAiFailure(error);
   const distributed = new Set(groups.flatMap((group) => group.node_ids)).size;
 
   return (
@@ -280,9 +272,9 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
           )}
 
           {failure && (
-            <OfflineNotice
-              reason={failure.unreachable ? "unreachable" : "disabled"}
-              alternative={failure.unreachable ? `${failure.message} Ручное редактирование вопросов остаётся доступным.` : "Ручное редактирование вопросов остаётся доступным."}
+            <AiFailureNotice
+              error={error}
+              manualAlternative="Ручное редактирование вопросов остаётся доступным."
             />
           )}
           {Boolean(error) && !failure && !(error instanceof DOMException && error.name === "AbortError") && <p className="inline-error" role="alert">{error instanceof Error ? error.message : "Группировка не выполнена"}</p>}
