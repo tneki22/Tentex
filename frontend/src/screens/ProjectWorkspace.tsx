@@ -573,6 +573,7 @@ export function ProjectWorkspace() {
           .map((binding) => ({
             kind: "image" as const,
             source: "binding" as const,
+            materialId: binding.material_id,
             label: binding.asset_label,
             url: materialFragmentAssetUrl(projectId, binding.material_id, binding.fragment_id),
             alt: `Изображение из «${binding.material_name}», стр. ${binding.page_number}`,
@@ -589,7 +590,11 @@ export function ProjectWorkspace() {
         <article className="workspace-reference-answer">
           <header><ReferenceAnswerBadge status={answerSlot.status} /><span>{source} · {match}</span></header>
           <h2>{selected.title}</h2>
-          <ReferenceAnswerContent text={answer.text} media={media} />
+          <ReferenceAnswerContent
+            text={answer.text}
+            media={media}
+            sourceMaterialId={answer.source_material_id}
+          />
           <Link to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть и изменить эталон</Link>
         </article>
       );

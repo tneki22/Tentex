@@ -1,12 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
+import { legacyBoundImages, type ReferenceAnswerMedia } from "./referenceAnswerMedia";
 
-export interface ReferenceAnswerMedia {
-  kind: "image" | "file";
-  source: "binding" | "attachment";
-  label: string | null;
-  url: string;
-  alt: string;
-}
+export type { ReferenceAnswerMedia } from "./referenceAnswerMedia";
 
 const MARKER = /\[(изображение|файл): ([^\]\r\n]+)\]|\[Изображение\]/g;
 const LIST_ITEM = /^([ \t]*)(?:([-*+])|(\d+)[.)])\s+(.+)$/;
@@ -30,10 +25,11 @@ function inlineContent(
   text: string,
   media: ReferenceAnswerMedia[],
   legacyImageIndex: { current: number },
+  sourceMaterialId: string | null,
 ): ReactNode[] {
   const content: ReactNode[] = [];
   let cursor = 0;
-  const boundImages = media.filter((item) => item.kind === "image" && item.source === "binding");
+  const boundImages = legacyBoundImages(media, sourceMaterialId);
 
   for (const match of text.matchAll(MARKER)) {
     const marker = match[0];
@@ -51,7 +47,15 @@ function inlineContent(
   return content;
 }
 
-export function ReferenceAnswerContent({ text, media }: { text: string; media: ReferenceAnswerMedia[] }) {
+export function ReferenceAnswerContent({
+  text,
+  media,
+  sourceMaterialId,
+}: {
+  text: string;
+  media: ReferenceAnswerMedia[];
+  sourceMaterialId: string | null;
+}) {
   const blocks: ReactNode[] = [];
   let list: { ordered: boolean; indent: string; start: number; items: string[] } | null = null;
   const legacyImageIndex = { current: 0 };
@@ -61,7 +65,7 @@ export function ReferenceAnswerContent({ text, media }: { text: string; media: R
     const Tag = list.ordered ? "ol" : "ul";
     blocks.push(
       <Tag className="workspace-reference-list" start={list.ordered ? list.start : undefined} style={indentStyle(list.indent)} key={`list-${blocks.length}`}>
-        {list.items.map((item, index) => <li key={index}>{inlineContent(item, media, legacyImageIndex)}</li>)}
+        {list.items.map((item, index) => <li key={index}>{inlineContent(item, media, legacyImageIndex, sourceMaterialId)}</li>)}
       </Tag>,
     );
     list = null;
@@ -86,7 +90,7 @@ export function ReferenceAnswerContent({ text, media }: { text: string; media: R
     }
     flushList();
     const leading = line.match(/^[ \t]*/)?.[0] ?? "";
-    blocks.push(<p className="workspace-reference-paragraph" style={indentStyle(leading)} key={`paragraph-${blocks.length}`}>{inlineContent(line.slice(leading.length), media, legacyImageIndex)}</p>);
+    blocks.push(<p className="workspace-reference-paragraph" style={indentStyle(leading)} key={`paragraph-${blocks.length}`}>{inlineContent(line.slice(leading.length), media, legacyImageIndex, sourceMaterialId)}</p>);
   }
   flushList();
   return <div className="workspace-reference-text">{blocks}</div>;

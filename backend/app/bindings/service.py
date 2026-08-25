@@ -1,6 +1,5 @@
 from collections import defaultdict
 from dataclasses import dataclass
-from pathlib import Path
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, func, select
@@ -18,6 +17,7 @@ from app.bindings.schemas import (
     SearchHighlightRead,
     SearchResultRead,
 )
+from app.marker_labels import material_image_label
 from app.materials.schemas import MaterialPurpose
 from app.models import (
     Binding,
@@ -145,7 +145,7 @@ def _fragment_read(
         bbox=fragment.bbox,
         element_kind=fragment.element_kind,
         asset_label=(
-            Path(fragment.asset_path).name
+            material_image_label(material.id, material.original_name, fragment.asset_path)
             if fragment.element_kind == "image" and fragment.asset_path
             else None
         ),

@@ -12,12 +12,12 @@
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from pathlib import Path
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.marker_labels import material_image_label
 from app.materials.schemas import MaterialPurpose
 from app.models import (
     Binding,
@@ -110,10 +110,11 @@ class _Section:
             if not (fragment.element_kind == "heading" and fragment.text.strip() == self.title)
         ]
 
-    def answer_text(self) -> str:
+    def answer_text(self, material: Material) -> str:
         body = [
             (
-                f"[изображение: {Path(fragment.asset_path).name}]"
+                "[изображение: "
+                f"{material_image_label(material.id, material.original_name, fragment.asset_path)}]"
                 if fragment.element_kind == "image" and fragment.asset_path
                 else fragment.text
             )
@@ -403,7 +404,7 @@ def _fill_answers(
     created = updated = kept = 0
     now = utc_now()
     for section in sections:
-        text = section.answer_text()
+        text = section.answer_text(material)
         if not text:
             continue
         for node_id in section.node_ids:

@@ -8,8 +8,13 @@ from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.marker_labels import marker_label, material_image_label
 from app.materials.storage import material_path, store_answer_upload
 from app.models import (
+    Binding,
+    BindingStatus,
+    Material,
+    MaterialFragment,
     NodeType,
     ProgramNode,
     Project,
@@ -432,6 +437,7 @@ def get_coverage_map(session: Session, project_id: UUID) -> CoverageMapRead:
 
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 ATTACHMENT_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf", ".docx", ".txt", ".md"}
+ACTIVE_BINDING_STATUSES = {BindingStatus.MANUAL, BindingStatus.CONFIRMED, BindingStatus.MACHINE}
 
 
 def _unique_attachment_name(file_name: str, existing_names: set[str]) -> str:
@@ -483,10 +489,27 @@ async def add_attachment(
                 )
             )
         )
+        bound_image_labels = {
+            material_image_label(material.id, material.original_name, asset_path)
+            for material, asset_path in session.execute(
+                select(Material, MaterialFragment.asset_path)
+                .join(Binding, Binding.material_id == Material.id)
+                .join(MaterialFragment, MaterialFragment.id == Binding.fragment_id)
+                .where(
+                    Binding.project_id == project_id,
+                    Binding.program_node_id == node_id,
+                    Binding.status.in_(ACTIVE_BINDING_STATUSES),
+                    MaterialFragment.element_kind == "image",
+                    MaterialFragment.asset_path.is_not(None),
+                )
+            )
+        }
         row = ReferenceAnswerAttachment(
             project_id=project_id,
             program_node_id=node_id,
-            file_name=_unique_attachment_name(original_name, existing_names),
+            file_name=_unique_attachment_name(
+                marker_label(original_name), existing_names | bound_image_labels
+            ),
             storage_path=storage_path,
             media_type=media_type,
             size_bytes=size,

@@ -260,4 +260,5 @@ def test_image_fragment_uses_its_asset_filename_as_answer_marker(session: Sessio
 
     answer = session.get(ReferenceAnswer, (project.id, nodes[0].id))
     assert answer is not None
-    assert answer.text == "Answer body\n\n[изображение: diagram-1.png]"
+    assert str(material.id) in answer.text
+    assert "diagram-1.png" in answer.text

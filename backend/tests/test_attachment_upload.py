@@ -1,10 +1,20 @@
 import io
 
 import pytest
-from conftest import make_exam_project, make_topic_node
+from conftest import (
+    add_page_with_fragments,
+    link_material,
+    make_exam_project,
+    make_material,
+    make_topic_node,
+)
 from fastapi import UploadFile
 
+from app.bindings import service
+from app.bindings.schemas import BindingCreateWrite
+from app.marker_labels import material_image_label
 from app.materials.storage import store_answer_upload
+from app.models import MaterialFragment
 from app.projects import answers
 from app.projects.errors import ProjectDomainError
 
@@ -71,3 +81,58 @@ async def test_attachment_names_are_unique_within_an_answer(
         "scheme (2).png",
         "scheme (3).png",
     ]
+
+
+@pytest.mark.asyncio
+async def test_attachment_marker_label_replaces_bracket_delimiters(
+    session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_exam_project(session)
+    node = make_topic_node(session, project, title="Безопасный маркер")
+
+    async def store_delimited_name(*_args, **_kwargs):
+        return "answers/test/file.png", "image/png", 3, "scheme].png"
+
+    monkeypatch.setattr(answers, "store_answer_upload", store_delimited_name)
+
+    attachment = await answers.add_attachment(
+        session, project.id, node.id, _upload("scheme].png", b"x")
+    )
+
+    assert attachment.file_name == "scheme］.png"
+
+
+@pytest.mark.asyncio
+async def test_attachment_label_avoids_a_bound_image_label(
+    session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_exam_project(session)
+    node = make_topic_node(session, project, title="Коллизия")
+    material = make_material(session, "a4")
+    link_material(session, project, material)
+    page = add_page_with_fragments(
+        session, material, page_number=1, revision=1, fragments=["[Изображение]"]
+    )
+    image = session.get(MaterialFragment, page.fragment_ids[0])
+    assert image is not None
+    image.element_kind = "image"
+    image.asset_path = "assets/material/flow.png"
+    session.commit()
+    service.create_bindings(
+        session,
+        project.id,
+        BindingCreateWrite(program_node_id=node.id, fragment_ids=page.fragment_ids),
+    )
+    image_label = material_image_label(material.id, material.original_name, image.asset_path)
+
+    async def store_colliding_name(*_args, **_kwargs):
+        return "answers/test/file.png", "image/png", 3, image_label
+
+    monkeypatch.setattr(answers, "store_answer_upload", store_colliding_name)
+
+    attachment = await answers.add_attachment(
+        session, project.id, node.id, _upload("flow.png", b"x")
+    )
+
+    assert attachment.file_name != image_label
+    assert "(2)" in attachment.file_name

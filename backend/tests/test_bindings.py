@@ -70,7 +70,30 @@ def test_active_image_binding_includes_kind_and_asset_label(session: Session) ->
     active = service.list_bindings(session, project.id, node_id=node.id)
 
     assert active[0].element_kind == "image"
-    assert active[0].asset_label == "flow.png"
+    assert active[0].asset_label is not None
+    assert active[0].asset_label.endswith(f" · {material.id}")
+
+
+def test_image_binding_labels_do_not_collide_between_materials(session: Session) -> None:
+    project = make_exam_project(session)
+    node = make_topic_node(session, project, title="Две схемы")
+    labels = []
+    for seed in ("a2", "a3"):
+        material = make_material(session, seed)
+        link_material(session, project, material)
+        page = add_page_with_fragments(
+            session, material, page_number=1, revision=1, fragments=["[Изображение]"]
+        )
+        image = session.get(MaterialFragment, page.fragment_ids[0])
+        assert image is not None
+        image.element_kind = "image"
+        image.asset_path = "assets/material/flow.png"
+        session.commit()
+        _bind(session, project, node, page.fragment_ids)
+        binding = service.list_bindings(session, project.id, material_id=material.id)[0]
+        labels.append(binding.asset_label)
+
+    assert labels[0] != labels[1]
 
 
 def test_remove_is_reversible_via_restore(session: Session) -> None:
