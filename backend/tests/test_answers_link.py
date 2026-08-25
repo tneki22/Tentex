@@ -1,6 +1,8 @@
 from uuid import uuid4
 
+import pytest
 from conftest import make_exam_project, make_material
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -264,6 +266,46 @@ def test_image_fragment_uses_its_asset_filename_as_answer_marker(session: Sessio
     assert answer is not None
     assert str(material.id) in answer.text
     assert "diagram-1.png" in answer.text
+
+
+def test_linked_answer_preserves_outer_blanks_and_indented_list(session: Session) -> None:
+    project, nodes = _program(session, 1)
+    material = _answers_material(
+        session,
+        project,
+        [
+            (
+                nodes[0].title,
+                [
+                    ("", "paragraph", None),
+                    ("  - Первый пункт", "paragraph", None),
+                    ("", "paragraph", None),
+                ],
+            )
+        ],
+    )
+
+    link_answers_material(session, project.id, material.id)
+
+    answer = session.get(ReferenceAnswer, (project.id, nodes[0].id))
+    assert answer is not None
+    assert answer.text == "\n  - Первый пункт\n"
+
+
+def test_manual_answer_validation_preserves_formatting_and_rejects_blank_text(
+    session: Session,
+) -> None:
+    text = "\n  - Первый пункт\n\n"
+    command = ReferenceAnswerWrite(text=text)
+    assert command.text == text
+    with pytest.raises(ValidationError):
+        ReferenceAnswerWrite(text=" \n\t ")
+
+    project, nodes = _program(session, 1)
+    slot = put_reference_answer(session, project.id, nodes[0].id, command)
+
+    assert slot.answer is not None
+    assert slot.answer.text == text
 
 
 def test_manual_edit_clears_import_provenance_for_legacy_media_fallback(session: Session) -> None:

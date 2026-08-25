@@ -120,7 +120,7 @@ class _Section:
             )
             for fragment in self.bindable_fragments()
         ]
-        return "\n".join(body).strip()
+        return "\n".join(body)
 
 
 @dataclass(slots=True)
@@ -405,7 +405,7 @@ def _fill_answers(
     now = utc_now()
     for section in sections:
         text = section.answer_text(material)
-        if not text:
+        if not text.strip():
             continue
         for node_id in section.node_ids:
             answer = session.get(ReferenceAnswer, (project_id, node_id))
@@ -433,7 +433,7 @@ def _fill_answers(
                 continue
             ours = answer.source_material_id == material.id
             same_import = (
-                answer.text.strip() == text
+                answer.text == text
                 and answer.match_method == section.method
                 and answer.matched_title == section.title
                 and answer.source_page_from == section.page_from

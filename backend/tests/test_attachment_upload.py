@@ -1,4 +1,7 @@
+import importlib
 import io
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from conftest import (
@@ -9,12 +12,13 @@ from conftest import (
     make_topic_node,
 )
 from fastapi import UploadFile
+from sqlalchemy import select
 
 from app.bindings import service
 from app.bindings.schemas import BindingCreateWrite
 from app.marker_labels import material_image_label
 from app.materials.storage import store_answer_upload
-from app.models import MaterialFragment
+from app.models import MaterialFragment, ReferenceAnswerAttachment
 from app.projects import answers
 from app.projects.errors import ProjectDomainError
 
@@ -136,3 +140,83 @@ async def test_attachment_label_avoids_a_bound_image_label(
 
     assert attachment.file_name != image_label
     assert "(2)" in attachment.file_name
+
+
+def test_attachment_label_migration_normalizes_and_uniquifies_existing_rows(
+    session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_exam_project(session)
+    node = make_topic_node(session, project, title="Старые вложения")
+    other_node = make_topic_node(session, project, title="Другая тема")
+    created = datetime(2026, 8, 25, tzinfo=UTC)
+    session.add_all(
+        [
+            ReferenceAnswerAttachment(
+                id=uuid4(),
+                project_id=project.id,
+                program_node_id=node.id,
+                file_name="scheme].png",
+                storage_path="answers/test/one",
+                media_type="image/png",
+                size_bytes=1,
+                created_at=created,
+            ),
+            ReferenceAnswerAttachment(
+                id=uuid4(),
+                project_id=project.id,
+                program_node_id=node.id,
+                file_name="scheme］.png",
+                storage_path="answers/test/two",
+                media_type="image/png",
+                size_bytes=1,
+                created_at=created + timedelta(seconds=1),
+            ),
+            ReferenceAnswerAttachment(
+                id=uuid4(),
+                project_id=project.id,
+                program_node_id=node.id,
+                file_name=" draft [v1] .md ",
+                storage_path="answers/test/three",
+                media_type="text/markdown",
+                size_bytes=1,
+                created_at=created + timedelta(seconds=2),
+            ),
+            ReferenceAnswerAttachment(
+                id=uuid4(),
+                project_id=project.id,
+                program_node_id=other_node.id,
+                file_name="scheme].png",
+                storage_path="answers/test/four",
+                media_type="image/png",
+                size_bytes=1,
+                created_at=created,
+            ),
+        ]
+    )
+    session.flush()
+    migration = importlib.import_module(
+        "migrations.versions.20260825_0020_reference_attachment_marker_labels"
+    )
+    monkeypatch.setattr(migration.op, "get_bind", session.connection)
+
+    migration.upgrade()
+    session.expire_all()
+    names = list(
+        session.scalars(
+            select(ReferenceAnswerAttachment.file_name)
+            .where(
+                ReferenceAnswerAttachment.project_id == project.id,
+                ReferenceAnswerAttachment.program_node_id == node.id,
+            )
+            .order_by(ReferenceAnswerAttachment.created_at)
+        )
+    )
+    other_name = session.scalar(
+        select(ReferenceAnswerAttachment.file_name).where(
+            ReferenceAnswerAttachment.project_id == project.id,
+            ReferenceAnswerAttachment.program_node_id == other_node.id,
+        )
+    )
+
+    assert names == ["scheme］.png", "scheme］ (2).png", "draft ［v1］ .md"]
+    assert other_name == "scheme］.png"

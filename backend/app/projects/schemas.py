@@ -349,10 +349,9 @@ class ReferenceAnswerWrite(ApiModel):
     @field_validator("text")
     @classmethod
     def strip_answer_text(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
+        if not value.strip():
             raise ValueError("Эталонный ответ не может быть пустым")
-        return stripped
+        return value
 
     @field_validator("source_label")
     @classmethod
