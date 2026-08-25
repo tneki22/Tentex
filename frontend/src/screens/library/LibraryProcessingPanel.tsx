@@ -1,10 +1,13 @@
 import { Pencil, Play, RotateCcw, Sparkles } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   LibraryMaterialDetailRead,
+  MaterialCapabilities,
   MaterialPageRead,
+  ParserMode,
   ProcessingScope,
 } from "../../api/materials";
+import { getMaterialCapabilities } from "../../api/materials";
 import { getMaterialPresentation } from "../../components/domain/material-viewer";
 import { TaskRow } from "../../components/domain";
 import type { BackgroundTask } from "../../components/domain";
@@ -21,23 +24,7 @@ import {
  * Пять режимов распознавания. Недоступные не прячутся: скрытый вариант
  * выглядит как отсутствие функции, а не как «пока не подключено».
  */
-const OCR_MODES = [
-  {
-    id: "fast",
-    title: "Быстро",
-    meta: "Локально · CPU",
-    enabled: true,
-    description: "Обычный текст, фотографии лекций и сканы без отправки данных.",
-    reason: "",
-  },
-  {
-    id: "textbook",
-    title: "Учебник",
-    meta: "Локально · GPU",
-    enabled: false,
-    description: "Сложная вёрстка, таблицы и печатные учебники.",
-    reason: "Нужен совместимый локальный GPU runtime.",
-  },
+const STATIC_OCR_MODES = [
   {
     id: "cloud",
     title: "Облако",
@@ -84,7 +71,12 @@ interface LibraryProcessingPanelProps {
   page: MaterialPageRead | null;
   busy: boolean;
   readOnly: boolean;
-  onStart: (command: { scope: ProcessingScope; page_from?: number; page_to?: number }) => void;
+  onStart: (command: {
+    parser_mode: ParserMode;
+    scope: ProcessingScope;
+    page_from?: number;
+    page_to?: number;
+  }) => void;
   onControl: (action: "pause" | "resume" | "retry") => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
@@ -103,7 +95,8 @@ export function LibraryProcessingPanel({
   onConfirmPageReview,
 }: LibraryProcessingPanelProps) {
   const presentation = getMaterialPresentation(material.presentation_kind);
-  const [mode, setMode] = useState<string>("fast");
+  const [mode, setMode] = useState<ParserMode>("fast");
+  const [ocrCapabilities, setOcrCapabilities] = useState<MaterialCapabilities | null>(null);
   const [scope, setScope] = useState<ProcessingScope>("all");
   const [range, setRange] = useState({ from: 1, to: material.page_count ?? 1 });
 
@@ -118,6 +111,45 @@ export function LibraryProcessingPanel({
     : null;
   const currentNeedsReview = page?.quality === "ocr_low"
     && currentPageState?.reviewed_at === null;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void getMaterialCapabilities(controller.signal)
+      .then(setOcrCapabilities)
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setOcrCapabilities({
+          fast_available: true,
+          fast_label: "PP-OCRv5 · русский · CPU",
+          textbook_available: false,
+          textbook_label: "Локально · GPU",
+          textbook_reason: "Не удалось проверить состояние локального GPU-сервиса.",
+          cloud_reason: "Облачные режимы не подключены.",
+        });
+      });
+    return () => controller.abort();
+  }, [material.id, material.task?.updated_at]);
+
+  const ocrModes = [
+    {
+      id: "fast" as const,
+      title: "Быстро",
+      meta: ocrCapabilities?.fast_label ?? "Локально · CPU",
+      enabled: ocrCapabilities?.fast_available ?? true,
+      description: "Нативный текст плюс OCR только растровых областей; сканы — целиком.",
+      reason: "Быстрый локальный OCR недоступен.",
+    },
+    {
+      id: "textbook" as const,
+      title: "Учебник",
+      meta: ocrCapabilities?.textbook_label ?? "Локально · GPU",
+      enabled: ocrCapabilities?.textbook_available ?? false,
+      description: "Сложная вёрстка, таблицы и формулы с сохранением исходных вырезов.",
+      reason: ocrCapabilities?.textbook_reason ?? "Проверяем локальный GPU-сервис…",
+    },
+    ...STATIC_OCR_MODES,
+  ];
+  const selectedMode = ocrModes.find((item) => item.id === mode);
 
   const backgroundTask: BackgroundTask | null = useMemo(() => {
     if (!task || task.state === "completed") return null;
@@ -141,8 +173,10 @@ export function LibraryProcessingPanel({
     <div className="inspector-content">
       <header className="inspector-section-head">
         <h3>{presentation.processingTitle}</h3>
-        {material.parser_mode === "fast" && prepared && (
-          <StatusBadge tone="neutral">Быстро · локально</StatusBadge>
+        {material.parser_mode && prepared && (
+          <StatusBadge tone="neutral">
+            {material.parser_mode === "textbook" ? "Учебник · локально" : "Быстро · локально"}
+          </StatusBadge>
         )}
       </header>
 
@@ -208,13 +242,13 @@ export function LibraryProcessingPanel({
               label="Режим распознавания"
               layout="rows"
               value={mode}
-              options={OCR_MODES.map((item) => ({
+              options={ocrModes.map((item) => ({
                 value: item.id,
                 title: item.meta ? `${item.title} · ${item.meta}` : item.title,
                 description: item.description,
                 unavailableReason: item.enabled ? undefined : item.reason,
               }))}
-              onChange={setMode}
+              onChange={(next) => setMode(next as ParserMode)}
             />
           ) : (
             <p className="inspector-note">
@@ -297,11 +331,11 @@ export function LibraryProcessingPanel({
           )}
 
           <Button
-            disabled={busy || mode !== "fast" || rangeInvalid}
+            disabled={busy || !selectedMode?.enabled || rangeInvalid}
             onClick={() => onStart(
               scope === "range"
-                ? { scope, page_from: range.from, page_to: range.to }
-                : { scope: canScope ? scope : "all" },
+                ? { parser_mode: mode, scope, page_from: range.from, page_to: range.to }
+                : { parser_mode: mode, scope: canScope ? scope : "all" },
             )}
           >
             {prepared

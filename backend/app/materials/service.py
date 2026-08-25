@@ -23,6 +23,7 @@ from app.materials.library import (
 from app.materials.library import (
     task_read as _task_read,
 )
+from app.materials.parsers import textbook
 from app.materials.schemas import (
     ExamProgramDraftImportWrite,
     ExamProgramImportWrite,
@@ -305,10 +306,16 @@ def control_task(
         return _read(link, material, _latest_task(session, material_id))
 
 
-def get_page(session: Session, project_id: UUID, material_id: UUID, page_number: int) -> PageRead:
+def get_page(
+    session: Session,
+    project_id: UUID,
+    material_id: UUID,
+    page_number: int,
+    task_id: UUID | None = None,
+) -> PageRead:
     _project(session, project_id, writable=False)
     _link(session, project_id, material_id)
-    return library.read_library_page(session, material_id, page_number)
+    return library.read_library_page(session, material_id, page_number, task_id=task_id)
 
 
 def page_image_path(
@@ -453,11 +460,13 @@ def import_exam_draft_from_material(
 
 
 def capabilities() -> MaterialCapabilities:
+    textbook_status = textbook.status()
     return MaterialCapabilities(
         fast_available=True,
         fast_label="PP-OCRv5 · русский · CPU",
-        textbook_available=False,
-        textbook_reason="PaddleOCR-VL 1.6 ещё не проверен на RTX 5060 Laptop",
+        textbook_available=textbook_status.available,
+        textbook_label=textbook_status.label,
+        textbook_reason=textbook_status.reason,
     )
 
 

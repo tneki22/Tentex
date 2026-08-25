@@ -40,7 +40,7 @@ class HeadingSuggestionCandidateRead(ApiModel):
 class HeadingSuggestionRead(ApiModel):
     """Заголовок без уверенного вопроса: показываем кандидатов, решает пользователь."""
 
-    block_id: UUID
+    anchor_fragment_id: UUID
     heading: str
     preview: str | None = None
     page_from: int
@@ -62,10 +62,15 @@ class AnswersLinkRead(ApiModel):
     unmatched_headings: list[str]
     duplicate_headings: list[str]
     suggestions: list[HeadingSuggestionRead] = Field(default_factory=list)
+    expected_questions: int = 0
+    linked_node_ids: list[UUID] = Field(default_factory=list)
+    missing_node_ids: list[UUID] = Field(default_factory=list)
+    ambiguous_sections: list[str] = Field(default_factory=list)
+    ambiguous_pages: list[int] = Field(default_factory=list)
 
 
 class AnswersHeadingResolveWrite(ApiModel):
-    block_id: UUID
+    anchor_fragment_id: UUID
     program_node_id: UUID
 
 

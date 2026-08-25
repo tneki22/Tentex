@@ -675,8 +675,26 @@
 }
 
 .structured-fragment {
+  position: relative;
   border-radius: var(--radius-sm);
   scroll-margin-block: var(--space-8);
+}
+
+.structured-recognition {
+  display: block;
+  width: fit-content;
+  margin: calc(-1 * var(--space-2)) 0 var(--space-3);
+  padding: 1px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+}
+
+.structured-recognition.is-low {
+  border-color: color-mix(in srgb, var(--tone-warning) 45%, var(--line));
+  color: var(--tone-warning);
 }
 
 .structured-fragment.is-focused {
@@ -719,6 +737,51 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
 }
+
+.structured-figure {
+  margin: var(--space-3) 0;
+}
+
+.structured-figure .structured-image { margin: 0; }
+
+.structured-transcript,
+.structured-source-crop {
+  margin-block-start: var(--space-2);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.structured-transcript summary,
+.structured-source-crop summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.structured-source-crop img,
+.structured-formula-fallback img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-block-start: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.structured-formula {
+  overflow-x: auto;
+  margin: var(--space-4) 0;
+}
+
+.structured-formula-fallback {
+  overflow-x: auto;
+  margin: var(--space-4) 0;
+  padding: var(--space-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.structured-formula-fallback code { white-space: pre-wrap; }
 
 .structured-table-scroll {
   overflow-x: auto;
@@ -1457,6 +1520,10 @@
   border-color: var(--accent-edge);
 }
 
+.revision-row.is-compared {
+  box-shadow: 0 0 0 1px var(--accent-edge);
+}
+
 .revision-head {
   display: flex;
   gap: var(--space-2);
@@ -1477,6 +1544,17 @@
 .revision-meta {
   color: var(--faint);
   font-size: var(--text-xs);
+}
+
+.revision-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.revision-inline-actions > button {
+  flex: 1 1 auto;
 }
 
 /* ── Узкое окно ──────────────────────────────────────────────────────────── */

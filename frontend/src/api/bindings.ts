@@ -11,7 +11,7 @@ export interface HeadingSuggestionCandidate {
 }
 
 export interface HeadingSuggestion {
-  block_id: string;
+  anchor_fragment_id: string;
   heading: string;
   preview: string | null;
   page_from: number;
@@ -31,6 +31,11 @@ export interface AnswersLinkRead {
   unmatched_headings: string[];
   duplicate_headings: string[];
   suggestions: HeadingSuggestion[];
+  expected_questions: number;
+  linked_node_ids: string[];
+  missing_node_ids: string[];
+  ambiguous_sections: string[];
+  ambiguous_pages: number[];
 }
 
 export interface BindingFragmentRead {
@@ -128,12 +133,15 @@ export const linkAnswersMaterial = (
 export const resolveAnswersHeading = (
   projectId: string,
   materialId: string,
-  command: { blockId: string; programNodeId: string },
+  command: { anchorFragmentId: string; programNodeId: string },
 ): Promise<AnswersLinkRead> => request(
   `/api/projects/${encodeURIComponent(projectId)}/materials/${encodeURIComponent(materialId)}/link-answers/resolve`,
   {
     method: "POST",
-    body: JSON.stringify({ block_id: command.blockId, program_node_id: command.programNodeId }),
+    body: JSON.stringify({
+      anchor_fragment_id: command.anchorFragmentId,
+      program_node_id: command.programNodeId,
+    }),
   },
 );
 

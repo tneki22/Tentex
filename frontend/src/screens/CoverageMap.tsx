@@ -414,6 +414,12 @@ export function CoverageMap() {
                   </Link>
                 </p>
               )}
+              {slot.answer?.source_only && (
+                <p className="coverage-answer-origin" role="status">
+                  Ответ находится в источнике. Текстовая проверка недоступна,
+                  пока здесь не появится текстовый эталон.
+                </p>
+              )}
               <Field label="Эталонный ответ" required><textarea rows={12} value={answerDraft} disabled={readOnly || busy} onChange={(event) => { setAnswerDraft(event.target.value); setNotice(""); }} placeholder="Добавьте короткий образцовый ответ по вопросу" /></Field>
               <Field label="Источник" hint="Необязательно: название конспекта или документа"><input value={sourceDraft} disabled={readOnly || busy} onChange={(event) => setSourceDraft(event.target.value)} /></Field>
 

@@ -3,6 +3,7 @@ import type {
   LibraryMaterialDetailRead,
   MaterialPageRead,
   MaterialRevisionRead,
+  ParserMode,
   ProcessingScope,
 } from "../../api/materials";
 import { LibraryMaterialFilePanel } from "./LibraryMaterialFilePanel";
@@ -22,12 +23,19 @@ interface LibraryMaterialInspectorProps {
   page: MaterialPageRead | null;
   revisions: MaterialRevisionRead[];
   selectedRevision: number | null;
+  compareRevision: number | null;
   tab: InspectorTab;
   busy: boolean;
   readOnly: boolean;
   onTabChange: (tab: InspectorTab) => void;
   onSelectRevision: (revision: number | null) => void;
-  onStart: (command: { scope: ProcessingScope; page_from?: number; page_to?: number }) => void;
+  onCompareRevision: (revision: number | null) => void;
+  onStart: (command: {
+    parser_mode: ParserMode;
+    scope: ProcessingScope;
+    page_from?: number;
+    page_to?: number;
+  }) => void;
   onControl: (action: "pause" | "resume" | "retry") => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
@@ -48,11 +56,13 @@ export function LibraryMaterialInspector({
   page,
   revisions,
   selectedRevision,
+  compareRevision,
   tab,
   busy,
   readOnly,
   onTabChange,
   onSelectRevision,
+  onCompareRevision,
   onStart,
   onControl,
   onEditPage,
@@ -108,7 +118,12 @@ export function LibraryMaterialInspector({
           <Tabs.Content value="file">
             <LibraryMaterialFilePanel
               material={material}
+              revisions={revisions}
+              selectedRevision={selectedRevision}
+              compareRevision={compareRevision}
               busy={busy}
+              onSelectRevision={onSelectRevision}
+              onCompareRevision={onCompareRevision}
               onAddToProject={onAddToProject}
               onRefreshSource={onRefreshSource}
               onDelete={onDelete}

@@ -18,6 +18,7 @@ import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from functools import lru_cache
 from uuid import UUID
 
 from app.materials.lexicon import lemmatize, normalize, query_terms
@@ -102,6 +103,13 @@ def _significant_lemmas(normalized: str) -> frozenset[str]:
     return frozenset(lemmatize(normalize(normalized)))
 
 
+@lru_cache(maxsize=65_536)
+def _lemma_similarity(left: str, right: str) -> float:
+    if left == right:
+        return 1.0
+    return SequenceMatcher(None, left, right).ratio()
+
+
 def _soft_overlap(left: frozenset[str], right: frozenset[str]) -> float:
     """Пересечение, в котором лемме засчитывается почти такая же пара.
 
@@ -114,7 +122,7 @@ def _soft_overlap(left: frozenset[str], right: frozenset[str]) -> float:
     for lemma in left:
         best_score, best_index = 0.0, -1
         for position, other in enumerate(remaining):
-            score = 1.0 if lemma == other else SequenceMatcher(None, lemma, other).ratio()
+            score = _lemma_similarity(lemma, other)
             if score > best_score:
                 best_score, best_index = score, position
         if best_index >= 0 and best_score >= LEMMA_MATCH:
@@ -142,11 +150,13 @@ class HeadingIndex:
     def __init__(self, nodes: Iterable[tuple[UUID, str]]) -> None:
         self._exact: dict[str, list[UUID]] = {}
         self._entries: list[_Entry] = []
+        self._entries_by_id: dict[UUID, _Entry] = {}
         self._by_lemma: dict[str, list[int]] = {}
         for node_id, title in nodes:
             normalized = normalize_answer_heading(title)
             self._exact.setdefault(normalized, []).append(node_id)
             entry = _Entry(node_id, title, normalized, _significant_lemmas(normalized))
+            self._entries_by_id[node_id] = entry
             index = len(self._entries)
             self._entries.append(entry)
             for lemma in entry.lemmas:
@@ -154,6 +164,43 @@ class HeadingIndex:
 
     def __len__(self) -> int:
         return len(self._entries)
+
+    def rank(self, heading: str) -> tuple[HeadingCandidate, ...]:
+        """Return all plausible questions without applying the auto-link threshold."""
+        normalized = normalize_answer_heading(heading)
+        if not normalized:
+            return ()
+
+        exact = self._exact.get(normalized)
+        if exact:
+            return tuple(
+                HeadingCandidate(node_id, self._entries_by_id[node_id].title, 1.0)
+                for node_id in exact
+            )
+
+        lemmas = _significant_lemmas(normalized)
+        if not lemmas:
+            return ()
+
+        # Сравниваем только с теми вопросами, у которых есть хоть одно общее слово:
+        # иначе на каждый заголовок приходится весь список вопросов.
+        seen: set[int] = set()
+        for lemma in lemmas:
+            seen.update(self._by_lemma.get(lemma, ()))
+        if not seen:
+            return ()
+
+        return tuple(sorted(
+            (
+                HeadingCandidate(
+                    self._entries[index].node_id,
+                    self._entries[index].title,
+                    _score(normalized, lemmas, self._entries[index]),
+                )
+                for index in seen
+            ),
+            key=lambda candidate: (-candidate.score, candidate.title),
+        ))
 
     def match(self, heading: str) -> HeadingMatch:
         normalized = normalize_answer_heading(heading)
@@ -166,29 +213,9 @@ class HeadingIndex:
             # ответ у них один и тот же, а дубль — проблема программы, а не привязки.
             return HeadingMatch(tuple(exact), ReferenceAnswerMatchMethod.EXACT_TITLE, 1.0)
 
-        lemmas = _significant_lemmas(normalized)
-        if not lemmas:
+        scored = list(self.rank(heading))
+        if not scored:
             return HeadingMatch()
-
-        # Сравниваем только с теми вопросами, у которых есть хоть одно общее слово:
-        # иначе на каждый заголовок приходится весь список вопросов.
-        seen: set[int] = set()
-        for lemma in lemmas:
-            seen.update(self._by_lemma.get(lemma, ()))
-        if not seen:
-            return HeadingMatch()
-
-        scored = sorted(
-            (
-                HeadingCandidate(
-                    self._entries[index].node_id,
-                    self._entries[index].title,
-                    _score(normalized, lemmas, self._entries[index]),
-                )
-                for index in seen
-            ),
-            key=lambda candidate: (-candidate.score, candidate.title),
-        )
         best = scored[0]
         runner_up = scored[1].score if len(scored) > 1 else 0.0
         if best.score >= AUTO_THRESHOLD and best.score - runner_up >= CONFIDENT_MARGIN:

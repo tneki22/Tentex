@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     # локальными данными установки; в SQLite этот секрет не хранится.
     secret_key: str | None = None
     ai_timeout_seconds: float = 60.0
+    # Отдельный процесс держит тяжёлые GPU-модели. На хосте он опубликован на
+    # localhost, а Compose переопределяет адрес именем сервиса.
+    textbook_ocr_url: str = "http://127.0.0.1:8090"
+    textbook_ocr_timeout_seconds: float = 180.0
 
     @property
     def database_path(self) -> Path:

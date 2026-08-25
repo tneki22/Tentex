@@ -8,6 +8,7 @@ from app.materials.parsers.base import ParsedElement, ParsedPage
 
 NUMBERED_RE = re.compile(r"^\s*\d{1,3}[.)]\s*")
 NUMBER_MARKER_RE = re.compile(r"(?<!\S)\d{1,3}[.)]\s*")
+ENDS_SENTENCE_RE = re.compile(r"[.!?:;][\"»)\]]?$")
 _engine: Any = None
 
 
@@ -92,30 +93,48 @@ def parse_image(path: Path, page_number: int) -> ParsedPage:
         )
     lines.sort(key=lambda item: (item[2][1], item[2][0]))
 
+    # OCR returns visual lines. Keep real paragraph boundaries, but join a
+    # wrapped line (including a numbered question) when geometry says it is a
+    # continuation. A number is only a structural signal, never a heading by itself.
     merged: list[tuple[str, float, tuple[float, float, float, float]]] = []
     for text, score, bbox in lines:
-        if merged and not NUMBERED_RE.match(text) and NUMBERED_RE.match(merged[-1][0]):
+        previous = merged[-1] if merged else None
+        if previous is not None:
             previous, previous_score, previous_bbox = merged[-1]
-            merged[-1] = (
-                f"{previous} {text}",
-                min(previous_score, score),
-                (
-                    min(previous_bbox[0], bbox[0]),
-                    min(previous_bbox[1], bbox[1]),
-                    max(previous_bbox[2], bbox[2]),
-                    max(previous_bbox[3], bbox[3]),
-                ),
+            previous_height = max(0.0001, previous_bbox[3] - previous_bbox[1])
+            gap = bbox[1] - previous_bbox[3]
+            aligned = abs(bbox[0] - previous_bbox[0]) <= 0.08
+            continuation = (
+                not NUMBERED_RE.match(text)
+                and aligned
+                and gap <= previous_height * 0.9
+                and (
+                    NUMBERED_RE.match(previous) is not None
+                    or ENDS_SENTENCE_RE.search(previous) is None
+                )
             )
-        else:
-            merged.append((text, score, bbox))
+            if continuation:
+                merged[-1] = (
+                    f"{previous} {text}",
+                    min(previous_score, score),
+                    (
+                        min(previous_bbox[0], bbox[0]),
+                        min(previous_bbox[1], bbox[1]),
+                        max(previous_bbox[2], bbox[2]),
+                        max(previous_bbox[3], bbox[3]),
+                    ),
+                )
+                continue
+        merged.append((text, score, bbox))
 
     elements = tuple(
         ParsedElement(
-            "heading" if NUMBERED_RE.match(text) else "paragraph",
+            "list" if NUMBERED_RE.match(text) else "paragraph",
             text,
             bbox,
             1 if NUMBERED_RE.match(text) else None,
             score,
+            recognition_source="ocr",
         )
         for text, score, bbox in merged
     )
@@ -124,7 +143,7 @@ def parse_image(path: Path, page_number: int) -> ParsedPage:
     diagnostics = ("low_confidence",) if quality == "ocr_low" else ()
     plain_text = "\n".join(element.text for element in elements)
     markdown = "\n\n".join(
-        f"## {element.text}" if element.kind == "heading" else element.text for element in elements
+        element.text for element in elements
     )
     return ParsedPage(
         page_number,

@@ -3,7 +3,7 @@ import type { MaterialPresentation } from "./types";
 
 const PRESENTATIONS: Record<MaterialPresentationKind, Omit<MaterialPresentation, "kind">> = {
   pdf: {
-    defaultMode: "compare",
+    defaultMode: "source",
     sourceLabel: "Оригинал",
     textLabel: "Подготовленный текст",
     processingTitle: "Распознавание",
@@ -12,7 +12,7 @@ const PRESENTATIONS: Record<MaterialPresentationKind, Omit<MaterialPresentation,
     supportsTimeline: false,
   },
   image: {
-    defaultMode: "compare",
+    defaultMode: "source",
     sourceLabel: "Изображение",
     textLabel: "Распознанный текст",
     processingTitle: "Распознавание",

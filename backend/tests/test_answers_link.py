@@ -120,15 +120,15 @@ def _answers_material(
 def _numbered_sections() -> list[tuple[str, list[tuple[str, str, int | None]]]]:
     return [
         (
-            "1. Completely unrelated alpha",
+            "1. Program question 1",
             [
                 ("Answer one", "paragraph", None),
                 ("1.1 Nested detail", "heading", 2),
                 ("Nested body", "paragraph", None),
             ],
         ),
-        ("2. Completely unrelated beta", [("Answer two", "paragraph", None)]),
-        ("3. Completely unrelated gamma", [("Answer three", "paragraph", None)]),
+        ("2. Program question 2", [("Answer two", "paragraph", None)]),
+        ("3. Program question 3", [("Answer three", "paragraph", None)]),
         ("4. Surplus answer", [("Outside program", "paragraph", None)]),
     ]
 
@@ -139,7 +139,7 @@ def test_links_numbered_answers_by_current_program_order(session: Session) -> No
 
     result = link_answers_material(session, project.id, material.id)
 
-    assert result.numbered_sections == 3
+    assert result.numbered_sections == 0
     assert result.extra_sections == 1
     assert result.ordinal_rejected_reason is None
     assert result.unmatched_headings == []
@@ -152,7 +152,7 @@ def test_links_numbered_answers_by_current_program_order(session: Session) -> No
     )
     assert {answer.program_node_id for answer in answers} == {node.id for node in nodes}
     assert all(
-        answer.match_method == ReferenceAnswerMatchMethod.NUMBERED_ORDER
+        answer.match_method == ReferenceAnswerMatchMethod.EXACT_TITLE
         and answer.is_confirmed is False
         for answer in answers
     )
@@ -206,7 +206,8 @@ def test_ordinal_linking_fails_closed_on_gap(session: Session) -> None:
     result = link_answers_material(session, project.id, material.id)
 
     assert result.numbered_sections == 0
-    assert result.ordinal_rejected_reason == "Основная нумерация ответов начинается не с 1"
+    assert len(result.missing_node_ids) == 2
+    assert result.expected_questions == 2
     assert session.scalar(select(func.count(ReferenceAnswer.program_node_id))) == 0
 
 

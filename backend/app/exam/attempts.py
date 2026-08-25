@@ -25,6 +25,7 @@ from app.models import (
     ChatSession,
     Grade,
     GradeMethod,
+    ReferenceAnswer,
     utc_now,
 )
 from app.projects.errors import ProjectDomainError
@@ -221,6 +222,20 @@ async def submit_answer(
             session, project_id, chat_row.program_node_id
         )
         ctx = build_context(session, chat_row, for_judge=True)
+        source_only_answer = session.get(
+            ReferenceAnswer, (project_id, chat_row.program_node_id)
+        )
+        if (
+            source_only_answer is not None
+            and source_only_answer.is_active
+            and source_only_answer.source_material_id is not None
+            and not source_only_answer.text.strip()
+        ):
+            raise ProjectDomainError(
+                "Эталон находится только в изображении источника; текстовая проверка недоступна",
+                status=409,
+                code="textual_check_unavailable",
+            )
         ordinal = (
             session.scalar(
                 select(func.count(Attempt.id)).where(

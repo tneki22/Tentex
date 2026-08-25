@@ -5,12 +5,14 @@ import { useLocation, useNavigate, useParams, useSearchParams } from "react-rout
 import {
   confirmLibraryPageReview,
   deleteLibraryMaterial,
+  getLibraryPage,
   getMaterialDeletePreview,
   refreshLibrarySource,
   restoreMaterialRevision,
   searchLibraryMaterial,
   updateLibraryPageText,
   type MaterialDeletePreview,
+  type MaterialPageRead,
   type MaterialPurpose,
 } from "../../api/materials";
 import {
@@ -61,6 +63,8 @@ export function LibraryMaterialWorkspace() {
 
   const revisionParam = Number(searchParams.get("revision"));
   const selectedRevision = Number.isFinite(revisionParam) && revisionParam > 0 ? revisionParam : null;
+  const compareParam = Number(searchParams.get("compareRevision"));
+  const compareRevision = Number.isFinite(compareParam) && compareParam > 0 ? compareParam : null;
   const inspectorTab = (searchParams.get("panel") as InspectorTab | null) ?? "processing";
 
   const [mode, setMode] = useState<MaterialViewMode | null>(null);
@@ -79,6 +83,9 @@ export function LibraryMaterialWorkspace() {
   const [attachOpen, setAttachOpen] = useState(false);
   const [deletePreview, setDeletePreview] = useState<MaterialDeletePreview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [comparisonPage, setComparisonPage] = useState<MaterialPageRead | null>(null);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
 
   useEffect(() => {
     const onResize = () => setNarrow((current) => {
@@ -103,6 +110,36 @@ export function LibraryMaterialWorkspace() {
     revision: selectedRevision,
   });
   const { detail, page } = store;
+  const primaryRevision = selectedRevision ?? detail?.active_parse_revision ?? 0;
+  const isVersionComparison = compareRevision !== null && compareRevision !== primaryRevision;
+
+  useEffect(() => {
+    if (!isVersionComparison || compareRevision === null) {
+      setComparisonPage(null);
+      setComparisonError(null);
+      setComparisonLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setComparisonLoading(true);
+    setComparisonError(null);
+    void getLibraryPage(materialId, view.page, {
+      revision: compareRevision,
+      signal: controller.signal,
+    })
+      .then((next) => {
+        if (!controller.signal.aborted) setComparisonPage(next);
+      })
+      .catch((caught: unknown) => {
+        if (controller.signal.aborted) return;
+        setComparisonPage(null);
+        setComparisonError(caught instanceof Error ? caught.message : "Не удалось открыть версию для сравнения");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setComparisonLoading(false);
+      });
+    return () => controller.abort();
+  }, [materialId, view.page, compareRevision, isVersionComparison]);
 
   const presentation = useMemo(
     () => (detail ? getMaterialPresentation(detail.presentation_kind) : null),
@@ -176,6 +213,22 @@ export function LibraryMaterialWorkspace() {
     setSearchParams(next, { replace: true });
   }
 
+  function selectRevision(revision: number | null) {
+    const next = new URLSearchParams(searchParams);
+    if (revision === null) next.delete("revision");
+    else next.set("revision", String(revision));
+    const opened = revision ?? detail?.active_parse_revision ?? 0;
+    if (Number(next.get("compareRevision")) === opened) next.delete("compareRevision");
+    setSearchParams(next, { replace: true });
+  }
+
+  function compareWithRevision(revision: number | null) {
+    const next = new URLSearchParams(searchParams);
+    if (revision === null || revision === primaryRevision) next.delete("compareRevision");
+    else next.set("compareRevision", String(revision));
+    setSearchParams(next, { replace: true });
+  }
+
   /* Возврат ведёт туда, откуда пришли: в сохранённый список Библиотеки или на
      ту же страницу проектного просмотрщика. По прямой ссылке — просто в список. */
   function goBack() {
@@ -234,41 +287,84 @@ export function LibraryMaterialWorkspace() {
   const prepared = detail.active_parse_revision > 0;
   const building = detail.task
     && (detail.task.state === "running" || detail.task.state === "queued")
-    && !prepared;
+    ? true
+    : false;
+  const revisionLabel = (revision: number) => {
+    const row = store.revisions.find((item) => item.revision === revision);
+    const modeLabel = row?.parser_mode === "textbook"
+      ? "Учебник"
+      : row?.parser_mode === "fast"
+        ? "Быстро"
+        : "правка";
+    return `Версия ${revision} · ${modeLabel}`;
+  };
+  const comparisonLabels = isVersionComparison && compareRevision !== null
+    ? { left: revisionLabel(primaryRevision), right: revisionLabel(compareRevision) }
+    : null;
 
   const stage = (
     <DocumentStage
-      mode={stageMode}
+      mode={isVersionComparison ? "compare" : stageMode}
       storageKey={detail.id}
-      sourceLabel={presentation.sourceLabel}
-      textLabel={presentation.textLabel}
+      sourceLabel={comparisonLabels?.left ?? presentation.sourceLabel}
+      textLabel={comparisonLabels?.right ?? presentation.textLabel}
       canPrevPage={activePage > 1}
       canNextPage={activePage < pageCount}
       onPrevPage={pageCount > 1 ? () => view.goToPage(activePage - 1) : undefined}
       onNextPage={pageCount > 1 ? () => view.goToPage(activePage + 1) : undefined}
       source={
-        <MaterialSourceView
-          material={detail}
-          page={page}
-          revision={selectedRevision}
-          query={search.query}
-          zoom={view.effectiveZoom}
-          showRegions={view.showRegions}
-          focusedFragmentId={focusedFragmentId}
-          currentTime={currentTime}
-          onTimeUpdate={setCurrentTime}
-          scrollRef={view.attachScroll}
-        />
+        isVersionComparison ? (
+          <MaterialTextView
+            material={detail}
+            page={page}
+            query={search.query}
+            focusedFragmentId={focusedFragmentId}
+            currentTime={currentTime}
+            onSeek={setCurrentTime}
+          />
+        ) : (
+          <MaterialSourceView
+            material={detail}
+            page={page}
+            pageNumber={activePage}
+            revision={selectedRevision}
+            query={search.query}
+            zoom={view.effectiveZoom}
+            showRegions={view.showRegions}
+            focusedFragmentId={focusedFragmentId}
+            currentTime={currentTime}
+            onTimeUpdate={setCurrentTime}
+            scrollRef={view.attachScroll}
+          />
+        )
       }
       text={
-        <MaterialTextView
-          material={detail}
-          page={page}
-          query={search.query}
-          focusedFragmentId={focusedFragmentId}
-          currentTime={currentTime}
-          onSeek={setCurrentTime}
-        />
+        isVersionComparison ? (
+          comparisonError ? (
+            <ErrorState message={comparisonError} />
+          ) : comparisonLoading || !comparisonPage ? (
+            <LoadingState label="Открываем версию для сравнения" />
+          ) : (
+            <MaterialTextView
+              material={detail}
+              page={comparisonPage}
+              query={search.query}
+              focusedFragmentId={null}
+              currentTime={currentTime}
+              onSeek={setCurrentTime}
+            />
+          )
+        ) : (
+          <MaterialTextView
+            material={detail}
+            page={page}
+            query={search.query}
+            focusedFragmentId={focusedFragmentId}
+            currentTime={currentTime}
+            onSeek={setCurrentTime}
+            processing={building}
+          />
+        )
       }
     />
   );
@@ -312,8 +408,8 @@ export function LibraryMaterialWorkspace() {
         {prepared && (
           <ViewerToolbar
             presentation={presentation}
-            mode={stageMode}
-            canCompare={canCompare}
+            mode={isVersionComparison ? "compare" : stageMode}
+            canCompare={!isVersionComparison && canCompare}
             page={activePage}
             pageCount={pageCount}
             query={search.query}
@@ -323,7 +419,8 @@ export function LibraryMaterialWorkspace() {
             fullscreen={view.fullscreen}
             searching={search.loading}
             matchLabel={search.label}
-            onModeChange={setMode}
+            versionComparison={comparisonLabels}
+            onModeChange={isVersionComparison ? () => undefined : setMode}
             onPageChange={view.goToPage}
             onQueryChange={search.setQuery}
             onQuerySubmit={search.step}
@@ -356,6 +453,14 @@ export function LibraryMaterialWorkspace() {
         </div>
       </header>
 
+      {comparisonLabels && (
+        <div className="library-readonly-bar is-comparison" role="status">
+          <Eye size={15} aria-hidden="true" />
+          <p>Сравниваются {comparisonLabels.left} и {comparisonLabels.right}.</p>
+          <Button variant="ghost" onClick={() => compareWithRevision(null)}>Закрыть сравнение</Button>
+        </div>
+      )}
+
       {readOnly && (
         <div className="library-readonly-bar" role="status">
           <Eye size={15} aria-hidden="true" />
@@ -365,7 +470,7 @@ export function LibraryMaterialWorkspace() {
               ? ` от ${new Date(store.revisions.find((item) => item.revision === selectedRevision)!.created_at).toLocaleDateString("ru-RU")}`
               : ""}. Изменения недоступны.
           </p>
-          <Button variant="ghost" onClick={() => setParam("revision", null)}>Вернуться к текущей</Button>
+          <Button variant="ghost" onClick={() => selectRevision(null)}>Вернуться к текущей</Button>
         </div>
       )}
 
@@ -428,13 +533,15 @@ export function LibraryMaterialWorkspace() {
             page={page}
             revisions={store.revisions}
             selectedRevision={selectedRevision}
+            compareRevision={compareRevision}
             tab={inspectorTab}
             busy={store.busy}
             readOnly={readOnly}
             onTabChange={(tab) => setParam("panel", tab === "processing" ? null : tab)}
-            onSelectRevision={(revision) => setParam("revision", revision === null ? null : String(revision))}
+            onSelectRevision={selectRevision}
+            onCompareRevision={compareWithRevision}
             onStart={(command) => void store.startProcessing({
-              parser_mode: "fast",
+              parser_mode: command.parser_mode,
               scope: command.scope,
               page_from: command.page_from ?? null,
               page_to: command.page_to ?? null,
@@ -514,13 +621,15 @@ export function LibraryMaterialWorkspace() {
             page={page}
             revisions={store.revisions}
             selectedRevision={selectedRevision}
+            compareRevision={compareRevision}
             tab={inspectorTab}
             busy={store.busy}
             readOnly={readOnly}
             onTabChange={(tab) => setParam("panel", tab === "processing" ? null : tab)}
-            onSelectRevision={(revision) => setParam("revision", revision === null ? null : String(revision))}
+            onSelectRevision={selectRevision}
+            onCompareRevision={compareWithRevision}
             onStart={(command) => void store.startProcessing({
-              parser_mode: "fast",
+              parser_mode: command.parser_mode,
               scope: command.scope,
               page_from: command.page_from ?? null,
               page_to: command.page_to ?? null,

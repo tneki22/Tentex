@@ -141,22 +141,23 @@ def _save_page(session: Session, task_id: UUID, parsed: ParsedPage) -> bool:
             )
         )
         if existing is None:
-            session.add(
-                MaterialPage(
-                    material_id=task.material_id,
-                    revision=revision,
-                    page_number=parsed.page_number,
-                    width=parsed.width,
-                    height=parsed.height,
-                    text=parsed.plain_text,
-                    markdown=parsed.markdown,
-                    quality=PageQuality(parsed.quality),
-                    confidence=parsed.confidence,
-                    elements=[library.element_to_json(element) for element in parsed.elements],
-                    diagnostics=list(parsed.diagnostics),
-                    created_at=utc_now(),
-                )
+            existing = MaterialPage(
+                material_id=task.material_id,
+                revision=revision,
+                page_number=parsed.page_number,
+                width=parsed.width,
+                height=parsed.height,
+                text=parsed.plain_text,
+                markdown=parsed.markdown,
+                quality=PageQuality(parsed.quality),
+                confidence=parsed.confidence,
+                elements=[library.element_to_json(element) for element in parsed.elements],
+                diagnostics=list(parsed.diagnostics),
+                created_at=utc_now(),
             )
+            session.add(existing)
+            session.flush()
+            library.rebuild_checkpoint_page(session, existing)
         # Считаем по позиции в выбранном списке, а не по номеру страницы: у
         # диапазона и списка «нужно проверить» номера не начинаются с единицы.
         checkpoint["next_index"] = max(

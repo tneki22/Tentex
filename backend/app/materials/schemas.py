@@ -21,6 +21,7 @@ from app.models import (
     ParserMode,
     ProcessingStage,
     ProcessingTaskState,
+    RecognitionSource,
     SourceRole,
 )
 
@@ -150,11 +151,13 @@ class FragmentRead(ApiModel):
     text: str
     bbox: list[float]
     element_kind: str
-    # Только у element_kind == "image": путь показывать наружу незачем, важен сам факт.
+    # Путь показывать наружу незачем, важен сам факт исходного выреза.
     has_asset: bool = False
     structure_level: int | None
     degraded_structure: bool
     quality: PageQuality
+    recognition_source: RecognitionSource
+    confidence: float | None = None
     # Границы сегмента у расшифровки аудио и субтитров; у остальных источников None.
     time_from: float | None = None
     time_to: float | None = None
@@ -354,6 +357,7 @@ class MaterialCapabilities(ApiModel):
     fast_available: bool
     fast_label: str
     textbook_available: bool
+    textbook_label: str
     textbook_reason: str
     cloud_reason: str = "Облачные режимы появятся на этапе 7"
 

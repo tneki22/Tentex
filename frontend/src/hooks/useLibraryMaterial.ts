@@ -87,7 +87,7 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
     : undefined;
   const activeRevision = detail?.active_parse_revision ?? 0;
   const hasReadyRevision = activeRevision > 0;
-  const previewTaskId = !hasReadyRevision ? activeTaskId : undefined;
+  const previewTaskId = revision === null ? activeTaskId : undefined;
 
   const detailLoaded = detail !== null;
   useEffect(() => {
@@ -113,7 +113,11 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
       .catch((caught: unknown) => {
         if (controller.signal.aborted || mine !== generation.current) return;
         setPageData(null);
-        setPageError(caught instanceof Error ? caught.message : "Страница не загрузилась");
+        setPageError(
+          previewTaskId
+            ? null
+            : caught instanceof Error ? caught.message : "Страница не загрузилась",
+        );
       })
       .finally(() => {
         if (!controller.signal.aborted && mine === generation.current) setPageLoading(false);
@@ -121,7 +125,16 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
     return () => controller.abort();
     // Активная версия в зависимостях не случайно: после обработки, правки и
     // восстановления страницу нужно перечитать, а на каждый тик опроса — нет.
-  }, [materialId, page, revision, detailLoaded, activeRevision, hasReadyRevision, previewTaskId]);
+  }, [
+    materialId,
+    page,
+    revision,
+    detailLoaded,
+    activeRevision,
+    hasReadyRevision,
+    previewTaskId,
+    detail?.task?.done,
+  ]);
 
   const run = useCallback(async <T,>(action: () => Promise<T>): Promise<T | null> => {
     setBusy(true);

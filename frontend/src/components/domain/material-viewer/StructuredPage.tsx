@@ -1,4 +1,5 @@
-import type { CSSProperties, ReactNode } from "react";
+import katex from "katex";
+import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
 import type { MaterialFragmentRead, MaterialPageRead } from "../../../api/materials";
 import { QualityBadge } from "../QualityBadge";
 
@@ -12,7 +13,7 @@ interface StructuredPageProps {
   focusedFragmentId?: string | null;
   /** Проектный потребитель добавляет сюда привязки; в Библиотеке их нет. */
   renderFragmentOverlay?: (fragment: MaterialFragmentRead) => ReactNode;
-  fragmentProps?: (fragment: MaterialFragmentRead) => Record<string, unknown> | undefined;
+  fragmentProps?: (fragment: MaterialFragmentRead) => HTMLAttributes<HTMLDivElement> | undefined;
   className?: string;
 }
 
@@ -39,17 +40,27 @@ export function StructuredPage({
         <span>Страница {page.page_number}</span>
         <QualityBadge quality={page.quality} />
       </header>
-      {page.fragments.map((fragment) => (
-        <div
-          className={`structured-fragment ${fragment.id === focusedFragmentId ? "is-focused" : ""}`.trim()}
-          key={fragment.id}
-          id={`fragment-${fragment.id}`}
-          {...(fragmentProps?.(fragment) ?? {})}
-        >
-          {renderFragmentOverlay?.(fragment)}
-          <FragmentBody fragment={fragment} query={query} assetUrl={assetUrl} />
-        </div>
-      ))}
+      {page.fragments.map((fragment) => {
+        const extra = fragmentProps?.(fragment) ?? {};
+        const classNames = [
+          "structured-fragment",
+          fragment.id === focusedFragmentId ? "is-focused" : "",
+          extra.className ?? "",
+        ].filter(Boolean).join(" ");
+        return (
+          <div
+            {...extra}
+            className={classNames}
+            data-recognition-source={fragment.recognition_source}
+            key={fragment.id}
+            id={`fragment-${fragment.id}`}
+          >
+            {renderFragmentOverlay?.(fragment)}
+            <FragmentBody fragment={fragment} query={query} assetUrl={assetUrl} />
+            <RecognitionMeta fragment={fragment} />
+          </div>
+        );
+      })}
       {page.fragments.length === 0 && (
         <p className="structured-page-empty">На этой странице не нашлось текста.</p>
       )}
@@ -67,13 +78,25 @@ function FragmentBody({
   assetUrl?: (fragmentId: string) => string;
 }) {
   if (fragment.element_kind === "image" && fragment.has_asset && assetUrl) {
+    const transcript = fragment.text.trim();
+    const hasTranscript = fragment.recognition_source !== "native"
+      && transcript.length > 0
+      && !/^\[?(изображение|image)\]?$/iu.test(transcript);
     return (
-      <img
-        className="structured-image"
-        src={assetUrl(fragment.id)}
-        alt="Изображение из документа"
-        loading="lazy"
-      />
+      <figure className="structured-figure">
+        <img
+          className="structured-image"
+          src={assetUrl(fragment.id)}
+          alt="Изображение из документа"
+          loading="lazy"
+        />
+        {hasTranscript && (
+          <details className="structured-transcript">
+            <summary>Расшифровка изображения</summary>
+            <p>{highlight(transcript, query)}</p>
+          </details>
+        )}
+      </figure>
     );
   }
   if (fragment.element_kind === "heading") {
@@ -92,8 +115,66 @@ function FragmentBody({
       </p>
     );
   }
-  if (fragment.element_kind === "table") return <MarkdownTable markdown={fragment.text} />;
+  if (fragment.element_kind === "formula") {
+    return <Formula fragment={fragment} assetUrl={assetUrl} />;
+  }
+  if (fragment.element_kind === "table") {
+    return (
+      <>
+        <MarkdownTable markdown={fragment.text} />
+        {fragment.has_asset && assetUrl && (
+          <details className="structured-source-crop">
+            <summary>Оригинальный фрагмент таблицы</summary>
+            <img src={assetUrl(fragment.id)} alt="Оригинальный фрагмент таблицы" loading="lazy" />
+          </details>
+        )}
+      </>
+    );
+  }
   return <p>{highlight(fragment.text, query)}</p>;
+}
+
+function RecognitionMeta({ fragment }: { fragment: MaterialFragmentRead }) {
+  if (fragment.recognition_source === "native") return null;
+  const label = {
+    ocr: "OCR",
+    vl: "PaddleOCR-VL",
+    manual: "исправлено вручную",
+  }[fragment.recognition_source];
+  const lowConfidence = fragment.confidence !== null && fragment.confidence < 0.75;
+  return (
+    <small className={`structured-recognition ${lowConfidence ? "is-low" : ""}`.trim()}>
+      {label}
+      {lowConfidence ? ` · уверенность ${Math.round(fragment.confidence! * 100)}%` : ""}
+    </small>
+  );
+}
+
+function Formula({
+  fragment,
+  assetUrl,
+}: {
+  fragment: MaterialFragmentRead;
+  assetUrl?: (fragmentId: string) => string;
+}) {
+  try {
+    const html = katex.renderToString(fragment.text, {
+      displayMode: true,
+      throwOnError: true,
+      strict: "warn",
+      trust: false,
+    });
+    return <div className="structured-formula" dangerouslySetInnerHTML={{ __html: html }} />;
+  } catch {
+    return (
+      <div className="structured-formula-fallback">
+        <code>{fragment.text}</code>
+        {fragment.has_asset && assetUrl && (
+          <img src={assetUrl(fragment.id)} alt="Оригинальный фрагмент формулы" loading="lazy" />
+        )}
+      </div>
+    );
+  }
 }
 
 function splitMarkdownRow(row: string): string[] {
