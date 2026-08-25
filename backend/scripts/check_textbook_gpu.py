@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pymupdf as fitz
 
-
 DEFAULT_PAGES = "1,6,13,14,15,28,38,42,61,68"
 
 
@@ -103,7 +102,11 @@ def main() -> int:
         )
     print(
         json.dumps(
-            {"status": "passed", "pages": len(pages), "seconds": round(time.perf_counter() - started, 2)},
+            {
+                "status": "passed",
+                "pages": len(pages),
+                "seconds": round(time.perf_counter() - started, 2),
+            },
             ensure_ascii=False,
         ),
         flush=True,
