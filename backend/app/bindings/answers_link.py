@@ -109,6 +109,10 @@ class _Section:
         ]
 
     def answer_text(self, material: Material) -> str:
+        fragments = self.bindable_fragments()
+        if fragments and all(fragment.element_kind == "image" for fragment in fragments):
+            # Эталон без единой текстовой строки нечем сверять — источник открывается напрямую (`source_only`).
+            return ""
         body = [
             (
                 "[изображение: "
@@ -116,9 +120,9 @@ class _Section:
                 if fragment.element_kind == "image" and fragment.asset_path
                 else fragment.text
             )
-            for fragment in self.bindable_fragments()
+            for fragment in fragments
         ]
-        return "\n".join(text for text in body if text.strip()).strip()
+        return "\n".join(body)
 
 
 def find_answers_material(session: Session, project_id: UUID) -> ProjectMaterial | None:
@@ -264,9 +268,9 @@ def _fill_answers(
     created = updated = kept = 0
     now = utc_now()
     for section in sections:
-        text = section.answer_text(material)
-        if not text.strip():
+        if not section.bindable_fragments():
             continue
+        text = section.answer_text(material)
         for node_id in section.node_ids:
             answer = session.get(ReferenceAnswer, (project_id, node_id))
             if answer is None:
