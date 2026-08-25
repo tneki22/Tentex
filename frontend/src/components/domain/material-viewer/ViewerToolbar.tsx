@@ -26,6 +26,7 @@ export interface ViewerToolbarProps {
   fullscreen: boolean;
   searching?: boolean;
   matchLabel?: string | null;
+  versionComparison?: { left: string; right: string } | null;
   onModeChange(mode: MaterialViewMode): void;
   onPageChange(page: number): void;
   onQueryChange(query: string): void;
@@ -53,6 +54,7 @@ export function ViewerToolbar({
   fullscreen,
   searching = false,
   matchLabel = null,
+  versionComparison = null,
   onModeChange,
   onPageChange,
   onQueryChange,
@@ -78,11 +80,13 @@ export function ViewerToolbar({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const tabs = [
-    ...(canCompare ? [{ value: "compare" as const, label: "Сравнение" }] : []),
-    { value: "source" as const, label: presentation.sourceLabel },
-    { value: "text" as const, label: presentation.textLabel },
-  ];
+  const tabs = versionComparison
+    ? [{ value: "compare" as const, label: `${versionComparison.left} ↔ ${versionComparison.right}` }]
+    : [
+        ...(canCompare ? [{ value: "compare" as const, label: "Сравнение" }] : []),
+        { value: "source" as const, label: presentation.sourceLabel },
+        { value: "text" as const, label: presentation.textLabel },
+      ];
 
   return (
     <div className="viewer-toolbar-tools">
@@ -170,7 +174,7 @@ export function ViewerToolbar({
       )}
 
       <div className="viewer-toolbar-end">
-        {presentation.supportsZoom && (
+        {presentation.supportsZoom && !versionComparison && (
           <Tooltip label={showRegions ? "Скрыть рамки распознанных областей" : "Показать рамки распознанных областей"}>
             <IconButton
               label="Рамки распознанных областей"

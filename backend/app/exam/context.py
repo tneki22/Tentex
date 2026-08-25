@@ -139,7 +139,11 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
     node = session.get(ProgramNode, chat.program_node_id)
     assert node is not None
     answer = session.get(ReferenceAnswer, (chat.project_id, chat.program_node_id))
-    reference_text = answer.text if answer is not None and answer.is_active else None
+    reference_text = (
+        answer.text
+        if answer is not None and answer.is_active and answer.text.strip()
+        else None
+    )
     all_fragments = bound_fragments(session, chat.project_id, chat.program_node_id)
     # Хвост сообщений судье не передаётся вообще (FR-V7): роль судьи получает
     # тот же вопрос, эталон и фрагменты, но не переписку чата.

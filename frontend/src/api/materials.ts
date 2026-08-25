@@ -11,6 +11,7 @@ export type MaterialState =
   | "failed";
 export type ParserMode = "fast" | "textbook";
 export type PageQuality = "native" | "ocr" | "ocr_low";
+export type RecognitionSource = "native" | "ocr" | "vl" | "manual";
 export type SourceRole = "main" | "additional" | "reference";
 export type MaterialSourceKind = "file" | "text" | "url" | "youtube" | "audio";
 
@@ -73,6 +74,8 @@ export interface MaterialFragmentRead {
   structure_level: number | null;
   degraded_structure: boolean;
   quality: PageQuality;
+  recognition_source: RecognitionSource;
+  confidence: number | null;
   /** Границы сегмента у расшифровки аудио и субтитров; у остальных — null. */
   time_from: number | null;
   time_to: number | null;
@@ -107,6 +110,7 @@ export interface MaterialCapabilities {
   fast_available: boolean;
   fast_label: string;
   textbook_available: boolean;
+  textbook_label: string;
   textbook_reason: string;
   cloud_reason: string;
 }
@@ -448,8 +452,10 @@ export const getMaterialPage = (
   materialId: string,
   page: number,
   signal?: AbortSignal,
+  taskId?: string,
 ): Promise<MaterialPageRead> => request(
-  `${materialPath(projectId, materialId)}/pages/${page}`,
+  `${materialPath(projectId, materialId)}/pages/${page}`
+    + (taskId ? `?task_id=${encodeURIComponent(taskId)}` : ""),
   { signal },
 );
 

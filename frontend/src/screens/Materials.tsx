@@ -31,7 +31,6 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import type { BindingFragmentRead, HeadingSuggestion, NodeBindingSummary } from "../api/bindings";
@@ -73,6 +72,7 @@ import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTreeNode } from "./programTree";
 import { AiCleanupPanel } from "./AiCleanupPanel";
 import { MaterialFileTab } from "./materials/MaterialFileTab";
+import { StructuredPage } from "../components/domain/material-viewer";
 
 const EMPTY_STRING_SET: Set<string> = new Set();
 const EMPTY_TITLES_MAP: Map<string, string[]> = new Map();
@@ -473,6 +473,14 @@ function DocumentView({
   }
 
   const blockById = new Map(page.blocks.map((block) => [block.id, block]));
+  const firstFragmentByBlock = new Set<string>();
+  const seenBlocks = new Set<string>();
+  for (const fragment of page.fragments) {
+    if (!seenBlocks.has(fragment.block_id)) {
+      seenBlocks.add(fragment.block_id);
+      firstFragmentByBlock.add(fragment.id);
+    }
+  }
   const {
     bindingMode,
     activeNodeId,
@@ -484,18 +492,15 @@ function DocumentView({
     onFragmentUnbind,
     fragmentBindingTitles,
   } = binding;
-  let previousBlockId: string | null = null;
   return (
     <div className={`materials-pages is-text ${page.quality === "ocr_low" ? "is-ocr-low" : ""}`.trim()}>
-      <article className={`materials-page ${page.quality === "ocr_low" ? "is-ocr-low" : ""}`.trim()}>
-        <header className="materials-page-head">
-          <span>Страница {page.page_number}</span>
-          <QualityBadge quality={page.quality} />
-        </header>
-        {page.fragments.map((fragment) => {
+      <StructuredPage
+        page={page}
+        query={query}
+        assetUrl={(fragmentId) => materialFragmentAssetUrl(projectId, material.id, fragmentId)}
+        className={`materials-page materials-structured-page ${page.quality === "ocr_low" ? "is-ocr-low" : ""}`.trim()}
+        fragmentProps={(fragment) => {
           const block = blockById.get(fragment.block_id);
-          const isNewBlock = fragment.block_id !== previousBlockId;
-          previousBlockId = fragment.block_id;
           const isService = block?.block_class === "service";
           const isAnyBound = boundFragmentIds.has(fragment.id);
           const isActiveBound = activeNodeFragmentIds.has(fragment.id);
@@ -510,10 +515,32 @@ function DocumentView({
             clickable ? "is-bindable" : "",
           ].filter(Boolean).join(" ");
 
+          return {
+            className,
+            role: clickable ? "button" : undefined,
+            tabIndex: clickable ? 0 : undefined,
+            "aria-pressed": clickable ? isActiveBound : undefined,
+            onClick: clickable
+              ? (event) => onFragmentActivate(fragment.id, { shiftKey: event.shiftKey })
+              : undefined,
+            onKeyDown: clickable
+              ? (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onFragmentActivate(fragment.id, { shiftKey: event.shiftKey });
+                }
+              }
+              : undefined,
+          };
+        }}
+        renderFragmentOverlay={(fragment) => {
+          const block = blockById.get(fragment.block_id);
+          const isService = block?.block_class === "service";
+          const isAnyBound = boundFragmentIds.has(fragment.id);
           return (
-            <div className="materials-document-block-wrap" key={fragment.id}>
-              {isNewBlock && bindingMode && block && (
-                <div className="materials-block-actions">
+            <>
+              {firstFragmentByBlock.has(fragment.id) && bindingMode && block && (
+                <div className="materials-block-actions" onClick={(event) => event.stopPropagation()}>
                   <Button
                     variant="ghost"
                     disabled={!activeNodeId}
@@ -524,135 +551,24 @@ function DocumentView({
                   </Button>
                 </div>
               )}
-              <section
-                className={className}
-                role={clickable ? "button" : undefined}
-                tabIndex={clickable ? 0 : undefined}
-                aria-pressed={clickable ? isActiveBound : undefined}
-                onClick={clickable ? (event) => onFragmentActivate(fragment.id, { shiftKey: event.shiftKey }) : undefined}
-                onKeyDown={clickable ? (event: ReactKeyboardEvent<HTMLElement>) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onFragmentActivate(fragment.id, { shiftKey: event.shiftKey });
-                  }
-                } : undefined}
-              >
-                {isAnyBound && (
-                  <button
-                    type="button"
-                    className="materials-fragment-pin"
-                    title={`Снять привязку · ${(fragmentBindingTitles.get(fragment.id) ?? []).join(", ")}`}
-                    aria-label={`Снять привязку фрагмента: ${(fragmentBindingTitles.get(fragment.id) ?? []).join(", ")}`}
-                    onClick={(event) => { event.stopPropagation(); onFragmentUnbind(fragment.id); }}
-                  >
-                    <Link2 size={12} aria-hidden="true" />
-                    <Unlink size={12} aria-hidden="true" />
-                  </button>
-                )}
-                <FragmentBody fragment={fragment} query={query} projectId={projectId} materialId={material.id} />
-              </section>
-            </div>
+              {isAnyBound && (
+                <button
+                  type="button"
+                  className="materials-fragment-pin"
+                  title={`Снять привязку · ${(fragmentBindingTitles.get(fragment.id) ?? []).join(", ")}`}
+                  aria-label={`Снять привязку фрагмента: ${(fragmentBindingTitles.get(fragment.id) ?? []).join(", ")}`}
+                  onClick={(event) => { event.stopPropagation(); onFragmentUnbind(fragment.id); }}
+                >
+                  <Link2 size={12} aria-hidden="true" />
+                  <Unlink size={12} aria-hidden="true" />
+                </button>
+              )}
+            </>
           );
-        })}
-        <footer>Фрагментов: {page.fragments.length}</footer>
-      </article>
-    </div>
-  );
-}
-
-/**
- * Оформление исходника: заголовок остаётся заголовком, пункт списка получает
- * висячий отступ по своему уровню вложенности (маркер живёт в самом тексте —
- * так его видно и в поиске, и при копировании).
- */
-function FragmentBody({
-  fragment,
-  query,
-  projectId,
-  materialId,
-}: {
-  fragment: MaterialFragmentRead;
-  query: string;
-  projectId: string;
-  materialId: string;
-}) {
-  if (fragment.element_kind === "image" && fragment.has_asset) {
-    return (
-      <img
-        className="materials-document-image"
-        src={materialFragmentAssetUrl(projectId, materialId, fragment.id)}
-        alt="Изображение из документа"
-        loading="lazy"
+        }}
       />
-    );
-  }
-  if (fragment.element_kind === "heading") {
-    if ((fragment.structure_level ?? 1) <= 1) return <h2>{highlight(fragment.text, query)}</h2>;
-    if (fragment.structure_level === 2) return <h3>{highlight(fragment.text, query)}</h3>;
-    return <h4>{highlight(fragment.text, query)}</h4>;
-  }
-  if (fragment.element_kind === "list") {
-    return (
-      <p
-        className="materials-document-list-item"
-        style={{ "--list-level": fragment.structure_level ?? 1 } as React.CSSProperties}
-      >
-        {highlight(fragment.text, query)}
-      </p>
-    );
-  }
-  if (fragment.element_kind === "table") {
-    return <MarkdownTable markdown={fragment.text} />;
-  }
-  return <p>{highlight(fragment.text, query)}</p>;
-}
-
-function splitMarkdownRow(row: string): string[] {
-  const cells: string[] = [];
-  let cell = "";
-  let escaped = false;
-  for (const character of row.trim().replace(/^\|/, "").replace(/\|$/, "")) {
-    if (escaped) {
-      cell += character;
-      escaped = false;
-    } else if (character === "\\") {
-      escaped = true;
-    } else if (character === "|") {
-      cells.push(cell.trim());
-      cell = "";
-    } else {
-      cell += character;
-    }
-  }
-  cells.push(cell.trim());
-  return cells;
-}
-
-function MarkdownTable({ markdown }: { markdown: string }) {
-  const lines = markdown.split("\n").filter((line) => line.trim().startsWith("|"));
-  const rows = lines.map(splitMarkdownRow);
-  const divider = rows.findIndex((row) => row.every((cell) => /^:?-{3,}:?$/.test(cell)));
-  if (divider !== 1 || rows.length < 2) return <p>{markdown}</p>;
-  const [head] = rows;
-  const body = rows.slice(2);
-  return (
-    <div className="materials-document-table-scroll" role="region" aria-label="Таблица из документа" tabIndex={0}>
-      <table className="materials-document-table">
-        <thead><tr>{head.map((cell, index) => <th scope="col" key={`${index}-${cell}`}>{cell}</th>)}</tr></thead>
-        <tbody>{body.map((row, rowIndex) => (
-          <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>
-        ))}</tbody>
-      </table>
     </div>
   );
-}
-
-function highlight(text: string, query: string) {
-  const needle = query.trim().toLocaleLowerCase("ru");
-  if (!needle) return text;
-  const index = text.toLocaleLowerCase("ru").indexOf(needle);
-  if (index < 0) return text;
-  return <>{text.slice(0, index)}<mark>{text.slice(index, index + needle.length)}</mark>{text.slice(index + needle.length)}</>;
 }
 
 function NodePickerDialog({
@@ -777,10 +693,11 @@ function ProcessingTab({
         <section className="materials-processing-section">
           <h3>Ответы из файла</h3>
           <p>
-            Сопоставляем точный или близкий заголовок. Если формулировки другие,
-            используем проверенную нумерацию разделов. Неуверенные разделы можно связать вручную.
+            Ищем номера и формулировки вопросов во всех распознанных фрагментах,
+            в том числе через границы страниц. Пропущенные и неоднозначные вопросы
+            будут перечислены, а не потеряны молча.
           </p>
-          <Button disabled={busy} onClick={onLinkAnswers}><Link2 size={14} /> Связать с вопросами</Button>
+          <Button disabled={busy} onClick={onLinkAnswers}><Link2 size={14} /> Разобрать файл ответов</Button>
           <Button variant="ghost" disabled={busy} onClick={onImport}>Импортировать ответы текстом</Button>
         </section>
       )}
@@ -952,7 +869,7 @@ function BindingsTab({
             </small>
           </header>
           {headingSuggestions.map((suggestion) => (
-            <article className="materials-suggestion" key={suggestion.block_id}>
+            <article className="materials-suggestion" key={suggestion.anchor_fragment_id}>
               <b className="materials-suggestion-heading">{suggestion.heading}</b>
               <small className="materials-suggestion-preview">
                 стр. {suggestion.page_from}
@@ -963,7 +880,7 @@ function BindingsTab({
                   <Button
                     key={candidate.node_id}
                     variant="secondary"
-                    onClick={() => onResolveHeading(suggestion.block_id, candidate.node_id)}
+                    onClick={() => onResolveHeading(suggestion.anchor_fragment_id, candidate.node_id)}
                   >
                     <Link2 size={13} />
                     {nodeNumberById.get(candidate.node_id)
@@ -974,7 +891,7 @@ function BindingsTab({
                 <Button
                   variant="ghost"
                   disabled={!activeNode}
-                  onClick={() => activeNode && onResolveHeading(suggestion.block_id, activeNode.id)}
+                  onClick={() => activeNode && onResolveHeading(suggestion.anchor_fragment_id, activeNode.id)}
                 >
                   {activeNode ? `К вопросу ${activeNode.number}` : "Выберите вопрос ниже"}
                 </Button>
@@ -1274,7 +1191,7 @@ function MaterialSurface() {
   const [pageNumber, setPageNumber] = useState(1);
   const [page, setPage] = useState<MaterialPageRead | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"original" | "text">("text");
+  const [viewMode, setViewMode] = useState<"original" | "text">("original");
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const [documentQuery, setDocumentQuery] = useState("");
   /** «fit» — вписать страницу целиком: с ним документ открывается, а не с обрезанного 100%. */
@@ -1316,6 +1233,10 @@ function MaterialSurface() {
   // имело бы смысл сопоставлять с темами программы (см. пояснение к вкладке).
   const isExamStructureFile = material?.purposes.includes("exam_structure") ?? false;
   const documentBindingEnabled = !textbook && !isExamStructureFile;
+
+  useEffect(() => {
+    setViewMode(hasOriginal ? "original" : "text");
+  }, [hasOriginal, material?.id]);
 
   const treeResult = useMemo(() => {
     try { return buildProgramTree(project?.program.nodes ?? []); }
@@ -1385,19 +1306,35 @@ function MaterialSurface() {
   }, [projectId]);
 
   useEffect(() => {
-    if (!material || material.status !== "ready") {
+    const taskId = material?.status === "ready" ? undefined : material?.task?.id;
+    if (!material || (material.status !== "ready" && !taskId)) {
       setPage(null);
+      setPageError(null);
       return;
     }
     const controller = new AbortController();
     setPageError(null);
-    void getMaterialPage(projectId, material.id, pageNumber, controller.signal)
+    void getMaterialPage(projectId, material.id, pageNumber, controller.signal, taskId)
       .then(setPage)
       .catch((caught) => {
-        if (!controller.signal.aborted) setPageError(caught instanceof Error ? caught.message : "Страница не загрузилась");
+        if (controller.signal.aborted) return;
+        if (material.status !== "ready") {
+          setPage(null);
+          setPageError(null);
+          return;
+        }
+        setPageError(caught instanceof Error ? caught.message : "Страница не загрузилась");
       });
     return () => controller.abort();
-  }, [material, pageNumber, projectId]);
+  }, [
+    material?.id,
+    material?.status,
+    material?.active_parse_revision,
+    material?.task?.id,
+    material?.task?.done,
+    pageNumber,
+    projectId,
+  ]);
 
   useEffect(() => {
     setSelectedFragmentIds([]);
@@ -1779,10 +1716,16 @@ function MaterialSurface() {
       void bindings.refreshSummary();
       setAnswersSuggestions({ materialId: material.id, items: result.suggestions });
       const parts = [
-        `Связано с вопросами: ${result.linked_sections}`,
+        `Связано вопросов: ${result.linked_node_ids.length} из ${result.expected_questions}`,
         `фрагментов: ${result.linked_fragments}`,
         `эталонов создано: ${result.created_answers}`,
       ];
+      if (result.missing_node_ids.length) {
+        parts.push(`не найдено: ${result.missing_node_ids.length}`);
+      }
+      if (result.ambiguous_sections.length) {
+        parts.push(`неоднозначно: ${result.ambiguous_sections.length}`);
+      }
       if (result.numbered_sections) parts.push(`по порядку номеров: ${result.numbered_sections}`);
       if (result.extra_sections) parts.push(`вне текущей программы: ${result.extra_sections}`);
       if (result.fuzzy_headings.length) {
@@ -1797,7 +1740,9 @@ function MaterialSurface() {
         parts.push(`формулировка повторяется в программе: ${result.duplicate_headings.length}`);
       }
       if (result.ordinal_rejected_reason) parts.push(result.ordinal_rejected_reason);
-      say(`${parts.join(", ")}.`, result.linked_sections > 0 ? "success" : "danger");
+      const complete = result.missing_node_ids.length === 0
+        && result.ambiguous_sections.length === 0;
+      say(`${parts.join(", ")}.`, complete ? "success" : "danger");
       if (result.suggestions.length) setInspectorTab("bindings");
     } catch (caught) {
       say(caught instanceof Error ? caught.message : "Не удалось связать ответы с вопросами", "danger");
@@ -1805,16 +1750,16 @@ function MaterialSurface() {
   }
 
   /** Пользователь указал вопрос для заголовка, который система не опознала. */
-  async function resolveHeading(blockId: string, nodeId: string) {
+  async function resolveHeading(anchorFragmentId: string, nodeId: string) {
     if (!material) return;
     try {
       const result = await resolveAnswersHeading(projectId, material.id, {
-        blockId,
+        anchorFragmentId,
         programNodeId: nodeId,
       });
       setAnswersSuggestions((current) => current && ({
         materialId: current.materialId,
-        items: current.items.filter((item) => item.block_id !== blockId),
+        items: current.items.filter((item) => item.anchor_fragment_id !== anchorFragmentId),
       }));
       refreshBindingData();
       void bindings.refreshSummary();
@@ -1969,36 +1914,43 @@ function MaterialSurface() {
                 </>
               )}
               <div ref={attachScroll} className="materials-document-scroll" style={{ "--materials-zoom": effectiveZoom } as React.CSSProperties}>
-                {material.status !== "ready" ? (
+                {pageError ? (
+                  <div className="materials-document-center"><ErrorState message={pageError} /></div>
+                ) : page ? (
+                  <DocumentView
+                    projectId={projectId}
+                    material={material}
+                    page={page}
+                    viewMode={viewMode}
+                    query={documentQuery}
+                    binding={{
+                      bindingMode: bindingMode && documentBindingEnabled,
+                      activeNodeId: documentBindingEnabled ? activeNodeId : null,
+                      boundFragmentIds: documentBindingEnabled ? boundFragmentIds : EMPTY_STRING_SET,
+                      activeNodeFragmentIds: documentBindingEnabled ? activeNodeFragmentIds : EMPTY_STRING_SET,
+                      selectedFragmentIds: documentBindingEnabled ? selectedFragmentIdSet : EMPTY_STRING_SET,
+                      onFragmentActivate: handleFragmentActivate,
+                      onBindBlock: handleBindBlock,
+                      onFragmentUnbind: handleFragmentUnbind,
+                      fragmentBindingTitles: documentBindingEnabled ? fragmentBindingTitles : EMPTY_TITLES_MAP,
+                    }}
+                  />
+                ) : viewMode === "original" && hasOriginal ? (
+                  <div className="materials-original-page">
+                    <div className="materials-original-canvas">
+                      <img
+                        src={materialPageImageUrl(projectId, material.id, pageNumber)}
+                        alt={`Страница ${pageNumber} файла ${material.display_name}`}
+                      />
+                    </div>
+                  </div>
+                ) : material.status !== "ready" ? (
                   <div className="materials-processing-placeholder">
                     <StatusBadge tone={STATUS[material.status].tone}>{STATUS[material.status].label}</StatusBadge>
                     <h1>{material.display_name}</h1>
-                    <p>Страница появится после завершения фонового разбора.</p>
+                    <p>Страница ещё обрабатывается. Готовые страницы появляются здесь по мере разбора.</p>
                   </div>
-                ) : pageError ? (
-                  <div className="materials-document-center"><ErrorState message={pageError} /></div>
-                ) : page
-                  ? (
-                    <DocumentView
-                      projectId={projectId}
-                      material={material}
-                      page={page}
-                      viewMode={viewMode}
-                      query={documentQuery}
-                      binding={{
-                        bindingMode: bindingMode && documentBindingEnabled,
-                        activeNodeId: documentBindingEnabled ? activeNodeId : null,
-                        boundFragmentIds: documentBindingEnabled ? boundFragmentIds : EMPTY_STRING_SET,
-                        activeNodeFragmentIds: documentBindingEnabled ? activeNodeFragmentIds : EMPTY_STRING_SET,
-                        selectedFragmentIds: documentBindingEnabled ? selectedFragmentIdSet : EMPTY_STRING_SET,
-                        onFragmentActivate: handleFragmentActivate,
-                        onBindBlock: handleBindBlock,
-                        onFragmentUnbind: handleFragmentUnbind,
-                        fragmentBindingTitles: documentBindingEnabled ? fragmentBindingTitles : EMPTY_TITLES_MAP,
-                      }}
-                    />
-                  )
-                  : <div className="materials-document-center"><LoadingState label="Открываем страницу" /></div>}
+                ) : <div className="materials-document-center"><LoadingState label="Открываем страницу" /></div>}
               </div>
             </div>
           </>

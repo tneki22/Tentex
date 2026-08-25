@@ -320,6 +320,7 @@ class ReferenceAnswerRead(ApiModel):
     source_material_id: UUID | None
     source_page_from: int | None
     source_page_to: int | None
+    source_only: bool = False
     created_at: datetime
     updated_at: datetime
 

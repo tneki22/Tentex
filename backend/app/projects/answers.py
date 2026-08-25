@@ -223,7 +223,12 @@ def reference_answer_status(
 
 
 def _answer_read(answer: ReferenceAnswer | None) -> ReferenceAnswerRead | None:
-    return ReferenceAnswerRead.model_validate(answer) if answer is not None else None
+    if answer is None:
+        return None
+    value = ReferenceAnswerRead.model_validate(answer, from_attributes=True)
+    return value.model_copy(
+        update={"source_only": bool(answer.source_material_id and not answer.text.strip())}
+    )
 
 
 def _slot(node: ProgramNode, answer: ReferenceAnswer | None) -> ReferenceAnswerSlot:

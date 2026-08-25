@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from conftest import make_exam_project, make_topic_node
+from conftest import make_exam_project, make_material, make_topic_node
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.ai.gateway import ModelGateway
@@ -215,3 +215,37 @@ async def test_offline_blocks_message_but_answer_still_saves(
     assert result.messages[0].payload["ordinal"] == 1
     assert result.attempt.ordinal == 1
     assert result.grade.outcome == "unscored"
+
+
+@pytest.mark.asyncio
+async def test_source_only_reference_disables_textual_check(session: Session) -> None:
+    project = make_exam_project(session)
+    topic = make_topic_node(session, project, title="Вопрос с ответом-картинкой")
+    material = make_material(session, "a17")
+    session.add(
+        ReferenceAnswer(
+            project_id=project.id,
+            program_node_id=topic.id,
+            text="",
+            origin_kind=ReferenceAnswerOrigin.IMPORT,
+            match_method=ReferenceAnswerMatchMethod.EXACT_TITLE,
+            matched_title=topic.title,
+            source_material_id=material.id,
+            is_confirmed=False,
+            is_active=True,
+            revision=1,
+        )
+    )
+    session.commit()
+    chat = chat_service.create_session(session, project.id, topic.id)
+
+    with pytest.raises(ProjectDomainError) as error:
+        await chat_router.post_chat_answer(
+            project_id=project.id,
+            session_id=chat.id,
+            command=ChatAnswerWrite(text="Мой текстовый ответ"),
+            session=session,
+            gateway=ModelGateway(session),
+        )
+
+    assert error.value.code == "textual_check_unavailable"

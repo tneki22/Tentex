@@ -388,8 +388,9 @@ def get_material_page(
     material_id: UUID,
     page_number: int,
     session: SessionDependency,
+    task_id: UUID | None = None,
 ) -> PageRead:
-    return service.get_page(session, project_id, material_id, page_number)
+    return service.get_page(session, project_id, material_id, page_number, task_id)
 
 
 @router.post(

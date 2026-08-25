@@ -11,6 +11,7 @@ services:
       - ./data:/data
     environment:
       TENTEX_DATA_DIR: /data
+      TENTEX_TEXTBOOK_OCR_URL: http://textbook-ocr:8090
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
       interval: 10s
@@ -28,10 +29,36 @@ services:
       - ./data/models/huggingface:/root/.cache/huggingface
     environment:
       TENTEX_DATA_DIR: /data
+      TENTEX_TEXTBOOK_OCR_URL: http://textbook-ocr:8090
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
     depends_on:
       api:
         condition: service_healthy
+
+  textbook-ocr:
+    profiles: ["textbook"]
+    build: ./ocr_service
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./data/models:/root/.paddlex
+      - ./data/models/huggingface:/root/.cache/huggingface
+    environment:
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
+      CUDA_VISIBLE_DEVICES: "0"
+      # VL-1.6 fits into 8 GB only nominally (about 7.85 GB) and did not finish
+      # a representative page in the hardware gate. Keep the downloaded model,
+      # but expose the usable textbook executor on this machine.
+      TENTEX_TEXTBOOK_EXECUTOR: structure
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    shm_size: "2gb"
+    restart: unless-stopped
 
   web:
     build: ./frontend

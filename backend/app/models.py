@@ -176,6 +176,13 @@ class PageQuality(StrEnum):
     OCR_LOW = "ocr_low"
 
 
+class RecognitionSource(StrEnum):
+    NATIVE = "native"
+    OCR = "ocr"
+    VL = "vl"
+    MANUAL = "manual"
+
+
 class MaterialRevisionOrigin(StrEnum):
     """Откуда взялась ревизия материала. Наружу переводится человеческой фразой."""
 
@@ -539,7 +546,12 @@ class MaterialFragment(Base):
     structure_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
     degraded_structure: Mapped[bool] = mapped_column(Boolean, default=False)
     quality: Mapped[PageQuality] = mapped_column(enum_type(PageQuality, "fragment_quality"))
-    # Заполняется у element_kind == "image": путь к вынутой из файла картинке.
+    recognition_source: Mapped[RecognitionSource] = mapped_column(
+        enum_type(RecognitionSource, "fragment_recognition_source"),
+        default=RecognitionSource.NATIVE,
+    )
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Исходный вырез доступен у изображений, формул и таблиц.
     asset_path: Mapped[str | None] = mapped_column(String, nullable=True)
     # Границы сегмента у временных источников: расшифровка аудио и субтитры.
     time_from: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -678,7 +690,6 @@ class ReferenceAnswer(Base):
             ["program_nodes.project_id", "program_nodes.id"],
             ondelete="CASCADE",
         ),
-        CheckConstraint("length(trim(text)) > 0", name="text_nonblank"),
         CheckConstraint("revision >= 0", name="revision_nonnegative"),
         Index("ix_reference_answers_project_active", "project_id", "is_active"),
     )

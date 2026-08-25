@@ -45,6 +45,7 @@ function useSourceText(materialId: string, enabled: boolean, revision: number | 
 interface MaterialSourceViewProps {
   material: LibraryMaterialDetailRead;
   page: MaterialPageRead | null;
+  pageNumber: number;
   revision: number | null;
   query: string;
   zoom: number;
@@ -64,6 +65,7 @@ interface MaterialSourceViewProps {
 export function MaterialSourceView({
   material,
   page,
+  pageNumber,
   revision,
   query,
   zoom,
@@ -97,8 +99,8 @@ export function MaterialSourceView({
         <div className="viewer-sheet-scroll" ref={scrollRef}>
           <div className="viewer-sheet" style={{ "--viewer-zoom": zoom } as CSSProperties}>
             <img
-              src={libraryPageImageUrl(material.id, page?.page_number ?? 1)}
-              alt={`Исходное изображение страницы ${page?.page_number ?? 1} — ${material.original_name}`}
+              src={libraryPageImageUrl(material.id, page?.page_number ?? pageNumber)}
+              alt={`Исходное изображение страницы ${page?.page_number ?? pageNumber} — ${material.original_name}`}
             />
             {showRegions && page && (
               <div className="viewer-region-layer" aria-hidden="true">
@@ -199,6 +201,7 @@ interface MaterialTextViewProps {
   focusedFragmentId: string | null;
   currentTime: number;
   onSeek: (seconds: number) => void;
+  processing?: boolean;
 }
 
 /** Правая половина сцены — подготовленный результат разбора. */
@@ -209,11 +212,12 @@ export function MaterialTextView({
   focusedFragmentId,
   currentTime,
   onSeek,
+  processing = false,
 }: MaterialTextViewProps) {
   if (!page) {
     return (
       <div className="viewer-pane-scroll">
-        <LoadingState label="Открываем текст" />
+        <LoadingState label={processing ? "Страница ещё обрабатывается" : "Открываем текст"} />
       </div>
     );
   }

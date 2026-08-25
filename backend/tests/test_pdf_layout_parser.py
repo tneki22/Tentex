@@ -1,8 +1,11 @@
 from pathlib import Path
 
 import pymupdf as fitz
+from PIL import Image
 
-from app.materials.parsers.native import iter_pages
+from app.materials.parsers import paddle_fast, textbook
+from app.materials.parsers.base import ParsedElement
+from app.materials.parsers.native import _merge_native_and_images, iter_pages
 from app.models import ParserMode
 
 
@@ -59,3 +62,89 @@ def test_layout_failure_falls_back_per_page(tmp_path: Path, monkeypatch) -> None
 
     assert page.plain_text
     assert "layout_fallback" in page.diagnostics
+
+
+def test_mixed_page_keeps_native_text_and_image_without_duplicate_transcript() -> None:
+    native = ParsedElement("paragraph", "Плотность распределения", (0.1, 0.1, 0.8, 0.2))
+    image = ParsedElement(
+        "image",
+        "Плотность распределения",
+        (0.05, 0.05, 0.9, 0.3),
+        confidence=0.72,
+        asset_path="assets/page.png",
+        recognition_source="ocr",
+    )
+
+    merged = _merge_native_and_images((native,), (image,))
+
+    assert [item.kind for item in merged].count("paragraph") == 1
+    assert [item.kind for item in merged].count("image") == 1
+    assert next(item for item in merged if item.kind == "paragraph").text == (
+        "Плотность распределения"
+    )
+    image_result = next(item for item in merged if item.kind == "image")
+    assert image_result.text == "[Изображение]"
+    assert image_result.asset_path == "assets/page.png"
+
+
+def test_fast_ocr_groups_wrapped_numbered_question_without_making_heading(
+    tmp_path: Path, monkeypatch
+) -> None:
+    image_path = tmp_path / "page.png"
+    Image.new("RGB", (1000, 1000), "white").save(image_path)
+
+    class Engine:
+        def predict(self, _path: str):
+            return [
+                {
+                    "rec_texts": ["10. Дать определение плотности", "распределения вероятности"],
+                    "rec_scores": [0.95, 0.93],
+                    "rec_boxes": [[50, 50, 850, 90], [50, 95, 700, 135]],
+                }
+            ]
+
+    monkeypatch.setattr(paddle_fast, "_get_engine", lambda: Engine())
+
+    page = paddle_fast.parse_image(image_path, 1)
+
+    assert len(page.elements) == 1
+    assert page.elements[0].kind == "list"
+    assert page.elements[0].text == (
+        "10. Дать определение плотности распределения вероятности"
+    )
+
+
+def test_textbook_formula_preserves_latex_and_original_crop(
+    tmp_path: Path, monkeypatch
+) -> None:
+    image_path = tmp_path / "page.png"
+    Image.new("RGB", (1000, 500), "white").save(image_path)
+    monkeypatch.setattr(
+        textbook,
+        "_json_request",
+        lambda *_args, **_kwargs: {
+            "width": 1000,
+            "height": 500,
+            "markdown": "$$P(A)=1$$",
+            "elements": [
+                {
+                    "label": "formula",
+                    "content": r"P(A)=1",
+                    "bbox": [100, 100, 900, 300],
+                    "confidence": 0.91,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        textbook,
+        "store_material_asset",
+        lambda owner, name, _data: f"assets/{owner}/{name}",
+    )
+
+    page = textbook.parse_image(image_path, 1, "document")
+
+    assert page.elements[0].kind == "formula"
+    assert page.elements[0].text == r"P(A)=1"
+    assert page.elements[0].recognition_source == "vl"
+    assert page.elements[0].asset_path == "assets/document/vl-p1-0.png"

@@ -593,11 +593,17 @@ export function ProjectWorkspace() {
         <article className="workspace-reference-answer">
           <header><ReferenceAnswerBadge status={answerSlot.status} /><span>{source} · {match}</span></header>
           <h2>{selected.title}</h2>
-          <ReferenceAnswerContent
-            text={answer.text}
-            media={media}
-            sourceMaterialId={answer.source_material_id}
-          />
+          {answer.source_only ? (
+            <div className="workspace-reference-text">
+              Ответ находится в источнике. Текстовая проверка недоступна.
+            </div>
+          ) : (
+            <ReferenceAnswerContent
+              text={answer.text}
+              media={media}
+              sourceMaterialId={answer.source_material_id}
+            />
+          )}
           <Link to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть и изменить эталон</Link>
         </article>
       );

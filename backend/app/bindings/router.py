@@ -62,7 +62,11 @@ def resolve_answers_heading(
 ) -> AnswersLinkRead:
     with session.begin():
         result = answers_link.resolve_answers_heading(
-            session, project_id, material_id, command.block_id, command.program_node_id
+            session,
+            project_id,
+            material_id,
+            command.anchor_fragment_id,
+            command.program_node_id,
         )
     return AnswersLinkRead.model_validate(result, from_attributes=True)
 

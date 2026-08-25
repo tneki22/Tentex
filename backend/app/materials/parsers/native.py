@@ -1,6 +1,7 @@
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 from functools import reduce
 from pathlib import Path
 from statistics import median
@@ -11,14 +12,13 @@ from docx import Document
 from docx.text.paragraph import Paragraph
 from PIL import Image
 
+from app.materials.parsers import paddle_fast, textbook
 from app.materials.parsers.audio import parse_audio
-from app.materials.parsers.base import ElementKind, ParsedElement, ParsedPage
-from app.materials.parsers.paddle_fast import parse_image
+from app.materials.parsers.base import ElementKind, ParsedElement, ParsedPage, RecognitionSource
 from app.materials.parsers.pdf_layout import parse_layout_page
 from app.materials.storage import store_material_asset
 from app.models import ParserMode
 
-SCAN_TEXT_THRESHOLD = 40
 NUMBERED_RE = re.compile(r"^\s*\d{1,3}[.)]\s+")
 BULLET_RE = re.compile(r"^\s*[•▪◦‣·*+\-–—]\s+")
 ORDERED_RE = re.compile(r"^\s*(?:\d{1,3}|[a-zа-я])[.)]\s+")
@@ -59,9 +59,7 @@ def inspect(path: Path) -> tuple[int, int, int, list[str]]:
             raise PermissionError("PDF защищён паролем")
         if len(document) > 500:
             raise OverflowError("В PDF больше 500 страниц")
-        scan_pages = sum(
-            len(page.get_text("text").strip()) < SCAN_TEXT_THRESHOLD for page in document
-        )
+        scan_pages = sum(not page.get_text("text").strip() for page in document)
         return len(document), scan_pages, max(1, len(document) - scan_pages + scan_pages * 3), []
     if suffix in {".jpg", ".jpeg", ".png"}:
         with Image.open(path) as image:
@@ -171,7 +169,13 @@ def _classify(
 
 
 def _image_element(
-    block: dict, page: fitz.Page, page_number: int, owner: str, index: int
+    block: dict,
+    page: fitz.Page,
+    page_number: int,
+    owner: str,
+    index: int,
+    *,
+    run_ocr: bool = False,
 ) -> ParsedElement | None:
     """Фотография или схема со страницы. Мелочь вроде логотипов пропускаем."""
     data = block.get("image")
@@ -182,16 +186,42 @@ def _image_element(
         return None
     extension = str(block.get("ext") or "png").lower()
     asset_path = store_material_asset(owner, f"p{page_number}-{index}.{extension}", data)
+    text = IMAGE_PLACEHOLDER
+    confidence = None
+    recognition_source: RecognitionSource = "native"
+    if run_ocr and paddle_fast.available():
+        with NamedTemporaryFile(suffix=f".{extension}", delete=False) as temporary:
+            temporary.write(data)
+            temporary_path = Path(temporary.name)
+        try:
+            recognized = paddle_fast.parse_image(temporary_path, page_number)
+            if recognized.plain_text.strip():
+                text = recognized.plain_text.strip()
+                confidence = recognized.confidence
+                recognition_source = "ocr"
+        except Exception:
+            # Исходный вырез остаётся полезным даже если OCR этой области не справился.
+            pass
+        finally:
+            temporary_path.unlink(missing_ok=True)
     return ParsedElement(
         "image",
-        IMAGE_PLACEHOLDER,
+        text,
         _normalized_bbox((x0, top, x1, bottom), page.rect.width, page.rect.height),
         None,
+        confidence,
         asset_path=asset_path,
+        recognition_source=recognition_source,
     )
 
 
-def _native_pdf_page(page: fitz.Page, page_number: int, owner: str = "") -> ParsedPage:
+def _native_pdf_page(
+    page: fitz.Page,
+    page_number: int,
+    owner: str = "",
+    *,
+    ocr_images: bool = False,
+) -> ParsedPage:
     raw = page.get_text("dict", sort=True)
     blocks = raw.get("blocks", [])
     text_blocks = [block for block in blocks if block.get("type") == 0]
@@ -206,7 +236,14 @@ def _native_pdf_page(page: fitz.Page, page_number: int, owner: str = "") -> Pars
     for index, block in enumerate(blocks):
         if block.get("type") == 1:
             if owner:
-                image = _image_element(block, page, page_number, owner, index)
+                image = _image_element(
+                    block,
+                    page,
+                    page_number,
+                    owner,
+                    index,
+                    run_ocr=ocr_images,
+                )
                 if image is not None:
                     elements.append(image)
             continue
@@ -246,6 +283,68 @@ def _native_pdf_page(page: fitz.Page, page_number: int, owner: str = "") -> Pars
     )
 
 
+def _bbox_overlap(
+    inner: tuple[float, float, float, float], outer: tuple[float, float, float, float]
+) -> float:
+    x0 = max(inner[0], outer[0])
+    y0 = max(inner[1], outer[1])
+    x1 = min(inner[2], outer[2])
+    y1 = min(inner[3], outer[3])
+    intersection = max(0.0, x1 - x0) * max(0.0, y1 - y0)
+    area = max(0.000001, (inner[2] - inner[0]) * (inner[3] - inner[1]))
+    return intersection / area
+
+
+def _normalized_text(text: str) -> str:
+    return re.sub(r"[^0-9a-zа-я]+", "", text.casefold())
+
+
+def _merge_native_and_images(
+    native: tuple[ParsedElement, ...], images: tuple[ParsedElement, ...]
+) -> tuple[ParsedElement, ...]:
+    """Merge layout regions and raster regions, preferring a native text layer."""
+    merged_images: list[ParsedElement] = []
+    native_text = [item for item in native if item.kind != "image" and item.text.strip()]
+    for image in images:
+        if image.recognition_source != "ocr":
+            merged_images.append(image)
+            continue
+        covered = " ".join(
+            item.text for item in native_text if _bbox_overlap(item.bbox, image.bbox) >= 0.7
+        )
+        left = _normalized_text(covered)
+        right = _normalized_text(image.text)
+        duplicate = bool(left and right) and (
+            left in right
+            or right in left
+            or SequenceMatcher(None, left, right).ratio() >= 0.72
+        )
+        merged_images.append(
+            replace(
+                image,
+                text=IMAGE_PLACEHOLDER,
+                confidence=None,
+                recognition_source="native",
+            )
+            if duplicate
+            else image
+        )
+    return tuple(sorted((*native, *merged_images), key=lambda item: (item.bbox[1], item.bbox[0])))
+
+
+def _page_quality(elements: tuple[ParsedElement, ...]) -> tuple[str, float | None]:
+    recognized = [
+        item
+        for item in elements
+        if item.recognition_source in {"ocr", "vl"} and item.text.strip()
+    ]
+    if not recognized:
+        return "native", None
+    scores = [item.confidence for item in recognized if item.confidence is not None]
+    confidence = min(scores) if scores else None
+    return ("ocr_low" if confidence is not None and confidence < 0.75 else "ocr"), confidence
+
+
 def _markdown(elements: list[ParsedElement]) -> str:
     """Разметка сохраняет уровни: заголовки решётками, пункты списка — отступом."""
     lines: list[str] = []
@@ -255,13 +354,17 @@ def _markdown(elements: list[ParsedElement]) -> str:
         elif element.kind == "list":
             lines.append(f"{'    ' * ((element.level or 1) - 1)}{element.text}")
         elif element.kind == "image":
-            lines.append(f"![{element.text}]({element.asset_path or ''})")
+            lines.append(f"![Изображение]({element.asset_path or ''})")
         else:
             lines.append(element.text)
     return "\n\n".join(lines)
 
 
-def parse_text_page(text: str, page_number: int = 1) -> ParsedPage:
+def parse_text_page(
+    text: str,
+    page_number: int = 1,
+    recognition_source: RecognitionSource = "native",
+) -> ParsedPage:
     elements: list[ParsedElement] = []
     raw_lines = [line for line in text.splitlines() if line.strip()]
     for index, raw in enumerate(raw_lines):
@@ -287,7 +390,15 @@ def parse_text_page(text: str, page_number: int = 1) -> ParsedPage:
             kind, content, level = "paragraph", line, None
         top = index / max(1, len(raw_lines))
         bottom = (index + 1) / max(1, len(raw_lines))
-        elements.append(ParsedElement(kind, content, (0, top, 1, bottom), level))
+        elements.append(
+            ParsedElement(
+                kind,
+                content,
+                (0, top, 1, bottom),
+                level,
+                recognition_source=recognition_source,
+            )
+        )
     plain = "\n".join(element.text for element in elements)
     return ParsedPage(page_number, 1, 1, _markdown(elements), plain, "native", tuple(elements))
 
@@ -469,54 +580,69 @@ def iter_pages(path: Path, mode: ParserMode, start_page: int = 1) -> Iterator[Pa
         document = fitz.open(path)
         for page_index in range(start_page - 1, len(document)):
             page = document[page_index]
-            if len(page.get_text("text").strip()) >= SCAN_TEXT_THRESHOLD:
+            if mode == ParserMode.TEXTBOOK:
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                with NamedTemporaryFile(suffix=".png", delete=False) as temporary:
+                    temporary_path = Path(temporary.name)
+                try:
+                    pixmap.save(temporary_path)
+                    yield textbook.parse_image(temporary_path, page_index + 1, owner)
+                finally:
+                    temporary_path.unlink(missing_ok=True)
+                continue
+            if page.get_text("text").strip():
                 try:
                     parsed = parse_layout_page(document, page_index)
-                    legacy = _native_pdf_page(page, page_index + 1, owner)
+                    legacy = _native_pdf_page(
+                        page,
+                        page_index + 1,
+                        owner,
+                        ocr_images=mode == ParserMode.FAST,
+                    )
                     images = tuple(
                         element for element in legacy.elements if element.kind == "image"
                     )
                     if images:
-                        elements = tuple(
-                            sorted(
-                                (*parsed.elements, *images),
-                                key=lambda element: (element.bbox[1], element.bbox[0]),
-                            )
-                        )
+                        elements = _merge_native_and_images(parsed.elements, images)
+                        quality, confidence = _page_quality(elements)
                         parsed = ParsedPage(
                             page_number=parsed.page_number,
                             width=parsed.width,
                             height=parsed.height,
                             markdown=_markdown(list(elements)),
                             plain_text=parsed.plain_text,
-                            quality=parsed.quality,
+                            quality=quality,
                             elements=elements,
                             diagnostics=parsed.diagnostics,
-                            confidence=parsed.confidence,
+                            confidence=confidence,
                         )
                     yield parsed
                 except Exception:
-                    fallback = _native_pdf_page(page, page_index + 1, owner)
+                    fallback = _native_pdf_page(
+                        page,
+                        page_index + 1,
+                        owner,
+                        ocr_images=mode == ParserMode.FAST,
+                    )
+                    quality, confidence = _page_quality(fallback.elements)
                     yield ParsedPage(
                         page_number=fallback.page_number,
                         width=fallback.width,
                         height=fallback.height,
                         markdown=fallback.markdown,
                         plain_text=fallback.plain_text,
-                        quality=fallback.quality,
+                        quality=quality,
                         elements=fallback.elements,
                         diagnostics=(*fallback.diagnostics, "layout_fallback"),
-                        confidence=fallback.confidence,
+                        confidence=confidence,
                     )
                 continue
-            if mode == ParserMode.TEXTBOOK:
-                raise RuntimeError("Режим «Учебник» не настроен для этой установки")
             pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
             with NamedTemporaryFile(suffix=".png", delete=False) as temporary:
                 temporary_path = Path(temporary.name)
             try:
                 pixmap.save(temporary_path)
-                yield parse_image(temporary_path, page_index + 1)
+                yield paddle_fast.parse_image(temporary_path, page_index + 1)
             finally:
                 temporary_path.unlink(missing_ok=True)
         return
@@ -524,8 +650,9 @@ def iter_pages(path: Path, mode: ParserMode, start_page: int = 1) -> Iterator[Pa
         return
     if suffix in {".jpg", ".jpeg", ".png"}:
         if mode == ParserMode.TEXTBOOK:
-            raise RuntimeError("Режим «Учебник» не настроен для этой установки")
-        yield parse_image(path, 1)
+            yield textbook.parse_image(path, 1, owner)
+            return
+        yield paddle_fast.parse_image(path, 1)
     elif suffix == ".docx":
         yield _docx_page(path, owner)
     elif suffix in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:

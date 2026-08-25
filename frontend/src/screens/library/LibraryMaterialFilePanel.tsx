@@ -5,8 +5,9 @@ import {
   librarySourceUrl,
   type LibraryMaterialDetailRead,
   type MaterialPurpose,
+  type MaterialRevisionRead,
 } from "../../api/materials";
-import { Button, ConfirmDialog, Disclosure } from "../../components/ui";
+import { Button, ConfirmDialog, Disclosure, StatusBadge } from "../../components/ui";
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "список вопросов",
@@ -23,7 +24,12 @@ function sizeLabel(bytes: number): string {
 
 interface LibraryMaterialFilePanelProps {
   material: LibraryMaterialDetailRead;
+  revisions: MaterialRevisionRead[];
+  selectedRevision: number | null;
+  compareRevision: number | null;
   busy: boolean;
+  onSelectRevision: (revision: number | null) => void;
+  onCompareRevision: (revision: number | null) => void;
   onAddToProject: () => void;
   onRefreshSource: () => void;
   onDelete: () => void;
@@ -31,7 +37,12 @@ interface LibraryMaterialFilePanelProps {
 
 export function LibraryMaterialFilePanel({
   material,
+  revisions,
+  selectedRevision,
+  compareRevision,
   busy,
+  onSelectRevision,
+  onCompareRevision,
   onAddToProject,
   onRefreshSource,
   onDelete,
@@ -87,6 +98,71 @@ export function LibraryMaterialFilePanel({
             </Button>
           )}
         </div>
+      </section>
+
+      <section className="inspector-section">
+        <h4>Версии разбора</h4>
+        <p className="inspector-note">
+          Каждый запуск «Быстро» или «Учебник» сохраняется отдельно. Откройте
+          одну версию либо сравните две версии текста на текущей странице.
+        </p>
+        {revisions.length === 0 ? (
+          <p className="inspector-note">Версии появятся после первой обработки.</p>
+        ) : (
+          <div className="revision-list" role="list">
+            {revisions.map((revision) => {
+              const openRevision = selectedRevision ?? material.active_parse_revision;
+              const isOpen = revision.revision === openRevision;
+              const isCompared = revision.revision === compareRevision;
+              const mode = revision.parser_mode === "textbook"
+                ? "Учебник"
+                : revision.parser_mode === "fast"
+                  ? "Быстро · гибридный OCR"
+                  : "Ручная или восстановленная версия";
+              return (
+                <div
+                  key={revision.revision}
+                  className={`revision-row ${isOpen ? "is-open" : ""} ${isCompared ? "is-compared" : ""}`.trim()}
+                  role="listitem"
+                >
+                  <span className="revision-head">
+                    <b>Версия {revision.revision}</b>
+                    {revision.is_current
+                      ? <StatusBadge tone="success">Текущая</StatusBadge>
+                      : isCompared
+                        ? <StatusBadge tone="info">Сравнение</StatusBadge>
+                        : isOpen && <StatusBadge tone="neutral">Открыта</StatusBadge>}
+                  </span>
+                  <span className="revision-origin">{mode}</span>
+                  <span className="revision-meta">
+                    {new Date(revision.created_at).toLocaleString("ru-RU", {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })}
+                  </span>
+                  <div className="revision-inline-actions">
+                    <Button
+                      variant="ghost"
+                      disabled={isOpen}
+                      onClick={() => onSelectRevision(
+                        revision.revision === material.active_parse_revision ? null : revision.revision,
+                      )}
+                    >
+                      {isOpen ? "Открыта" : "Открыть"}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      disabled={isOpen}
+                      onClick={() => onCompareRevision(isCompared ? null : revision.revision)}
+                    >
+                      {isCompared ? "Закрыть сравнение" : "Сравнить"}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <section className="inspector-section">

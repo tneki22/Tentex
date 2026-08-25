@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 ElementKind = Literal["heading", "paragraph", "list", "table", "formula", "image"]
+RecognitionSource = Literal["native", "ocr", "vl", "manual"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,8 +14,9 @@ class ParsedElement:
     confidence: float | None = None
     time_from: float | None = None
     time_to: float | None = None
-    # Путь в хранилище: заполняется только у kind == "image".
+    # Исходный вырез доступен у изображений, формул и таблиц.
     asset_path: str | None = None
+    recognition_source: RecognitionSource = "native"
 
 
 @dataclass(frozen=True, slots=True)

@@ -1011,9 +1011,15 @@ def start_processing_core(
     if task and task.state in ACTIVE_TASK_STATES:
         raise ProjectConflictError("Разбор уже запущен", code="material_processing_active")
     if command.parser_mode == ParserMode.TEXTBOOK:
-        raise ProjectConflictError(
-            "Режим «Учебник» ещё не проверен на этой GPU", code="parser_mode_unavailable"
-        )
+        from app.materials.parsers import textbook
+
+        textbook_status = textbook.status()
+        if not textbook_status.available:
+            raise ProjectConflictError(
+                textbook_status.reason,
+                code="parser_mode_unavailable",
+                context={"parser_mode": "textbook"},
+            )
     pages = _selected_pages(session, material, command)
     revision = revision_registry.max_revision(session, material_id) + 1
     scope: dict[str, Any] = {"kind": command.scope}
@@ -1109,6 +1115,7 @@ def element_to_parsed(item: dict[str, Any]) -> ParsedElement:
         item.get("time_from"),
         item.get("time_to"),
         item.get("asset_path"),
+        item.get("recognition_source", "native"),
     )
 
 
@@ -1122,6 +1129,7 @@ def element_to_json(element: ParsedElement) -> dict[str, Any]:
         "time_from": element.time_from,
         "time_to": element.time_to,
         "asset_path": element.asset_path,
+        "recognition_source": element.recognition_source,
     }
 
 
@@ -1254,6 +1262,8 @@ def rebuild_structure(
                 element_kind=element.kind,
                 structure_level=element.level,
                 asset_path=element.asset_path,
+                recognition_source=element.recognition_source,
+                confidence=element.confidence,
                 time_from=element.time_from,
                 time_to=element.time_to,
                 degraded_structure=not has_heading.get(page_number, False),
@@ -1264,6 +1274,59 @@ def rebuild_structure(
             page_orders[page_number] = order + 1
     session.flush()
     return new_fragments
+
+
+def rebuild_checkpoint_page(session: Session, page: MaterialPage) -> None:
+    """Expose one committed page of a building revision to its task viewer.
+
+    Final blocks are still rebuilt across the whole revision by
+    ``rebuild_structure``. This temporary one-page block exists only so a page
+    becomes readable immediately after its checkpoint.
+    """
+    session.execute(delete(MaterialFragment).where(MaterialFragment.page_id == page.id))
+    block = session.scalar(
+        select(MaterialBlock).where(
+            MaterialBlock.material_id == page.material_id,
+            MaterialBlock.revision == page.revision,
+            MaterialBlock.sort_order == page.page_number - 1,
+        )
+    )
+    elements = [element_to_parsed(item) for item in page.elements]
+    if block is None:
+        heading = next((item.text for item in elements if item.kind == "heading"), None)
+        block = MaterialBlock(
+            material_id=page.material_id,
+            revision=page.revision,
+            sort_order=page.page_number - 1,
+            title=heading,
+            block_class=BlockClass.CONTENT,
+            service_reason=None,
+            page_from=page.page_number,
+            page_to=page.page_number,
+        )
+        session.add(block)
+        session.flush()
+    degraded = not any(item.kind == "heading" for item in elements)
+    for order, element in enumerate(elements):
+        session.add(
+            MaterialFragment(
+                material_id=page.material_id,
+                page_id=page.id,
+                block_id=block.id,
+                sort_order=order,
+                text=element.text,
+                bbox=list(element.bbox),
+                element_kind=element.kind,
+                structure_level=element.level,
+                degraded_structure=degraded,
+                quality=page.quality,
+                recognition_source=element.recognition_source,
+                confidence=element.confidence,
+                asset_path=element.asset_path,
+                time_from=element.time_from,
+                time_to=element.time_to,
+            )
+        )
 
 
 def activation_summary(session: Session, material_id: UUID, revision: int) -> dict[str, Any]:
@@ -1338,11 +1401,11 @@ def update_page_text_core(
         if old.page_number != page_number:
             copy_page(session, old, revision)
             continue
-        corrected = parse_text_page(command.text, old.page_number)
-        # Картинки страницы правкой текста не задеваются: их в текстовом поле
-        # нет, и терять их при исправлении опечатки нельзя.
-        images = tuple(
-            element_to_parsed(item) for item in old.elements if item["kind"] == "image"
+        corrected = parse_text_page(command.text, old.page_number, "manual")
+        # Исходные вырезы правкой текста не задеваются: их в текстовом поле нет,
+        # и терять изображение, формулу или таблицу при исправлении опечатки нельзя.
+        source_assets = tuple(
+            element_to_parsed(item) for item in old.elements if item.get("asset_path")
         )
         session.add(
             MaterialPage(
@@ -1356,7 +1419,7 @@ def update_page_text_core(
                 quality=old.quality,
                 confidence=None,
                 elements=[
-                    element_to_json(element) for element in (*corrected.elements, *images)
+                    element_to_json(element) for element in (*corrected.elements, *source_assets)
                 ],
                 diagnostics=sorted({*old.diagnostics, "manual_correction"}),
                 image_path=old.image_path,

@@ -319,6 +319,7 @@ export interface ReferenceAnswerRead {
   source_material_id: string | null;
   source_page_from: number | null;
   source_page_to: number | null;
+  source_only: boolean;
   created_at: string;
   updated_at: string;
 }

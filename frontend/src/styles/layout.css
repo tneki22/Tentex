@@ -7636,6 +7636,7 @@ button.wizard-back-projects {
    поэтому масштабировать нечего, кроме самого набора. */
 .materials-pages.is-text .materials-page {
   width: min(calc(900px * var(--materials-zoom, 1)), 100%);
+  max-width: none;
   min-height: auto;
   margin: 0 auto;
   padding: var(--space-10) clamp(var(--space-6), 6vw, var(--space-16));
@@ -7643,6 +7644,10 @@ button.wizard-back-projects {
   border-radius: 0;
   box-shadow: none;
   font-size: calc(var(--text-base) * var(--materials-zoom, 1));
+}
+
+.materials-structured-page .structured-page-head {
+  font-family: var(--font-sans);
 }
 
 .materials-pages.is-text .materials-page h2,
