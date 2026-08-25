@@ -86,6 +86,8 @@ class BindingFragmentRead(ApiModel):
     page_number: int
     text: str
     bbox: list[float]
+    element_kind: str
+    asset_label: str | None = None
     quality: PageQuality
     status: BindingStatus
     mechanism: BindingMechanism

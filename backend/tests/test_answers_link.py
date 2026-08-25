@@ -226,3 +226,38 @@ def test_exact_title_match_keeps_priority_over_number(session: Session) -> None:
     assert answer is not None
     assert answer.match_method == ReferenceAnswerMatchMethod.EXACT_TITLE
     assert result.numbered_sections == 0
+
+
+def test_image_fragment_uses_its_asset_filename_as_answer_marker(session: Session) -> None:
+    project, nodes = _program(session, 1)
+    material = _answers_material(
+        session,
+        project,
+        [(nodes[0].title, [("Answer body", "paragraph", None), ("", "paragraph", None)])],
+    )
+    page = session.scalar(select(MaterialPage).where(MaterialPage.material_id == material.id))
+    block = session.scalar(select(MaterialBlock).where(MaterialBlock.material_id == material.id))
+    assert page is not None and block is not None
+    session.add(
+        MaterialFragment(
+            id=uuid4(),
+            material_id=material.id,
+            page_id=page.id,
+            block_id=block.id,
+            sort_order=3,
+            text="[Изображение]",
+            bbox=[0, 0.02, 1, 0.03],
+            element_kind="image",
+            asset_path="assets/source/diagram-1.png",
+            structure_level=None,
+            degraded_structure=False,
+            quality=PageQuality.NATIVE,
+        )
+    )
+    session.commit()
+
+    link_answers_material(session, project.id, material.id)
+
+    answer = session.get(ReferenceAnswer, (project.id, nodes[0].id))
+    assert answer is not None
+    assert answer.text == "Answer body\n\n[изображение: diagram-1.png]"

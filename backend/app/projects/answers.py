@@ -434,6 +434,19 @@ MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 ATTACHMENT_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf", ".docx", ".txt", ".md"}
 
 
+def _unique_attachment_name(file_name: str, existing_names: set[str]) -> str:
+    """Маркер вложения — это имя файла, поэтому в одном ответе оно однозначно."""
+    if file_name not in existing_names:
+        return file_name
+    path = Path(file_name)
+    index = 2
+    while True:
+        candidate = f"{path.stem} ({index}){path.suffix}"
+        if candidate not in existing_names:
+            return candidate
+        index += 1
+
+
 def list_attachments(
     session: Session, project_id: UUID, node_id: UUID
 ) -> list[ReferenceAnswerAttachmentRead]:
@@ -462,10 +475,18 @@ async def add_attachment(
     with session.begin():
         _require_exam_project(session, project_id, writable=True)
         _require_study_node(session, project_id, node_id)
+        existing_names = set(
+            session.scalars(
+                select(ReferenceAnswerAttachment.file_name).where(
+                    ReferenceAnswerAttachment.project_id == project_id,
+                    ReferenceAnswerAttachment.program_node_id == node_id,
+                )
+            )
+        )
         row = ReferenceAnswerAttachment(
             project_id=project_id,
             program_node_id=node_id,
-            file_name=original_name,
+            file_name=_unique_attachment_name(original_name, existing_names),
             storage_path=storage_path,
             media_type=media_type,
             size_bytes=size,

@@ -11,7 +11,14 @@ from sqlalchemy.orm import Session
 
 from app.bindings import service
 from app.bindings.schemas import BindingCreateWrite
-from app.models import Binding, BindingStatus, ProgramNode, ProjectMaterial, ProjectStatus
+from app.models import (
+    Binding,
+    BindingStatus,
+    MaterialFragment,
+    ProgramNode,
+    ProjectMaterial,
+    ProjectStatus,
+)
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.projects.program import undo_last_project_action
 
@@ -43,6 +50,27 @@ def test_repeated_create_does_not_duplicate(session: Session) -> None:
     assert count is not None
     all_rows = list(session.scalars(select(Binding).where(Binding.project_id == project.id)))
     assert len(all_rows) == 1
+
+
+def test_active_image_binding_includes_kind_and_asset_label(session: Session) -> None:
+    project = make_exam_project(session)
+    node = make_topic_node(session, project, title="Схема")
+    material = make_material(session, "a1")
+    link_material(session, project, material)
+    page = add_page_with_fragments(
+        session, material, page_number=1, revision=1, fragments=["[Изображение]"]
+    )
+    image = session.get(MaterialFragment, page.fragment_ids[0])
+    assert image is not None
+    image.element_kind = "image"
+    image.asset_path = "assets/material/flow.png"
+    session.commit()
+
+    _bind(session, project, node, page.fragment_ids)
+    active = service.list_bindings(session, project.id, node_id=node.id)
+
+    assert active[0].element_kind == "image"
+    assert active[0].asset_label == "flow.png"
 
 
 def test_remove_is_reversible_via_restore(session: Session) -> None:

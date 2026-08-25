@@ -45,6 +45,8 @@ export interface BindingFragmentRead {
   page_number: number;
   text: string;
   bbox: number[];
+  element_kind: string;
+  asset_label: string | null;
   quality: PageQuality;
   status: BindingStatus;
   mechanism: BindingMechanism;

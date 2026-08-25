@@ -136,6 +136,7 @@ export function CoverageMap() {
   const [attachments, setAttachments] = useState<ReferenceAnswerAttachment[]>([]);
   const [boundImages, setBoundImages] = useState<BindingFragmentRead[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const answerTextRef = useRef<HTMLTextAreaElement>(null);
   const { recent, recordSave } = useRecentAnswers(projectId);
 
   async function load(signal?: AbortSignal) {
@@ -316,6 +317,24 @@ export function CoverageMap() {
     }
   }
 
+  function attachmentMarker(file: ReferenceAnswerAttachment): string {
+    return file.media_type.startsWith("image/")
+      ? `[изображение: ${file.file_name}]`
+      : `[файл: ${file.file_name}]`;
+  }
+
+  function insertAttachmentMarker(file: ReferenceAnswerAttachment) {
+    const marker = attachmentMarker(file);
+    const input = answerTextRef.current;
+    const start = input?.selectionStart ?? answerDraft.length;
+    const end = input?.selectionEnd ?? start;
+    setAnswerDraft(`${answerDraft.slice(0, start)}${marker}${answerDraft.slice(end)}`);
+    requestAnimationFrame(() => {
+      input?.focus();
+      input?.setSelectionRange(start + marker.length, start + marker.length);
+    });
+  }
+
   if (loading) return <div className="screen"><LoadingState label="Загружаем ответы" placement="page" /></div>;
   if (loadError) {
     const notFound = loadError instanceof ProjectApiError && loadError.status === 404;
@@ -414,7 +433,7 @@ export function CoverageMap() {
                   </Link>
                 </p>
               )}
-              <Field label="Эталонный ответ" required><textarea rows={12} value={answerDraft} disabled={readOnly || busy} onChange={(event) => { setAnswerDraft(event.target.value); setNotice(""); }} placeholder="Добавьте короткий образцовый ответ по вопросу" /></Field>
+              <Field label="Эталонный ответ" required><textarea ref={answerTextRef} rows={12} value={answerDraft} disabled={readOnly || busy} onChange={(event) => { setAnswerDraft(event.target.value); setNotice(""); }} placeholder="Добавьте короткий образцовый ответ по вопросу" /></Field>
               <Field label="Источник" hint="Необязательно: название конспекта или документа"><input value={sourceDraft} disabled={readOnly || busy} onChange={(event) => setSourceDraft(event.target.value)} /></Field>
 
               {boundImages.length > 0 && (
@@ -450,6 +469,8 @@ export function CoverageMap() {
                       <Paperclip size={13} aria-hidden="true" />
                       <a className="coverage-attachment-name" href={answerAttachmentUrl(projectId, file.id)} target="_blank" rel="noreferrer">{file.file_name}</a>
                       <small>{sizeLabel(file.size_bytes)}</small>
+                      <span className="coverage-attachment-marker">{attachmentMarker(file)}</span>
+                      <button type="button" className="coverage-attachment-insert" disabled={readOnly || busy} onClick={() => insertAttachmentMarker(file)}>Вставить</button>
                       <button type="button" disabled={readOnly || busy} onClick={() => void removeAttachment(file.id)} aria-label={`Убрать файл «${file.file_name}»`}><X size={12} /></button>
                     </span>
                   ))}

@@ -25,10 +25,13 @@ import {
 } from "lucide-react";
 import type { BindingFragmentRead } from "../api/bindings";
 import { listBindings, removeBinding, createBindings } from "../api/bindings";
+import { materialFragmentAssetUrl } from "../api/materials";
 import {
+  answerAttachmentUrl,
   getCoverageMap,
   getReferenceAnswer,
   getProject,
+  listAnswerAttachments,
   ProjectApiError,
   saveWorkspaceState,
   type CoverageMapRead,
@@ -37,6 +40,7 @@ import {
   type ProjectRead,
   type ReferenceAnswerSlot,
   type ReferenceAnswerStatus,
+  type ReferenceAnswerAttachment,
   type WorkspaceLayout,
   type WorkspaceTab,
 } from "../api/projects";
@@ -73,6 +77,7 @@ import { StudioPanel } from "./StudioPanel";
 import { usePersonalMarks } from "../hooks/usePersonalMarks";
 import { ExamChatPanel } from "./workspace/chat/ExamChatPanel";
 import { AttemptHistory } from "./workspace/AttemptHistory";
+import { ReferenceAnswerContent, type ReferenceAnswerMedia } from "./workspace/ReferenceAnswerContent";
 
 const DEFAULT_LAYOUT: WorkspaceLayout = {
   selected_node_id: null,
@@ -201,6 +206,7 @@ export function ProjectWorkspace() {
   const [answerSlot, setAnswerSlot] = useState<ReferenceAnswerSlot | null>(null);
   const [answerLoading, setAnswerLoading] = useState(false);
   const [answerError, setAnswerError] = useState("");
+  const [answerAttachments, setAnswerAttachments] = useState<ReferenceAnswerAttachment[]>([]);
   const [attemptsReloadKey, setAttemptsReloadKey] = useState(0);
   const [coverage, setCoverage] = useState<CoverageMapRead | null>(null);
   const [query, setQuery] = useState("");
@@ -330,6 +336,19 @@ export function ProjectWorkspace() {
       .finally(() => {
         if (!controller.signal.aborted) setAnswerLoading(false);
       });
+    return () => controller.abort();
+  }, [projectId, selected?.id, textbook]);
+
+  useEffect(() => {
+    if (!selected || textbook !== false) {
+      setAnswerAttachments([]);
+      return;
+    }
+    const controller = new AbortController();
+    setAnswerAttachments([]);
+    listAnswerAttachments(projectId, selected.id, controller.signal)
+      .then(setAnswerAttachments)
+      .catch(() => undefined);
     return () => controller.abort();
   }, [projectId, selected?.id, textbook]);
 
@@ -548,11 +567,29 @@ export function ProjectWorkspace() {
       const match = answer.match_method === "exact_title"
         ? `Сопоставлен по заголовку${answer.matched_title ? `: ${answer.matched_title}` : ""}`
         : "Сопоставлен вручную";
+      const media: ReferenceAnswerMedia[] = [
+        ...sourceBindings
+          .filter((binding) => binding.element_kind === "image")
+          .map((binding) => ({
+            kind: "image" as const,
+            source: "binding" as const,
+            label: binding.asset_label,
+            url: materialFragmentAssetUrl(projectId, binding.material_id, binding.fragment_id),
+            alt: `Изображение из «${binding.material_name}», стр. ${binding.page_number}`,
+          })),
+        ...answerAttachments.map((attachment) => ({
+          kind: attachment.media_type.startsWith("image/") ? "image" as const : "file" as const,
+          source: "attachment" as const,
+          label: attachment.file_name,
+          url: answerAttachmentUrl(projectId, attachment.id),
+          alt: attachment.file_name,
+        })),
+      ];
       referenceContent = (
         <article className="workspace-reference-answer">
           <header><ReferenceAnswerBadge status={answerSlot.status} /><span>{source} · {match}</span></header>
           <h2>{selected.title}</h2>
-          <div className="workspace-reference-text">{answer.text}</div>
+          <ReferenceAnswerContent text={answer.text} media={media} />
           <Link to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть и изменить эталон</Link>
         </article>
       );

@@ -1,5 +1,6 @@
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, func, select
@@ -142,6 +143,12 @@ def _fragment_read(
         page_number=page.page_number,
         text=fragment.text,
         bbox=fragment.bbox,
+        element_kind=fragment.element_kind,
+        asset_label=(
+            Path(fragment.asset_path).name
+            if fragment.element_kind == "image" and fragment.asset_path
+            else None
+        ),
         quality=fragment.quality,
         status=binding.status,
         mechanism=binding.mechanism,

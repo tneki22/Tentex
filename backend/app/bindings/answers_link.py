@@ -12,6 +12,7 @@
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, select
@@ -110,8 +111,15 @@ class _Section:
         ]
 
     def answer_text(self) -> str:
-        body = [fragment.text for fragment in self.bindable_fragments()]
-        return "\n".join(text for text in body if text.strip()).strip()
+        body = [
+            (
+                f"[изображение: {Path(fragment.asset_path).name}]"
+                if fragment.element_kind == "image" and fragment.asset_path
+                else fragment.text
+            )
+            for fragment in self.bindable_fragments()
+        ]
+        return "\n".join(body).strip()
 
 
 @dataclass(slots=True)
