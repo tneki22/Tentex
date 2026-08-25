@@ -303,6 +303,9 @@ def put_reference_answer(
             answer.is_confirmed = True
             answer.is_active = True
             answer.source_label = command.source_label
+            answer.source_material_id = None
+            answer.source_page_from = None
+            answer.source_page_to = None
             answer.revision += 1
             answer.updated_at = now
         session.flush()

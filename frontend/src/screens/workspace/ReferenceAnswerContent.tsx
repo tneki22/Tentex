@@ -1,5 +1,9 @@
 import type { CSSProperties, ReactNode } from "react";
-import { legacyBoundImages, type ReferenceAnswerMedia } from "./referenceAnswerMedia";
+import {
+  canonicalImageMedia,
+  legacyBoundImages,
+  type ReferenceAnswerMedia,
+} from "./referenceAnswerMedia";
 
 export type { ReferenceAnswerMedia } from "./referenceAnswerMedia";
 
@@ -38,7 +42,9 @@ function inlineContent(
     const kind = match[1] as "изображение" | "файл" | undefined;
     const label = match[2];
     const resolved = kind
-      ? media.find((item) => item.kind === (kind === "изображение" ? "image" : "file") && item.label === label)
+      ? kind === "изображение"
+        ? canonicalImageMedia(media, label)
+        : media.find((item) => item.kind === "file" && item.label === label)
       : boundImages[legacyImageIndex.current++];
     content.push(resolved ? mediaNode(resolved, `${start}-${marker}`) : marker);
     cursor = start + marker.length;

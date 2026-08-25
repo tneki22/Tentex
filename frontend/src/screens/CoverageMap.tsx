@@ -47,6 +47,7 @@ import {
 } from "../components/ui";
 import { buildProgramTree, flattenProgramTree } from "./programTree";
 import { useRecentAnswers } from "../hooks/useRecentAnswers";
+import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
 
 type CoverageFilter = "all" | "with_answer" | "missing" | "needs_review" | "outside";
 
@@ -319,7 +320,7 @@ export function CoverageMap() {
 
   function attachmentMarker(file: ReferenceAnswerAttachment): string {
     return file.media_type.startsWith("image/")
-      ? `[изображение: ${file.file_name}]`
+      ? `[изображение: ${attachmentImageLabel(file.file_name, file.id)}]`
       : `[файл: ${file.file_name}]`;
   }
 

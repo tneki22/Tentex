@@ -78,6 +78,7 @@ import { usePersonalMarks } from "../hooks/usePersonalMarks";
 import { ExamChatPanel } from "./workspace/chat/ExamChatPanel";
 import { AttemptHistory } from "./workspace/AttemptHistory";
 import { ReferenceAnswerContent, type ReferenceAnswerMedia } from "./workspace/ReferenceAnswerContent";
+import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
 
 const DEFAULT_LAYOUT: WorkspaceLayout = {
   selected_node_id: null,
@@ -581,7 +582,9 @@ export function ProjectWorkspace() {
         ...answerAttachments.map((attachment) => ({
           kind: attachment.media_type.startsWith("image/") ? "image" as const : "file" as const,
           source: "attachment" as const,
-          label: attachment.file_name,
+          label: attachment.media_type.startsWith("image/")
+            ? attachmentImageLabel(attachment.file_name, attachment.id)
+            : attachment.file_name,
           url: answerAttachmentUrl(projectId, attachment.id),
           alt: attachment.file_name,
         })),

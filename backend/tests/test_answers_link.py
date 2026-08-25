@@ -22,6 +22,8 @@ from app.models import (
     SourceRole,
     utc_now,
 )
+from app.projects.answers import put_reference_answer
+from app.projects.schemas import ReferenceAnswerWrite
 
 
 def _program(session: Session, count: int) -> tuple[object, list[ProgramNode]]:
@@ -262,3 +264,37 @@ def test_image_fragment_uses_its_asset_filename_as_answer_marker(session: Sessio
     assert answer is not None
     assert str(material.id) in answer.text
     assert "diagram-1.png" in answer.text
+
+
+def test_manual_edit_clears_import_provenance_for_legacy_media_fallback(session: Session) -> None:
+    project, nodes = _program(session, 1)
+    material = make_material(session, "a5")
+    session.add(
+        ReferenceAnswer(
+            project_id=project.id,
+            program_node_id=nodes[0].id,
+            text="Imported",
+            origin_kind=ReferenceAnswerOrigin.IMPORT,
+            match_method=ReferenceAnswerMatchMethod.EXACT_TITLE,
+            is_confirmed=False,
+            is_active=True,
+            revision=0,
+            source_material_id=material.id,
+            source_page_from=1,
+            source_page_to=2,
+        )
+    )
+    session.commit()
+
+    slot = put_reference_answer(
+        session,
+        project.id,
+        nodes[0].id,
+        ReferenceAnswerWrite(expected_revision=0, text="Manual"),
+    )
+
+    assert slot.answer is not None
+    assert slot.answer.origin_kind == ReferenceAnswerOrigin.MANUAL
+    assert slot.answer.source_material_id is None
+    assert slot.answer.source_page_from is None
+    assert slot.answer.source_page_to is None

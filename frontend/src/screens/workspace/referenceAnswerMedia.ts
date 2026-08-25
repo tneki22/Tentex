@@ -7,6 +7,17 @@ export interface ReferenceAnswerMedia {
   alt: string;
 }
 
+export function attachmentImageLabel(fileName: string, attachmentId: string): string {
+  return `вложение · ${fileName} · ${attachmentId}`;
+}
+
+export function canonicalImageMedia(
+  media: ReferenceAnswerMedia[],
+  label: string,
+): ReferenceAnswerMedia | undefined {
+  return media.find((item) => item.kind === "image" && item.label === label);
+}
+
 export function legacyBoundImages(
   media: ReferenceAnswerMedia[],
   sourceMaterialId: string | null,
