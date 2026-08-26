@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from "react";
 import type { MaterialPageRead } from "../../api/materials";
 import { Button } from "../../components/ui";
 
@@ -29,8 +30,15 @@ interface PageTextEditorProps {
 }
 
 export function PageTextEditor({ pageNumber, text, dirty, busy, error, zoom, onChange, onSave, onCancel }: PageTextEditorProps) {
+  function saveWithShortcut(event: KeyboardEvent) {
+    if (!(event.ctrlKey || event.metaKey) || (event.key !== "Enter" && event.code !== "Enter")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!busy && dirty && text.trim()) onSave();
+  }
+
   return (
-    <div className="library-page-editor" aria-busy={busy}>
+    <div className="library-page-editor" aria-busy={busy} onKeyDownCapture={saveWithShortcut}>
       <div className="library-editor-head">
         <label htmlFor="library-page-text">Текст страницы {pageNumber}</label>
         <div className="library-editor-actions">
@@ -53,12 +61,6 @@ export function PageTextEditor({ pageNumber, text, dirty, busy, error, zoom, onC
         value={text}
         style={{ fontSize: `calc(var(--text-base) * ${zoom})` }}
         onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => {
-          if ((event.ctrlKey || event.metaKey) && (event.key === "Enter" || event.code === "KeyS")) {
-            event.preventDefault();
-            if (!busy && dirty && text.trim()) onSave();
-          }
-        }}
       />
       <div className="library-editor-foot" role="status">
         <span>{dirty ? "Есть несохранённые изменения" : "Нет изменений"}</span>

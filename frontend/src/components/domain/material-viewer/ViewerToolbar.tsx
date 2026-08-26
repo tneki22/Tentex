@@ -187,9 +187,14 @@ export function ViewerToolbar({
 
       </div>
       <div className="viewer-toolbar-end">
-        {onEditText && !editing && (
-          <Tooltip label="Исправить текст текущей страницы">
-            <IconButton label="Исправить текст" disabled={editDisabled} onClick={onEditText}>
+        {onEditText && (
+          <Tooltip label={editing ? "Выйти из исправления текста" : "Исправить текст текущей страницы"}>
+            <IconButton
+              label={editing ? "Выйти из исправления текста" : "Исправить текст"}
+              aria-pressed={editing}
+              disabled={editDisabled}
+              onClick={onEditText}
+            >
               <Pencil size={15} />
             </IconButton>
           </Tooltip>

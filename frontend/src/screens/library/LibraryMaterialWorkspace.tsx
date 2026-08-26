@@ -517,9 +517,15 @@ export function LibraryMaterialWorkspace() {
             searching={search.loading}
             matchLabel={search.label}
             versionComparison={comparisonLabels}
-            onEditText={detail.capabilities.can_edit_text ? openTextEditor : undefined}
-            editDisabled={!page || store.pageLoading || readOnly || isVersionComparison || store.busy
-              || Boolean(detail.task && ["running", "queued", "paused"].includes(detail.task.state))}
+            onEditText={detail.capabilities.can_edit_text
+              ? editOpen
+                ? () => requestLeave(closeEditor)
+                : openTextEditor
+              : undefined}
+            editDisabled={editOpen
+              ? editBusy
+              : !page || store.pageLoading || readOnly || isVersionComparison || store.busy
+                || Boolean(detail.task && ["running", "queued", "paused"].includes(detail.task.state))}
             editing={editOpen}
             panelTools={panelTools}
             onModeChange={isVersionComparison ? () => undefined : setMode}
