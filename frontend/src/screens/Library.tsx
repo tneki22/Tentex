@@ -312,11 +312,11 @@ export function Library() {
                     {material.native_page_count > 0 && (
                       <QualityBadge quality="native" count={material.native_page_count} />
                     )}
-                    {material.ocr_page_count > 0 && (
-                      <QualityBadge quality="ocr" count={material.ocr_page_count} />
+                    {material.ocr_page_count + (material.parser_mode === "fast" ? material.ocr_low_page_count : 0) > 0 && (
+                      <QualityBadge quality="ocr" count={material.ocr_page_count + (material.parser_mode === "fast" ? material.ocr_low_page_count : 0)} />
                     )}
-                    {material.ocr_low_page_count > 0 && (
-                      <QualityBadge quality="ocr_low" count={material.ocr_low_page_count} showReview={material.parser_mode !== "fast"} />
+                    {material.parser_mode !== "fast" && material.ocr_low_page_count > 0 && (
+                      <QualityBadge quality="ocr_low" count={material.ocr_low_page_count} />
                     )}
                   </span>
                 </button>

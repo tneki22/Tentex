@@ -30,6 +30,7 @@ function originText(revision: MaterialRevisionRead): string {
     return `${base}: страницы ${scope.page_from}–${scope.page_to}`;
   }
   if (revision.origin === "parse" && scope.kind === "needs_review") {
+    if (revision.parser_mode === "fast") return `${base}: часть документа`;
     return `${base}: страницы, которые нужно проверить`;
   }
   return base;
@@ -39,7 +40,7 @@ function summaryText(revision: MaterialRevisionRead): string {
   const summary = revision.summary as Record<string, number | undefined>;
   const parts: string[] = [];
   if (summary.page_count) parts.push(`${summary.page_count} стр.`);
-  if (summary.review_page_count) parts.push(`нужно проверить: ${summary.review_page_count}`);
+  if (revision.parser_mode !== "fast" && summary.review_page_count) parts.push(`нужно проверить: ${summary.review_page_count}`);
   if (summary.changed_pages) parts.push(`изменено: ${summary.changed_pages}`);
   return parts.join(" · ");
 }
