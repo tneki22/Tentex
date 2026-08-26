@@ -405,6 +405,14 @@
   min-width: 0;
 }
 
+.viewer-toolbar-navigation {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .viewer-mode-tabs {
   flex: 0 0 auto;
 }
@@ -1628,8 +1636,16 @@
 
   .library-head-lead { grid-column: 1; }
   .viewer-toolbar-tools {
+    display: contents;
+  }
+  .viewer-toolbar-navigation {
     grid-column: 1 / -1;
+    grid-row: 2;
     flex-wrap: wrap;
+  }
+  .viewer-toolbar-end {
+    grid-column: 2;
+    grid-row: 1;
   }
 }
 
