@@ -97,89 +97,91 @@ export function ViewerToolbar({
 
   return (
     <div className="viewer-toolbar-tools">
-      <SegmentedTabs
-        className="viewer-mode-tabs"
-        label="Что показать"
-        value={mode}
-        tabs={tabs}
-        onChange={onModeChange}
-      />
-
-      {pageCount > 1 && (
-        <div className="viewer-page-tools">
-          <IconButton
-            label="Предыдущая страница"
-            disabled={page <= 1}
-            onClick={() => onPageChange(page - 1)}
-          >
-            <ChevronLeft size={15} />
-          </IconButton>
-          <span aria-live="polite">{page} / {pageCount}</span>
-          <IconButton
-            label="Следующая страница"
-            disabled={page >= pageCount}
-            onClick={() => onPageChange(page + 1)}
-          >
-            <ChevronRight size={15} />
-          </IconButton>
-        </div>
-      )}
-
-      <label className={`viewer-search ${searching ? "is-busy" : ""}`.trim()}>
-        <Search size={14} aria-hidden="true" />
-        <span className="sr-only">Найти в материале</span>
-        <input
-          ref={searchInput}
-          type="search"
-          value={query}
-          placeholder="Найти в материале"
-          onChange={(event) => onQueryChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter") return;
-            event.preventDefault();
-            onQuerySubmit?.(event.shiftKey ? -1 : 1);
-          }}
+      <div className="viewer-toolbar-navigation">
+        <SegmentedTabs
+          className="viewer-mode-tabs"
+          label="Что показать"
+          value={mode}
+          tabs={tabs}
+          onChange={onModeChange}
         />
-        {matchLabel && <span className="viewer-search-count">{matchLabel}</span>}
-      </label>
 
-      {presentation.supportsZoom && (
-        <div className="viewer-zoom-tools">
-          <IconButton
-            label="Уменьшить"
-            disabled={zoomPercent <= 50}
-            onClick={() => onZoomChange(Math.max(0.5, Number((zoomPercent / 100 - 0.25).toFixed(2))))}
-          >
-            <ZoomOut size={15} />
-          </IconButton>
-          <Tooltip label="Вписать страницу целиком">
-            <button
-              type="button"
-              className={`viewer-zoom-readout ${zoom === "fit-page" ? "is-active" : ""}`.trim()}
-              onClick={() => onZoomChange("fit-page")}
+        {pageCount > 1 && (
+          <div className="viewer-page-tools">
+            <IconButton
+              label="Предыдущая страница"
+              disabled={page <= 1}
+              onClick={() => onPageChange(page - 1)}
             >
-              {zoomPercent}%
-            </button>
-          </Tooltip>
-          <IconButton
-            label="Увеличить"
-            disabled={zoomPercent >= 200}
-            onClick={() => onZoomChange(Math.min(2, Number((zoomPercent / 100 + 0.25).toFixed(2))))}
-          >
-            <ZoomIn size={15} />
-          </IconButton>
-          <Tooltip label="По ширине">
-            <button
-              type="button"
-              className={`viewer-zoom-fit ${zoom === "fit-width" ? "is-active" : ""}`.trim()}
-              onClick={() => onZoomChange("fit-width")}
+              <ChevronLeft size={15} />
+            </IconButton>
+            <span aria-live="polite">{page} / {pageCount}</span>
+            <IconButton
+              label="Следующая страница"
+              disabled={page >= pageCount}
+              onClick={() => onPageChange(page + 1)}
             >
-              По ширине
-            </button>
-          </Tooltip>
-        </div>
-      )}
+              <ChevronRight size={15} />
+            </IconButton>
+          </div>
+        )}
 
+        <label className={`viewer-search ${searching ? "is-busy" : ""}`.trim()}>
+          <Search size={14} aria-hidden="true" />
+          <span className="sr-only">Найти в материале</span>
+          <input
+            ref={searchInput}
+            type="search"
+            value={query}
+            placeholder="Найти в материале"
+            onChange={(event) => onQueryChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              onQuerySubmit?.(event.shiftKey ? -1 : 1);
+            }}
+          />
+          {matchLabel && <span className="viewer-search-count">{matchLabel}</span>}
+        </label>
+
+        {presentation.supportsZoom && (
+          <div className="viewer-zoom-tools">
+            <IconButton
+              label="Уменьшить"
+              disabled={zoomPercent <= 50}
+              onClick={() => onZoomChange(Math.max(0.5, Number((zoomPercent / 100 - 0.25).toFixed(2))))}
+            >
+              <ZoomOut size={15} />
+            </IconButton>
+            <Tooltip label="Вписать страницу целиком">
+              <button
+                type="button"
+                className={`viewer-zoom-readout ${zoom === "fit-page" ? "is-active" : ""}`.trim()}
+                onClick={() => onZoomChange("fit-page")}
+              >
+                {zoomPercent}%
+              </button>
+            </Tooltip>
+            <IconButton
+              label="Увеличить"
+              disabled={zoomPercent >= 200}
+              onClick={() => onZoomChange(Math.min(2, Number((zoomPercent / 100 + 0.25).toFixed(2))))}
+            >
+              <ZoomIn size={15} />
+            </IconButton>
+            <Tooltip label="По ширине">
+              <button
+                type="button"
+                className={`viewer-zoom-fit ${zoom === "fit-width" ? "is-active" : ""}`.trim()}
+                onClick={() => onZoomChange("fit-width")}
+              >
+                По ширине
+              </button>
+            </Tooltip>
+          </div>
+        )}
+
+      </div>
       <div className="viewer-toolbar-end">
         {onEditText && (
           <Tooltip label="Исправить текст текущей страницы">
