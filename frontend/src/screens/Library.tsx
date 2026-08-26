@@ -178,7 +178,7 @@ export function Library() {
         && material.status !== "processing" && material.status !== "queued") return false;
       if (filters.status === "paused" && material.status !== "paused") return false;
       if (filters.status === "failed" && material.status !== "failed") return false;
-      if (filters.quality === "needs_review" && material.ocr_low_page_count === 0) return false;
+      if (filters.quality === "needs_review" && (material.parser_mode === "fast" || material.ocr_low_page_count === 0)) return false;
       if (filters.usage === "attached" && material.usage.length === 0) return false;
       if (filters.usage === "unattached" && material.usage.length > 0) return false;
       return true;
@@ -195,7 +195,7 @@ export function Library() {
   const totals = useMemo(() => ({
     pages: materials.reduce((sum, material) => sum + (material.page_count ?? 0), 0),
     bytes: materials.reduce((sum, material) => sum + material.size_bytes, 0),
-    review: materials.reduce((sum, material) => sum + material.ocr_low_page_count, 0),
+    review: materials.reduce((sum, material) => sum + (material.parser_mode === "fast" ? 0 : material.ocr_low_page_count), 0),
   }), [materials]);
 
   /* Возврат живёт в query, а не только в `location.state`: рабочая область
@@ -316,7 +316,7 @@ export function Library() {
                       <QualityBadge quality="ocr" count={material.ocr_page_count} />
                     )}
                     {material.ocr_low_page_count > 0 && (
-                      <QualityBadge quality="ocr_low" count={material.ocr_low_page_count} />
+                      <QualityBadge quality="ocr_low" count={material.ocr_low_page_count} showReview={material.parser_mode !== "fast"} />
                     )}
                   </span>
                 </button>

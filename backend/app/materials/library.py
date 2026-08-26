@@ -338,6 +338,7 @@ def library_read(material: Material, aggregate: LibraryAggregate) -> LibraryMate
         page_count=material.page_count,
         status=material.status,
         native_page_count=aggregate.quality_counts.get(PageQuality.NATIVE, 0),
+        parser_mode=material.parser_mode,
         ocr_page_count=aggregate.quality_counts.get(PageQuality.OCR, 0),
         ocr_low_page_count=aggregate.quality_counts.get(PageQuality.OCR_LOW, 0),
         block_count=aggregate.block_count,
@@ -385,7 +386,6 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
             )
         ],
         active_parse_revision=material.active_parse_revision,
-        parser_mode=material.parser_mode,
         scan_page_count=material.scan_page_count,
         estimated_seconds=material.estimated_seconds,
         diagnostics=material.diagnostics,

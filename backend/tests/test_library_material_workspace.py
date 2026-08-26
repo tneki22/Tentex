@@ -25,6 +25,7 @@ from app.models import (
     MaterialRevisionOrigin,
     MaterialSourceKind,
     PageQuality,
+    ParserMode,
     ProjectStatus,
     SourceRole,
     utc_now,
@@ -307,8 +308,12 @@ def test_delete_preview_lists_every_project(session: Session) -> None:
     assert {usage.project_id for usage in preview.material.usage} == {first.id, second.id}
 
 
-def test_detail_reports_quality_counters_for_active_revision(session: Session) -> None:
+@pytest.mark.parametrize("parser_mode", [ParserMode.FAST, ParserMode.TEXTBOOK])
+def test_detail_reports_quality_counters_for_active_revision(
+    session: Session, parser_mode: ParserMode
+) -> None:
     material = make_material(session, "c10")
+    material.parser_mode = parser_mode
     add_page_with_fragments(session, material, page_number=1, revision=1, fragments=["Текст"])
     session.add(
         MaterialPage(
@@ -330,6 +335,13 @@ def test_detail_reports_quality_counters_for_active_revision(session: Session) -
     detail = library.read_library_material(session, material.id)
     assert detail.native_page_count == 1
     assert detail.ocr_low_page_count == 1
+    assert detail.parser_mode == parser_mode
+    listed = next(
+        item for item in library.list_library_materials(session) if item.id == material.id
+    )
+    assert listed.parser_mode == parser_mode
+    assert listed.ocr_low_page_count == 1
+    assert all(page.reviewed_at is None for page in detail.page_states)
     assert isinstance(detail.updated_at, datetime)
 
 

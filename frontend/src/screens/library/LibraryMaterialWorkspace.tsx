@@ -260,6 +260,12 @@ export function LibraryMaterialWorkspace() {
     }
   }
 
+  function openTextEditor() {
+    if (!page || readOnly || isVersionComparison || store.busy) return;
+    setEditText(page.markdown || page.text);
+    setEditOpen(true);
+  }
+
   if (store.loading) {
     return (
       <div className="library-workspace is-skeleton">
@@ -301,6 +307,29 @@ export function LibraryMaterialWorkspace() {
   const comparisonLabels = isVersionComparison && compareRevision !== null
     ? { left: revisionLabel(primaryRevision), right: revisionLabel(compareRevision) }
     : null;
+  const panelTools = (
+    <div className="library-head-panels">
+      <Tooltip label={hasOutline ? "Оглавление" : "В документе нет оглавления."}>
+        <IconButton
+          label="Оглавление"
+          aria-pressed={outlineOpen && hasOutline}
+          disabled={!hasOutline}
+          onClick={() => setOutlineOpen((value) => !value)}
+        >
+          <ListTree size={15} />
+        </IconButton>
+      </Tooltip>
+      <Tooltip label={inspectorOpen ? "Скрыть панель обработки" : "Показать панель обработки"}>
+        <IconButton
+          label="Панель обработки"
+          aria-pressed={inspectorOpen}
+          onClick={() => setInspectorOpen((value) => !value)}
+        >
+          <PanelRight size={15} />
+        </IconButton>
+      </Tooltip>
+    </div>
+  );
 
   const stage = (
     <DocumentStage
@@ -316,6 +345,7 @@ export function LibraryMaterialWorkspace() {
         isVersionComparison ? (
           <MaterialTextView
             material={detail}
+            parserMode={store.revisions.find((item) => item.revision === primaryRevision)?.parser_mode ?? detail.parser_mode}
             page={page}
             query={search.query}
             focusedFragmentId={focusedFragmentId}
@@ -347,6 +377,7 @@ export function LibraryMaterialWorkspace() {
           ) : (
             <MaterialTextView
               material={detail}
+              parserMode={store.revisions.find((item) => item.revision === compareRevision)?.parser_mode ?? detail.parser_mode}
               page={comparisonPage}
               query={search.query}
               focusedFragmentId={null}
@@ -357,6 +388,7 @@ export function LibraryMaterialWorkspace() {
         ) : (
           <MaterialTextView
             material={detail}
+            parserMode={store.revisions.find((item) => item.revision === primaryRevision)?.parser_mode ?? detail.parser_mode}
             page={page}
             query={search.query}
             focusedFragmentId={focusedFragmentId}
@@ -420,6 +452,9 @@ export function LibraryMaterialWorkspace() {
             searching={search.loading}
             matchLabel={search.label}
             versionComparison={comparisonLabels}
+            onEditText={detail.capabilities.can_edit_text ? openTextEditor : undefined}
+            editDisabled={!page || readOnly || isVersionComparison || store.busy}
+            panelTools={panelTools}
             onModeChange={isVersionComparison ? () => undefined : setMode}
             onPageChange={view.goToPage}
             onQueryChange={search.setQuery}
@@ -430,27 +465,7 @@ export function LibraryMaterialWorkspace() {
           />
         )}
 
-        <div className="library-head-panels">
-          <Tooltip label={hasOutline ? "Оглавление" : "В документе нет оглавления."}>
-            <IconButton
-              label="Оглавление"
-              aria-pressed={showOutline}
-              disabled={!hasOutline}
-              onClick={() => setOutlineOpen((value) => !value)}
-            >
-              <ListTree size={15} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip label={inspectorOpen ? "Скрыть панель обработки" : "Показать панель обработки"}>
-            <IconButton
-              label="Панель обработки"
-              aria-pressed={inspectorOpen}
-              onClick={() => setInspectorOpen((value) => !value)}
-            >
-              <PanelRight size={15} />
-            </IconButton>
-          </Tooltip>
-        </div>
+        {!prepared && panelTools}
       </header>
 
       {comparisonLabels && (
@@ -491,6 +506,7 @@ export function LibraryMaterialWorkspace() {
             page={activePage}
             pageCount={pageCount}
             pageStates={readOnly ? [] : detail.page_states}
+            showOcrReview={detail.parser_mode !== "fast"}
             storageKey={detail.id}
             onPageChange={view.goToPage}
           />
@@ -536,7 +552,7 @@ export function LibraryMaterialWorkspace() {
             compareRevision={compareRevision}
             tab={inspectorTab}
             busy={store.busy}
-            readOnly={readOnly}
+            readOnly={readOnly || isVersionComparison}
             onTabChange={(tab) => setParam("panel", tab === "processing" ? null : tab)}
             onSelectRevision={selectRevision}
             onCompareRevision={compareWithRevision}
@@ -547,11 +563,7 @@ export function LibraryMaterialWorkspace() {
               page_to: command.page_to ?? null,
             })}
             onControl={(action) => void store.controlProcessing(action)}
-            onEditPage={() => {
-              if (!page) return;
-              setEditText(page.markdown || page.text);
-              setEditOpen(true);
-            }}
+            onEditPage={openTextEditor}
             onCleanupPage={() => setCleanupOpen(true)}
             onConfirmPageReview={() => {
               if (!page) return;
@@ -601,6 +613,7 @@ export function LibraryMaterialWorkspace() {
             page={activePage}
             pageCount={pageCount}
             pageStates={readOnly ? [] : detail.page_states}
+            showOcrReview={detail.parser_mode !== "fast"}
             storageKey={detail.id}
             onPageChange={(next) => {
               view.goToPage(next);
@@ -624,7 +637,7 @@ export function LibraryMaterialWorkspace() {
             compareRevision={compareRevision}
             tab={inspectorTab}
             busy={store.busy}
-            readOnly={readOnly}
+            readOnly={readOnly || isVersionComparison}
             onTabChange={(tab) => setParam("panel", tab === "processing" ? null : tab)}
             onSelectRevision={selectRevision}
             onCompareRevision={compareWithRevision}
@@ -635,11 +648,7 @@ export function LibraryMaterialWorkspace() {
               page_to: command.page_to ?? null,
             })}
             onControl={(action) => void store.controlProcessing(action)}
-            onEditPage={() => {
-              if (!page) return;
-              setEditText(page.markdown || page.text);
-              setEditOpen(true);
-            }}
+            onEditPage={openTextEditor}
             onCleanupPage={() => setCleanupOpen(true)}
             onConfirmPageReview={() => {
               if (!page) return;

@@ -214,6 +214,7 @@ class LibraryMaterialRead(ApiModel):
     size_bytes: int
     page_count: int | None
     status: MaterialState
+    parser_mode: ParserMode | None
     native_page_count: int
     ocr_page_count: int
     ocr_low_page_count: int

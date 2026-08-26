@@ -3,12 +3,13 @@ import {
   ChevronRight,
   Maximize2,
   Minimize2,
+  Pencil,
   ScanLine,
   Search,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { IconButton, SegmentedTabs, Tooltip } from "../../ui";
 import type { MaterialPresentation, MaterialViewMode, ViewerZoom } from "./types";
 
@@ -27,6 +28,9 @@ export interface ViewerToolbarProps {
   searching?: boolean;
   matchLabel?: string | null;
   versionComparison?: { left: string; right: string } | null;
+  editDisabled?: boolean;
+  panelTools?: ReactNode;
+  onEditText?(): void;
   onModeChange(mode: MaterialViewMode): void;
   onPageChange(page: number): void;
   onQueryChange(query: string): void;
@@ -55,6 +59,9 @@ export function ViewerToolbar({
   searching = false,
   matchLabel = null,
   versionComparison = null,
+  editDisabled = false,
+  panelTools,
+  onEditText,
   onModeChange,
   onPageChange,
   onQueryChange,
@@ -85,7 +92,7 @@ export function ViewerToolbar({
     : [
         ...(canCompare ? [{ value: "compare" as const, label: "Сравнение" }] : []),
         { value: "source" as const, label: presentation.sourceLabel },
-        { value: "text" as const, label: presentation.textLabel },
+        { value: "text" as const, label: presentation.textLabel === "Подготовленный текст" ? "Текст" : presentation.textLabel },
       ];
 
   return (
@@ -174,6 +181,13 @@ export function ViewerToolbar({
       )}
 
       <div className="viewer-toolbar-end">
+        {onEditText && (
+          <Tooltip label="Исправить текст текущей страницы">
+            <IconButton label="Исправить текст" disabled={editDisabled} onClick={onEditText}>
+              <Pencil size={15} />
+            </IconButton>
+          </Tooltip>
+        )}
         {presentation.supportsZoom && !versionComparison && (
           <Tooltip label={showRegions ? "Скрыть рамки распознанных областей" : "Показать рамки распознанных областей"}>
             <IconButton
@@ -194,6 +208,7 @@ export function ViewerToolbar({
             {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
           </IconButton>
         </Tooltip>
+        {panelTools}
       </div>
     </div>
   );

@@ -164,7 +164,7 @@ function MaterialCatalog({
           <strong>{material.display_name}</strong>
           <small>{STATUS[material.status].label}</small>
         </span>
-        {(material.status === "failed" || material.ocr_low_page_count > 0) && (
+        {(material.status === "failed" || (material.parser_mode !== "fast" && material.ocr_low_page_count > 0)) && (
           <span className="materials-attention-dot tone-warning" />
         )}
       </Link>
@@ -271,7 +271,7 @@ function MaterialOverview({
                   <strong>{material.display_name}</strong>
                   <span>{material.purposes.map((purpose) => PURPOSE[purpose]).join(", ")}</span>
                   <span>{material.page_count ?? "—"}</span>
-                  <span>{material.ocr_low_page_count ? `${material.ocr_low_page_count} low` : "—"}</span>
+                  <span>{material.parser_mode !== "fast" && material.ocr_low_page_count ? `${material.ocr_low_page_count} low` : "—"}</span>
                   <StatusBadge tone={STATUS[material.status].tone}>{STATUS[material.status].label}</StatusBadge>
                 </button>
               ))}
@@ -493,12 +493,13 @@ function DocumentView({
     fragmentBindingTitles,
   } = binding;
   return (
-    <div className={`materials-pages is-text ${page.quality === "ocr_low" ? "is-ocr-low" : ""}`.trim()}>
+    <div className={`materials-pages is-text ${material.parser_mode !== "fast" && page.quality === "ocr_low" ? "is-ocr-low" : ""}`.trim()}>
       <StructuredPage
+        showOcrReview={material.parser_mode !== "fast"}
         page={page}
         query={query}
         assetUrl={(fragmentId) => materialFragmentAssetUrl(projectId, material.id, fragmentId)}
-        className={`materials-page materials-structured-page ${page.quality === "ocr_low" ? "is-ocr-low" : ""}`.trim()}
+        className={`materials-page materials-structured-page ${material.parser_mode !== "fast" && page.quality === "ocr_low" ? "is-ocr-low" : ""}`.trim()}
         fragmentProps={(fragment) => {
           const block = blockById.get(fragment.block_id);
           const isService = block?.block_class === "service";
@@ -676,7 +677,7 @@ function ProcessingTab({
         <dl className="materials-ocr-summary">
           <div><dt>Страниц</dt><dd>{material.page_count ?? 1}</dd></div>
           <div><dt>Сканов</dt><dd>{material.scan_page_count}</dd></div>
-          <div><dt>Нужно проверить</dt><dd>{material.ocr_low_page_count}</dd></div>
+          {material.parser_mode !== "fast" && <div><dt>Нужно проверить</dt><dd>{material.ocr_low_page_count}</dd></div>}
         </dl>
         <p>
           Распознавание, версии и сведения о самом файле — в Библиотеке.
@@ -711,7 +712,7 @@ function ProcessingTab({
           </p>
         </>
       )}
-      {material.diagnostics.length > 0 && <section className="materials-processing-section"><h3>Диагностика</h3><ul>{material.diagnostics.map((item) => <li key={item}>{item === "formula_possible" ? "Возможны формулы — сверяйте с оригиналом" : item === "audio_transcription_required" ? "Нужна локальная транскрипция аудио" : item}</li>)}</ul>{material.ocr_low_page_count > 0 && <p>Есть страницы, которые стоит сравнить с оригиналом.</p>}</section>}
+      {material.diagnostics.length > 0 && <section className="materials-processing-section"><h3>Диагностика</h3><ul>{material.diagnostics.map((item) => <li key={item}>{item === "formula_possible" ? "Возможны формулы — сверяйте с оригиналом" : item === "audio_transcription_required" ? "Нужна локальная транскрипция аудио" : item}</li>)}</ul>{(material.parser_mode !== "fast" && material.ocr_low_page_count > 0) && <p>Есть страницы, которые стоит сравнить с оригиналом.</p>}</section>}
       {material.error && <ErrorState title="Разбор остановился" message={material.error} />}
     </div>
   );
@@ -1005,7 +1006,7 @@ function BindingsTab({
         <section className="materials-selection-card">
           <div className="materials-selection-head">
             <h3>Выбранный фрагмент</h3>
-            <QualityBadge quality={focusedFragment.quality} />
+            <QualityBadge quality={focusedFragment.quality} showReview={focusedFragment.recognition_source !== "ocr"} />
           </div>
           <p>{focusedFragment.text}</p>
           {focusedFragmentBindings.length > 0 && (

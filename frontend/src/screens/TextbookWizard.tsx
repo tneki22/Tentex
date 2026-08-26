@@ -181,7 +181,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   const subpointCount = nodes.filter((node) => node.node_type === "subpoint").length;
   const readyMaterialCount = materials.materials.filter((material) => material.status === "ready").length;
   const scanPageCount = materials.materials.reduce((sum, material) => sum + material.scan_page_count, 0);
-  const reviewPageCount = materials.materials.reduce((sum, material) => sum + material.ocr_low_page_count, 0);
+  const reviewPageCount = materials.materials.reduce((sum, material) => sum + (material.parser_mode === "fast" ? 0 : material.ocr_low_page_count), 0);
 
   useEffect(() => {
     if (selected && selected.id !== selectedId) setSelectedId(selected.id);
@@ -409,7 +409,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
               <Card className="textbook-source-card" key={material.id}>
                 <div className="textbook-source-main">
                   <BookOpen className="textbook-source-icon" size={16} aria-hidden="true" />
-                  <span className="textbook-source-copy"><b>{material.display_name}</b><small>{material.page_count ?? 1} стр.</small>{material.ocr_low_page_count > 0 && <em><QualityBadge quality="ocr_low" count={material.ocr_low_page_count} /></em>}</span>
+                  <span className="textbook-source-copy"><b>{material.display_name}</b><small>{material.page_count ?? 1} стр.</small>{material.parser_mode !== "fast" && material.ocr_low_page_count > 0 && <em><QualityBadge quality="ocr_low" count={material.ocr_low_page_count} /></em>}</span>
                   {material.status !== "ready_to_process" && <StatusBadge tone={material.status === "ready" ? "success" : material.status === "failed" ? "danger" : "neutral"}>{material.status === "ready" ? "Текст готов" : material.status === "failed" ? "Ошибка" : "Подготавливаем"}</StatusBadge>}
                   <div className="textbook-source-actions">
                     {material.status === "ready_to_process" && <Button variant="secondary" disabled={materials.busy} onClick={() => void materials.start(material.id)}>Подготовить текст</Button>}

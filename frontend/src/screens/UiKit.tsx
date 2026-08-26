@@ -60,6 +60,7 @@ const DEMO_LIBRARY_MATERIAL: LibraryMaterialRead = {
   size_bytes: 2_400_000,
   page_count: 184,
   status: "ready",
+  parser_mode: "fast",
   native_page_count: 180,
   ocr_page_count: 4,
   ocr_low_page_count: 0,
@@ -497,6 +498,7 @@ export function UiKit() {
             <QualityBadge key={quality} quality={quality} count={quality === "native" ? 320 : 8} />
           ))}
           <StatusBadge tone="info">привязано</StatusBadge>
+          <QualityBadge quality="ocr_low" showReview={false} />
           <StatusBadge tone="danger">разбор упал</StatusBadge>
         </div>
       </section>

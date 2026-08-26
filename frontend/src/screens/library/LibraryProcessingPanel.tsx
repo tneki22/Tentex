@@ -103,13 +103,15 @@ export function LibraryProcessingPanel({
   const task = material.task;
   const running = task && (task.state === "running" || task.state === "queued" || task.state === "paused");
   const prepared = material.active_parse_revision > 0;
-  const reviewPages = material.ocr_low_page_count;
+  const showOcrReview = material.parser_mode !== "fast";
+  const reviewPages = showOcrReview ? material.ocr_low_page_count : 0;
+  const processingScope = scope === "needs_review" && !showOcrReview ? "all" : scope;
   const pageCount = material.page_count ?? 1;
   const canScope = material.capabilities.can_run_ocr && prepared && pageCount > 1;
   const currentPageState = page
     ? material.page_states.find((item) => item.page_number === page.page_number)
     : null;
-  const currentNeedsReview = page?.quality === "ocr_low"
+  const currentNeedsReview = showOcrReview && page?.quality === "ocr_low"
     && currentPageState?.reviewed_at === null;
 
   useEffect(() => {
@@ -185,8 +187,14 @@ export function LibraryProcessingPanel({
         {material.capabilities.can_run_ocr && (
           <div><dt>Сканов</dt><dd>{material.scan_page_count}</dd></div>
         )}
-        <div><dt>Нужно проверить</dt><dd>{reviewPages}</dd></div>
+        {showOcrReview && <div><dt>Нужно проверить</dt><dd>{reviewPages}</dd></div>}
       </dl>
+
+      {material.parser_mode === "fast" && prepared && (
+        <p className="inspector-note">
+          «Быстро» распознаёт обычный текст. Формулы могут содержать ошибки — сверяйтесь с изображением.
+        </p>
+      )}
 
       {reviewPages > 0 && (
         <p className="inspector-warning" role="status">
@@ -262,21 +270,21 @@ export function LibraryProcessingPanel({
               className="scope-modes"
               label="Область запуска"
               layout="rows"
-              value={scope}
+              value={processingScope}
               options={[
                 {
                   value: "all",
                   title: "Весь документ",
                   description: `${pageCount} страниц заново`,
                 },
-                {
-                  value: "needs_review",
+                ...(showOcrReview ? [{
+                  value: "needs_review" as const,
                   title: "Только страницы, которые нужно проверить",
                   description: `${reviewPages} страниц`,
                   unavailableReason: reviewPages === 0
                     ? "Все страницы уже подготовлены без предупреждений."
                     : undefined,
-                },
+                }] : []),
                 {
                   value: "range",
                   title: "Диапазон",
@@ -333,9 +341,9 @@ export function LibraryProcessingPanel({
           <Button
             disabled={busy || !selectedMode?.enabled || rangeInvalid}
             onClick={() => onStart(
-              scope === "range"
-                ? { parser_mode: mode, scope, page_from: range.from, page_to: range.to }
-                : { parser_mode: mode, scope: canScope ? scope : "all" },
+              processingScope === "range"
+                ? { parser_mode: mode, scope: processingScope, page_from: range.from, page_to: range.to }
+                : { parser_mode: mode, scope: canScope ? processingScope : "all" },
             )}
           >
             {prepared

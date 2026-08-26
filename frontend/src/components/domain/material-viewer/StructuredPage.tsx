@@ -5,6 +5,7 @@ import { QualityBadge } from "../QualityBadge";
 
 interface StructuredPageProps {
   page: MaterialPageRead;
+  showOcrReview?: boolean;
   /** Подсветка совпадений поиска. Пустая строка — ничего не подсвечивать. */
   query?: string;
   /** Ссылка на картинку фрагмента: у проекта и Библиотеки маршруты разные. */
@@ -27,6 +28,7 @@ interface StructuredPageProps {
  */
 export function StructuredPage({
   page,
+  showOcrReview = true,
   query = "",
   assetUrl,
   focusedFragmentId = null,
@@ -38,7 +40,7 @@ export function StructuredPage({
     <article className={`structured-page ${className}`.trim()}>
       <header className="structured-page-head">
         <span>Страница {page.page_number}</span>
-        <QualityBadge quality={page.quality} />
+        <QualityBadge quality={page.quality} showReview={showOcrReview} />
       </header>
       {page.fragments.map((fragment) => {
         const extra = fragmentProps?.(fragment) ?? {};
@@ -57,7 +59,7 @@ export function StructuredPage({
           >
             {renderFragmentOverlay?.(fragment)}
             <FragmentBody fragment={fragment} query={query} assetUrl={assetUrl} />
-            <RecognitionMeta fragment={fragment} />
+            <RecognitionMeta fragment={fragment} showConfidence={showOcrReview} />
           </div>
         );
       })}
@@ -92,7 +94,8 @@ function FragmentBody({
         />
         {hasTranscript && (
           <details className="structured-transcript">
-            <summary>Расшифровка изображения</summary>
+            <summary>Распознанный текст</summary>
+            <p className="structured-transcript-note">Может содержать ошибки, особенно в формулах.</p>
             <p>{highlight(transcript, query)}</p>
           </details>
         )}
@@ -134,14 +137,14 @@ function FragmentBody({
   return <p>{highlight(fragment.text, query)}</p>;
 }
 
-function RecognitionMeta({ fragment }: { fragment: MaterialFragmentRead }) {
+function RecognitionMeta({ fragment, showConfidence }: { fragment: MaterialFragmentRead; showConfidence: boolean }) {
   if (fragment.recognition_source === "native") return null;
   const label = {
     ocr: "OCR",
     vl: "PaddleOCR-VL",
     manual: "исправлено вручную",
   }[fragment.recognition_source];
-  const lowConfidence = fragment.confidence !== null && fragment.confidence < 0.75;
+  const lowConfidence = showConfidence && fragment.confidence !== null && fragment.confidence < 0.75;
   return (
     <small className={`structured-recognition ${lowConfidence ? "is-low" : ""}`.trim()}>
       {label}
