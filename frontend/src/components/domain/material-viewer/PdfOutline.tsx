@@ -10,8 +10,8 @@ interface OutlineNode {
   children: OutlineNode[];
 }
 
-function pageMark(state: PageStateRead | undefined): { className: string; label: string | null } {
-  if (state?.quality === "ocr_low" && state.reviewed_at === null) {
+function pageMark(state: PageStateRead | undefined, showOcrReview: boolean): { className: string; label: string | null } {
+  if (showOcrReview && state?.quality === "ocr_low" && state.reviewed_at === null) {
     return { className: "needs-review", label: "нужно проверить" };
   }
   if (state?.quality === "ocr") {
@@ -39,6 +39,7 @@ interface PdfOutlineProps {
   page: number;
   pageCount: number;
   pageStates: PageStateRead[];
+  showOcrReview?: boolean;
   /** Ключ материала: раскрытые ветви и вкладка запоминаются для него. */
   storageKey: string;
   onPageChange(page: number): void;
@@ -56,6 +57,7 @@ export function PdfOutline({
   page,
   pageCount,
   pageStates,
+  showOcrReview = true,
   storageKey,
   onPageChange,
 }: PdfOutlineProps) {
@@ -120,7 +122,7 @@ export function PdfOutline({
       const containsActive = hasChildren && subtreeKeys(node).includes(activeKey ?? "");
       const isCollapsed = hasChildren && collapsed.has(node.key) && !containsActive;
       const isActive = node.key === activeKey;
-      const mark = pageMark(stateByPage.get(node.item.page));
+      const mark = pageMark(stateByPage.get(node.item.page), showOcrReview);
       return (
         <div className="outline-branch" key={node.key} role="none">
           <div className="outline-row" role="treeitem" aria-expanded={hasChildren ? !isCollapsed : undefined} aria-selected={isActive}>
@@ -194,7 +196,7 @@ export function PdfOutline({
       ) : (
         <div className="viewer-outline-pages" role="list" aria-label="Страницы">
           {Array.from({ length: pageCount }, (_, index) => index + 1).map((number) => {
-            const mark = pageMark(stateByPage.get(number));
+            const mark = pageMark(stateByPage.get(number), showOcrReview);
             return (
               <button
                 type="button"

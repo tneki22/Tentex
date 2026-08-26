@@ -49,10 +49,14 @@ interface QualityBadgeProps {
   quality: PageQuality;
   /** Число страниц с этим флагом. Без него — просто метка качества. */
   count?: number;
+  /** Быстрый OCR сохраняет техническое качество, но не создаёт очередь проверки. */
+  showReview?: boolean;
 }
 
-export function QualityBadge({ quality, count }: QualityBadgeProps) {
-  const { label, tone, title } = QUALITY[quality];
+export function QualityBadge({ quality, count, showReview = true }: QualityBadgeProps) {
+  const { label, tone, title } = quality === "ocr_low" && !showReview
+    ? { label: "OCR-текст", tone: "neutral" as const, title: "Автоматическая расшифровка может содержать ошибки, особенно в формулах." }
+    : QUALITY[quality];
   return (
     <span title={title}>
       <StatusBadge tone={tone}>{count === undefined ? label : `${label}: ${count}`}</StatusBadge>

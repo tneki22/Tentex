@@ -7,6 +7,7 @@ import {
   librarySourceUrl,
   type LibraryMaterialDetailRead,
   type MaterialPageRead,
+  type ParserMode,
 } from "../../api/materials";
 import { StructuredPage, TimedTranscript } from "../../components/domain/material-viewer";
 import { LoadingState } from "../../components/ui";
@@ -128,6 +129,7 @@ export function MaterialSourceView({
           {page
             ? (
               <StructuredPage
+                showOcrReview={material.parser_mode !== "fast"}
                 page={page}
                 query={query}
                 assetUrl={(fragmentId) => libraryFragmentAssetUrl(material.id, fragmentId)}
@@ -196,6 +198,7 @@ export function MaterialSourceView({
 
 interface MaterialTextViewProps {
   material: LibraryMaterialDetailRead;
+  parserMode?: ParserMode | null;
   page: MaterialPageRead | null;
   query: string;
   focusedFragmentId: string | null;
@@ -207,6 +210,7 @@ interface MaterialTextViewProps {
 /** Правая половина сцены — подготовленный результат разбора. */
 export function MaterialTextView({
   material,
+  parserMode = material.parser_mode,
   page,
   query,
   focusedFragmentId,
@@ -246,6 +250,7 @@ export function MaterialTextView({
   return (
     <div className="viewer-pane-scroll">
       <StructuredPage
+        showOcrReview={parserMode !== "fast"}
         page={page}
         query={query}
         assetUrl={(fragmentId) => libraryFragmentAssetUrl(material.id, fragmentId)}

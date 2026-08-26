@@ -141,6 +141,7 @@ export interface LibraryMaterialRead {
   size_bytes: number;
   page_count: number | null;
   status: MaterialState;
+  parser_mode: ParserMode | null;
   native_page_count: number;
   ocr_page_count: number;
   ocr_low_page_count: number;
