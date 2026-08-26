@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ViewerZoom } from "../components/domain/material-viewer";
+import { useViewerFullscreen } from "./useViewerFullscreen";
 
 /** Размеры листа заданы в CSS сцены: держим их синхронно, иначе «вписать» промахнётся. */
 const SHEET_WIDTH = 680;
@@ -12,6 +13,9 @@ interface ViewportOptions {
   pageCount: number;
   /** Масштаб имеет смысл только там, где показана настоящая страница. */
   zoomable: boolean;
+  pageAspect?: number;
+  textMode?: boolean;
+  navigationDisabled?: boolean;
   onPageChange?: (page: number) => void;
 }
 
@@ -22,10 +26,10 @@ interface ViewportOptions {
  * Вынесено из проектного экрана, чтобы Библиотека и проект вели себя одинаково:
  * два независимых расчёта «вписать» разъезжались бы на первой же правке CSS.
  */
-export function useMaterialViewport({ pageCount, zoomable, onPageChange }: ViewportOptions) {
+export function useMaterialViewport({ pageCount, zoomable, pageAspect, textMode, navigationDisabled, onPageChange }: ViewportOptions) {
   const [page, setPage] = useState(1);
   const [zoom, setZoom] = useState<ViewerZoom>("fit-page");
-  const [fullscreen, setFullscreen] = useState(false);
+  const { fullscreen, setFullscreen } = useViewerFullscreen();
   const [showRegions, setShowRegions] = useState(false);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -34,7 +38,7 @@ export function useMaterialViewport({ pageCount, zoomable, onPageChange }: Viewp
   const measure = useCallback(() => {
     const node = scrollRef.current;
     if (!node) return;
-    const box = node.getBoundingClientRect();
+    const box = { width: node.clientWidth, height: node.clientHeight };
     setViewport((current) => (
       current.width === box.width && current.height === box.height
         ? current
@@ -64,14 +68,16 @@ export function useMaterialViewport({ pageCount, zoomable, onPageChange }: Viewp
   const effectiveZoom = useMemo(() => {
     if (!zoomable) return 1;
     if (typeof zoom === "number") return zoom;
+    if (textMode) return 1;
     if (viewport.width === 0 || viewport.height === 0) return 1;
     const byWidth = (viewport.width - SHEET_PADDING) / SHEET_WIDTH;
-    if (zoom === "fit-width") return Math.min(2, Math.max(0.5, byWidth));
-    const byHeight = (viewport.height - SHEET_PADDING) / SHEET_HEIGHT;
-    return Math.min(2, Math.max(0.5, Math.min(byWidth, byHeight)));
-  }, [zoom, zoomable, viewport]);
+    if (zoom === "fit-width") return Math.min(2, Math.max(0.1, byWidth));
+    const byHeight = (viewport.height - SHEET_PADDING) / (pageAspect ? SHEET_WIDTH * pageAspect : SHEET_HEIGHT);
+    return Math.min(2, Math.max(0.1, Math.min(byWidth, byHeight)));
+  }, [zoom, zoomable, viewport, pageAspect, textMode]);
 
   const goToPage = useCallback((next: number) => {
+    if (navigationDisabled) return;
     setPage((current) => {
       const target = Math.min(Math.max(1, next), Math.max(1, pageCount));
       if (target !== current) {
@@ -80,7 +86,7 @@ export function useMaterialViewport({ pageCount, zoomable, onPageChange }: Viewp
       }
       return target;
     });
-  }, [pageCount, onPageChange]);
+  }, [pageCount, onPageChange, navigationDisabled]);
 
   useEffect(() => {
     function isTyping(target: EventTarget | null): boolean {
@@ -88,7 +94,12 @@ export function useMaterialViewport({ pageCount, zoomable, onPageChange }: Viewp
       return target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
     }
     function onKeyDown(event: KeyboardEvent) {
-      if (isTyping(event.target)) return;
+      if (isTyping(event.target) || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.target instanceof HTMLElement) {
+        if (event.target.closest('[role="dialog"]')) return;
+        if (["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(event.key)
+          && event.target.closest('[role="separator"], [role="tablist"], [role="tree"]')) return;
+      }
       switch (event.key) {
         case "ArrowLeft":
         case "PageUp":
@@ -128,7 +139,7 @@ export function useMaterialViewport({ pageCount, zoomable, onPageChange }: Viewp
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [page, pageCount, fullscreen, goToPage]);
+  }, [page, pageCount, fullscreen, goToPage, setFullscreen]);
 
   return {
     page,

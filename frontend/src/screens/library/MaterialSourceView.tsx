@@ -205,6 +205,7 @@ interface MaterialTextViewProps {
   currentTime: number;
   onSeek: (seconds: number) => void;
   processing?: boolean;
+  zoom?: number;
 }
 
 /** Правая половина сцены — подготовленный результат разбора. */
@@ -217,6 +218,7 @@ export function MaterialTextView({
   currentTime,
   onSeek,
   processing = false,
+  zoom = 1,
 }: MaterialTextViewProps) {
   if (!page) {
     return (
@@ -248,7 +250,7 @@ export function MaterialTextView({
     );
   }
   return (
-    <div className="viewer-pane-scroll">
+    <div className="viewer-pane-scroll" style={{ "--viewer-text-zoom": zoom } as CSSProperties}>
       <StructuredPage
         showOcrReview={parserMode !== "fast"}
         page={page}

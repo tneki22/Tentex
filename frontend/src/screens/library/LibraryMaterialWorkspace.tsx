@@ -39,6 +39,7 @@ import { AiCleanupPanel } from "../AiCleanupPanel";
 import { AddToProjectDialog } from "./AddToProjectDialog";
 import { LibraryMaterialInspector, type InspectorTab } from "./LibraryMaterialInspector";
 import { MaterialSourceView, MaterialTextView } from "./MaterialSourceView";
+import { editablePageText, PageTextEditor } from "./PageTextEditor";
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "список вопросов",
@@ -79,6 +80,9 @@ export function LibraryMaterialWorkspace() {
   const [editOpen, setEditOpen] = useState(false);
   const [editText, setEditText] = useState("");
   const [editBusy, setEditBusy] = useState(false);
+  const [editSession, setEditSession] = useState<{ page: MaterialPageRead; revision: number; initial: string; draftKey: string } | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
   const [deletePreview, setDeletePreview] = useState<MaterialDeletePreview | null>(null);
@@ -103,13 +107,40 @@ export function LibraryMaterialWorkspace() {
   /* Геометрия просмотра нужна раньше карточки: страница — это то, что мы
      запрашиваем. Поэтому число страниц и масштабируемость приезжают в неё
      отдельным состоянием, как только карточка загрузилась. */
-  const [geometry, setGeometry] = useState({ pageCount: 1, zoomable: false });
-  const view = useMaterialViewport(geometry);
+  const [geometry, setGeometry] = useState({ pageCount: 1, zoomable: false, pageAspect: 900 / 680 });
+  const view = useMaterialViewport({ ...geometry, textMode: !editOpen && (mode === "text" || compareRevision !== null), navigationDisabled: editOpen });
   const store = useLibraryMaterial(materialId, {
     page: view.page,
     revision: selectedRevision,
   });
-  const { detail, page } = store;
+  const { detail } = store;
+  const page = editSession?.page ?? store.page;
+  const editDirty = editSession !== null && editText !== editSession.initial;
+  const textZoom = typeof view.zoom === "number" ? view.zoom : 1;
+
+  useEffect(() => {
+    // При переходе между материалами React переиспользует экран. Черновик остаётся
+    // в sessionStorage старого документа, но не должен попасть в новый.
+    setEditOpen(false);
+    setEditSession(null);
+    setEditError(null);
+    setPendingLeave(null);
+    setMode(null);
+    view.setPage(1);
+  }, [materialId]);
+
+  useEffect(() => {
+    if (!editSession) return;
+    if (editDirty) sessionStorage.setItem(editSession.draftKey, editText);
+    else sessionStorage.removeItem(editSession.draftKey);
+    const onUnload = (event: BeforeUnloadEvent) => {
+      if (!editDirty && !editBusy) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onUnload);
+    return () => window.removeEventListener("beforeunload", onUnload);
+  }, [editSession, editText, editDirty, editBusy]);
   const primaryRevision = selectedRevision ?? detail?.active_parse_revision ?? 0;
   const isVersionComparison = compareRevision !== null && compareRevision !== primaryRevision;
 
@@ -151,12 +182,12 @@ export function LibraryMaterialWorkspace() {
   useEffect(() => {
     if (!detail || !presentation) return;
     setGeometry((current) => {
-      const next = { pageCount: detail.page_count ?? 1, zoomable: presentation.supportsZoom };
-      return current.pageCount === next.pageCount && current.zoomable === next.zoomable
+      const next = { pageCount: detail.page_count ?? 1, zoomable: presentation.supportsZoom, pageAspect: page && page.width > 0 ? page.height / page.width : 900 / 680 };
+      return current.pageCount === next.pageCount && current.zoomable === next.zoomable && current.pageAspect === next.pageAspect
         ? current
         : next;
     });
-  }, [detail?.page_count, presentation]);
+  }, [detail?.page_count, presentation, page?.width, page?.height]);
 
   const searchProvider = useCallback(
     async (query: string, signal: AbortSignal) => {
@@ -176,7 +207,7 @@ export function LibraryMaterialWorkspace() {
   const search = useDocumentSearch(searchProvider);
 
   useEffect(() => {
-    if (!search.current) return;
+    if (!search.current || editOpen) return;
     setFocusedFragmentId(search.current.fragmentId);
     if (search.current.pageNumber !== activePage) view.goToPage(search.current.pageNumber);
     // Прокрутка к найденному фрагменту происходит после отрисовки страницы.
@@ -202,8 +233,8 @@ export function LibraryMaterialWorkspace() {
 
   const readOnly = selectedRevision !== null && selectedRevision !== detail?.active_parse_revision;
   const hasOutline = Boolean(detail && detail.outline_source !== "none" && detail.outline.length > 0);
-  const showOutline = hasOutline && outlineOpen && !narrow;
-  const showInspector = inspectorOpen && !narrow;
+  const showOutline = hasOutline && outlineOpen && !narrow && !view.fullscreen && !editOpen;
+  const showInspector = inspectorOpen && !narrow && !view.fullscreen && !editOpen;
   const inspectorVisible = showInspector || (narrow && inspectorOpen);
 
   function setParam(key: string, value: string | null) {
@@ -232,6 +263,13 @@ export function LibraryMaterialWorkspace() {
   /* Возврат ведёт туда, откуда пришли: в сохранённый список Библиотеки или на
      ту же страницу проектного просмотрщика. По прямой ссылке — просто в список. */
   function goBack() {
+    if (editOpen) {
+      requestLeave(() => {
+        closeEditor();
+        navigate(returnTo ?? "/library");
+      });
+      return;
+    }
     const state = location.state as { libraryReturnTo?: string } | null;
     navigate(returnTo ?? state?.libraryReturnTo ?? "/library");
   }
@@ -242,11 +280,13 @@ export function LibraryMaterialWorkspace() {
     : "Вернуться в Библиотеку";
 
   async function savePageText() {
-    if (!detail || !page || !editText.trim()) return;
+    if (!detail || !editSession || editBusy || !editDirty || !editText.trim()) return;
     setEditBusy(true);
+    setEditError(null);
     try {
-      const result = await updateLibraryPageText(detail.id, page.page_number, editText);
-      setEditOpen(false);
+      const result = await updateLibraryPageText(detail.id, editSession.page.page_number, editText, { revision: editSession.revision });
+      closeEditor();
+      if (selectedRevision !== null) setParam("revision", null);
       setNotice(
         result.orphaned_binding_ids.length > 0
           ? `Текст сохранён новой версией. Привязок перенесено: ${result.transferred_bindings}, осиротело: ${result.orphaned_binding_ids.length}.`
@@ -254,16 +294,35 @@ export function LibraryMaterialWorkspace() {
       );
       await store.refreshDetail();
     } catch (caught) {
-      store.setError(caught instanceof Error ? caught.message : "Не удалось сохранить исправление");
+      setEditError(caught instanceof Error ? caught.message : "Не удалось сохранить исправление");
+      if ((caught as { status?: number }).status === 409) await store.refreshDetail();
     } finally {
       setEditBusy(false);
     }
   }
 
   function openTextEditor() {
-    if (!page || readOnly || isVersionComparison || store.busy) return;
-    setEditText(page.markdown || page.text);
+    if (!page || !detail || store.pageLoading || page.page_number !== activePage || readOnly || isVersionComparison || store.busy || editOpen
+      || (detail.task && ["running", "queued", "paused"].includes(detail.task.state))) return;
+    const initial = editablePageText(page);
+    const draftKey = `tentex-page-draft:${detail.id}:${primaryRevision}:${page.page_number}`;
+    setEditSession({ page, revision: primaryRevision, initial, draftKey });
+    setEditText(sessionStorage.getItem(draftKey) ?? initial);
+    setEditError(null);
     setEditOpen(true);
+  }
+
+  function closeEditor() {
+    if (editSession) sessionStorage.removeItem(editSession.draftKey);
+    setEditOpen(false);
+    setEditSession(null);
+    setEditError(null);
+  }
+
+  function requestLeave(action: () => void) {
+    if (editBusy) return;
+    if (editDirty) setPendingLeave(() => action);
+    else action();
   }
 
   if (store.loading) {
@@ -307,7 +366,7 @@ export function LibraryMaterialWorkspace() {
   const comparisonLabels = isVersionComparison && compareRevision !== null
     ? { left: revisionLabel(primaryRevision), right: revisionLabel(compareRevision) }
     : null;
-  const panelTools = (
+  const panelTools = !editOpen && !view.fullscreen && (
     <div className="library-head-panels">
       <Tooltip label={hasOutline ? "Оглавление" : "В документе нет оглавления."}>
         <IconButton
@@ -333,17 +392,18 @@ export function LibraryMaterialWorkspace() {
 
   const stage = (
     <DocumentStage
-      mode={isVersionComparison ? "compare" : stageMode}
+      mode={editOpen ? (detail.capabilities.can_compare ? "compare" : "text") : isVersionComparison ? "compare" : stageMode}
       storageKey={detail.id}
       sourceLabel={comparisonLabels?.left ?? presentation.sourceLabel}
-      textLabel={comparisonLabels?.right ?? presentation.textLabel}
+      textLabel={editOpen ? "Исправление текста" : comparisonLabels?.right ?? presentation.textLabel}
       canPrevPage={activePage > 1}
       canNextPage={activePage < pageCount}
-      onPrevPage={pageCount > 1 ? () => view.goToPage(activePage - 1) : undefined}
-      onNextPage={pageCount > 1 ? () => view.goToPage(activePage + 1) : undefined}
+      onPrevPage={!editOpen && pageCount > 1 ? () => view.goToPage(activePage - 1) : undefined}
+      onNextPage={!editOpen && pageCount > 1 ? () => view.goToPage(activePage + 1) : undefined}
       source={
         isVersionComparison ? (
           <MaterialTextView
+            zoom={textZoom}
             material={detail}
             parserMode={store.revisions.find((item) => item.revision === primaryRevision)?.parser_mode ?? detail.parser_mode}
             page={page}
@@ -369,13 +429,26 @@ export function LibraryMaterialWorkspace() {
         )
       }
       text={
-        isVersionComparison ? (
+        editOpen ? (
+          <PageTextEditor
+            pageNumber={activePage}
+            text={editText}
+            dirty={editDirty}
+            busy={editBusy}
+            error={editError}
+            zoom={textZoom}
+            onChange={setEditText}
+            onSave={() => void savePageText()}
+            onCancel={() => requestLeave(closeEditor)}
+          />
+        ) : isVersionComparison ? (
           comparisonError ? (
             <ErrorState message={comparisonError} />
           ) : comparisonLoading || !comparisonPage ? (
             <LoadingState label="Открываем версию для сравнения" />
           ) : (
             <MaterialTextView
+              zoom={textZoom}
               material={detail}
               parserMode={store.revisions.find((item) => item.revision === compareRevision)?.parser_mode ?? detail.parser_mode}
               page={comparisonPage}
@@ -387,6 +460,7 @@ export function LibraryMaterialWorkspace() {
           )
         ) : (
           <MaterialTextView
+            zoom={textZoom}
             material={detail}
             parserMode={store.revisions.find((item) => item.revision === primaryRevision)?.parser_mode ?? detail.parser_mode}
             page={page}
@@ -409,6 +483,7 @@ export function LibraryMaterialWorkspace() {
         showInspector ? "has-inspector" : "",
         view.fullscreen ? "is-fullscreen" : "",
         narrow ? "is-narrow" : "",
+        editOpen ? "is-editing" : "",
       ].filter(Boolean).join(" ")}
       style={{ "--viewer-zoom": view.effectiveZoom } as CSSProperties}
     >
@@ -421,19 +496,9 @@ export function LibraryMaterialWorkspace() {
           </Tooltip>
           <div className="library-head-title">
             <h1 title={detail.original_name}>{detail.original_name}</h1>
-            <div className="library-head-meta">
+            {detail.status !== "ready" && <div className="library-head-meta">
               <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-              {detail.usage.length > 0 && (
-                <span
-                  className="library-head-usage"
-                  title={detail.usage.map((usage) => `${usage.project_name}: ${usage.purposes.map((item) => PURPOSE[item]).join(", ")}`).join("\n")}
-                >
-                  {detail.usage.length === 1
-                    ? detail.usage[0].project_name
-                    : `в ${detail.usage.length} проектах`}
-                </span>
-              )}
-            </div>
+            </div>}
           </div>
         </div>
 
@@ -453,7 +518,9 @@ export function LibraryMaterialWorkspace() {
             matchLabel={search.label}
             versionComparison={comparisonLabels}
             onEditText={detail.capabilities.can_edit_text ? openTextEditor : undefined}
-            editDisabled={!page || readOnly || isVersionComparison || store.busy}
+            editDisabled={!page || store.pageLoading || readOnly || isVersionComparison || store.busy
+              || Boolean(detail.task && ["running", "queued", "paused"].includes(detail.task.state))}
+            editing={editOpen}
             panelTools={panelTools}
             onModeChange={isVersionComparison ? () => undefined : setMode}
             onPageChange={view.goToPage}
@@ -588,7 +655,7 @@ export function LibraryMaterialWorkspace() {
         )}
       </div>
 
-      {narrow && (
+      {narrow && !editOpen && !view.fullscreen && (
         <nav className="library-narrow-bar" aria-label="Панели рабочей области">
           {hasOutline && (
             <Button variant="ghost" onClick={() => setOutlineOpen((value) => !value)}>
@@ -601,7 +668,7 @@ export function LibraryMaterialWorkspace() {
         </nav>
       )}
 
-      {narrow && outlineOpen && hasOutline && (
+      {narrow && outlineOpen && hasOutline && !editOpen && !view.fullscreen && (
         <div className="library-layer" role="dialog" aria-label="Оглавление">
           <div className="library-layer-head">
             <strong>Оглавление</strong>
@@ -623,7 +690,7 @@ export function LibraryMaterialWorkspace() {
         </div>
       )}
 
-      {narrow && inspectorOpen && (
+      {narrow && inspectorOpen && !editOpen && !view.fullscreen && (
         <div className="library-layer is-inspector" role="dialog" aria-label="Обработка материала">
           <div className="library-layer-head">
             <strong>Материал</strong>
@@ -663,24 +730,19 @@ export function LibraryMaterialWorkspace() {
       )}
 
       <Dialog
-        open={editOpen}
-        onOpenChange={setEditOpen}
-        title={`Исправить текст страницы ${page?.page_number ?? ""}`}
-        description="Исправление сохранится новой версией. Исходный файл не меняется, и оно будет видно во всех проектах с этим материалом."
+        open={pendingLeave !== null}
+        onOpenChange={(open) => !open && setPendingLeave(null)}
+        title="Закрыть без сохранения?"
+        description="Изменения текста этой страницы будут потеряны."
         footer={
           <>
-            <Button variant="ghost" onClick={() => setEditOpen(false)}>Отменить</Button>
-            <Button disabled={editBusy || !editText.trim()} onClick={() => void savePageText()}>
-              Сохранить исправление
+            <Button variant="ghost" onClick={() => setPendingLeave(null)}>Продолжить исправление</Button>
+            <Button onClick={() => { pendingLeave?.(); setPendingLeave(null); }}>
+              Не сохранять
             </Button>
           </>
         }
-      >
-        <label className="materials-page-editor">
-          Текст страницы
-          <textarea autoFocus value={editText} onChange={(event) => setEditText(event.target.value)} />
-        </label>
-      </Dialog>
+      />
 
       {page && (
         <AiCleanupPanel
@@ -693,10 +755,7 @@ export function LibraryMaterialWorkspace() {
           }}
           page={page}
           onOpenChange={setCleanupOpen}
-          onManualEdit={() => {
-            setEditText(page.markdown || page.text);
-            setEditOpen(true);
-          }}
+          onManualEdit={openTextEditor}
           onReload={async () => {
             await store.refreshDetail();
           }}

@@ -29,6 +29,7 @@ export interface ViewerToolbarProps {
   matchLabel?: string | null;
   versionComparison?: { left: string; right: string } | null;
   editDisabled?: boolean;
+  editing?: boolean;
   panelTools?: ReactNode;
   onEditText?(): void;
   onModeChange(mode: MaterialViewMode): void;
@@ -60,6 +61,7 @@ export function ViewerToolbar({
   matchLabel = null,
   versionComparison = null,
   editDisabled = false,
+  editing = false,
   panelTools,
   onEditText,
   onModeChange,
@@ -98,6 +100,7 @@ export function ViewerToolbar({
   return (
     <div className="viewer-toolbar-tools">
       <div className="viewer-toolbar-navigation">
+        {editing ? <strong className="viewer-editing-label">Исправление текста</strong> : <>
         <SegmentedTabs
           className="viewer-mode-tabs"
           label="Что показать"
@@ -143,6 +146,7 @@ export function ViewerToolbar({
           />
           {matchLabel && <span className="viewer-search-count">{matchLabel}</span>}
         </label>
+        </>}
 
         {presentation.supportsZoom && (
           <div className="viewer-zoom-tools">
@@ -183,7 +187,7 @@ export function ViewerToolbar({
 
       </div>
       <div className="viewer-toolbar-end">
-        {onEditText && (
+        {onEditText && !editing && (
           <Tooltip label="Исправить текст текущей страницы">
             <IconButton label="Исправить текст" disabled={editDisabled} onClick={onEditText}>
               <Pencil size={15} />

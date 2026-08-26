@@ -69,6 +69,7 @@ import {
 import { MetricList } from "../components/domain";
 import { useBindings } from "../hooks/useBindings";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
+import { useViewerFullscreen } from "../hooks/useViewerFullscreen";
 import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTreeNode } from "./programTree";
 import { AiCleanupPanel } from "./AiCleanupPanel";
 import { MaterialFileTab } from "./materials/MaterialFileTab";
@@ -1198,7 +1199,7 @@ function MaterialSurface() {
   /** «fit» — вписать страницу целиком: с ним документ открывается, а не с обрезанного 100%. */
   const [zoom, setZoom] = useState<number | "fit">("fit");
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
-  const [fullscreen, setFullscreen] = useState(false);
+  const { fullscreen, setFullscreen } = useViewerFullscreen();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const scrollObserver = useRef<ResizeObserver | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -1582,6 +1583,7 @@ function MaterialSurface() {
         void undoLastBindingAction();
         return;
       }
+      if (event.ctrlKey || event.metaKey || event.altKey || event.defaultPrevented) return;
       switch (event.key) {
         case "ArrowLeft":
         case "PageUp":
