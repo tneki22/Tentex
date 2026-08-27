@@ -146,7 +146,7 @@ def _fragment_read(
         element_kind=fragment.element_kind,
         asset_label=(
             material_image_label(material.id, material.original_name, fragment.asset_path)
-            if fragment.element_kind == "image" and fragment.asset_path
+            if fragment.element_kind in {"image", "table"} and fragment.asset_path
             else None
         ),
         quality=fragment.quality,

@@ -74,6 +74,28 @@ def test_active_image_binding_includes_kind_and_asset_label(session: Session) ->
     assert active[0].asset_label.endswith(f" · {material.id}")
 
 
+def test_active_table_binding_includes_kind_and_asset_label(session: Session) -> None:
+    project = make_exam_project(session)
+    node = make_topic_node(session, project, title="Таблица")
+    material = make_material(session, "a4")
+    link_material(session, project, material)
+    page = add_page_with_fragments(
+        session, material, page_number=1, revision=1, fragments=["Таблица"]
+    )
+    table = session.get(MaterialFragment, page.fragment_ids[0])
+    assert table is not None
+    table.element_kind = "table"
+    table.asset_path = "assets/material/table.png"
+    session.commit()
+
+    _bind(session, project, node, page.fragment_ids)
+    active = service.list_bindings(session, project.id, node_id=node.id)
+
+    assert active[0].element_kind == "table"
+    assert active[0].asset_label is not None
+    assert active[0].asset_label.endswith(f" · {material.id}")
+
+
 def test_image_binding_labels_do_not_collide_between_materials(session: Session) -> None:
     project = make_exam_project(session)
     node = make_topic_node(session, project, title="Две схемы")
