@@ -570,7 +570,7 @@ export function ProjectWorkspace() {
         : "Сопоставлен вручную";
       const media: ReferenceAnswerMedia[] = [
         ...sourceBindings
-          .filter((binding) => binding.element_kind === "image")
+          .filter((binding) => ["image", "table"].includes(binding.element_kind))
           .map((binding) => ({
             kind: "image" as const,
             source: "binding" as const,

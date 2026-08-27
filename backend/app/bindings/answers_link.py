@@ -111,17 +111,21 @@ class _Section:
     def answer_text(self, material: Material) -> str:
         fragments = self.bindable_fragments()
         if fragments and all(fragment.element_kind == "image" for fragment in fragments):
-            # Эталон без единой текстовой строки нечем сверять — источник открывается напрямую (`source_only`).
+            # Эталон без единой текстовой строки нечем сверять — источник
+            # открывается напрямую (`source_only`).
             return ""
-        body = [
-            (
-                "[изображение: "
-                f"{material_image_label(material.id, material.original_name, fragment.asset_path)}]"
-                if fragment.element_kind == "image" and fragment.asset_path
-                else fragment.text
-            )
-            for fragment in fragments
-        ]
+        body: list[str] = []
+        for fragment in fragments:
+            if fragment.element_kind in {"image", "table"} and fragment.asset_path:
+                label = material_image_label(
+                    material.id, material.original_name, fragment.asset_path
+                )
+                body.append(f"[изображение: {label}]")
+            elif fragment.element_kind == "formula" and fragment.text.strip():
+                formula = fragment.text.strip()
+                body.append(formula if formula.startswith("$$") else f"$${formula}$$")
+            else:
+                body.append(fragment.text)
         return "\n".join(body)
 
 

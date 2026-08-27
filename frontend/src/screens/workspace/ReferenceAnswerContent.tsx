@@ -1,3 +1,4 @@
+import katex from "katex";
 import type { CSSProperties, ReactNode } from "react";
 import {
   canonicalImageMedia,
@@ -9,6 +10,8 @@ export type { ReferenceAnswerMedia } from "./referenceAnswerMedia";
 
 const MARKER = /\[(изображение|файл): ([^\]\r\n]+)\]|\[Изображение\]/g;
 const LIST_ITEM = /^([ \t]*)(?:([-*+])|(\d+)[.)])\s+(.+)$/;
+const DISPLAY_MATH = /^\$\$([\s\S]+)\$\$$/;
+const INLINE_MATH = /\$([^$\n]+?)\$|\\\(([\s\S]+?)\\\)/g;
 
 function indentation(value: string): number {
   return Array.from(value).reduce((total, character) => total + (character === "\t" ? 4 : 1), 0);
@@ -25,6 +28,40 @@ function mediaNode(media: ReferenceAnswerMedia, key: string): ReactNode {
   return <a className="workspace-reference-file" href={media.url} download={media.label ?? undefined} key={key}>{media.label ?? "Скачать файл"}</a>;
 }
 
+function mathNode(source: string, displayMode: boolean, key: string): ReactNode {
+  try {
+    const html = katex.renderToString(source, {
+      displayMode,
+      throwOnError: true,
+      strict: "ignore",
+      trust: false,
+    });
+    const Tag = displayMode ? "div" : "span";
+    return (
+      <Tag
+        className={displayMode ? "structured-formula" : "structured-inline-math"}
+        dangerouslySetInnerHTML={{ __html: html }}
+        key={key}
+      />
+    );
+  } catch {
+    return <code key={key}>{displayMode ? `$$${source}$$` : `$${source}$`}</code>;
+  }
+}
+
+function textNodes(text: string, keyPrefix: string): ReactNode[] {
+  const content: ReactNode[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(INLINE_MATH)) {
+    const start = match.index;
+    if (start > cursor) content.push(text.slice(cursor, start));
+    content.push(mathNode(match[1] ?? match[2] ?? "", false, `${keyPrefix}-math-${start}`));
+    cursor = start + match[0].length;
+  }
+  if (cursor < text.length) content.push(text.slice(cursor));
+  return content;
+}
+
 function inlineContent(
   text: string,
   media: ReferenceAnswerMedia[],
@@ -38,7 +75,9 @@ function inlineContent(
   for (const match of text.matchAll(MARKER)) {
     const marker = match[0];
     const start = match.index ?? 0;
-    if (start > cursor) content.push(text.slice(cursor, start));
+    if (start > cursor) {
+      content.push(...textNodes(text.slice(cursor, start), `text-${cursor}`));
+    }
     const kind = match[1] as "изображение" | "файл" | undefined;
     const label = match[2];
     const resolved = kind
@@ -49,7 +88,9 @@ function inlineContent(
     content.push(resolved ? mediaNode(resolved, `${start}-${marker}`) : marker);
     cursor = start + marker.length;
   }
-  if (cursor < text.length) content.push(text.slice(cursor));
+  if (cursor < text.length) {
+    content.push(...textNodes(text.slice(cursor), `text-${cursor}`));
+  }
   return content;
 }
 
@@ -81,6 +122,12 @@ export function ReferenceAnswerContent({
     if (!line.trim()) {
       flushList();
       blocks.push(<p className="workspace-reference-paragraph is-blank" aria-hidden="true" key={`blank-${blocks.length}`}> </p>);
+      continue;
+    }
+    const displayMath = line.trim().match(DISPLAY_MATH);
+    if (displayMath) {
+      flushList();
+      blocks.push(mathNode(displayMath[1], true, `formula-${blocks.length}`));
       continue;
     }
     const item = line.match(LIST_ITEM);
