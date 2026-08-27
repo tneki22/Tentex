@@ -28,6 +28,25 @@ from app.ocr import settings as ocr_settings
 from app.projects.errors import ProjectConflictError
 
 
+def test_textbook_status_rejects_a_legacy_layout_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        textbook,
+        "health_payload",
+        lambda **_: {
+            "ready": True,
+            "executor": "PP-StructureV3 + PP-FormulaNet Plus M",
+            "layout_model": "PP-DocBlockLayout",
+        },
+    )
+
+    current = textbook.status()
+
+    assert current.available is False
+    assert "PP-DocLayout_plus-L" in current.reason
+
+
 def test_textbook_mode_is_rejected_when_models_are_not_installed(
     session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

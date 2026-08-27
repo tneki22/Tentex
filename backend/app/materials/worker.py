@@ -285,8 +285,13 @@ def process_task(session: Session, task: ProcessingTask) -> None:
         session.rollback()
         _prepare_revision(session, task_id)
         if next_index < len(selected):
+            remaining_pages = selected[next_index:]
             for page in iter_pages(
-                source_path, parser_mode, selected[next_index], params=params
+                source_path,
+                parser_mode,
+                remaining_pages[0],
+                params=params,
+                page_numbers=remaining_pages,
             ):
                 if not _save_page(session, task_id, page):
                     return

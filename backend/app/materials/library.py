@@ -1539,7 +1539,7 @@ def restore_revision(
     session.rollback()
     with session.begin():
         material = material_or_404(session, material_id)
-        revision_registry.require_revision(session, material_id, revision)
+        source_revision = revision_registry.require_revision(session, material_id, revision)
         if revision == material.active_parse_revision:
             raise ProjectConflictError(
                 "Эта версия уже текущая", code="material_revision_is_current"
@@ -1579,7 +1579,7 @@ def restore_revision(
             material_id,
             target,
             origin=MaterialRevisionOrigin.RESTORE,
-            parser_mode=material.parser_mode,
+            parser_mode=source_revision.parser_mode,
             parent_revision=revision,
             source_storage_path=storage_path,
             source_hash=source_hash,

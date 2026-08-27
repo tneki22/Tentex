@@ -1,5 +1,5 @@
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from functools import reduce
@@ -593,6 +593,7 @@ def iter_pages(
     start_page: int = 1,
     *,
     params: OcrRuntimeParams | None = None,
+    page_numbers: Sequence[int] | None = None,
 ) -> Iterator[ParsedPage]:
     params = params or OcrRuntimeParams()
     suffix = path.suffix.lower()
@@ -601,7 +602,16 @@ def iter_pages(
     scale_matrix = fitz.Matrix(params.raster_scale, params.raster_scale)
     if suffix == ".pdf":
         document = fitz.open(path)
-        for page_index in range(start_page - 1, len(document)):
+        page_indices = (
+            range(start_page - 1, len(document))
+            if page_numbers is None
+            else (
+                page_number - 1
+                for page_number in page_numbers
+                if start_page <= page_number <= len(document)
+            )
+        )
+        for page_index in page_indices:
             page = document[page_index]
             if mode == ParserMode.TEXTBOOK:
                 pixmap = page.get_pixmap(matrix=scale_matrix, alpha=False)

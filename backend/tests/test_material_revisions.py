@@ -108,10 +108,16 @@ def test_restore_creates_next_revision_instead_of_rewinding(session: Session) ->
     material = make_material(session, "a5")
     add_page_with_fragments(session, material, page_number=1, revision=1, fragments=["Оригинал"])
     revision_registry.record_revision(
-        session, material.id, 1, origin=MaterialRevisionOrigin.IMPORTED
+        session,
+        material.id,
+        1,
+        origin=MaterialRevisionOrigin.IMPORTED,
+        parser_mode=ParserMode.FAST,
     )
     session.commit()
     library.update_library_page_text(session, material.id, 1, PageTextUpdate(text="Правка"))
+    material.parser_mode = ParserMode.TEXTBOOK
+    session.commit()
 
     detail = library.restore_revision(session, material.id, 1)
 
@@ -120,6 +126,7 @@ def test_restore_creates_next_revision_instead_of_rewinding(session: Session) ->
     history = revision_registry.list_revisions(session, material.id)
     assert history[0].origin == MaterialRevisionOrigin.RESTORE
     assert history[0].parent_revision == 1
+    assert history[0].parser_mode == ParserMode.FAST
     assert [row.revision for row in history] == [3, 2, 1]
 
 

@@ -28,6 +28,7 @@ ASSET_KINDS = {"formula", "table", "image"}
 _HEALTH_CACHE_SECONDS = 2.0
 _health_cache: dict[str, tuple[float, dict | None]] = {}
 DEFAULT_QUALITY_THRESHOLD = 0.75
+REQUIRED_LAYOUT_MODEL = "PP-DocLayout_plus-L"
 LABEL_KIND: dict[str, ElementKind] = {
     "doc_title": "heading",
     "paragraph_title": "heading",
@@ -99,6 +100,15 @@ def status(*, base_url: str | None = None) -> TextbookStatus:
     ready = bool(payload.get("ready"))
     executor = str(payload.get("executor") or "") or None
     label = executor or "Сервис отвечает"
+    layout_model = str(payload.get("layout_model") or "")
+    if ready and layout_model != REQUIRED_LAYOUT_MODEL:
+        return TextbookStatus(
+            False,
+            label,
+            f"Сервис запущен со старой моделью разметки. Нужна {REQUIRED_LAYOUT_MODEL}; "
+            "пересоберите и перезапустите сервис.",
+            executor,
+        )
     reason = str(payload.get("reason") or "Сервис ещё загружает модель в память видеокарты.")
     return TextbookStatus(ready, label, "" if ready else reason, executor)
 
