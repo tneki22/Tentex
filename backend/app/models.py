@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -20,6 +20,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    Time,
     UniqueConstraint,
     Uuid,
 )
@@ -381,6 +382,8 @@ class GoalPassport(Base):
     )
     expected_item_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     instructor_requirements: Mapped[str | None] = mapped_column(String, nullable=True)
+    exam_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    exam_procedure: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 

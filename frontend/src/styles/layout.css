@@ -4917,6 +4917,7 @@ button.wizard-back-projects {
 }
 
 .wizard-material-grid.has-one { grid-template-columns: minmax(0, 1fr); }
+.wizard-material-card.is-wide { grid-column: 1 / -1; }
 
 .wizard-material-card {
   overflow: hidden;
@@ -5079,11 +5080,11 @@ button.wizard-back-projects {
 .wizard-passport-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
+  align-items: stretch;
   gap: var(--space-4);
 }
 
-.wizard-form-card { padding: 0; overflow: hidden; border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); }
+.wizard-form-card { min-width: 0; display: flex; flex-direction: column; padding: 0; overflow: hidden; border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); }
 
 .wizard-form-card-head {
   display: flex;
@@ -5107,8 +5108,9 @@ button.wizard-back-projects {
 
 .wizard-form-card-head h2 { margin: 0; font-size: var(--text-md); }
 .wizard-form-card-head p { margin: 2px 0 0; color: var(--muted); font-size: var(--text-xs); }
-.wizard-form-fields { display: grid; gap: var(--space-5); padding: var(--space-5); }
+.wizard-form-fields { flex: 1; display: grid; align-content: start; gap: var(--space-5); padding: var(--space-5); }
 .wizard-field-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.wizard-exam-meta-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(112px, 0.72fr) minmax(0, 1fr); gap: var(--space-3); }
 .wizard-form-fields textarea { resize: vertical; }
 
 .wizard-inline-label { display: flex; align-items: center; gap: var(--space-4); }
@@ -5126,6 +5128,14 @@ button.wizard-back-projects {
 .wizard-control-group { display: grid; gap: var(--space-2); }
 .wizard-control-group > small { color: var(--muted); font-size: var(--text-xs); }
 .wizard-control-group .segmented-tabs button { padding-right: var(--space-2); padding-left: var(--space-2); font-size: var(--text-xs); }
+.wizard-outcome-tabs button {
+  min-height: 48px;
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+  overflow-wrap: anywhere;
+  line-height: var(--leading-tight);
+  white-space: normal;
+}
 .wizard-minutes { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
 .wizard-minutes > button,
@@ -5148,6 +5158,23 @@ button.wizard-back-projects {
 .wizard-minutes input { width: 58px; height: 36px; padding: 0 0 0 var(--space-3); border: 0; background: transparent; box-shadow: none; text-align: right; }
 .wizard-minutes input:focus-visible { box-shadow: none; }
 .wizard-minutes label small { color: var(--muted); font-size: var(--text-xs); }
+
+.wizard-ai-estimate-trigger { width: fit-content; display: inline-flex; border-radius: var(--radius-md); }
+.wizard-ai-estimate-trigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.wizard-ai-suggestion {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--accent-edge);
+  border-radius: var(--radius-lg);
+  background: var(--accent-wash);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+.wizard-ai-suggestion b { color: var(--accent); }
+.wizard-ai-suggestion small { color: var(--muted); }
+.wizard-ai-confirmation { display: grid; gap: var(--space-3); }
+.wizard-ai-confirmation > p { margin: 0; color: var(--ink-soft); }
 
 .wizard-review-summary {
   display: grid;
@@ -5390,6 +5417,7 @@ button.wizard-back-projects {
   .wizard-material-grid,
   .wizard-format-options,
   .wizard-field-pair,
+  .wizard-exam-meta-grid,
   .wizard-starting-levels { grid-template-columns: minmax(0, 1fr); }
 
   .wizard-progress { width: calc(100% - var(--space-4)); margin-top: var(--space-4); }
