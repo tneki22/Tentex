@@ -497,6 +497,7 @@ function DocumentView({
     <div className={`materials-pages is-text ${material.parser_mode !== "fast" && page.quality === "ocr_low" ? "is-ocr-low" : ""}`.trim()}>
       <StructuredPage
         showOcrReview={material.parser_mode !== "fast"}
+        preserveLayout={material.parser_mode === "textbook"}
         page={page}
         query={query}
         assetUrl={(fragmentId) => materialFragmentAssetUrl(projectId, material.id, fragmentId)}
