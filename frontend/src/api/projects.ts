@@ -86,6 +86,8 @@ export interface GoalPassportWrite {
   exam_format: ExamFormat | null;
   expected_item_count: number | null;
   instructor_requirements: string | null;
+  exam_time: string | null;
+  exam_procedure: string | null;
 }
 
 export interface GoalPassportRead extends GoalPassportWrite {
@@ -237,6 +239,40 @@ export interface ProgramGroupingRunRead {
   program_revision: number;
   source_hash: string;
   suggestion: { groups: ProgramGroupingItem[] };
+  usage: import("./ai").AiUsage;
+  requested_model_id: string;
+  actual_model_id: string;
+  cached: boolean;
+}
+
+export interface PreparationEstimateInput {
+  exam_date: string;
+  exam_time: string | null;
+  item_count: number;
+  exam_format: ExamFormat;
+  starting_level: StartingLevel;
+  target_outcome: TargetOutcome;
+  study_format: StudyFormat;
+  has_answers: boolean;
+  has_theory: boolean;
+}
+
+export interface PreparationEstimatePreflightRead {
+  input_hash: string;
+  study_days: number;
+  items_per_day: number;
+  review_day_reserved: boolean;
+  preflight: import("./ai").AiPreflight;
+}
+
+export interface PreparationEstimateRunRead {
+  run_id: string;
+  input_hash: string;
+  minutes_per_day: number;
+  study_days: number;
+  items_per_day: number;
+  review_day_reserved: boolean;
+  rationale: string;
   usage: import("./ai").AiUsage;
   requested_model_id: string;
   actual_model_id: string;
@@ -696,6 +732,26 @@ export const applyProgramGrouping = (
   },
   signal?: AbortSignal,
 ): Promise<ProgramChangeResult> => request(`${projectPath(projectId)}/program/ai-grouping/apply`, {
+  method: "POST",
+  body: JSON.stringify(command),
+  signal,
+});
+
+export const preflightPreparationEstimate = (
+  projectId: string,
+  command: PreparationEstimateInput,
+  signal?: AbortSignal,
+): Promise<PreparationEstimatePreflightRead> => request(`${projectPath(projectId)}/preparation-estimate/preflight`, {
+  method: "POST",
+  body: JSON.stringify(command),
+  signal,
+});
+
+export const runPreparationEstimate = (
+  projectId: string,
+  command: PreparationEstimateInput & { expected_input_hash: string; confirmed: boolean },
+  signal?: AbortSignal,
+): Promise<PreparationEstimateRunRead> => request(`${projectPath(projectId)}/preparation-estimate`, {
   method: "POST",
   body: JSON.stringify(command),
   signal,

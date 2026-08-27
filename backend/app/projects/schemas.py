@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 from uuid import UUID
@@ -88,6 +88,8 @@ class GoalPassportWrite(ApiModel):
     exam_format: ExamFormat | None = None
     expected_item_count: int | None = Field(default=None, gt=0)
     instructor_requirements: str | None = None
+    exam_time: time | None = None
+    exam_procedure: str | None = None
 
 
 class ProjectSettingsProjectWrite(ApiModel):

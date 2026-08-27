@@ -60,12 +60,14 @@ Production transport создаёт `AsyncOpenAI(base_url, api_key, timeout, max
 
 ## Роли и наследование модели
 
-Зарегистрированы шесть стабильных ролей:
+Зарегистрированы восемь стабильных ролей:
 
 | Роль | Модальность | Возможность | Кэш | Сейчас вызывается |
 |---|---|---|---|---|
 | `material_text_cleanup` | text | structured output | exact | да |
 | `exam_program_grouping` | text | structured output | exact | да |
+| `exam_import_repair` | text | structured output | exact | да |
+| `exam_preparation_estimate` | text | structured output | exact | да |
 | `exam_chat_reply` | text | streaming | none | да |
 | `exam_answer_judge` | text | structured output | exact | да |
 | `exam_chat_memory` | text | structured output | none | позже |
@@ -77,7 +79,8 @@ Production transport создаёт `AsyncOpenAI(base_url, api_key, timeout, max
 разрешённый request override → override роли → default модели модальности
 ```
 
-Cleanup и grouping запрещают request override. Чатовые ответ и судья его разрешают.
+Cleanup, grouping, import repair и оценка нагрузки запрещают request override.
+Чатовые ответ и судья его разрешают.
 `Auto` будущего интерфейса означает наследование, а не провайдерный роутер.
 
 ## Данные и миграция
@@ -148,7 +151,9 @@ SHA-256 считается от канонического JSON:
 - consumer-specific source fingerprint.
 
 Для cleanup fingerprint содержит page id, revision, source hash и instruction hash.
-Для grouping — `program_revision` и hash списка `node_id/type/title`.
+Для grouping — `program_revision` и hash списка `node_id/type/title`. Для оценки
+подготовки — hash минимального структурного паспорта и рассчитанного сервером
+распределения по дням; свободные поля паспорта в prompt и журнал не входят.
 
 `ai_runs.context_manifest` хранит id, ревизии, хеши, размеры и включённые поля. Полный
 текст страницы, формулировки вопросов, пользовательская инструкция, provider response
@@ -187,7 +192,7 @@ URL. Сохранение настройки не тестирует соеди�
 
 - глобальный выключатель и расход сегодня;
 - независимые подключения текста и речи, замену/удаление ключа, test и refresh каталога;
-- модели модальностей по умолчанию, совместимые ролевые override и все шесть ролей;
+- модели модальностей по умолчанию, совместимые ролевые override и все восемь ролей;
 - избранные текстовые модели, лимиты и локальный снимок USD/RUB.
 
 Остальные внутренние разделы Параметров показывают честные пустые состояния. Глобальная
@@ -253,6 +258,24 @@ Apply принимает отредактированные пользовате
 Сущности Плана подготовки в текущем ядре ещё нет, поэтому отдельный stale-флаг пока не
 пишется. Когда План появится, он должен реагировать на уже существующий increment
 `program_revision`, а не добавлять второй commit в grouping.
+
+## Оценка времени подготовки
+
+Ручки:
+
+```text
+POST /api/projects/{project}/preparation-estimate/preflight
+POST /api/projects/{project}/preparation-estimate
+```
+
+Consumer доступен draft и active экзаменационным проектам. Вход содержит только
+число элементов, дату/время, enum формата экзамена, стартовый и целевой уровни,
+формат подготовки и признаки наличия ответов/учебных материалов. Сервер до
+preflight рассчитывает число учебных дней, резерв последнего дня и элементов в
+день. Structured output ограничен `minutes_per_day=60..480` с шагом 30 и
+коротким `rationale`; изменение входа после preflight даёт
+`stale_preparation_estimate`. Run ничего не пишет в паспорт — клиент подставляет
+результат в редактируемый черновик.
 
 ## Import repair
 

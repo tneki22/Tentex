@@ -51,11 +51,12 @@ interface SettingsForm {
     deadline: string;
     enabled_modules: ModuleKey[];
   };
-  goal: Omit<GoalPassportWrite, "minutes_per_day" | "days_per_week" | "session_minutes" | "expected_item_count"> & {
+  goal: Omit<GoalPassportWrite, "minutes_per_day" | "days_per_week" | "session_minutes" | "expected_item_count" | "exam_time"> & {
     minutes_per_day: string;
     days_per_week: string;
     session_minutes: string;
     expected_item_count: string;
+    exam_time: string;
   };
 }
 
@@ -150,6 +151,8 @@ function formFromDetail(detail: ProjectDetail): SettingsForm {
       exam_format: goal?.exam_format ?? null,
       expected_item_count: numberText(goal?.expected_item_count ?? null),
       instructor_requirements: goal?.instructor_requirements ?? null,
+      exam_time: goal?.exam_time?.slice(0, 5) ?? "",
+      exam_procedure: goal?.exam_procedure ?? null,
     },
   };
 }
@@ -192,6 +195,8 @@ function commandFromForm(form: SettingsForm): ProjectSettingsCommand {
       exam_format: form.goal.exam_format,
       expected_item_count: nullableNumber(form.goal.expected_item_count),
       instructor_requirements: nullableText(form.goal.instructor_requirements),
+      exam_time: form.goal.exam_time || null,
+      exam_procedure: nullableText(form.goal.exam_procedure),
     },
   };
 }
@@ -375,13 +380,18 @@ export function ProjectSettings() {
         <fieldset className="settings-fieldset" disabled={readOnly || saving}>
           <Card className="settings-section">
             <h2><Flag size={17} aria-hidden="true" /> Проект</h2>
-            <div className="settings-grid is-two-columns">
+            <div className={`settings-grid ${detail.project.workspace_variant === "exam" ? "is-three-columns" : "is-two-columns"}`}>
               <Field label="Название" required error={errors.name}>
                 <input value={form.project.name} onChange={(event) => updateProject("name", event.target.value)} autoComplete="off" />
               </Field>
-              <Field label="Дедлайн" hint="Необязательно">
+              <Field label={detail.project.workspace_variant === "exam" ? "Дата экзамена" : "Дедлайн"} hint="Необязательно">
                 <input type="date" value={form.project.deadline} onChange={(event) => updateProject("deadline", event.target.value)} />
               </Field>
+              {detail.project.workspace_variant === "exam" && (
+                <Field label="Время экзамена" hint="Необязательно">
+                  <input type="time" value={form.goal.exam_time} onChange={(event) => updateGoal("exam_time", event.target.value)} />
+                </Field>
+              )}
             </div>
             <Field label="Описание" hint="Коротко: чем этот проект отличается от других по тому же предмету">
               <textarea rows={3} value={form.project.description} onChange={(event) => updateProject("description", event.target.value)} />
@@ -521,9 +531,14 @@ export function ProjectSettings() {
                   <input type="number" min="1" step="1" inputMode="numeric" value={form.goal.expected_item_count} onChange={(event) => updateGoal("expected_item_count", event.target.value)} />
                 </Field>
               </div>
-              <Field label="Требования преподавателя">
-                <textarea rows={3} value={text(form.goal.instructor_requirements)} onChange={(event) => updateGoal("instructor_requirements", event.target.value)} />
-              </Field>
+              <div className="settings-grid is-two-columns">
+                <Field label="Требования преподавателя">
+                  <textarea rows={4} value={text(form.goal.instructor_requirements)} onChange={(event) => updateGoal("instructor_requirements", event.target.value)} />
+                </Field>
+                <Field label="Как проходит экзамен">
+                  <textarea rows={4} value={text(form.goal.exam_procedure)} onChange={(event) => updateGoal("exam_procedure", event.target.value)} />
+                </Field>
+              </div>
             </Card>
           )}
 

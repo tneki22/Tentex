@@ -1,10 +1,12 @@
 import { useId } from "react";
 import type { CSSProperties } from "react";
+import { Tooltip } from "./Tooltip";
 
 interface SegmentedTab<T extends string> {
   value: T;
   label: string;
   disabled?: boolean;
+  tooltip?: string;
 }
 
 interface SegmentedTabsProps<T extends string> {
@@ -43,38 +45,45 @@ export function SegmentedTabs<T extends string>({
       /* Ширину и сдвиг бегунка считает CSS: только он знает про поля трека. */
       style={{ "--tab-count": tabs.length, "--tab-index": currentIndex } as CSSProperties}
     >
-      {tabs.map((tab, index) => (
-        <button
-          id={`${tabId}-${tab.value}-tab`}
-          key={tab.value}
-          role="tab"
-          type="button"
-          aria-selected={tab.value === value}
-          aria-controls={`${tabId}-tabpanel`}
-          disabled={tab.disabled}
-          tabIndex={tab.value === value ? 0 : -1}
-          onClick={() => onChange(tab.value)}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowRight") {
-              event.preventDefault();
-              move(index, 1);
-            } else if (event.key === "ArrowLeft") {
-              event.preventDefault();
-              move(index, -1);
-            } else if (event.key === "Home") {
-              event.preventDefault();
-              const first = tabs.find((candidate) => !candidate.disabled);
-              if (first) onChange(first.value);
-            } else if (event.key === "End") {
-              event.preventDefault();
-              const last = [...tabs].reverse().find((candidate) => !candidate.disabled);
-              if (last) onChange(last.value);
-            }
-          }}
-        >
-          {tab.label}
-        </button>
-      ))}
+      {tabs.map((tab, index) => {
+        const button = (
+          <button
+            id={`${tabId}-${tab.value}-tab`}
+            key={tab.value}
+            role="tab"
+            type="button"
+            aria-selected={tab.value === value}
+            aria-controls={`${tabId}-tabpanel`}
+            disabled={tab.disabled}
+            tabIndex={tab.value === value ? 0 : -1}
+            onClick={() => onChange(tab.value)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowRight") {
+                event.preventDefault();
+                move(index, 1);
+              } else if (event.key === "ArrowLeft") {
+                event.preventDefault();
+                move(index, -1);
+              } else if (event.key === "Home") {
+                event.preventDefault();
+                const first = tabs.find((candidate) => !candidate.disabled);
+                if (first) onChange(first.value);
+              } else if (event.key === "End") {
+                event.preventDefault();
+                const last = [...tabs].reverse().find((candidate) => !candidate.disabled);
+                if (last) onChange(last.value);
+              }
+            }}
+          >
+            {tab.label}
+          </button>
+        );
+        return tab.tooltip ? (
+          <Tooltip key={tab.value} label={tab.tooltip} side="bottom">
+            {button}
+          </Tooltip>
+        ) : button;
+      })}
       <span className="segmented-tabs-indicator" aria-hidden="true" />
     </div>
   );

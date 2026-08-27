@@ -83,6 +83,16 @@ ROLE_SPECS = {
             {"max_output_tokens": 8000},
         ),
         AiRoleSpec(
+            "exam_preparation_estimate",
+            "Оценка времени подготовки",
+            "Предлагает реалистичную дневную нагрузку по сроку и объёму экзамена.",
+            "text",
+            frozenset({"structured_output"}),
+            "exact",
+            "preparation-estimate-v1",
+            {"max_output_tokens": 700},
+        ),
+        AiRoleSpec(
             "exam_chat_reply",
             "Ответ экзаменатора",
             "Отвечает в чате и помогает разобраться в теме.",

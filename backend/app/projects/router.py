@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
 from app.db import get_session
-from app.projects import answers, import_repair, program, program_ai, service
+from app.projects import answers, import_repair, preparation_ai, program, program_ai, service
 from app.projects.schemas import (
     ActionUndoResult,
     ActivateWizardDraft,
@@ -302,6 +302,32 @@ def apply_program_grouping(
     session: SessionDependency,
 ) -> ProgramChangeResult:
     return program_ai.apply(session, project_id, command)
+
+
+@projects.post(
+    "/{project_id}/preparation-estimate/preflight",
+    response_model=preparation_ai.PreparationEstimatePreflightRead,
+)
+async def preflight_preparation_estimate(
+    project_id: UUID,
+    command: preparation_ai.PreparationEstimateWrite,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> preparation_ai.PreparationEstimatePreflightRead:
+    return await preparation_ai.preflight(session, gateway, project_id, command)
+
+
+@projects.post(
+    "/{project_id}/preparation-estimate",
+    response_model=preparation_ai.PreparationEstimateRunRead,
+)
+async def run_preparation_estimate(
+    project_id: UUID,
+    command: preparation_ai.PreparationEstimateRunWrite,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> preparation_ai.PreparationEstimateRunRead:
+    return await preparation_ai.run(session, gateway, project_id, command)
 
 
 @projects.post(

@@ -144,6 +144,8 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
       exam_format: null,
       expected_item_count: null,
       instructor_requirements: null,
+      exam_time: null,
+      exam_procedure: null,
     };
   }
 
