@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  ExternalLink,
   FileImage,
   FileText,
   Globe,
@@ -15,10 +14,7 @@ import {
   LibraryBig,
   Maximize2,
   Minimize2,
-  Pause,
-  Play,
   Plus,
-  RotateCcw,
   Search,
   Sparkles,
   Trash2,
@@ -26,7 +22,6 @@ import {
   Unlink,
   Upload,
   Video,
-  Pencil,
   X,
   ZoomIn,
   ZoomOut,
@@ -52,8 +47,7 @@ import type {
   SourceRole,
 } from "../api/materials";
 import { getProject, undoProjectAction, type LatestUndoableAction, type ProjectDetail } from "../api/projects";
-import { LibraryMaterialPickerDialog, ProjectNav, QualityBadge, TaskRow } from "../components/domain";
-import type { BackgroundTask } from "../components/domain";
+import { LibraryMaterialPickerDialog, ProjectNav, QualityBadge } from "../components/domain";
 import {
   Button,
   ConfirmDialog,
@@ -73,6 +67,8 @@ import { useViewerFullscreen } from "../hooks/useViewerFullscreen";
 import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTreeNode } from "./programTree";
 import { AiCleanupPanel } from "./AiCleanupPanel";
 import { MaterialFileTab } from "./materials/MaterialFileTab";
+import { MaterialProcessingPanels } from "./materials/MaterialProcessingPanels";
+import { AutoMatchDialog } from "./materials/AutoMatchDialog";
 import { StructuredPage } from "../components/domain/material-viewer";
 
 const EMPTY_STRING_SET: Set<string> = new Set();
@@ -104,21 +100,6 @@ function fileCountLabel(count: number): string {
   if (mod10 === 1) return `${count} файл`;
   if (mod10 >= 2 && mod10 <= 4) return `${count} файла`;
   return `${count} файлов`;
-}
-
-function taskFor(material: MaterialRead): BackgroundTask | null {
-  if (!material.task || material.task.state === "completed") return null;
-  return {
-    id: material.task.id,
-    kind: "parse",
-    subject: material.display_name,
-    unit: "страниц",
-    done: material.task.done,
-    total: material.task.total,
-    etaMinutes: null,
-    state: material.task.state,
-    error: material.task.error ?? undefined,
-  };
 }
 
 function MaterialIcon({ material }: { material: MaterialRead }) {
@@ -634,88 +615,43 @@ const TAB_LABELS: Record<InspectorTab, string> = {
 
 function ProcessingTab({
   material,
-  busy,
+  page,
   libraryLink,
-  onControl,
-  onImport,
   onEdit,
-  onLinkAnswers,
+  onCleanup,
+  onChanged,
+  onError,
   notice,
   onDismissNotice,
 }: {
   material: MaterialRead;
-  busy: boolean;
-  /** Канонический экран обработки этого файла с возвратом сюда. */
+  /** Текущая страница проекта: по ней панель включает правку и подтверждение OCR. */
+  page: MaterialPageRead | null;
+  /** Библиотека остаётся домом для сравнения версий, скачивания и удаления файла. */
   libraryLink: string;
-  onControl: (action: "pause" | "resume" | "retry" | "cancel") => void;
-  onImport: () => void;
   onEdit: () => void;
-  onLinkAnswers: () => void;
+  onCleanup: () => void;
+  onChanged: () => void;
+  onError: (message: string) => void;
   notice: NoticeState | null;
   onDismissNotice: () => void;
 }) {
-  const task = taskFor(material);
   return (
     <div className="materials-inspector-content">
       <NoticeLine notice={notice} onDismiss={onDismissNotice} />
-      {task && (
-        <TaskRow
-          task={task}
-          onPause={() => onControl("pause")}
-          onResume={() => onControl("resume")}
-          onRetry={() => onControl("retry")}
-          onCancel={() => onControl("cancel")}
-        />
-      )}
-      {/* Разбор общий для всех проектов с этим файлом, поэтому запуск и повтор
-          живут в канонической рабочей области Библиотеки: делать их отсюда
-          молча — значит менять чужие проекты без предупреждения. Наблюдение за
-          задачей и состояние остаются здесь, они проектную работу не меняют. */}
-      <section className="materials-processing-section materials-ocr-section">
-        <div className="materials-selection-head">
-          <h3>Подготовка файла</h3>
-          <StatusBadge tone="neutral">общая для всех проектов</StatusBadge>
-        </div>
-        <dl className="materials-ocr-summary">
-          <div><dt>Страниц</dt><dd>{material.page_count ?? 1}</dd></div>
-          <div><dt>Сканов</dt><dd>{material.scan_page_count}</dd></div>
-          {material.parser_mode !== "fast" && <div><dt>Нужно проверить</dt><dd>{material.ocr_low_page_count}</dd></div>}
-        </dl>
-        <p>
-          Распознавание, версии и сведения о самом файле — в Библиотеке.
-          Изменение там увидят все проекты, где используется этот материал.
-        </p>
-        <Link className="secondary-button" to={libraryLink}>
-          <ExternalLink size={14} aria-hidden="true" /> Открыть обработку в Библиотеке
-        </Link>
-      </section>
-      {material.status === "paused" && <Button disabled={busy} onClick={() => onControl("resume")}><Play size={14} /> Возобновить</Button>}
-      {material.status === "processing" && <Button variant="secondary" disabled={busy} onClick={() => onControl("pause")}><Pause size={14} /> Поставить на паузу</Button>}
-      {material.status === "failed" && <Button disabled={busy} onClick={() => onControl("retry")}><RotateCcw size={14} /> Повторить</Button>}
-      {material.status === "ready" && material.purposes.includes("reference_answers") && (
-        <section className="materials-processing-section">
-          <h3>Ответы из файла</h3>
-          <p>
-            Ищем номера и формулировки вопросов во всех распознанных фрагментах,
-            в том числе через границы страниц. Пропущенные и неоднозначные вопросы
-            будут перечислены, а не потеряны молча.
-          </p>
-          <Button disabled={busy} onClick={onLinkAnswers}><Link2 size={14} /> Разобрать файл ответов</Button>
-          <Button variant="ghost" disabled={busy} onClick={onImport}>Импортировать ответы текстом</Button>
-        </section>
-      )}
-      {material.status === "ready" && (
-        <>
-          <Button variant="secondary" disabled={busy} onClick={onEdit}>
-            <Pencil size={14} />Исправить текст страницы
-          </Button>
-          <p className="materials-muted">
-            Изменение будет использоваться во всех проектах с этим материалом.
-          </p>
-        </>
-      )}
-      {material.diagnostics.length > 0 && <section className="materials-processing-section"><h3>Диагностика</h3><ul>{material.diagnostics.map((item) => <li key={item}>{item === "formula_possible" ? "Возможны формулы — сверяйте с оригиналом" : item === "audio_transcription_required" ? "Нужна локальная транскрипция аудио" : item}</li>)}</ul>{(material.parser_mode !== "fast" && material.ocr_low_page_count > 0) && <p>Есть страницы, которые стоит сравнить с оригиналом.</p>}</section>}
-      {material.error && <ErrorState title="Разбор остановился" message={material.error} />}
+      <MaterialProcessingPanels
+        materialId={material.id}
+        page={page}
+        onEditPage={onEdit}
+        onCleanupPage={onCleanup}
+        onChanged={onChanged}
+        onError={onError}
+      />
+      <p className="materials-muted">
+        Сравнение версий, скачивание исходника и удаление файла из установки — в{" "}
+        <Link className="materials-text-link" to={libraryLink}>Библиотеке</Link>.
+        Изменения здесь общие для всех проектов с этим файлом.
+      </p>
     </div>
   );
 }
@@ -799,6 +735,9 @@ interface BindingsTabProps {
   onRemoveAllInScope: () => void;
   headingSuggestions: HeadingSuggestion[];
   onResolveHeading: (blockId: string, nodeId: string) => void;
+  /** Файл эталонных ответов, разбор завершён — режим «по заголовкам» применим. */
+  canAutoMatch: boolean;
+  onOpenAutoMatch: () => void;
 }
 
 /** «5. Реляционная модель…» — номер узла программы, если он известен. */
@@ -839,6 +778,8 @@ function BindingsTab({
   onRemoveAllInScope,
   headingSuggestions,
   onResolveHeading,
+  canAutoMatch,
+  onOpenAutoMatch,
 }: BindingsTabProps) {
   const alreadyBoundToActive = activeNode
     ? focusedFragmentBindings.some((binding) => binding.program_node_id === activeNode.id)
@@ -856,9 +797,15 @@ function BindingsTab({
         ]}
       />
 
-      <Tooltip label="Проход 2 привяжет остальное автоматически на этапе 8 — тогда же появится подтверждение перед отправкой данных">
-        <Button variant="ghost" disabled>Сопоставить автоматически · этап 8</Button>
-      </Tooltip>
+      {canAutoMatch ? (
+        <Button variant="secondary" onClick={onOpenAutoMatch}>
+          <Sparkles size={14} /> Сопоставить автоматически
+        </Button>
+      ) : (
+        <Tooltip label="Автопривязка материала к темам появится на этапе 8 (проход 2) — тогда же появится подтверждение перед отправкой данных">
+          <Button variant="ghost" disabled>Сопоставить автоматически · этап 8</Button>
+        </Tooltip>
+      )}
 
       <NoticeLine notice={notice} onDismiss={onDismissNotice} />
 
@@ -1108,11 +1055,12 @@ function MaterialInspector({
   busy,
   notice,
   libraryLink,
-  onControl,
-  onImport,
+  page,
   onRemove,
   onEdit,
-  onLinkAnswers,
+  onCleanup,
+  onChanged,
+  onError,
   answersMaterial,
   onSaveFile,
   bindingsProps,
@@ -1127,11 +1075,12 @@ function MaterialInspector({
   busy: boolean;
   notice: NoticeState | null;
   libraryLink: string;
-  onControl: (action: "pause" | "resume" | "retry" | "cancel") => void;
-  onImport: () => void;
+  page: MaterialPageRead | null;
   onRemove: () => void;
   onEdit: () => void;
-  onLinkAnswers: () => void;
+  onCleanup: () => void;
+  onChanged: () => void;
+  onError: (message: string) => void;
   answersMaterial: MaterialRead | null;
   onSaveFile: (command: MaterialUpdateCommand) => Promise<MaterialRead | null>;
   bindingsProps: BindingsTabProps;
@@ -1162,7 +1111,7 @@ function MaterialInspector({
           : <BindingsTab {...bindingsProps} />
         )}
         {activeTab === "processing" && (
-          <ProcessingTab material={material} busy={busy} libraryLink={libraryLink} onControl={onControl} onImport={onImport} onEdit={onEdit} onLinkAnswers={onLinkAnswers} notice={notice} onDismissNotice={onDismissNotice} />
+          <ProcessingTab material={material} page={page} libraryLink={libraryLink} onEdit={onEdit} onCleanup={onCleanup} onChanged={onChanged} onError={onError} notice={notice} onDismissNotice={onDismissNotice} />
         )}
         {activeTab === "file" && (
           <div className="materials-inspector-content">
@@ -1191,6 +1140,7 @@ function MaterialSurface() {
   const [addOpen, setAddOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
+  const [autoMatchOpen, setAutoMatchOpen] = useState(false);
   const [pageNumber, setPageNumber] = useState(1);
   const [page, setPage] = useState<MaterialPageRead | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -1968,11 +1918,12 @@ function MaterialSurface() {
           busy={store.busy}
           notice={notice}
           libraryLink={libraryLink}
-          onControl={(action) => void store.control(material.id, action)}
-          onImport={() => void importAnswers()}
+          page={page}
           onRemove={() => setRemoveOpen(true)}
           onEdit={() => { if (page) { setEditText(page.text); setEditOpen(true); } }}
-          onLinkAnswers={() => void linkAnswers()}
+          onCleanup={() => setCleanupOpen(true)}
+          onChanged={() => { void store.refresh(); refreshBindingData(); }}
+          onError={(message) => say(message, "danger")}
           answersMaterial={answersMaterial}
           onSaveFile={saveFileSettings}
           textbook={Boolean(textbook)}
@@ -2025,6 +1976,8 @@ function MaterialSurface() {
             headingSuggestions:
               answersSuggestions?.materialId === material.id ? answersSuggestions.items : [],
             onResolveHeading: (blockId, nodeId) => void resolveHeading(blockId, nodeId),
+            canAutoMatch: material.status === "ready" && material.purposes.includes("reference_answers"),
+            onOpenAutoMatch: () => setAutoMatchOpen(true),
           }}
         />
       )}
@@ -2033,6 +1986,12 @@ function MaterialSurface() {
         onOpenChange={setPickerOpen}
         tree={treeResult}
         onSelect={handlePickNode}
+      />
+      <AutoMatchDialog
+        open={autoMatchOpen}
+        onOpenChange={setAutoMatchOpen}
+        onRunHeadings={() => void linkAnswers()}
+        onImportText={() => void importAnswers()}
       />
       <AddMaterialDialog
         open={addOpen}
