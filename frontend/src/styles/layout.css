@@ -7679,6 +7679,17 @@ button.wizard-back-projects {
   font-family: var(--font-sans);
 }
 
+/* В «Учебнике» лист и OCR-фрагменты масштабируются одной системой координат. */
+.materials-pages.is-text .materials-page.is-spatial {
+  width: min(calc(680px * var(--materials-zoom, 1)), 100%);
+  padding: calc(24px * var(--materials-zoom, 1));
+  font-size: calc(11px * var(--materials-zoom, 1));
+}
+
+.materials-page.is-spatial .structured-page-head {
+  font-size: max(calc(11px * var(--materials-zoom, 1)), 8px);
+}
+
 .materials-pages.is-text .materials-page h2,
 .materials-pages.is-text .materials-document-block {
   font-size: revert;

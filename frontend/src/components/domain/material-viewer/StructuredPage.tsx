@@ -20,6 +20,8 @@ interface StructuredPageProps {
   pageImageUrl?: string;
   /** Показывать вырезки исходной фотографии над распознанным текстом. */
   showSourceCrops?: boolean;
+  /** Сохранить геометрию исходной страницы по координатам OCR. */
+  preserveLayout?: boolean;
   className?: string;
 }
 
@@ -41,47 +43,64 @@ export function StructuredPage({
   fragmentProps,
   pageImageUrl,
   showSourceCrops = false,
+  preserveLayout = false,
   className = "",
 }: StructuredPageProps) {
   const withCrops = showSourceCrops && Boolean(pageImageUrl);
+  const spatial = preserveLayout && page.width > 0 && page.height > 0;
   return (
-    <article className={`structured-page ${withCrops ? "with-crops" : ""} ${className}`.trim()}>
+    <article className={`structured-page ${withCrops ? "with-crops" : ""} ${spatial ? "is-spatial" : ""} ${className}`.trim()}>
       <header className="structured-page-head">
         <span>Страница {page.page_number}</span>
         <QualityBadge quality={page.quality} showReview={showOcrReview} />
       </header>
-      {page.fragments.map((fragment) => {
-        const extra = fragmentProps?.(fragment) ?? {};
-        const classNames = [
-          "structured-fragment",
-          fragment.id === focusedFragmentId ? "is-focused" : "",
-          extra.className ?? "",
-        ].filter(Boolean).join(" ");
-        return (
-          <div
-            {...extra}
-            className={classNames}
-            data-recognition-source={fragment.recognition_source}
-            key={fragment.id}
-            id={`fragment-${fragment.id}`}
-          >
-            {renderFragmentOverlay?.(fragment)}
-            {withCrops && pageImageUrl && hasArea(fragment.bbox) && (
-              <SourceCrop pageImageUrl={pageImageUrl} bbox={fragment.bbox} page={page} />
-            )}
-            <FragmentBody
-              fragment={fragment}
-              query={query}
-              assetUrl={assetUrl}
-              suppressImage={withCrops}
-            />
-            <RecognitionMeta fragment={fragment} showConfidence={showOcrReview} />
-          </div>
-        );
-      })}
-      {page.fragments.length === 0 && (
-        <p className="structured-page-empty">На этой странице не нашлось текста.</p>
-      )}
+      <div
+        className={spatial ? "structured-page-canvas" : "structured-page-flow"}
+        style={spatial ? { aspectRatio: `${page.width} / ${page.height}` } : undefined}
+      >
+        {page.fragments.map((fragment) => {
+          const extra = fragmentProps?.(fragment) ?? {};
+          const classNames = [
+            "structured-fragment",
+            fragment.id === focusedFragmentId ? "is-focused" : "",
+            extra.className ?? "",
+          ].filter(Boolean).join(" ");
+          const spatialStyle: CSSProperties | undefined = spatial && hasArea(fragment.bbox)
+            ? {
+                left: `${fragment.bbox[0] * 100}%`,
+                top: `${fragment.bbox[1] * 100}%`,
+                width: `${(fragment.bbox[2] - fragment.bbox[0]) * 100}%`,
+                height: `${(fragment.bbox[3] - fragment.bbox[1]) * 100}%`,
+              }
+            : undefined;
+          return (
+            <div
+              {...extra}
+              className={classNames}
+              data-recognition-source={fragment.recognition_source}
+              key={fragment.id}
+              id={`fragment-${fragment.id}`}
+              style={{ ...extra.style, ...spatialStyle }}
+            >
+              {renderFragmentOverlay?.(fragment)}
+              {withCrops && pageImageUrl && hasArea(fragment.bbox) && (
+                <SourceCrop pageImageUrl={pageImageUrl} bbox={fragment.bbox} page={page} />
+              )}
+              <FragmentBody
+                fragment={fragment}
+                query={query}
+                assetUrl={assetUrl}
+                suppressImage={withCrops}
+                preserveLayout={spatial}
+              />
+              <RecognitionMeta fragment={fragment} showConfidence={showOcrReview && !spatial} />
+            </div>
+          );
+        })}
+        {page.fragments.length === 0 && (
+          <p className="structured-page-empty">На этой странице не нашлось текста.</p>
+        )}
+      </div>
     </article>
   );
 }
@@ -91,12 +110,14 @@ function FragmentBody({
   query,
   assetUrl,
   suppressImage = false,
+  preserveLayout = false,
 }: {
   fragment: MaterialFragmentRead;
   query: string;
   assetUrl?: (fragmentId: string) => string;
   /** Вырезку оригинала уже показывает `SourceCrop` — свои картинки не дублируем. */
   suppressImage?: boolean;
+  preserveLayout?: boolean;
 }) {
   if (fragment.element_kind === "image") {
     const transcript = fragment.text.trim();
@@ -109,6 +130,9 @@ function FragmentBody({
     }
     if (!fragment.has_asset || !assetUrl) {
       return hasTranscript ? <p>{renderInlineMath(transcript, query)}</p> : null;
+    }
+    if (preserveLayout) {
+      return <img className="structured-image" src={assetUrl(fragment.id)} alt="Изображение из документа" loading="lazy" />;
     }
     return (
       <figure className="structured-figure">
@@ -145,9 +169,12 @@ function FragmentBody({
     );
   }
   if (fragment.element_kind === "formula") {
-    return <Formula fragment={fragment} assetUrl={suppressImage ? undefined : assetUrl} />;
+    return <Formula fragment={fragment} assetUrl={suppressImage ? undefined : assetUrl} preserveLayout={preserveLayout} />;
   }
   if (fragment.element_kind === "table") {
+    if (preserveLayout && fragment.has_asset && assetUrl) {
+      return <img className="structured-image" src={assetUrl(fragment.id)} alt="Таблица из документа" loading="lazy" />;
+    }
     return (
       <>
         <MarkdownTable markdown={fragment.text} />
@@ -250,12 +277,16 @@ function latexFromFragment(text: string): string {
 function Formula({
   fragment,
   assetUrl,
+  preserveLayout = false,
 }: {
   fragment: MaterialFragmentRead;
   assetUrl?: (fragmentId: string) => string;
+  preserveLayout?: boolean;
 }) {
+  const latex = latexFromFragment(fragment.text);
   try {
-    const html = katex.renderToString(latexFromFragment(fragment.text), {
+    if (!formulaLooksReliable(latex)) throw new Error("Suspicious OCR formula");
+    const html = katex.renderToString(latex, {
       displayMode: true,
       throwOnError: true,
       strict: "ignore",
@@ -263,15 +294,33 @@ function Formula({
     });
     return <div className="structured-formula" dangerouslySetInnerHTML={{ __html: html }} />;
   } catch {
-    return (
-      <div className="structured-formula-fallback">
-        <code>{fragment.text}</code>
-        {fragment.has_asset && assetUrl && (
+    if (fragment.has_asset && assetUrl) {
+      return (
+        <div className="structured-formula-fallback" data-formula-status="source-crop">
           <img src={assetUrl(fragment.id)} alt="Оригинальный фрагмент формулы" loading="lazy" />
-        )}
+          {!preserveLayout && (
+            <details>
+              <summary>LaTeX требует проверки</summary>
+              <code>{fragment.text}</code>
+            </details>
+          )}
+        </div>
+      );
+    }
+    return (
+      <div className="structured-formula-fallback" data-formula-status="raw-latex">
+        <code>{fragment.text}</code>
       </div>
     );
   }
+}
+
+function formulaLooksReliable(latex: string): boolean {
+  const compact = latex.replace(/\s+/g, "");
+  if (compact.length === 0 || compact.length > 1600) return false;
+  const tokens = compact.match(/\\[A-Za-z]+|[A-Za-z]+|\d+|[^A-Za-z\d]/g) ?? [];
+  if (tokens.length < 120) return true;
+  return new Set(tokens).size / tokens.length >= 0.08;
 }
 
 const INLINE_MATH = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$|\\\(([\s\S]+?)\\\)/g;
