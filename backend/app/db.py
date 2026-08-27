@@ -23,7 +23,7 @@ class Base(DeclarativeBase):
 
 engine = create_engine(
     URL.create("sqlite+pysqlite", database=str(settings.database_path)),
-    connect_args={"autocommit": False, "check_same_thread": False, "timeout": 5},
+    connect_args={"autocommit": False, "check_same_thread": False, "timeout": 30},
     # SQLAlchemy-пул рассчитан на дорогие сетевые соединения. Для SQLite
     # соединение — это просто open() файла, а WAL и busy_timeout уже решают
     # конкуренцию на уровне самого SQLite. С QueuePool по умолчанию (5+10)
@@ -43,7 +43,7 @@ def configure_sqlite(dbapi_connection: object, _: object) -> None:
         try:
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.execute("PRAGMA busy_timeout=30000")
             # data/ — bind-mount с Windows-хоста: mmap для wal-index там ненадёжен
             # и роняет параллельные запросы с "disk I/O error".
             # Обычный файловый ввод-вывод работает.
