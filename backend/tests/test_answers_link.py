@@ -269,6 +269,58 @@ def test_image_fragment_uses_its_asset_filename_as_answer_marker(session: Sessio
     assert "diagram-1.png" in answer.text
 
 
+def test_textbook_table_and_formula_survive_answer_linking(session: Session) -> None:
+    project, nodes = _program(session, 1)
+    material = _answers_material(
+        session,
+        project,
+        [(nodes[0].title, [("Answer body", "paragraph", None)])],
+    )
+    page = session.scalar(select(MaterialPage).where(MaterialPage.material_id == material.id))
+    block = session.scalar(select(MaterialBlock).where(MaterialBlock.material_id == material.id))
+    assert page is not None and block is not None
+    session.add_all(
+        [
+            MaterialFragment(
+                id=uuid4(),
+                material_id=material.id,
+                page_id=page.id,
+                block_id=block.id,
+                sort_order=2,
+                text="",
+                bbox=[0, 0.02, 1, 0.03],
+                element_kind="table",
+                asset_path="assets/source/table-1.png",
+                structure_level=None,
+                degraded_structure=False,
+                quality=PageQuality.OCR,
+            ),
+            MaterialFragment(
+                id=uuid4(),
+                material_id=material.id,
+                page_id=page.id,
+                block_id=block.id,
+                sort_order=3,
+                text=r"\mathbf{P}\{\xi=k\}=p^k",
+                bbox=[0, 0.04, 1, 0.05],
+                element_kind="formula",
+                asset_path="assets/source/formula-1.png",
+                structure_level=None,
+                degraded_structure=False,
+                quality=PageQuality.OCR,
+            ),
+        ]
+    )
+    session.commit()
+
+    link_answers_material(session, project.id, material.id)
+
+    answer = session.get(ReferenceAnswer, (project.id, nodes[0].id))
+    assert answer is not None
+    assert "table-1.png" in answer.text
+    assert r"$$\mathbf{P}\{\xi=k\}=p^k$$" in answer.text
+
+
 def test_linked_answer_preserves_outer_blanks_and_indented_list(session: Session) -> None:
     project, nodes = _program(session, 1)
     material = _answers_material(
