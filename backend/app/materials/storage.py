@@ -105,9 +105,15 @@ def store_revision_text(
 
 
 def store_material_asset(owner: str, name: str, data: bytes) -> str:
-    """Картинка, вынутая из материала. Имя детерминированное, поэтому повторный
-    разбор той же страницы переиспользует файл и не плодит копий."""
-    relative_path = Path("assets") / owner / name
+    """Картинка из материала с именем по содержимому.
+
+    Индекс блока может измениться между версиями OCR. Хеш не даёт новому блоку
+    переиспользовать чужую старую вырезку и при этом сохраняет дедупликацию.
+    """
+    source_name = Path(name)
+    digest = hashlib.sha256(data).hexdigest()[:16]
+    hashed_name = f"{source_name.stem}-{digest}{source_name.suffix}"
+    relative_path = Path("assets") / owner / hashed_name
     final_path = settings.storage_dir / relative_path
     final_path.parent.mkdir(parents=True, exist_ok=True)
     if not final_path.exists():
