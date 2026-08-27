@@ -106,6 +106,49 @@ def _markdown(result: Any) -> str:
     return str(payload or "")
 
 
+def _bbox_iou(left: Any, right: Any) -> float:
+    if not (
+        isinstance(left, list)
+        and isinstance(right, list)
+        and len(left) == 4
+        and len(right) == 4
+    ):
+        return 0.0
+    try:
+        left_box = [float(value) for value in left]
+        right_box = [float(value) for value in right]
+    except (TypeError, ValueError):
+        return 0.0
+    intersection_width = max(
+        0.0, min(left_box[2], right_box[2]) - max(left_box[0], right_box[0])
+    )
+    intersection_height = max(
+        0.0, min(left_box[3], right_box[3]) - max(left_box[1], right_box[1])
+    )
+    intersection = intersection_width * intersection_height
+    left_area = max(0.0, left_box[2] - left_box[0]) * max(
+        0.0, left_box[3] - left_box[1]
+    )
+    right_area = max(0.0, right_box[2] - right_box[0]) * max(
+        0.0, right_box[3] - right_box[1]
+    )
+    union = left_area + right_area - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def _layout_score(label: str, bbox: Any, boxes: Any) -> Any:
+    best_overlap = 0.0
+    best_score = None
+    for item in boxes if isinstance(boxes, list) else []:
+        if not isinstance(item, dict) or str(item.get("label") or "") != label:
+            continue
+        overlap = _bbox_iou(bbox, _plain(item.get("coordinate")))
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_score = item.get("score")
+    return best_score if best_overlap >= 0.8 else None
+
+
 def _elements(payload: dict[str, Any]) -> list[dict[str, Any]]:
     parsing = payload.get("parsing_res_list") or []
     layout = payload.get("layout_det_res") or {}
@@ -116,17 +159,7 @@ def _elements(payload: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         bbox = _plain(block.get("block_bbox") or block.get("coordinate") or [0, 0, 1, 1])
         label = str(block.get("block_label") or block.get("label") or "text")
-        score = None
-        if isinstance(boxes, list):
-            matching = [
-                item
-                for item in boxes
-                if isinstance(item, dict)
-                and str(item.get("label") or "") == label
-                and _plain(item.get("coordinate")) == bbox
-            ]
-            if matching:
-                score = matching[0].get("score")
+        score = _layout_score(label, bbox, boxes)
         result.append(
             {
                 "label": label,
@@ -136,7 +169,6 @@ def _elements(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "order": block.get("block_order"),
             }
         )
-    result.sort(key=lambda item: (item["order"] is None, item["order"] or 0))
     return result
 
 
