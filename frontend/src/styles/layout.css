@@ -7689,6 +7689,38 @@ button.wizard-back-projects {
   font-size: max(calc(11px * var(--materials-zoom, 1)), 8px);
 }
 
+.materials-page.is-spatial .materials-document-block,
+.materials-page.is-spatial .materials-document-block.is-bound,
+.materials-page.is-spatial .materials-document-block.is-answer,
+.materials-page.is-spatial .materials-document-block.is-note {
+  margin: 0;
+  padding: 0;
+  color: var(--ink);
+  font-size: 1em;
+  line-height: 1.15;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.materials-page.is-spatial .materials-document-block h2,
+.materials-page.is-spatial .materials-document-block h3,
+.materials-page.is-spatial .materials-document-block h4 {
+  font-size: 1em;
+  line-height: 1.15;
+}
+
+.materials-page.is-spatial .materials-fragment-pin,
+.materials-page.is-spatial .materials-block-actions {
+  display: none;
+}
+
+.materials-page.is-spatial .materials-document-block.is-selected {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .materials-pages.is-text .materials-page h2,
 .materials-pages.is-text .materials-document-block {
   font-size: revert;

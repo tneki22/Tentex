@@ -940,12 +940,23 @@
   width: 100%;
   overflow: hidden;
   background: var(--paper);
+  container-type: inline-size;
 }
 
 .structured-page.is-spatial .structured-fragment {
   position: absolute;
   min-width: 0;
   overflow: hidden;
+  font-size: 1.55cqw;
+}
+
+.structured-page.is-spatial .structured-fragment[data-element-kind="image"],
+.structured-page.is-spatial .structured-fragment[data-element-kind="table"] {
+  overflow: visible;
+}
+
+.structured-page.is-spatial .structured-recognition {
+  display: none;
 }
 
 .structured-page.is-spatial .structured-fragment > p,
@@ -964,7 +975,7 @@
 .structured-page.is-spatial .structured-formula-fallback img {
   display: block;
   width: 100%;
-  height: 100%;
+  height: auto;
   margin: 0;
   object-fit: contain;
   border: 0;

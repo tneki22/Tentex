@@ -77,6 +77,7 @@ export function StructuredPage({
             <div
               {...extra}
               className={classNames}
+              data-element-kind={fragment.element_kind}
               data-recognition-source={fragment.recognition_source}
               key={fragment.id}
               id={`fragment-${fragment.id}`}
