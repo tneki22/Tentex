@@ -105,10 +105,10 @@ function FragmentBody({
       && !/^\[?(изображение|image)\]?$/iu.test(transcript);
     if (suppressImage) {
       // Фото фрагмента уже над текстом — здесь только расшифровка, если есть.
-      return hasTranscript ? <p>{highlight(transcript, query)}</p> : null;
+      return hasTranscript ? <p>{renderInlineMath(transcript, query)}</p> : null;
     }
     if (!fragment.has_asset || !assetUrl) {
-      return hasTranscript ? <p>{highlight(transcript, query)}</p> : null;
+      return hasTranscript ? <p>{renderInlineMath(transcript, query)}</p> : null;
     }
     return (
       <figure className="structured-figure">
@@ -122,7 +122,7 @@ function FragmentBody({
           <details className="structured-transcript">
             <summary>Распознанный текст</summary>
             <p className="structured-transcript-note">Может содержать ошибки, особенно в формулах.</p>
-            <p>{highlight(transcript, query)}</p>
+            <p>{renderInlineMath(transcript, query)}</p>
           </details>
         )}
       </figure>
@@ -130,9 +130,9 @@ function FragmentBody({
   }
   if (fragment.element_kind === "heading") {
     const level = fragment.structure_level ?? 1;
-    if (level <= 1) return <h2>{highlight(fragment.text, query)}</h2>;
-    if (level === 2) return <h3>{highlight(fragment.text, query)}</h3>;
-    return <h4>{highlight(fragment.text, query)}</h4>;
+    if (level <= 1) return <h2>{renderInlineMath(fragment.text, query)}</h2>;
+    if (level === 2) return <h3>{renderInlineMath(fragment.text, query)}</h3>;
+    return <h4>{renderInlineMath(fragment.text, query)}</h4>;
   }
   if (fragment.element_kind === "list") {
     return (
@@ -140,7 +140,7 @@ function FragmentBody({
         className="structured-list-item"
         style={{ "--list-level": fragment.structure_level ?? 1 } as CSSProperties}
       >
-        {highlight(fragment.text, query)}
+        {renderInlineMath(fragment.text, query)}
       </p>
     );
   }
@@ -160,7 +160,7 @@ function FragmentBody({
       </>
     );
   }
-  return <p>{highlight(fragment.text, query)}</p>;
+  return <p>{renderInlineMath(fragment.text, query)}</p>;
 }
 
 function RecognitionMeta({ fragment, showConfidence }: { fragment: MaterialFragmentRead; showConfidence: boolean }) {
@@ -272,6 +272,39 @@ function Formula({
       </div>
     );
   }
+}
+
+const INLINE_MATH = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$|\\\(([\s\S]+?)\\\)/g;
+
+function renderInlineMath(text: string, query: string): ReactNode {
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(INLINE_MATH)) {
+    const start = match.index;
+    if (start > cursor) parts.push(highlight(text.slice(cursor, start), query));
+    const source = match[1] ?? match[2] ?? match[3] ?? "";
+    try {
+      const html = katex.renderToString(source, {
+        displayMode: false,
+        throwOnError: true,
+        strict: "ignore",
+        trust: false,
+      });
+      parts.push(
+        <span
+          className="structured-inline-math"
+          dangerouslySetInnerHTML={{ __html: html }}
+          key={`${start}-${match[0]}`}
+        />,
+      );
+    } catch {
+      parts.push(match[0]);
+    }
+    cursor = start + match[0].length;
+  }
+  if (cursor === 0) return highlight(text, query);
+  if (cursor < text.length) parts.push(highlight(text.slice(cursor), query));
+  return parts;
 }
 
 function splitMarkdownRow(row: string): string[] {
