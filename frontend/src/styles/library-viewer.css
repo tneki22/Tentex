@@ -68,10 +68,12 @@
    должен быть ровно по своей подписи, иначе четыре штуки съедают весь экран.
    Класс попадает на сам триггер, поэтому селектор одноуровневый. */
 .select-trigger.lib-filter-select {
+  flex: 0 0 auto;
   width: auto;
   min-height: 34px;
   padding: 0 var(--space-2) 0 var(--space-3);
   font-size: var(--text-sm);
+  white-space: nowrap;
   background: var(--surface-sunken);
   border-color: transparent;
   border-radius: var(--radius-pill);

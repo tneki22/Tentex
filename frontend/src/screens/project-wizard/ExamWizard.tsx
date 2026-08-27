@@ -525,7 +525,6 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
   }
 
   function changeMinutes(minutesPerDay: string) {
-    setPreparationSuggestion(null);
     setForm((current) => ({ ...current, minutesPerDay }));
   }
 
@@ -888,7 +887,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                   <Field label="Время экзамена" hint="Если уже известно">
                     <input type="time" value={form.examTime} onChange={(event) => setForm((current) => ({ ...current, examTime: event.target.value }))} />
                   </Field>
-                  <Field label={form.format === "tickets" ? "Ожидается билетов" : form.format === "unknown" ? "Ожидается разделов" : "Ожидается элементов"} hint={`Предварительно найдено: ${studyCount}`}>
+                  <Field label={form.format === "tickets" ? "Ожидается билетов" : form.format === "unknown" ? "Ожидается разделов" : "Кол-во вопросов"} hint={`Предварительно найдено: ${studyCount}`}>
                     <input min="1" type="number" value={form.expectedCount} onChange={(event) => setForm((current) => ({ ...current, expectedCount: event.target.value }))} />
                   </Field>
                 </div>

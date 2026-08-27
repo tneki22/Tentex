@@ -5172,6 +5172,7 @@ button.wizard-back-projects {
   font-size: var(--text-sm);
 }
 .wizard-ai-suggestion b { color: var(--accent); }
+.wizard-ai-suggestion span { white-space: pre-line; }
 .wizard-ai-suggestion small { color: var(--muted); }
 .wizard-ai-confirmation { display: grid; gap: var(--space-3); }
 .wizard-ai-confirmation > p { margin: 0; color: var(--ink-soft); }

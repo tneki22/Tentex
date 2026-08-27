@@ -310,7 +310,7 @@ export function Library() {
                       </StatusBadge>
                     )}
                     {material.native_page_count > 0 && (
-                      <QualityBadge quality="native" count={material.native_page_count} />
+                      <StatusBadge tone="neutral">{material.native_page_count} стр.</StatusBadge>
                     )}
                     {material.ocr_page_count + (material.parser_mode === "fast" ? material.ocr_low_page_count : 0) > 0 && (
                       <QualityBadge quality="ocr" count={material.ocr_page_count + (material.parser_mode === "fast" ? material.ocr_low_page_count : 0)} />
