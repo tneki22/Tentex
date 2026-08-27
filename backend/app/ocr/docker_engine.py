@@ -136,8 +136,13 @@ def inspect_container(container_id: str) -> dict[str, Any] | None:
     return result if isinstance(result, dict) else None
 
 
+def inspect_image(reference: str) -> dict[str, Any] | None:
+    result = _safe("GET", f"/images/{quote(reference, safe='')}/json", timeout=5.0)
+    return result if isinstance(result, dict) else None
+
+
 def image_exists(reference: str) -> bool:
-    return _safe("GET", f"/images/{quote(reference, safe='')}/json", timeout=5.0) is not None
+    return inspect_image(reference) is not None
 
 
 def create_container(name: str, config: dict[str, Any]) -> str:

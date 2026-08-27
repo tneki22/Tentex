@@ -272,12 +272,17 @@ def start(environment: dict[str, str]) -> ServiceStatus:
     try:
         if found is not None:
             container_id = str(found.get("Id") or "")
-            # Настройки движка приезжают переменными окружения, а они
-            # задаются при создании. Изменились — пересоздаём контейнер.
             details = docker_engine.inspect_container(container_id) or {}
             current = set((details.get("Config") or {}).get("Env") or [])
             wanted = {f"{key}={value}" for key, value in environment.items()}
-            if not wanted.issubset(current):
+            current_image = str(details.get("Image") or "")
+            image = docker_engine.inspect_image(_image(project)) if current_image else None
+            wanted_image = str((image or {}).get("Id") or "")
+            # И настройки, и образ фиксируются при создании контейнера. Простого
+            # старта недостаточно: после пересборки Docker иначе поднимет старый OCR.
+            if not wanted.issubset(current) or (
+                wanted_image and current_image != wanted_image
+            ):
                 docker_engine.remove_container(container_id)
                 found = None
         if found is None:

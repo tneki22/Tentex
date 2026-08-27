@@ -17,6 +17,8 @@ log = logging.getLogger("tentex.textbook_ocr")
 app = FastAPI(title="Tentex textbook OCR", docs_url=None, redoc_url=None)
 
 MODEL_NAME = "PP-StructureV3 + PP-FormulaNet Plus M"
+LAYOUT_MODEL = "PP-DocLayout_plus-L"
+FORMULA_MODEL = "PP-FormulaNet_plus-M"
 DEVICE = os.getenv("TENTEX_TEXTBOOK_DEVICE", "gpu")
 _lock = threading.Lock()
 _pipeline: Any = None
@@ -42,8 +44,8 @@ def _load_pipeline() -> tuple[Any, str]:
         device=DEVICE,
         precision="fp16",
         lang="ru",
-        layout_detection_model_name="PP-DocLayout_plus-L",
-        formula_recognition_model_name="PP-FormulaNet_plus-M",
+        layout_detection_model_name=LAYOUT_MODEL,
+        formula_recognition_model_name=FORMULA_MODEL,
         formula_recognition_batch_size=1,
         text_recognition_batch_size=1,
         use_doc_orientation_classify=False,
@@ -205,6 +207,8 @@ def health() -> dict[str, Any]:
     return {
         "ready": _pipeline is not None,
         "model": MODEL_NAME,
+        "layout_model": LAYOUT_MODEL,
+        "formula_model": FORMULA_MODEL,
         "executor": _executor,
         "label": _executor or "",
         "reason": _reason,

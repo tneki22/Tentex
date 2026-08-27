@@ -108,6 +108,44 @@ def test_start_forgets_the_previous_stop_marker(monkeypatch: pytest.MonkeyPatch)
     assert service_control._expected_stop_container is None
 
 
+def test_start_recreates_a_stopped_container_after_its_image_was_rebuilt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    removed: list[str] = []
+    started: list[str] = []
+    monkeypatch.setattr(docker_engine, "available", lambda: True)
+    monkeypatch.setattr(docker_engine, "self_container", _fake_self)
+    monkeypatch.setattr(
+        docker_engine, "find_container", lambda labels: {"Id": "old", "State": "exited"}
+    )
+    monkeypatch.setattr(
+        docker_engine,
+        "inspect_container",
+        lambda container_id: {"Image": "sha256:old", "Config": {"Env": []}},
+    )
+    monkeypatch.setattr(
+        docker_engine, "inspect_image", lambda reference: {"Id": "sha256:new"}
+    )
+    monkeypatch.setattr(
+        docker_engine, "remove_container", lambda container_id: removed.append(container_id)
+    )
+    monkeypatch.setattr(docker_engine, "image_exists", lambda reference: True)
+    monkeypatch.setattr(
+        service_control, "_container_config", lambda project, own, environment: {}
+    )
+    monkeypatch.setattr(
+        docker_engine, "create_container", lambda name, config: "new"
+    )
+    monkeypatch.setattr(
+        docker_engine, "start_container", lambda container_id: started.append(container_id)
+    )
+
+    service_control.start({})
+
+    assert removed == ["old"]
+    assert started == ["new"]
+
+
 def test_tail_logs_strips_ansi_color_codes(monkeypatch: pytest.MonkeyPatch) -> None:
     """Иначе цветовые коды PaddleX рисуются в `<pre>` нечитаемыми прямоугольниками."""
     payload = b"\x1b[32mCreating model\x1b[0m\nFatalError: boom\n"

@@ -64,6 +64,22 @@ def test_layout_failure_falls_back_per_page(tmp_path: Path, monkeypatch) -> None
     assert "layout_fallback" in page.diagnostics
 
 
+def test_iter_pages_skips_unselected_pdf_pages(tmp_path: Path) -> None:
+    path = tmp_path / "selected-pages.pdf"
+    document = fitz.open()
+    for page_number in range(1, 4):
+        page = document.new_page(width=500, height=600)
+        page.insert_text((50, 50), f"Page {page_number}", fontsize=12)
+    document.save(path)
+    document.close()
+
+    pages = list(
+        iter_pages(path, ParserMode.FAST, page_numbers=(1, 3))
+    )
+
+    assert [page.page_number for page in pages] == [1, 3]
+
+
 def test_mixed_page_keeps_native_text_and_image_without_duplicate_transcript() -> None:
     native = ParsedElement("paragraph", "Плотность распределения", (0.1, 0.1, 0.8, 0.2))
     image = ParsedElement(
