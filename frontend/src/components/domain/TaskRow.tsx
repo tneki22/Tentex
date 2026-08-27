@@ -1,4 +1,4 @@
-import { Pause, Play, RotateCcw } from "lucide-react";
+import { Pause, Play, RotateCcw, X } from "lucide-react";
 import { IconButton, Progress } from "../ui";
 
 /** Что именно считается. Названия — из словаря проекта, без синонимов. */
@@ -32,6 +32,8 @@ interface TaskRowProps {
   onPause?: (id: string) => void;
   onResume?: (id: string) => void;
   onRetry?: (id: string) => void;
+  /** Отменить незавершённый разбор: строящаяся версия выбрасывается, активная цела. */
+  onCancel?: (id: string) => void;
 }
 
 /**
@@ -41,9 +43,11 @@ interface TaskRowProps {
  * Счётчик «сделано из всего» — это и есть чекпоинт: он показывает ровно то, с
  * чего работа продолжится после падения, а не абстрактный процент.
  */
-export function TaskRow({ task, onPause, onResume, onRetry }: TaskRowProps) {
+export function TaskRow({ task, onPause, onResume, onRetry, onCancel }: TaskRowProps) {
   const failed = task.state === "failed";
   const label = `${KIND_LABEL[task.kind]} · ${task.subject}`;
+  // Отменить можно то, что ещё не завершилось: очередь, ход и паузу.
+  const cancellable = task.state === "queued" || task.state === "running" || task.state === "paused";
 
   return (
     <div className={`task-row ${failed ? "is-failed" : ""}`.trim()}>
@@ -63,6 +67,11 @@ export function TaskRow({ task, onPause, onResume, onRetry }: TaskRowProps) {
           {failed && onRetry && (
             <IconButton label="Повторить" onClick={() => onRetry(task.id)}>
               <RotateCcw size={14} />
+            </IconButton>
+          )}
+          {cancellable && onCancel && (
+            <IconButton label="Отменить разбор" onClick={() => onCancel(task.id)}>
+              <X size={14} />
             </IconButton>
           )}
         </span>

@@ -160,7 +160,7 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
     page_to?: number | null;
   }) => run(() => startLibraryProcessing(materialId, command)), [materialId, run]);
 
-  const controlProcessing = useCallback((action: "pause" | "resume" | "retry") =>
+  const controlProcessing = useCallback((action: "pause" | "resume" | "retry" | "cancel") =>
     run(() => controlLibraryProcessing(materialId, action)), [materialId, run]);
 
   return {

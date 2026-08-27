@@ -15,6 +15,11 @@ interface StructuredPageProps {
   /** Проектный потребитель добавляет сюда привязки; в Библиотеке их нет. */
   renderFragmentOverlay?: (fragment: MaterialFragmentRead) => ReactNode;
   fragmentProps?: (fragment: MaterialFragmentRead) => HTMLAttributes<HTMLDivElement> | undefined;
+  /** Ссылка на растр исходной страницы: с ней над каждым фрагментом можно
+      показать вырезку оригинала, а расшифровку — под ней. */
+  pageImageUrl?: string;
+  /** Показывать вырезки исходной фотографии над распознанным текстом. */
+  showSourceCrops?: boolean;
   className?: string;
 }
 
@@ -34,10 +39,13 @@ export function StructuredPage({
   focusedFragmentId = null,
   renderFragmentOverlay,
   fragmentProps,
+  pageImageUrl,
+  showSourceCrops = false,
   className = "",
 }: StructuredPageProps) {
+  const withCrops = showSourceCrops && Boolean(pageImageUrl);
   return (
-    <article className={`structured-page ${className}`.trim()}>
+    <article className={`structured-page ${withCrops ? "with-crops" : ""} ${className}`.trim()}>
       <header className="structured-page-head">
         <span>Страница {page.page_number}</span>
         <QualityBadge quality={page.quality} showReview={showOcrReview} />
@@ -58,7 +66,15 @@ export function StructuredPage({
             id={`fragment-${fragment.id}`}
           >
             {renderFragmentOverlay?.(fragment)}
-            <FragmentBody fragment={fragment} query={query} assetUrl={assetUrl} />
+            {withCrops && pageImageUrl && hasArea(fragment.bbox) && (
+              <SourceCrop pageImageUrl={pageImageUrl} bbox={fragment.bbox} page={page} />
+            )}
+            <FragmentBody
+              fragment={fragment}
+              query={query}
+              assetUrl={assetUrl}
+              suppressImage={withCrops}
+            />
             <RecognitionMeta fragment={fragment} showConfidence={showOcrReview} />
           </div>
         );
@@ -74,16 +90,26 @@ function FragmentBody({
   fragment,
   query,
   assetUrl,
+  suppressImage = false,
 }: {
   fragment: MaterialFragmentRead;
   query: string;
   assetUrl?: (fragmentId: string) => string;
+  /** Вырезку оригинала уже показывает `SourceCrop` — свои картинки не дублируем. */
+  suppressImage?: boolean;
 }) {
-  if (fragment.element_kind === "image" && fragment.has_asset && assetUrl) {
+  if (fragment.element_kind === "image") {
     const transcript = fragment.text.trim();
     const hasTranscript = fragment.recognition_source !== "native"
       && transcript.length > 0
       && !/^\[?(изображение|image)\]?$/iu.test(transcript);
+    if (suppressImage) {
+      // Фото фрагмента уже над текстом — здесь только расшифровка, если есть.
+      return hasTranscript ? <p>{highlight(transcript, query)}</p> : null;
+    }
+    if (!fragment.has_asset || !assetUrl) {
+      return hasTranscript ? <p>{highlight(transcript, query)}</p> : null;
+    }
     return (
       <figure className="structured-figure">
         <img
@@ -119,13 +145,13 @@ function FragmentBody({
     );
   }
   if (fragment.element_kind === "formula") {
-    return <Formula fragment={fragment} assetUrl={assetUrl} />;
+    return <Formula fragment={fragment} assetUrl={suppressImage ? undefined : assetUrl} />;
   }
   if (fragment.element_kind === "table") {
     return (
       <>
         <MarkdownTable markdown={fragment.text} />
-        {fragment.has_asset && assetUrl && (
+        {!suppressImage && fragment.has_asset && assetUrl && (
           <details className="structured-source-crop">
             <summary>Оригинальный фрагмент таблицы</summary>
             <img src={assetUrl(fragment.id)} alt="Оригинальный фрагмент таблицы" loading="lazy" />
@@ -141,7 +167,7 @@ function RecognitionMeta({ fragment, showConfidence }: { fragment: MaterialFragm
   if (fragment.recognition_source === "native") return null;
   const label = {
     ocr: "OCR",
-    vl: "PaddleOCR-VL",
+    vl: "Учебник",
     manual: "исправлено вручную",
   }[fragment.recognition_source];
   const lowConfidence = showConfidence && fragment.confidence !== null && fragment.confidence < 0.75;
@@ -153,6 +179,74 @@ function RecognitionMeta({ fragment, showConfidence }: { fragment: MaterialFragm
   );
 }
 
+/** У фрагмента есть, что вырезать: непустая площадь бокса. */
+function hasArea(bbox: number[]): boolean {
+  const [x0, y0, x1, y1] = bbox;
+  return x1 - x0 > 0.01 && y1 - y0 > 0.005;
+}
+
+/**
+ * Вырезка исходной фотографии под один фрагмент: тот же кадр страницы, обрезанный
+ * по нормализованному боксу. Растр один на страницу, кроим его через background —
+ * лишних сетевых запросов на каждый фрагмент нет.
+ */
+function SourceCrop({
+  pageImageUrl,
+  bbox,
+  page,
+}: {
+  pageImageUrl: string;
+  bbox: number[];
+  page: MaterialPageRead;
+}) {
+  const [x0, y0, x1, y1] = bbox;
+  const width = Math.min(1, Math.max(0.0001, x1 - x0));
+  const height = Math.min(1, Math.max(0.0001, y1 - y0));
+  const ratio = (width * page.width) / (height * page.height);
+  const style: CSSProperties = {
+    backgroundImage: `url("${pageImageUrl}")`,
+    backgroundSize: `${100 / width}% ${100 / height}%`,
+    backgroundPosition: `${width >= 1 ? 0 : (x0 / (1 - width)) * 100}% ${
+      height >= 1 ? 0 : (y0 / (1 - height)) * 100
+    }%`,
+    aspectRatio: Number.isFinite(ratio) && ratio > 0 ? `${ratio}` : undefined,
+  };
+  return (
+    <div
+      className="structured-source-photo"
+      style={style}
+      role="img"
+      aria-label="Вырезка исходной страницы"
+    />
+  );
+}
+
+/**
+ * Распознаватель формул (PP-FormulaNet) и markdown часто оборачивают LaTeX в
+ * разделители `$$…$$`, `\[…\]`, `\(…\)` или `$…$`. KaTeX ждёт голое выражение,
+ * поэтому внешнюю обёртку снимаем — иначе валидная формула молча падала в
+ * запасной вид сырым текстом.
+ */
+function latexFromFragment(text: string): string {
+  let value = text.trim();
+  const wrappers: [string, string][] = [
+    ["$$", "$$"],
+    ["\\[", "\\]"],
+    ["\\(", "\\)"],
+    ["$", "$"],
+  ];
+  for (const [open, close] of wrappers) {
+    if (
+      value.length >= open.length + close.length
+      && value.startsWith(open)
+      && value.endsWith(close)
+    ) {
+      return value.slice(open.length, value.length - close.length).trim();
+    }
+  }
+  return value;
+}
+
 function Formula({
   fragment,
   assetUrl,
@@ -161,10 +255,10 @@ function Formula({
   assetUrl?: (fragmentId: string) => string;
 }) {
   try {
-    const html = katex.renderToString(fragment.text, {
+    const html = katex.renderToString(latexFromFragment(fragment.text), {
       displayMode: true,
       throwOnError: true,
-      strict: "warn",
+      strict: "ignore",
       trust: false,
     });
     return <div className="structured-formula" dangerouslySetInnerHTML={{ __html: html }} />;

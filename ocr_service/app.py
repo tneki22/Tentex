@@ -16,9 +16,8 @@ from pydantic import BaseModel
 log = logging.getLogger("tentex.textbook_ocr")
 app = FastAPI(title="Tentex textbook OCR", docs_url=None, redoc_url=None)
 
-MODEL_NAME = os.getenv("TENTEX_TEXTBOOK_MODEL", "PaddleOCR-VL-1.6-0.9B")
+MODEL_NAME = "PP-StructureV3 + PP-FormulaNet Plus M"
 DEVICE = os.getenv("TENTEX_TEXTBOOK_DEVICE", "gpu")
-EXECUTOR_MODE = os.getenv("TENTEX_TEXTBOOK_EXECUTOR", "auto")
 _lock = threading.Lock()
 _pipeline: Any = None
 _executor: str | None = None
@@ -30,74 +29,44 @@ class ParseRequest(BaseModel):
     page_number: int
 
 
-def _is_oom(error: BaseException) -> bool:
-    message = str(error).lower()
-    return "out of memory" in message or "resourceexhausted" in message or "cuda oom" in message
-
-
-def _load_vl() -> tuple[Any, str]:
-    from paddleocr import PaddleOCRVL
-
-    pipeline = PaddleOCRVL(
-        pipeline_version="v1.6",
-        device=DEVICE,
-        precision="fp16",
-        use_queues=False,
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-    )
-    return pipeline, "PaddleOCR-VL-1.6-0.9B"
-
-
-def _load_fallback() -> tuple[Any, str]:
+def _load_pipeline() -> tuple[Any, str]:
     from paddleocr import PPStructureV3
 
+    # Модель разметки обязана выделять формулы отдельным классом, иначе
+    # `use_formula_recognition` нечего передать в PP-FormulaNet и формула
+    # уезжает в обычное распознавание текста «супер криво». PP-DocBlockLayout —
+    # блочная модель (текст/таблица/картинка), класса «формула» у неё нет;
+    # PP-DocLayout_plus-L различает 20 классов, включая формулы, и является
+    # штатной моделью разметки PP-StructureV3.
     pipeline = PPStructureV3(
         device=DEVICE,
         precision="fp16",
         lang="ru",
+        layout_detection_model_name="PP-DocLayout_plus-L",
         formula_recognition_model_name="PP-FormulaNet_plus-M",
         formula_recognition_batch_size=1,
         text_recognition_batch_size=1,
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
+        use_seal_recognition=False,
+        use_table_recognition=False,
+        use_formula_recognition=True,
         use_chart_recognition=False,
+        use_region_detection=False,
     )
     return pipeline, "PP-StructureV3 + PP-FormulaNet Plus M"
-
-
-def _activate_fallback(error: BaseException) -> None:
-    global _pipeline, _executor, _reason
-    log.warning("PaddleOCR-VL exceeded GPU memory; activating fallback: %s", error)
-    _pipeline = None
-    try:
-        _pipeline, _executor = _load_fallback()
-        _reason = ""
-    except Exception as fallback_error:
-        _reason = f"Не удалось загрузить запасной GPU-исполнитель: {fallback_error}"
-        log.exception(_reason)
 
 
 @app.on_event("startup")
 def load_pipeline() -> None:
     global _pipeline, _executor, _reason
     try:
-        _pipeline, _executor = (
-            _load_fallback() if EXECUTOR_MODE == "structure" else _load_vl()
-        )
+        _pipeline, _executor = _load_pipeline()
         _reason = ""
     except Exception as error:
-        if _is_oom(error):
-            _activate_fallback(error)
-        else:
-            target = (
-                "PP-StructureV3 + PP-FormulaNet Plus M"
-                if EXECUTOR_MODE == "structure"
-                else MODEL_NAME
-            )
-            _reason = f"Не удалось загрузить {target}: {error}"
-            log.exception(_reason)
+        _reason = f"Не удалось загрузить {MODEL_NAME}: {error}"
+        log.exception(_reason)
 
 
 def _plain(value: Any) -> Any:
@@ -172,24 +141,63 @@ def _elements(payload: dict[str, Any]) -> list[dict[str, Any]]:
 def _predict(path: Path) -> dict[str, Any]:
     if _pipeline is None:
         raise RuntimeError(_reason)
-    try:
-        result = next(iter(_pipeline.predict(str(path))))
-    except Exception as error:
-        if _executor == "PaddleOCR-VL-1.6-0.9B" and _is_oom(error):
-            _activate_fallback(error)
-            if _pipeline is None:
-                raise RuntimeError(_reason) from error
-            result = next(iter(_pipeline.predict(str(path))))
-        else:
-            raise
+    result = next(iter(_pipeline.predict(str(path))))
     payload = _result_json(result)
+    elements = _elements(payload)
+    markdown = _markdown(result)
+    if not markdown.strip():
+        markdown = "\n\n".join(item["content"] for item in elements if item["content"])
     return {
         "width": int(payload.get("width") or 1),
         "height": int(payload.get("height") or 1),
-        "markdown": _markdown(result),
-        "elements": _elements(payload),
+        "markdown": markdown,
+        "elements": elements,
         "diagnostics": [f"textbook_executor:{_executor}"],
     }
+
+
+def _gpu() -> dict[str, Any] | None:
+    """Характеристики видеокарты для экрана настроек Tentex.
+
+    Этот процесс — единственный, кто видит GPU напрямую: контейнер API запущен
+    без доступа к драйверу и сам определить её не может.
+    """
+    global _gpu_cache
+    if _gpu_cache is not None:
+        return _gpu_cache or None
+    import shutil
+    import subprocess
+
+    _gpu_cache = {}
+    if shutil.which("nvidia-smi") is None:
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,driver_version",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = next((item for item in result.stdout.splitlines() if item.strip()), "")
+    parts = [item.strip() for item in line.split(",")]
+    if len(parts) < 2:
+        return None
+    _gpu_cache = {
+        "name": parts[0],
+        "vram_mb": int(parts[1]) if parts[1].isdigit() else None,
+        "driver": parts[2] if len(parts) > 2 else None,
+    }
+    return _gpu_cache
+
+
+_gpu_cache: dict[str, Any] | None = None
 
 
 @app.get("/health")
@@ -198,10 +206,11 @@ def health() -> dict[str, Any]:
         "ready": _pipeline is not None,
         "model": MODEL_NAME,
         "executor": _executor,
-        "label": f"{_executor} · GPU" if _executor else "Локально · GPU",
+        "label": _executor or "",
         "reason": _reason,
         "concurrency": 1,
         "precision": "fp16",
+        "gpu": _gpu(),
     }
 
 

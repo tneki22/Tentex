@@ -354,15 +354,6 @@ class ExamProgramDraftImportWrite(ApiModel):
     expected_program_revision: int = Field(ge=0)
 
 
-class MaterialCapabilities(ApiModel):
-    fast_available: bool
-    fast_label: str
-    textbook_available: bool
-    textbook_label: str
-    textbook_reason: str
-    cloud_reason: str = "Облачные режимы появятся на этапе 7"
-
-
 class MaterialAnswerImportResult(ApiModel):
     created: int
     skipped_existing: int

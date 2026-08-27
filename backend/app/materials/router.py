@@ -19,7 +19,6 @@ from app.materials.schemas import (
     LibraryMaterialRead,
     LibrarySearchResult,
     MaterialAnswerImportResult,
-    MaterialCapabilities,
     MaterialDeletePreview,
     MaterialPurpose,
     MaterialRead,
@@ -39,11 +38,6 @@ from app.projects.schemas import ProgramChangeResult
 SessionDependency = Annotated[Session, Depends(get_session)]
 GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
 router = APIRouter(prefix="/api", tags=["materials"])
-
-
-@router.get("/material-capabilities", response_model=MaterialCapabilities)
-def get_capabilities() -> MaterialCapabilities:
-    return service.capabilities()
 
 
 # ── Глобальная Библиотека. Конкретные пути объявляются раньше `/{material_id}`,

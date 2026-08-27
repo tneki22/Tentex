@@ -10,7 +10,7 @@ import {
   type ParserMode,
 } from "../../api/materials";
 import { StructuredPage, TimedTranscript } from "../../components/domain/material-viewer";
-import { LoadingState } from "../../components/ui";
+import { LoadingState, Switch } from "../../components/ui";
 import { AudioTranscriptView } from "./AudioTranscriptView";
 import { WebSnapshotView } from "./WebSnapshotView";
 
@@ -206,7 +206,11 @@ interface MaterialTextViewProps {
   onSeek: (seconds: number) => void;
   processing?: boolean;
   zoom?: number;
+  /** Предлагать тумблер «фото фрагментов»: только у основного текста, не в сравнении версий. */
+  allowSourcePhotos?: boolean;
 }
+
+const SOURCE_PHOTO_KEY = "tentex-viewer-source-photos";
 
 /** Правая половина сцены — подготовленный результат разбора. */
 export function MaterialTextView({
@@ -219,7 +223,24 @@ export function MaterialTextView({
   onSeek,
   processing = false,
   zoom = 1,
+  allowSourcePhotos = false,
 }: MaterialTextViewProps) {
+  // Фотографии фрагментов есть только там, где страница — растр (PDF, скан).
+  const canShowPhotos = allowSourcePhotos
+    && (material.presentation_kind === "pdf" || material.presentation_kind === "image");
+  // По умолчанию «Учебник» показывает фото с расшифровкой под ними; выбор запоминается.
+  const [showPhotos, setShowPhotos] = useState<boolean>(() => {
+    const stored = localStorage.getItem(SOURCE_PHOTO_KEY);
+    if (stored === "on") return true;
+    if (stored === "off") return false;
+    return parserMode === "textbook";
+  });
+
+  function togglePhotos(next: boolean) {
+    setShowPhotos(next);
+    localStorage.setItem(SOURCE_PHOTO_KEY, next ? "on" : "off");
+  }
+
   if (!page) {
     return (
       <div className="viewer-pane-scroll">
@@ -251,12 +272,23 @@ export function MaterialTextView({
   }
   return (
     <div className="viewer-pane-scroll" style={{ "--viewer-text-zoom": zoom } as CSSProperties}>
+      {canShowPhotos && (
+        <div className="viewer-text-controls">
+          <Switch
+            label="Фото фрагментов с расшифровкой"
+            checked={showPhotos}
+            onCheckedChange={togglePhotos}
+          />
+        </div>
+      )}
       <StructuredPage
         showOcrReview={parserMode !== "fast"}
         page={page}
         query={query}
         assetUrl={(fragmentId) => libraryFragmentAssetUrl(material.id, fragmentId)}
         focusedFragmentId={focusedFragmentId}
+        pageImageUrl={canShowPhotos ? libraryPageImageUrl(material.id, page.page_number) : undefined}
+        showSourceCrops={canShowPhotos && showPhotos}
       />
     </div>
   );

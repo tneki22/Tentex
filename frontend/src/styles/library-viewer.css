@@ -841,6 +841,29 @@
 
 .structured-figure .structured-image { margin: 0; }
 
+/* Тумблер «фото фрагментов» и режим фото+расшифровка. */
+.viewer-text-controls {
+  display: flex;
+  justify-content: flex-end;
+  margin-block-end: var(--space-3);
+}
+
+.structured-page.with-crops .structured-fragment {
+  padding: var(--space-3);
+  margin-block-end: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.structured-source-photo {
+  width: 100%;
+  background-repeat: no-repeat;
+  background-color: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  margin-block-end: var(--space-2);
+}
+
 .structured-transcript,
 .structured-source-crop {
   margin-block-start: var(--space-2);

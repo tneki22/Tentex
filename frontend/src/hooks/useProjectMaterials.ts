@@ -96,7 +96,7 @@ export function useProjectMaterials(projectId: string | undefined) {
       projectId ? mutate(() => updateMaterial(projectId, materialId, command)) : null,
     start: (materialId: string, mode: ParserMode = "fast") =>
       projectId ? mutate(() => startMaterialProcessing(projectId, materialId, mode)) : null,
-    control: (materialId: string, action: "pause" | "resume" | "retry") =>
+    control: (materialId: string, action: "pause" | "resume" | "retry" | "cancel") =>
       projectId ? mutate(() => controlMaterialProcessing(projectId, materialId, action)) : null,
     detach: (materialId: string) =>
       projectId ? mutate(() => detachMaterial(projectId, materialId)) : null,

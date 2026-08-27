@@ -469,6 +469,7 @@ export function LibraryMaterialWorkspace() {
             currentTime={currentTime}
             onSeek={setCurrentTime}
             processing={building}
+            allowSourcePhotos
           />
         )
       }

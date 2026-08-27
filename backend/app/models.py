@@ -1127,3 +1127,46 @@ class ChatMessage(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class OcrSettings(Base):
+    """Глобальные настройки распознавания. Одна строка, как AiSettings."""
+
+    __tablename__ = "ocr_settings"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="singleton"),
+        CheckConstraint(
+            "quality_threshold >= 0 AND quality_threshold <= 1", name="threshold_range"
+        ),
+        CheckConstraint("raster_scale IN (1.5, 2.0, 3.0)", name="raster_scale_known"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    default_mode: Mapped[ParserMode] = mapped_column(
+        enum_type(ParserMode, "ocr_default_mode"), default=ParserMode.FAST
+    )
+    quality_threshold: Mapped[float] = mapped_column(Float, default=0.75)
+    raster_scale: Mapped[float] = mapped_column(Float, default=2.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class OcrEngineConfig(Base):
+    """Настройки одного движка распознавания из реестра `app.ocr.engines`.
+
+    `mode` — строка, а не FK на перечисление: реестр шире, чем `ParserMode`
+    (включает пока не реализованные `cloud`/`maximum`/`expert`), и новый движок
+    не должен требовать миграции. `extra` несёт поля, специфичные для движка
+    (например, адрес и таймаут GPU-сервиса «Учебника»).
+    """
+
+    __tablename__ = "ocr_engine_configs"
+
+    mode: Mapped[str] = mapped_column(String, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    model_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    device: Mapped[str | None] = mapped_column(String, nullable=True)
+    language: Mapped[str | None] = mapped_column(String, nullable=True)
+    executor: Mapped[str | None] = mapped_column(String, nullable=True)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)

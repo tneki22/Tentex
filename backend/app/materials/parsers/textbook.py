@@ -1,9 +1,16 @@
-"""HTTP-клиент из CPU-воркера к изолированному PaddleOCR-VL сервису."""
+"""HTTP-клиент из CPU-воркера к изолированному GPU-сервису режима «Учебник».
+
+Сервис поднимает связку PP-StructureV3 + PP-FormulaNet: размечает страницу,
+читает текст и переводит печатные формулы в LaTeX. Внутренняя метка источника
+фрагмента — `vl` (историческое имя, менять её значит трогать данные), но
+пользователю она показывается как «Учебник», а не «PaddleOCR-VL».
+"""
 
 from __future__ import annotations
 
 import base64
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -16,6 +23,11 @@ from app.materials.parsers.base import ElementKind, ParsedElement, ParsedPage
 from app.materials.storage import store_material_asset
 
 ASSET_KINDS = {"formula", "table", "image"}
+# Экран настроек перечитывает статус на каждый GET, а ещё опрашивает его сам —
+# без короткого кэша один запрос браузера бьёт по сервису дважды подряд.
+_HEALTH_CACHE_SECONDS = 2.0
+_health_cache: dict[str, tuple[float, dict | None]] = {}
+DEFAULT_QUALITY_THRESHOLD = 0.75
 LABEL_KIND: dict[str, ElementKind] = {
     "doc_title": "heading",
     "paragraph_title": "heading",
@@ -42,10 +54,10 @@ class TextbookStatus:
     executor: str | None = None
 
 
-def _json_request(path: str, payload: dict | None, timeout: float) -> dict:
+def _json_request(path: str, payload: dict | None, timeout: float, *, base_url: str) -> dict:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = Request(
-        f"{settings.textbook_ocr_url.rstrip('/')}{path}",
+        f"{base_url.rstrip('/')}{path}",
         data=body,
         headers={"Content-Type": "application/json", "Accept": "application/json"},
         method="POST" if payload is not None else "GET",
@@ -54,24 +66,45 @@ def _json_request(path: str, payload: dict | None, timeout: float) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def status() -> TextbookStatus:
+def health_payload(*, base_url: str | None = None) -> dict | None:
+    """Сырой ответ `/health` GPU-сервиса. `None` — сервис не отвечает.
+
+    Отдельно от `status()`, потому что настройки распознавания достают отсюда
+    ещё и характеристики видеокарты: сервис — единственное место в системе,
+    которое видит её напрямую.
+    """
+    url = base_url or settings.textbook_ocr_url
+    now = time.monotonic()
+    cached = _health_cache.get(url)
+    if cached is not None and now - cached[0] < _HEALTH_CACHE_SECONDS:
+        return cached[1]
     try:
-        payload = _json_request("/health", None, timeout=0.6)
+        payload = _json_request("/health", None, timeout=0.6, base_url=url)
     except (OSError, URLError, TimeoutError, ValueError):
-        return TextbookStatus(
-            False,
-            "Локально · GPU",
-            "GPU-сервис не запущен. Запустите профиль Compose «textbook».",
-        )
+        payload = None
+    result = payload if isinstance(payload, dict) else None
+    _health_cache[url] = (now, result)
+    return result
+
+
+def reset_health_cache() -> None:
+    """Для тестов и после запуска/остановки сервиса, чтобы статус не отставал."""
+    _health_cache.clear()
+
+
+def status(*, base_url: str | None = None) -> TextbookStatus:
+    payload = health_payload(base_url=base_url)
+    if payload is None:
+        return TextbookStatus(False, "", "Сервис распознавания не отвечает.")
     ready = bool(payload.get("ready"))
     executor = str(payload.get("executor") or "") or None
-    label = str(payload.get("label") or "PaddleOCR-VL 1.6 · GPU")
-    reason = str(payload.get("reason") or "GPU-сервис ещё загружает модели.")
+    label = executor or "Сервис отвечает"
+    reason = str(payload.get("reason") or "Сервис ещё загружает модель в память видеокарты.")
     return TextbookStatus(ready, label, "" if ready else reason, executor)
 
 
-def require_available() -> TextbookStatus:
-    current = status()
+def require_available(*, base_url: str | None = None) -> TextbookStatus:
+    current = status(base_url=base_url)
     if not current.available:
         raise RuntimeError(current.reason)
     return current
@@ -115,19 +148,28 @@ def _crop_asset(
     return store_material_asset(owner, f"vl-p{page_number}-{index}.png", output.getvalue())
 
 
-def parse_image(path: Path, page_number: int, owner: str = "") -> ParsedPage:
+def parse_image(
+    path: Path,
+    page_number: int,
+    owner: str = "",
+    *,
+    base_url: str | None = None,
+    timeout: float | None = None,
+    quality_threshold: float = DEFAULT_QUALITY_THRESHOLD,
+) -> ParsedPage:
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     try:
         payload = _json_request(
             "/parse",
             {"image_base64": encoded, "page_number": page_number},
-            timeout=settings.textbook_ocr_timeout_seconds,
+            timeout=timeout if timeout is not None else settings.textbook_ocr_timeout_seconds,
+            base_url=base_url or settings.textbook_ocr_url,
         )
     except HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GPU-сервис вернул ошибку {error.code}: {detail}") from error
     except (OSError, URLError, TimeoutError) as error:
-        raise RuntimeError("GPU-сервис PaddleOCR-VL недоступен во время обработки") from error
+        raise RuntimeError("GPU-сервис распознавания недоступен во время обработки") from error
 
     width = float(payload.get("width") or 1)
     height = float(payload.get("height") or 1)
@@ -171,7 +213,7 @@ def parse_image(path: Path, page_number: int, owner: str = "") -> ParsedPage:
     plain = "\n".join(item.text for item in elements if item.kind != "image").strip()
     markdown = str(payload.get("markdown") or plain)
     confidence = min(confidences) if confidences else None
-    quality = "ocr_low" if confidence is not None and confidence < 0.75 else "ocr"
+    quality = "ocr_low" if confidence is not None and confidence < quality_threshold else "ocr"
     diagnostics = tuple(str(item) for item in payload.get("diagnostics") or [])
     return ParsedPage(
         page_number=page_number,

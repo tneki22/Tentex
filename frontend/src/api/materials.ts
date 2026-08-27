@@ -106,15 +106,6 @@ export interface MaterialPageRead {
   blocks: MaterialBlockRead[];
 }
 
-export interface MaterialCapabilities {
-  fast_available: boolean;
-  fast_label: string;
-  textbook_available: boolean;
-  textbook_label: string;
-  textbook_reason: string;
-  cloud_reason: string;
-}
-
 export interface MaterialAnswerImportResult {
   created: number;
   skipped_existing: number;
@@ -443,7 +434,7 @@ export const startMaterialProcessing = (
 export const controlMaterialProcessing = (
   projectId: string,
   materialId: string,
-  action: "pause" | "resume" | "retry",
+  action: "pause" | "resume" | "retry" | "cancel",
 ): Promise<MaterialRead> => request(`${materialPath(projectId, materialId)}/processing/${action}`, {
   method: "POST",
 });
@@ -533,9 +524,6 @@ export const materialFragmentAssetUrl = (
   materialId: string,
   fragmentId: string,
 ): string => `${materialPath(projectId, materialId)}/fragments/${encodeURIComponent(fragmentId)}/asset`;
-
-export const getMaterialCapabilities = (signal?: AbortSignal): Promise<MaterialCapabilities> =>
-  request("/api/material-capabilities", { signal });
 
 export const importMaterialReferenceAnswers = (
   projectId: string,
@@ -671,7 +659,7 @@ export const startLibraryProcessing = (
 
 export const controlLibraryProcessing = (
   materialId: string,
-  action: "pause" | "resume" | "retry",
+  action: "pause" | "resume" | "retry" | "cancel",
 ): Promise<LibraryMaterialDetailRead> => request(
   `${libraryPath(materialId)}/processing/${action}`,
   { method: "POST" },

@@ -1,0 +1,302 @@
+/**
+ * Раздел «Распознавание» в Параметрах установки.
+ *
+ * Общая рамка групп, форм и кнопок берётся у настроек ИИ (`.ai-*` в
+ * layout.css) — они одинаковые по смыслу и должны выглядеть одинаково.
+ * Здесь только то, чего там нет: цветной статус, таблица фактов о железе и
+ * модели, карточка набора моделей.
+ */
+
+/* Состояние строкой: цветная точка, слово и объяснение под ним.
+   Слово и объяснение разнесены намеренно — слитную серую строку не читают. */
+.ocr-status {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.ocr-status > div {
+  min-width: 0;
+}
+
+.ocr-status strong {
+  color: var(--status-color);
+  font-size: var(--text-sm);
+}
+
+.ocr-status p {
+  max-width: 68ch;
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.ocr-status-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--status-color);
+}
+
+.ocr-status.tone-success { --status-color: var(--tone-success); }
+.ocr-status.tone-warning { --status-color: var(--tone-warning); }
+.ocr-status.tone-danger { --status-color: var(--tone-danger); }
+.ocr-status.tone-info { --status-color: var(--tone-info); }
+.ocr-status.tone-neutral { --status-color: var(--muted); }
+
+/* Факты о железе и о наборе моделей: подпись сверху, значение снизу. */
+.ocr-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-3) var(--space-5);
+  margin: 0;
+}
+
+.ocr-facts > div {
+  min-width: 0;
+}
+
+.ocr-facts dt {
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.ocr-facts dd {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.ocr-facts dd a,
+.ocr-source a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--accent);
+}
+
+/* Плитки режимов на «Обзоре». */
+.ocr-engine-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--space-3);
+}
+
+.ocr-engine-summary > button {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color var(--ease-fast), background-color var(--ease-fast);
+}
+
+.ocr-engine-summary > button:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+
+.ocr-engine-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.ocr-engine-summary small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+}
+
+/* Управление GPU-сервисом. */
+.ocr-service {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+}
+
+.ocr-service-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.ocr-service-head > div {
+  min-width: 0;
+}
+
+.ocr-service-head strong,
+.ocr-service-head small {
+  display: block;
+}
+
+.ocr-service-head small {
+  max-width: 62ch;
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+/* Хвост журнала контейнера: сохраняем переносы, но не даём растянуть страницу. */
+.ocr-service-detail {
+  max-height: 12em;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ocr-advanced {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.ocr-inline-field {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.ocr-inline-field input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Карточка набора моделей. */
+.ocr-model-list {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.ocr-model {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.ocr-model-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.ocr-model-head > div {
+  min-width: 0;
+}
+
+.ocr-model-head h4 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-md);
+}
+
+.ocr-model-head p {
+  max-width: 68ch;
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.ocr-model-mark {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.ocr-model p:last-of-type {
+  margin-bottom: 0;
+}
+
+.ocr-model-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: 68ch;
+  margin: 0;
+  color: var(--tone-warning);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.ocr-model-note svg {
+  flex: none;
+  margin-top: 3px;
+}
+
+/* Откуда приедут файлы: организация и полные имена репозиториев. */
+.ocr-source {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.ocr-source ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ocr-source li a {
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  word-break: break-all;
+}
+
+.ocr-progress {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.ocr-progress small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 900px) {
+  .ocr-model-head,
+  .ocr-service-head {
+    flex-direction: column;
+  }
+}

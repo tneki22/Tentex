@@ -32,6 +32,7 @@ from app.models import (
     ProjectMaterial,
     utc_now,
 )
+from app.ocr import settings as ocr_settings
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 
 log = logging.getLogger("tentex.worker")
@@ -119,7 +120,12 @@ def _prepare_revision(session: Session, task_id: UUID) -> None:
         ):
             if page.page_number in selected or page.page_number in present:
                 continue
-            library.copy_page(session, page, revision)
+            copied = library.copy_page(session, page, revision)
+            # Скопированной странице сразу нужны фрагменты, иначе при просмотре
+            # строящейся ревизии по task_id (пока идёт частичный переразбор) все
+            # непереразбираемые страницы показывались бы пустыми — «текста нет».
+            # Финальную структуру всё равно пересоберёт `rebuild_structure`.
+            library.rebuild_checkpoint_page(session, copied)
 
 
 def _save_page(session: Session, task_id: UUID, parsed: ParsedPage) -> bool:
@@ -258,8 +264,14 @@ def _finish(session: Session, task_id: UUID) -> None:
 
 
 def process_task(session: Session, task: ProcessingTask) -> None:
+    # Захватываются до первого rollback: он истощает (expire) атрибуты task,
+    # а обращение к task.id/task.material_id между rollback и следующим явным
+    # session.begin() тихо перечитывает их запросом и уже открытой транзакцией
+    # сталкивается со следующим begin() — отсюда местные переменные, а не task.*.
+    task_id = task.id
+    material_id = task.material_id
     try:
-        material = session.get(Material, task.material_id)
+        material = session.get(Material, material_id)
         if material is None:
             return
         source_path = material_path(material.storage_path)
@@ -269,18 +281,22 @@ def process_task(session: Session, task: ProcessingTask) -> None:
         # SQLAlchemy starts a read transaction for session.get(); page checkpoints
         # need their own short transactions so a stopped worker never loses a page.
         session.rollback()
-        _prepare_revision(session, task.id)
+        params = ocr_settings.runtime_params(session)
+        session.rollback()
+        _prepare_revision(session, task_id)
         if next_index < len(selected):
-            for page in iter_pages(source_path, parser_mode, selected[next_index]):
-                if not _save_page(session, task.id, page):
+            for page in iter_pages(
+                source_path, parser_mode, selected[next_index], params=params
+            ):
+                if not _save_page(session, task_id, page):
                     return
-        _finish(session, task.id)
+        _finish(session, task_id)
     except Exception as error:
         session.rollback()
-        log.exception("task failed material=%s: %s", task.material_id, error)
+        log.exception("task failed material=%s: %s", material_id, error)
         with session.begin():
-            failed = session.get(ProcessingTask, task.id)
-            material = session.get(Material, task.material_id)
+            failed = session.get(ProcessingTask, task_id)
+            material = session.get(Material, material_id)
             if failed:
                 failed.state = ProcessingTaskState.FAILED
                 failed.error = str(error)

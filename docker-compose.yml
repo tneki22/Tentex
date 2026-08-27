@@ -9,6 +9,10 @@ services:
     volumes:
       - ./backend:/app
       - ./data:/data
+      # Кнопка «Запустить сервис» в разделе «Распознавание» поднимает контейнер
+      # textbook-ocr сама. Без сокета кнопки не будет — экран честно скажет, что
+      # управлять сервисом отсюда нельзя, и ничего не сломается.
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       TENTEX_DATA_DIR: /data
       TENTEX_TEXTBOOK_OCR_URL: http://textbook-ocr:8090
@@ -46,10 +50,9 @@ services:
     environment:
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
       CUDA_VISIBLE_DEVICES: "0"
-      # VL-1.6 fits into 8 GB only nominally (about 7.85 GB) and did not finish
-      # a representative page in the hardware gate. Keep the downloaded model,
-      # but expose the usable textbook executor on this machine.
-      TENTEX_TEXTBOOK_EXECUTOR: structure
+      # Единственный профиль «Учебник»: формулы и структура страницы без тяжёлого
+      # распознавания таблиц. Он рассчитан на доступные 8 ГБ видеопамяти.
+      TENTEX_TEXTBOOK_EXECUTOR: formulas
     deploy:
       resources:
         reservations:

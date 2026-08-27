@@ -18,6 +18,7 @@ from app.materials.parsers.base import ElementKind, ParsedElement, ParsedPage, R
 from app.materials.parsers.pdf_layout import parse_layout_page
 from app.materials.storage import store_material_asset
 from app.models import ParserMode
+from app.ocr.engines import DEFAULT_QUALITY_THRESHOLD, OcrRuntimeParams
 
 NUMBERED_RE = re.compile(r"^\s*\d{1,3}[.)]\s+")
 BULLET_RE = re.compile(r"^\s*[•▪◦‣·*+\-–—]\s+")
@@ -176,11 +177,13 @@ def _image_element(
     index: int,
     *,
     run_ocr: bool = False,
+    params: OcrRuntimeParams | None = None,
 ) -> ParsedElement | None:
     """Фотография или схема со страницы. Мелочь вроде логотипов пропускаем."""
     data = block.get("image")
     if not data:
         return None
+    params = params or OcrRuntimeParams()
     x0, top, x1, bottom = block["bbox"]
     if (x1 - x0) < MIN_IMAGE_SIDE or (bottom - top) < MIN_IMAGE_SIDE:
         return None
@@ -194,7 +197,13 @@ def _image_element(
             temporary.write(data)
             temporary_path = Path(temporary.name)
         try:
-            recognized = paddle_fast.parse_image(temporary_path, page_number)
+            recognized = paddle_fast.parse_image(
+                temporary_path,
+                page_number,
+                language=params.fast_language,
+                ocr_version=params.fast_model_id,
+                quality_threshold=params.quality_threshold,
+            )
             if recognized.plain_text.strip():
                 text = recognized.plain_text.strip()
                 confidence = recognized.confidence
@@ -221,6 +230,7 @@ def _native_pdf_page(
     owner: str = "",
     *,
     ocr_images: bool = False,
+    params: OcrRuntimeParams | None = None,
 ) -> ParsedPage:
     raw = page.get_text("dict", sort=True)
     blocks = raw.get("blocks", [])
@@ -243,6 +253,7 @@ def _native_pdf_page(
                     owner,
                     index,
                     run_ocr=ocr_images,
+                    params=params,
                 )
                 if image is not None:
                     elements.append(image)
@@ -332,7 +343,10 @@ def _merge_native_and_images(
     return tuple(sorted((*native, *merged_images), key=lambda item: (item.bbox[1], item.bbox[0])))
 
 
-def _page_quality(elements: tuple[ParsedElement, ...]) -> tuple[str, float | None]:
+def _page_quality(
+    elements: tuple[ParsedElement, ...],
+    quality_threshold: float = DEFAULT_QUALITY_THRESHOLD,
+) -> tuple[str, float | None]:
     recognized = [
         item
         for item in elements
@@ -342,7 +356,8 @@ def _page_quality(elements: tuple[ParsedElement, ...]) -> tuple[str, float | Non
         return "native", None
     scores = [item.confidence for item in recognized if item.confidence is not None]
     confidence = min(scores) if scores else None
-    return ("ocr_low" if confidence is not None and confidence < 0.75 else "ocr"), confidence
+    quality = "ocr_low" if confidence is not None and confidence < quality_threshold else "ocr"
+    return quality, confidence
 
 
 def _markdown(elements: list[ParsedElement]) -> str:
@@ -572,21 +587,36 @@ def _docx_page(path: Path, owner: str = "") -> ParsedPage:
     return ParsedPage(1, 1, 1, _markdown(elements), plain, "native", tuple(elements))
 
 
-def iter_pages(path: Path, mode: ParserMode, start_page: int = 1) -> Iterator[ParsedPage]:
+def iter_pages(
+    path: Path,
+    mode: ParserMode,
+    start_page: int = 1,
+    *,
+    params: OcrRuntimeParams | None = None,
+) -> Iterator[ParsedPage]:
+    params = params or OcrRuntimeParams()
     suffix = path.suffix.lower()
     # Имя файла материала — его sha256, поэтому оно же служит папкой для картинок.
     owner = path.stem
+    scale_matrix = fitz.Matrix(params.raster_scale, params.raster_scale)
     if suffix == ".pdf":
         document = fitz.open(path)
         for page_index in range(start_page - 1, len(document)):
             page = document[page_index]
             if mode == ParserMode.TEXTBOOK:
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                pixmap = page.get_pixmap(matrix=scale_matrix, alpha=False)
                 with NamedTemporaryFile(suffix=".png", delete=False) as temporary:
                     temporary_path = Path(temporary.name)
                 try:
                     pixmap.save(temporary_path)
-                    yield textbook.parse_image(temporary_path, page_index + 1, owner)
+                    yield textbook.parse_image(
+                        temporary_path,
+                        page_index + 1,
+                        owner,
+                        base_url=params.textbook_base_url,
+                        timeout=params.textbook_timeout_seconds,
+                        quality_threshold=params.quality_threshold,
+                    )
                 finally:
                     temporary_path.unlink(missing_ok=True)
                 continue
@@ -598,13 +628,14 @@ def iter_pages(path: Path, mode: ParserMode, start_page: int = 1) -> Iterator[Pa
                         page_index + 1,
                         owner,
                         ocr_images=mode == ParserMode.FAST,
+                        params=params,
                     )
                     images = tuple(
                         element for element in legacy.elements if element.kind == "image"
                     )
                     if images:
                         elements = _merge_native_and_images(parsed.elements, images)
-                        quality, confidence = _page_quality(elements)
+                        quality, confidence = _page_quality(elements, params.quality_threshold)
                         parsed = ParsedPage(
                             page_number=parsed.page_number,
                             width=parsed.width,
@@ -623,8 +654,11 @@ def iter_pages(path: Path, mode: ParserMode, start_page: int = 1) -> Iterator[Pa
                         page_index + 1,
                         owner,
                         ocr_images=mode == ParserMode.FAST,
+                        params=params,
                     )
-                    quality, confidence = _page_quality(fallback.elements)
+                    quality, confidence = _page_quality(
+                        fallback.elements, params.quality_threshold
+                    )
                     yield ParsedPage(
                         page_number=fallback.page_number,
                         width=fallback.width,
@@ -637,12 +671,18 @@ def iter_pages(path: Path, mode: ParserMode, start_page: int = 1) -> Iterator[Pa
                         confidence=confidence,
                     )
                 continue
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            pixmap = page.get_pixmap(matrix=scale_matrix, alpha=False)
             with NamedTemporaryFile(suffix=".png", delete=False) as temporary:
                 temporary_path = Path(temporary.name)
             try:
                 pixmap.save(temporary_path)
-                yield paddle_fast.parse_image(temporary_path, page_index + 1)
+                yield paddle_fast.parse_image(
+                    temporary_path,
+                    page_index + 1,
+                    language=params.fast_language,
+                    ocr_version=params.fast_model_id,
+                    quality_threshold=params.quality_threshold,
+                )
             finally:
                 temporary_path.unlink(missing_ok=True)
         return
@@ -650,9 +690,22 @@ def iter_pages(path: Path, mode: ParserMode, start_page: int = 1) -> Iterator[Pa
         return
     if suffix in {".jpg", ".jpeg", ".png"}:
         if mode == ParserMode.TEXTBOOK:
-            yield textbook.parse_image(path, 1, owner)
+            yield textbook.parse_image(
+                path,
+                1,
+                owner,
+                base_url=params.textbook_base_url,
+                timeout=params.textbook_timeout_seconds,
+                quality_threshold=params.quality_threshold,
+            )
             return
-        yield paddle_fast.parse_image(path, 1)
+        yield paddle_fast.parse_image(
+            path,
+            1,
+            language=params.fast_language,
+            ocr_version=params.fast_model_id,
+            quality_threshold=params.quality_threshold,
+        )
     elif suffix == ".docx":
         yield _docx_page(path, owner)
     elif suffix in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:

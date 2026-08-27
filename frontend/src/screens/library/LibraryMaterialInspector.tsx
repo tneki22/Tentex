@@ -36,7 +36,7 @@ interface LibraryMaterialInspectorProps {
     page_from?: number;
     page_to?: number;
   }) => void;
-  onControl: (action: "pause" | "resume" | "retry") => void;
+  onControl: (action: "pause" | "resume" | "retry" | "cancel") => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
   onConfirmPageReview: () => void;

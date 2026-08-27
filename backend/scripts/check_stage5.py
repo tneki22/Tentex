@@ -25,7 +25,10 @@ def run_worker(data_dir: Path) -> None:
         env=environment,
         capture_output=True,
         text=True,
-        timeout=30,
+        # `--once` разбирает весь материал за один вызов; реальный экзаменационный
+        # PDF на полсотни страниц (см. check_manual_binding.py) укладывается в
+        # минуту, но не всегда в 30 секунд.
+        timeout=90,
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
@@ -134,10 +137,11 @@ def run() -> None:
             assert status == 200 and study_ready["status"] == "ready"
 
             project_id, _ = create_exam_project(server)
-            status, capabilities = request(server, "GET", "/api/material-capabilities")
+            status, ocr_settings = request(server, "GET", "/api/settings/ocr")
             assert status == 200
-            assert capabilities["fast_available"] is True
-            assert capabilities["textbook_available"] is False
+            ocr_engines = {engine["mode"]: engine for engine in ocr_settings["engines"]}
+            assert ocr_engines["fast"]["available"] is True
+            assert ocr_engines["textbook"]["available"] is False
 
             status, material = request(
                 server,

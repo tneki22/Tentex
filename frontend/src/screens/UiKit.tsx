@@ -352,6 +352,7 @@ export function UiKit() {
                 state: "running",
               }}
               onPause={() => undefined}
+              onCancel={() => undefined}
             />
           </Popover>
           <Button variant="secondary" onClick={() => setDialog(true)}>

@@ -14,6 +14,7 @@
 | Просмотрщик и автопривязка | `materials-viewer-and-answers-autolink.md` | pytest |
 | Шлюз внешних моделей | `ai-model-gateway.md` | `check_ai_gateway.py` |
 | Провайдеры и модели | `ai-provider-model-settings.md` | pytest |
+| Настройки распознавания | `ocr-settings.md` | pytest, `check_stage5.py` |
 | Экзаменационный чат | `exam-chat.md` | `check_exam_chat.py` |
 | Экзаменационный мастер | `exam-wizard-material-onboarding.md` | `check_stage5.py` |
 | Глобальная Библиотека | `global-library-material-workspace.md` | `check_library_workspace.py` |

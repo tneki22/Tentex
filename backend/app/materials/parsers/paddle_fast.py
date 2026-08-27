@@ -9,7 +9,11 @@ from app.materials.parsers.base import ParsedElement, ParsedPage
 NUMBERED_RE = re.compile(r"^\s*\d{1,3}[.)]\s*")
 NUMBER_MARKER_RE = re.compile(r"(?<!\S)\d{1,3}[.)]\s*")
 ENDS_SENTENCE_RE = re.compile(r"[.!?:;][\"»)\]]?$")
+DEFAULT_LANGUAGE = "ru"
+DEFAULT_OCR_VERSION = "PP-OCRv5"
+DEFAULT_QUALITY_THRESHOLD = 0.75
 _engine: Any = None
+_engine_key: tuple[str, str] | None = None
 
 
 def available() -> bool:
@@ -20,18 +24,20 @@ def available() -> bool:
     return True
 
 
-def _get_engine() -> Any:
-    global _engine
-    if _engine is None:
+def _get_engine(language: str = DEFAULT_LANGUAGE, ocr_version: str = DEFAULT_OCR_VERSION) -> Any:
+    global _engine, _engine_key
+    key = (language, ocr_version)
+    if _engine is None or _engine_key != key:
         from paddleocr import PaddleOCR
 
         _engine = PaddleOCR(
-            lang="ru",
-            ocr_version="PP-OCRv5",
+            lang=language,
+            ocr_version=ocr_version,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
         )
+        _engine_key = key
     return _engine
 
 
@@ -68,9 +74,16 @@ def split_numbered_line(
     return result
 
 
-def parse_image(path: Path, page_number: int) -> ParsedPage:
+def parse_image(
+    path: Path,
+    page_number: int,
+    *,
+    language: str = DEFAULT_LANGUAGE,
+    ocr_version: str = DEFAULT_OCR_VERSION,
+    quality_threshold: float = DEFAULT_QUALITY_THRESHOLD,
+) -> ParsedPage:
     width, height = Image.open(path).size
-    results = list(_get_engine().predict(str(path)))
+    results = list(_get_engine(language, ocr_version).predict(str(path)))
     if not results:
         return ParsedPage(page_number, width, height, "", "", "ocr_low", (), ("empty_ocr",), 0.0)
     data = _payload(results[0])
@@ -139,7 +152,7 @@ def parse_image(path: Path, page_number: int) -> ParsedPage:
         for text, score, bbox in merged
     )
     confidence = sum(score for _, score, _ in merged) / len(merged) if merged else 0.0
-    quality = "ocr" if confidence >= 0.75 else "ocr_low"
+    quality = "ocr" if confidence >= quality_threshold else "ocr_low"
     diagnostics = ("low_confidence",) if quality == "ocr_low" else ()
     plain_text = "\n".join(element.text for element in elements)
     markdown = "\n\n".join(

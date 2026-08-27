@@ -23,7 +23,6 @@ from app.materials.library import (
 from app.materials.library import (
     task_read as _task_read,
 )
-from app.materials.parsers import textbook
 from app.materials.schemas import (
     ExamProgramDraftImportWrite,
     ExamProgramImportWrite,
@@ -31,7 +30,6 @@ from app.materials.schemas import (
     ExamProgramPreviewNode,
     ExternalMaterialCreate,
     MaterialAnswerImportResult,
-    MaterialCapabilities,
     MaterialPurpose,
     MaterialRead,
     MaterialUpdate,
@@ -456,17 +454,6 @@ def import_exam_draft_from_material(
         parsed=parsed,
         material_id=material_id,
         material_name=material_name,
-    )
-
-
-def capabilities() -> MaterialCapabilities:
-    textbook_status = textbook.status()
-    return MaterialCapabilities(
-        fast_available=True,
-        fast_label="PP-OCRv5 · русский · CPU",
-        textbook_available=textbook_status.available,
-        textbook_label=textbook_status.label,
-        textbook_reason=textbook_status.reason,
     )
 
 

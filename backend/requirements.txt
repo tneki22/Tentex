@@ -16,4 +16,7 @@ youtube-transcript-api>=1.0,<2
 pymorphy3>=2.0,<3
 pymorphy3-dicts-ru>=2.4,<3
 openai>=2,<3
+# Клиент Hugging Face: оттуда пользователь ставит модели распознавания
+# (см. app/ocr/catalog.py). Чистый Python, тяжёлого за собой не тянет.
+huggingface-hub>=0.34,<2
 cryptography>=46,<47

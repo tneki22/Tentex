@@ -647,7 +647,7 @@ function ProcessingTab({
   busy: boolean;
   /** Канонический экран обработки этого файла с возвратом сюда. */
   libraryLink: string;
-  onControl: (action: "pause" | "resume" | "retry") => void;
+  onControl: (action: "pause" | "resume" | "retry" | "cancel") => void;
   onImport: () => void;
   onEdit: () => void;
   onLinkAnswers: () => void;
@@ -664,6 +664,7 @@ function ProcessingTab({
           onPause={() => onControl("pause")}
           onResume={() => onControl("resume")}
           onRetry={() => onControl("retry")}
+          onCancel={() => onControl("cancel")}
         />
       )}
       {/* Разбор общий для всех проектов с этим файлом, поэтому запуск и повтор
@@ -1126,7 +1127,7 @@ function MaterialInspector({
   busy: boolean;
   notice: NoticeState | null;
   libraryLink: string;
-  onControl: (action: "pause" | "resume" | "retry") => void;
+  onControl: (action: "pause" | "resume" | "retry" | "cancel") => void;
   onImport: () => void;
   onRemove: () => void;
   onEdit: () => void;

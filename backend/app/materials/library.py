@@ -73,7 +73,6 @@ from app.models import (
     MaterialSourceKind,
     MaterialState,
     PageQuality,
-    ParserMode,
     ProcessingStage,
     ProcessingTask,
     ProcessingTaskKind,
@@ -85,6 +84,7 @@ from app.models import (
     SourceRole,
     utc_now,
 )
+from app.ocr import settings as ocr_settings
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
 
 ACTIVE_TASK_STATES = {
@@ -1010,16 +1010,16 @@ def start_processing_core(
     task = latest_task(session, material_id)
     if task and task.state in ACTIVE_TASK_STATES:
         raise ProjectConflictError("Разбор уже запущен", code="material_processing_active")
-    if command.parser_mode == ParserMode.TEXTBOOK:
-        from app.materials.parsers import textbook
-
-        textbook_status = textbook.status()
-        if not textbook_status.available:
-            raise ProjectConflictError(
-                textbook_status.reason,
-                code="parser_mode_unavailable",
-                context={"parser_mode": "textbook"},
-            )
+    # Готовность движка спрашиваем у реестра распознавания, а не у сервиса
+    # напрямую: там же считается статус на экране настроек, и разъехаться они
+    # не могут. Для «Быстро» это в том числе проверка, что модели скачаны.
+    ready, reason = ocr_settings.engine_ready(session, command.parser_mode.value)
+    if not ready:
+        raise ProjectConflictError(
+            reason or "Этот режим распознавания сейчас недоступен",
+            code="parser_mode_unavailable",
+            context={"parser_mode": command.parser_mode.value},
+        )
     pages = _selected_pages(session, material, command)
     revision = revision_registry.max_revision(session, material_id) + 1
     scope: dict[str, Any] = {"kind": command.scope}
@@ -1068,6 +1068,23 @@ def control_task_core(session: Session, material_id: UUID, action: str) -> Proce
         task.lease_owner = None
         task.lease_expires_at = None
         material.status = MaterialState.QUEUED
+    elif action == "cancel" and task.state in ACTIVE_TASK_STATES:
+        # Отмена: разбор был на паузе, в очереди или ещё шёл, и его бросают, а не
+        # возобновляют. Задача не создала зарегистрированную версию, поэтому её
+        # строящаяся ревизия выбрасывается целиком, а материал возвращается к
+        # прежнему готовому состоянию. Активная версия и привязки не страдают.
+        building = int(task.checkpoint.get("revision") or 0)
+        if building and building != material.active_parse_revision:
+            discard_building_revision(session, material_id, building)
+        session.delete(task)
+        material.status = (
+            MaterialState.READY
+            if material.active_parse_revision > 0
+            else MaterialState.READY_TO_PROCESS
+        )
+        material.error = None
+        session.flush()
+        return task
     elif action == "retry" and task.state == ProcessingTaskState.FAILED:
         task.state = ProcessingTaskState.QUEUED
         task.error = None
@@ -1274,6 +1291,41 @@ def rebuild_structure(
             page_orders[page_number] = order + 1
     session.flush()
     return new_fragments
+
+
+def discard_building_revision(session: Session, material_id: UUID, revision: int) -> None:
+    """Стереть страницы, блоки и фрагменты недоактивированной строящейся ревизии.
+
+    Зовётся только при отмене разбора: эта ревизия ещё не стала активной и не
+    попала в реестр версий, поэтому её содержимое — не история, а мусор. Активную
+    ревизию и её привязки функция не трогает: удаляет строго по номеру ревизии.
+    """
+    if revision <= 0:
+        return
+    session.execute(
+        delete(MaterialFragment).where(
+            MaterialFragment.id.in_(
+                select(MaterialFragment.id)
+                .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+                .where(
+                    MaterialFragment.material_id == material_id,
+                    MaterialPage.revision == revision,
+                )
+            )
+        )
+    )
+    session.execute(
+        delete(MaterialBlock).where(
+            MaterialBlock.material_id == material_id,
+            MaterialBlock.revision == revision,
+        )
+    )
+    session.execute(
+        delete(MaterialPage).where(
+            MaterialPage.material_id == material_id,
+            MaterialPage.revision == revision,
+        )
+    )
 
 
 def rebuild_checkpoint_page(session: Session, page: MaterialPage) -> None:
