@@ -995,6 +995,10 @@
   border: 0;
 }
 
+.structured-page.is-spatial .structured-formula {
+  font-size: 0.82em;
+}
+
 .structured-page.is-spatial .structured-formula .katex-display {
   max-width: 100%;
   margin: 0;

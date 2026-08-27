@@ -287,6 +287,7 @@ function Formula({
   const latex = latexFromFragment(fragment.text);
   try {
     if (!formulaLooksReliable(latex)) throw new Error("Suspicious OCR formula");
+    if (preserveLayout && latex.length > 220) throw new Error("Formula does not fit its OCR box");
     const html = katex.renderToString(latex, {
       displayMode: true,
       throwOnError: true,
@@ -319,6 +320,7 @@ function Formula({
 function formulaLooksReliable(latex: string): boolean {
   const compact = latex.replace(/\s+/g, "");
   if (compact.length === 0 || compact.length > 1600) return false;
+  if (/[\u3400-\u9fff\ufffd]/u.test(compact) || compact.includes("$")) return false;
   const tokens = compact.match(/\\[A-Za-z]+|[A-Za-z]+|\d+|[^A-Za-z\d]/g) ?? [];
   if (tokens.length < 120) return true;
   return new Set(tokens).size / tokens.length >= 0.08;
