@@ -6,7 +6,14 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.bindings.answers_link import link_answers_material
+from app.bindings.answers_link import (
+    AnswerLinkPhase,
+    AnswersLinkProgress,
+    AnswersLinkResult,
+    iter_link_answers_material,
+    link_answers_material,
+)
+from app.bindings.schemas import AnswersLinkRead
 from app.models import (
     Binding,
     BlockClass,
@@ -235,7 +242,7 @@ def test_legacy_unslotted_answers_file_still_sees_the_whole_tree(session: Sessio
     result = link_answers_material(session, project.id, material.id)
 
     assert result.expected_questions == 2
-    linked_ids = set(result.linked_node_ids)
+    linked_ids = set(result.matched_node_ids)
     assert linked_ids == {question.id, task.id}
     question_answer = session.get(ReferenceAnswer, (project.id, question.id))
     task_answer = session.get(ReferenceAnswer, (project.id, task.id))
@@ -317,6 +324,126 @@ def test_numbered_relink_is_idempotent_and_preserves_manual_answer(session: Sess
     assert repeated.created_answers == 0
 
 
+def test_relink_restores_inactive_manual_tombstone(session: Session) -> None:
+    project, nodes = _program(session, 1)
+    material = _answers_material(
+        session,
+        project,
+        [(nodes[0].title, [("Imported body", "paragraph", None)])],
+    )
+    session.add(
+        ReferenceAnswer(
+            project_id=project.id,
+            program_node_id=nodes[0].id,
+            text="Old manual text",
+            origin_kind=ReferenceAnswerOrigin.MANUAL,
+            match_method=ReferenceAnswerMatchMethod.MANUAL,
+            is_confirmed=True,
+            is_active=False,
+            revision=3,
+        )
+    )
+    session.commit()
+
+    result = link_answers_material(session, project.id, material.id)
+    answer = session.get(ReferenceAnswer, (project.id, nodes[0].id))
+
+    assert answer is not None
+    assert answer.is_active is True
+    assert answer.text == "Imported body"
+    assert answer.origin_kind == ReferenceAnswerOrigin.IMPORT
+    assert answer.match_method == ReferenceAnswerMatchMethod.EXACT_TITLE
+    assert answer.is_confirmed is False
+    assert answer.source_material_id == material.id
+    assert answer.revision == 4
+    assert result.restored_answers == 1
+    assert result.available_node_ids == [nodes[0].id]
+    assert result.unavailable_node_ids == []
+    assert result.complete is True
+
+
+def test_relink_preserves_active_manual_answer(session: Session) -> None:
+    project, nodes = _program(session, 1)
+    material = _answers_material(
+        session,
+        project,
+        [(nodes[0].title, [("Imported body", "paragraph", None)])],
+    )
+    session.add(
+        ReferenceAnswer(
+            project_id=project.id,
+            program_node_id=nodes[0].id,
+            text="Manual verified text",
+            origin_kind=ReferenceAnswerOrigin.MANUAL,
+            match_method=ReferenceAnswerMatchMethod.MANUAL,
+            is_confirmed=True,
+            is_active=True,
+            revision=4,
+        )
+    )
+    session.commit()
+
+    result = link_answers_material(session, project.id, material.id)
+    answer = session.get(ReferenceAnswer, (project.id, nodes[0].id))
+
+    assert answer is not None
+    assert answer.text == "Manual verified text"
+    assert answer.origin_kind == ReferenceAnswerOrigin.MANUAL
+    assert answer.source_material_id is None
+    assert answer.revision == 4
+    assert result.preserved_answers == 1
+    assert result.available_node_ids == [nodes[0].id]
+    assert result.complete is True
+
+
+def test_heading_without_body_is_matched_but_unavailable(session: Session) -> None:
+    project, nodes = _program(session, 1)
+    material = _answers_material(session, project, [(nodes[0].title, [])])
+
+    result = link_answers_material(session, project.id, material.id)
+
+    assert result.matched_node_ids == [nodes[0].id]
+    assert result.available_node_ids == []
+    assert result.unavailable_node_ids == [nodes[0].id]
+    assert result.complete is False
+    assert session.get(ReferenceAnswer, (project.id, nodes[0].id)) is None
+
+
+def test_matching_stream_reports_real_monotonic_checkpoints(session: Session) -> None:
+    project, nodes = _program(session, 2)
+    material = _answers_material(
+        session,
+        project,
+        [
+            (nodes[0].title, [("First body", "paragraph", None)]),
+            (nodes[1].title, [("Second body", "paragraph", None)]),
+        ],
+    )
+
+    events = list(iter_link_answers_material(session, project.id, material.id))
+    progress = [item for item in events if isinstance(item, AnswersLinkProgress)]
+    result = next(item for item in events if isinstance(item, AnswersLinkResult))
+
+    assert progress[0].phase == AnswerLinkPhase.PREPARING
+    assert progress[0].total == 0
+    determinate = [item for item in progress if item.total > 0]
+    assert [item.completed for item in determinate] == sorted(
+        item.completed for item in determinate
+    )
+    assert determinate[-1].completed == determinate[-1].total
+    assert sum(item.phase == AnswerLinkPhase.BINDING for item in progress) == 2
+    assert sum(item.phase == AnswerLinkPhase.IMPORTING for item in progress) == 2
+    assert result.complete is True
+
+    payload = AnswersLinkRead.model_validate(result, from_attributes=True).model_dump(
+        mode="json"
+    )
+    assert payload["matched_node_ids"] == [str(node.id) for node in nodes]
+    assert payload["available_node_ids"] == [str(node.id) for node in nodes]
+    assert payload["unavailable_node_ids"] == []
+    assert payload["complete"] is True
+
+
 def test_duplicate_program_titles_receive_the_same_answer(session: Session) -> None:
     """Импорт с сохранением дублей не должен оставлять второй вопрос без эталона."""
     project = make_exam_project(session)
@@ -351,7 +478,7 @@ def test_duplicate_program_titles_receive_the_same_answer(session: Session) -> N
 
     result = link_answers_material(session, project.id, material.id)
 
-    assert set(result.linked_node_ids) == {node.id for node in nodes}
+    assert set(result.matched_node_ids) == {node.id for node in nodes}
     assert result.missing_node_ids == []
     first_dup, other, second_dup = nodes
     first_answer = session.get(ReferenceAnswer, (project.id, first_dup.id))

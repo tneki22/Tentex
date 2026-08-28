@@ -26,6 +26,7 @@ from app.models import (
     WorkspaceVariant,
     utc_now,
 )
+from app.projects.answer_lifecycle import is_reference_answer_available
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
 from app.projects.heading_match import HeadingIndex, HeadingMatch, normalize_answer_heading
 from app.projects.program import read_program
@@ -206,7 +207,7 @@ def reference_answer_status(
     answer: ReferenceAnswer | None,
     current_title: str,
 ) -> ReferenceAnswerStatus:
-    if answer is None or not answer.is_active:
+    if not is_reference_answer_available(answer):
         return ReferenceAnswerStatus.MISSING
     if (
         answer.origin_kind == ReferenceAnswerOrigin.IMPORT
@@ -327,7 +328,7 @@ def confirm_reference_answer(
         _require_exam_project(session, project_id, writable=True)
         node = _require_study_node(session, project_id, node_id)
         answer = session.get(ReferenceAnswer, (project_id, node_id))
-        if answer is None or not answer.is_active:
+        if not is_reference_answer_available(answer):
             raise ProjectNotFoundError("Эталонный ответ не найден")
         _check_revision(answer, command.expected_revision)
         answer.is_confirmed = True
@@ -413,7 +414,7 @@ def _coverage_map(session: Session, project: Project) -> CoverageMapRead:
                 target_level=node.target_level,
                 answer_status=status,
                 answer_preview=(
-                    _preview(answer.text) if answer is not None and answer.is_active else None
+                    _preview(answer.text) if is_reference_answer_available(answer) else None
                 ),
                 answer_revision=(answer.revision if answer is not None else None),
             )

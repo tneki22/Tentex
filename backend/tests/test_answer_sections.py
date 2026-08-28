@@ -120,6 +120,9 @@ def test_image_only_answer_creates_empty_text_reference(session) -> None:
     answer = session.get(ReferenceAnswer, (project.id, nodes[0].id))
 
     assert result.created_answers == 1
+    assert result.available_node_ids == [nodes[0].id]
+    assert result.unavailable_node_ids == []
+    assert result.complete is True
     assert answer is not None and answer.text == ""
     assert session.scalar(select(func.count(Binding.id))) == 1
     slot = get_reference_answer(session, project.id, nodes[0].id)

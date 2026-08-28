@@ -198,7 +198,20 @@ def _link_answers_projects(session: Session, material_id: UUID) -> None:
         if MaterialPurpose.REFERENCE_ANSWERS.value not in (link.purposes or []):
             continue
         try:
-            link_answers_material(session, link.project_id, material_id)
+            result = link_answers_material(session, link.project_id, material_id)
+            log.info(
+                "answer matching completed",
+                extra={
+                    "project_id": str(link.project_id),
+                    "material_id": str(material_id),
+                    "expected": result.expected_questions,
+                    "matched": len(result.matched_node_ids),
+                    "available": len(result.available_node_ids),
+                    "restored": result.restored_answers,
+                    "preserved": result.preserved_answers,
+                    "unresolved": len(result.ambiguous_sections),
+                },
+            )
         except (ProjectConflictError, ProjectNotFoundError):
             continue
 

@@ -10,8 +10,10 @@
 не трогает, а свои прошлые — пересоздаёт, поэтому повтор идемпотентен.
 """
 
-from collections import defaultdict
+from collections import Counter, defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass, field
+from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, select
@@ -37,9 +39,15 @@ from app.models import (
     ProjectStatus,
     ReferenceAnswer,
     ReferenceAnswerMatchMethod,
-    ReferenceAnswerOrigin,
     WorkspaceVariant,
     utc_now,
+)
+from app.projects.answer_lifecycle import (
+    AnswerImportAction,
+    AnswerImportOutcome,
+    ImportedAnswerCandidate,
+    apply_imported_answer,
+    is_reference_answer_available,
 )
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.projects.heading_match import normalize_answer_heading
@@ -54,6 +62,25 @@ _ANSWERS_SLOT_KIND: dict[str | None, ExamKind | None] = {
     ExamMaterialSlot.TASK_ANSWERS.value: ExamKind.TASK,
     None: None,
 }
+
+
+class AnswerLinkPhase(StrEnum):
+    PREPARING = "preparing"
+    MATCHING = "matching"
+    BINDING = "binding"
+    IMPORTING = "importing"
+    VERIFYING = "verifying"
+
+
+@dataclass(frozen=True, slots=True)
+class AnswersLinkProgress:
+    phase: AnswerLinkPhase
+    completed: int
+    total: int
+    phase_completed: int = 0
+    phase_total: int = 0
+
+
 @dataclass(slots=True)
 class HeadingSuggestionCandidate:
     node_id: UUID
@@ -78,7 +105,9 @@ class AnswersLinkResult:
     linked_fragments: int = 0
     created_answers: int = 0
     updated_answers: int = 0
-    kept_answers: int = 0
+    restored_answers: int = 0
+    unchanged_answers: int = 0
+    preserved_answers: int = 0
     numbered_sections: int = 0
     extra_sections: int = 0
     ordinal_rejected_reason: str | None = None
@@ -87,10 +116,13 @@ class AnswersLinkResult:
     duplicate_headings: list[str] = field(default_factory=list)
     suggestions: list[HeadingSuggestion] = field(default_factory=list)
     expected_questions: int = 0
-    linked_node_ids: list[UUID] = field(default_factory=list)
+    matched_node_ids: list[UUID] = field(default_factory=list)
+    available_node_ids: list[UUID] = field(default_factory=list)
+    unavailable_node_ids: list[UUID] = field(default_factory=list)
     missing_node_ids: list[UUID] = field(default_factory=list)
     ambiguous_sections: list[str] = field(default_factory=list)
     ambiguous_pages: list[int] = field(default_factory=list)
+    complete: bool = False
 
 
 @dataclass(slots=True)
@@ -302,13 +334,7 @@ def _rebind(
     session: Session, project_id: UUID, material: Material, sections: list[_Section]
 ) -> tuple[int, list[UUID]]:
     """Свои прошлые привязки сносим и ставим заново; ручные — не трогаем."""
-    session.execute(
-        delete(Binding).where(
-            Binding.project_id == project_id,
-            Binding.material_id == material.id,
-            Binding.mechanism == BindingMechanism.ANSWERS_FILE,
-        )
-    )
+    _clear_answer_bindings(session, project_id, material.id)
     created: list[UUID] = []
     linked_fragments = 0
     for section in sections:
@@ -318,67 +344,129 @@ def _rebind(
     return linked_fragments, created
 
 
+def _clear_answer_bindings(session: Session, project_id: UUID, material_id: UUID) -> None:
+    session.execute(
+        delete(Binding).where(
+            Binding.project_id == project_id,
+            Binding.material_id == material_id,
+            Binding.mechanism == BindingMechanism.ANSWERS_FILE,
+        )
+    )
+
+
+def _fill_section_answers(
+    session: Session,
+    project_id: UUID,
+    material: Material,
+    label: str,
+    section: _Section,
+) -> list[AnswerImportOutcome]:
+    if not section.bindable_fragments():
+        return []
+    text = section.answer_text(material)
+    return [
+        apply_imported_answer(
+            session,
+            ImportedAnswerCandidate(
+                project_id=project_id,
+                node_id=node_id,
+                text=text,
+                match_method=section.method,
+                matched_title=section.title,
+                source_label=label,
+                source_material_id=material.id,
+                source_page_from=section.page_from,
+                source_page_to=section.page_to,
+            ),
+        )
+        for node_id in section.node_ids
+    ]
+
+
 def _fill_answers(
     session: Session, project_id: UUID, material: Material, label: str, sections: list[_Section]
-) -> tuple[int, int, int]:
-    """Эталон собирается из привязанного раздела.
+) -> list[AnswerImportOutcome]:
+    """Собрать кандидатов из разделов; решение о слоте принимает lifecycle-модуль."""
 
-    Переписываем только то, что сами и создали из этого файла и что пользователь
-    не подтвердил: правку руками автоматика забирать не имеет права.
-    """
-    created = updated = kept = 0
-    now = utc_now()
+    outcomes: list[AnswerImportOutcome] = []
     for section in sections:
-        if not section.bindable_fragments():
-            continue
-        text = section.answer_text(material)
-        for node_id in section.node_ids:
-            answer = session.get(ReferenceAnswer, (project_id, node_id))
-            if answer is None:
-                session.add(
-                    ReferenceAnswer(
-                        project_id=project_id,
-                        program_node_id=node_id,
-                        text=text,
-                        origin_kind=ReferenceAnswerOrigin.IMPORT,
-                        match_method=section.method,
-                        matched_title=section.title,
-                        is_confirmed=False,
-                        is_active=True,
-                        revision=0,
-                        source_label=label,
-                        source_material_id=material.id,
-                        source_page_from=section.page_from,
-                        source_page_to=section.page_to,
-                        created_at=now,
-                        updated_at=now,
-                    )
-                )
-                created += 1
-                continue
-            ours = answer.source_material_id == material.id
-            same_import = (
-                answer.text == text
-                and answer.match_method == section.method
-                and answer.matched_title == section.title
-                and answer.source_page_from == section.page_from
-                and answer.source_page_to == section.page_to
-            )
-            if not ours or answer.is_confirmed or same_import:
-                kept += 1
-                continue
-            answer.text = text
-            answer.match_method = section.method
-            answer.matched_title = section.title
-            answer.source_label = label
-            answer.source_page_from = section.page_from
-            answer.source_page_to = section.page_to
-            answer.is_active = True
-            answer.revision += 1
-            answer.updated_at = now
-            updated += 1
+        outcomes.extend(_fill_section_answers(session, project_id, material, label, section))
     session.flush()
-    return created, updated, kept
+    return outcomes
+
+
+def _build_link_result(
+    session: Session,
+    nodes: list[ProgramNode],
+    sections: list[_Section],
+    *,
+    linked_fragments: int,
+    outcomes: list[AnswerImportOutcome],
+    numbered_sections: int = 0,
+    extra_sections: int = 0,
+    ordinal_rejected_reason: str | None = None,
+    fuzzy_headings: list[str] | None = None,
+    unmatched_headings: list[str] | None = None,
+    duplicate_headings: list[str] | None = None,
+    suggestions: list[HeadingSuggestion] | None = None,
+    ambiguous_sections: list[str] | None = None,
+    ambiguous_pages: list[int] | None = None,
+) -> AnswersLinkResult:
+    """Сопоставление, привязки и доступность эталона считаются отдельно."""
+
+    session.flush()
+    node_ids = [node.id for node in nodes]
+    answers = {
+        answer.program_node_id: answer
+        for answer in session.scalars(
+            select(ReferenceAnswer).where(
+                ReferenceAnswer.project_id == nodes[0].project_id,
+                ReferenceAnswer.program_node_id.in_(node_ids),
+            )
+        )
+    } if nodes else {}
+    matched_ids = {node_id for section in sections for node_id in section.node_ids}
+    available_ids = {
+        node_id
+        for node_id, answer in answers.items()
+        if is_reference_answer_available(answer)
+    }
+    matched = [node.id for node in nodes if node.id in matched_ids]
+    missing = [node.id for node in nodes if node.id not in matched_ids]
+    available = [node.id for node in nodes if node.id in available_ids]
+    unavailable = [node.id for node in nodes if node.id not in available_ids]
+    ambiguous = ambiguous_sections or []
+    counts = Counter(outcome.action for outcome in outcomes)
+    complete = (
+        not missing
+        and not ambiguous
+        and not unavailable
+        and len(available) == len(nodes)
+    )
+    return AnswersLinkResult(
+        linked_sections=len(sections),
+        linked_fragments=linked_fragments,
+        created_answers=counts[AnswerImportAction.CREATED],
+        updated_answers=counts[AnswerImportAction.UPDATED],
+        restored_answers=counts[AnswerImportAction.RESTORED],
+        unchanged_answers=counts[AnswerImportAction.UNCHANGED],
+        preserved_answers=counts[AnswerImportAction.PRESERVED],
+        numbered_sections=numbered_sections,
+        extra_sections=extra_sections,
+        ordinal_rejected_reason=ordinal_rejected_reason,
+        fuzzy_headings=fuzzy_headings or [],
+        unmatched_headings=unmatched_headings or [],
+        duplicate_headings=duplicate_headings or [],
+        suggestions=suggestions or [],
+        expected_questions=len(nodes),
+        matched_node_ids=matched,
+        available_node_ids=available,
+        unavailable_node_ids=unavailable,
+        missing_node_ids=missing,
+        ambiguous_sections=ambiguous,
+        ambiguous_pages=ambiguous_pages or [],
+        complete=complete,
+    )
 
 
 def _require_answers_material(
@@ -404,10 +492,12 @@ def _require_answers_material(
     return material, link.display_name or material.original_name, exam_kind
 
 
-def link_answers_material(
+def iter_link_answers_material(
     session: Session, project_id: UUID, material_id: UUID
-) -> AnswersLinkResult:
-    """Вызывается из воркера после разбора и кнопкой «Привязать заново»."""
+) -> Iterator[AnswersLinkProgress | AnswersLinkResult]:
+    """Выполнить сопоставление и отдать реальные серверные контрольные точки."""
+
+    yield AnswersLinkProgress(AnswerLinkPhase.PREPARING, completed=0, total=0)
     material, label, exam_kind = _require_answers_material(session, project_id, material_id)
 
     nodes = _ordered_study_nodes(session, project_id, exam_kind)
@@ -452,8 +542,46 @@ def link_answers_material(
         for section in sections
         if section.method == ReferenceAnswerMatchMethod.NUMBERED_ORDER
     ]
-    linked_fragments, created_ids = _rebind(session, project_id, material, sections)
-    created, updated, kept = _fill_answers(session, project_id, material, label, sections)
+
+    section_total = len(sections)
+    total = 2 + section_total * 2
+    yield AnswersLinkProgress(
+        AnswerLinkPhase.MATCHING,
+        completed=1,
+        total=total,
+        phase_completed=section_total,
+        phase_total=len(nodes),
+    )
+
+    _clear_answer_bindings(session, project_id, material.id)
+    linked_fragments = 0
+    created_ids: list[UUID] = []
+    for index, section in enumerate(sections, start=1):
+        section_linked, section_created = _bind_section(
+            session, project_id, material, section
+        )
+        linked_fragments += section_linked
+        created_ids.extend(section_created)
+        yield AnswersLinkProgress(
+            AnswerLinkPhase.BINDING,
+            completed=1 + index,
+            total=total,
+            phase_completed=index,
+            phase_total=section_total,
+        )
+
+    outcomes: list[AnswerImportOutcome] = []
+    for index, section in enumerate(sections, start=1):
+        outcomes.extend(
+            _fill_section_answers(session, project_id, material, label, section)
+        )
+        yield AnswersLinkProgress(
+            AnswerLinkPhase.IMPORTING,
+            completed=1 + section_total + index,
+            total=total,
+            phase_completed=index,
+            phase_total=section_total,
+        )
 
     if created_ids:
         session.add(
@@ -467,13 +595,17 @@ def link_answers_material(
             )
         )
     session.flush()
-    linked_ids = {node_id for section in sections for node_id in section.node_ids}
-    return AnswersLinkResult(
-        linked_sections=len(sections),
+    yield AnswersLinkProgress(
+        AnswerLinkPhase.VERIFYING,
+        completed=total - 1,
+        total=total,
+    )
+    result = _build_link_result(
+        session,
+        nodes,
+        sections,
         linked_fragments=linked_fragments,
-        created_answers=created,
-        updated_answers=updated,
-        kept_answers=kept,
+        outcomes=outcomes,
         numbered_sections=len(numbered_sections),
         extra_sections=detection.extra_sections,
         ordinal_rejected_reason=None,
@@ -485,12 +617,31 @@ def link_answers_material(
         unmatched_headings=[suggestion.heading for suggestion in suggestions],
         duplicate_headings=[],
         suggestions=suggestions,
-        expected_questions=len(nodes),
-        linked_node_ids=[node.id for node in nodes if node.id in linked_ids],
-        missing_node_ids=[node.id for node in nodes if node.id not in linked_ids],
         ambiguous_sections=[item.heading for item in detection.ambiguous],
         ambiguous_pages=sorted({item.page for item in detection.ambiguous}),
     )
+    yield AnswersLinkProgress(
+        AnswerLinkPhase.VERIFYING,
+        completed=total,
+        total=total,
+        phase_completed=1,
+        phase_total=1,
+    )
+    yield result
+
+
+def link_answers_material(
+    session: Session, project_id: UUID, material_id: UUID
+) -> AnswersLinkResult:
+    """Синхронный адаптер для воркера, тестов и прежнего HTTP-контракта."""
+
+    result: AnswersLinkResult | None = None
+    for event in iter_link_answers_material(session, project_id, material_id):
+        if isinstance(event, AnswersLinkResult):
+            result = event
+    if result is None:  # pragma: no cover - генератор всегда заканчивается результатом
+        raise RuntimeError("Сопоставление ответов завершилось без отчёта")
+    return result
 
 
 def resolve_answers_heading(
@@ -533,7 +684,7 @@ def resolve_answers_heading(
         item_linked, item_created = _bind_section(session, project_id, material, item)
         linked_fragments += item_linked
         created_ids.extend(item_created)
-    created, updated, kept = _fill_answers(session, project_id, material, label, sections)
+    outcomes = _fill_answers(session, project_id, material, label, sections)
     if created_ids:
         session.add(
             ProjectActionLog(
@@ -546,14 +697,10 @@ def resolve_answers_heading(
             )
         )
     session.flush()
-    linked_ids = {item for sec in sections for item in sec.node_ids}
-    return AnswersLinkResult(
-        linked_sections=1,
+    return _build_link_result(
+        session,
+        nodes,
+        sections,
         linked_fragments=linked_fragments,
-        created_answers=created,
-        updated_answers=updated,
-        kept_answers=kept,
-        expected_questions=len(nodes),
-        linked_node_ids=[item.id for item in nodes if item.id in linked_ids],
-        missing_node_ids=[item.id for item in nodes if item.id not in linked_ids],
+        outcomes=outcomes,
     )

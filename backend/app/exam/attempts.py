@@ -28,6 +28,7 @@ from app.models import (
     ReferenceAnswer,
     utc_now,
 )
+from app.projects.answer_lifecycle import is_reference_answer_available
 from app.projects.errors import ProjectDomainError
 
 AI_FALLBACK_CODES = {
@@ -226,8 +227,7 @@ async def submit_answer(
             ReferenceAnswer, (project_id, chat_row.program_node_id)
         )
         if (
-            source_only_answer is not None
-            and source_only_answer.is_active
+            is_reference_answer_available(source_only_answer)
             and source_only_answer.source_material_id is not None
             and not source_only_answer.text.strip()
         ):

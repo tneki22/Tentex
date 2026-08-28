@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.bindings.service import list_bindings
 from app.models import ChatMessage, ChatSession, NodeType, ProgramNode, ReferenceAnswer
+from app.projects.answer_lifecycle import is_reference_answer_available
 
 # Бюджеты зафиксированы константами и не «настраиваются» — см. план вертикали.
 TAIL_MESSAGES = 12
@@ -141,7 +142,7 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
     answer = session.get(ReferenceAnswer, (chat.project_id, chat.program_node_id))
     reference_text = (
         answer.text
-        if answer is not None and answer.is_active and answer.text.strip()
+        if is_reference_answer_available(answer) and answer.text.strip()
         else None
     )
     all_fragments = bound_fragments(session, chat.project_id, chat.program_node_id)

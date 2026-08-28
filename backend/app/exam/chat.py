@@ -35,6 +35,7 @@ from app.models import (
     WorkspaceVariant,
     utc_now,
 )
+from app.projects.answer_lifecycle import is_reference_answer_available
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
 
 STUDY_NODE_TYPES = {NodeType.TOPIC, NodeType.SUBPOINT}
@@ -200,7 +201,7 @@ def context_preview(session: Session, project_id: UUID, node_id: UUID) -> ChatCo
     return ChatContextRead(
         node_id=node.id,
         question=node.title,
-        reference_included=answer is not None and answer.is_active,
+        reference_included=is_reference_answer_available(answer),
         material_count=len(fragments),
         tail_limit=TAIL_MESSAGES,
     )

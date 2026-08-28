@@ -1,12 +1,16 @@
+import json
+from collections.abc import Iterator
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.bindings import answers_link, service
 from app.bindings.schemas import (
     AnswersHeadingResolveWrite,
+    AnswersLinkProgressRead,
     AnswersLinkRead,
     BindingBulkRemoveWrite,
     BindingChangeResult,
@@ -16,8 +20,9 @@ from app.bindings.schemas import (
     ReindexResult,
     SearchResultRead,
 )
-from app.db import get_session
+from app.db import SessionLocal, get_session
 from app.models import BindingStatus
+from app.projects.errors import ProjectDomainError
 
 SessionDependency = Annotated[Session, Depends(get_session)]
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["bindings"])
@@ -51,6 +56,48 @@ def link_answers(
     with session.begin():
         result = answers_link.link_answers_material(session, project_id, material_id)
     return AnswersLinkRead.model_validate(result, from_attributes=True)
+
+
+def _answer_link_frame(event: str, payload: dict[str, object]) -> str:
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+def _answer_link_events(project_id: UUID, material_id: UUID) -> Iterator[str]:
+    """Поток владеет сессией: dependency закрывается до отправки StreamingResponse."""
+
+    final: AnswersLinkRead | None = None
+    with SessionLocal() as session:
+        try:
+            with session.begin():
+                for item in answers_link.iter_link_answers_material(
+                    session, project_id, material_id
+                ):
+                    if isinstance(item, answers_link.AnswersLinkProgress):
+                        progress = AnswersLinkProgressRead.model_validate(
+                            item, from_attributes=True
+                        )
+                        yield _answer_link_frame(
+                            "progress", progress.model_dump(mode="json")
+                        )
+                    else:
+                        final = AnswersLinkRead.model_validate(item, from_attributes=True)
+        except ProjectDomainError as error:
+            yield _answer_link_frame(
+                "error", {"code": error.code, "detail": error.detail}
+            )
+            return
+    if final is not None:
+        yield _answer_link_frame("completed", final.model_dump(mode="json"))
+
+
+@router.post("/materials/{material_id}/link-answers/stream")
+def stream_link_answers(project_id: UUID, material_id: UUID) -> StreamingResponse:
+    return StreamingResponse(
+        _answer_link_events(project_id, material_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/materials/{material_id}/link-answers/resolve", response_model=AnswersLinkRead)

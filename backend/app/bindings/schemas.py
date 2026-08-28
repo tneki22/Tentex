@@ -54,7 +54,9 @@ class AnswersLinkRead(ApiModel):
     linked_fragments: int
     created_answers: int
     updated_answers: int
-    kept_answers: int
+    restored_answers: int
+    unchanged_answers: int
+    preserved_answers: int
     numbered_sections: int = 0
     extra_sections: int = 0
     ordinal_rejected_reason: str | None = None
@@ -63,10 +65,21 @@ class AnswersLinkRead(ApiModel):
     duplicate_headings: list[str]
     suggestions: list[HeadingSuggestionRead] = Field(default_factory=list)
     expected_questions: int = 0
-    linked_node_ids: list[UUID] = Field(default_factory=list)
+    matched_node_ids: list[UUID] = Field(default_factory=list)
+    available_node_ids: list[UUID] = Field(default_factory=list)
+    unavailable_node_ids: list[UUID] = Field(default_factory=list)
     missing_node_ids: list[UUID] = Field(default_factory=list)
     ambiguous_sections: list[str] = Field(default_factory=list)
     ambiguous_pages: list[int] = Field(default_factory=list)
+    complete: bool = False
+
+
+class AnswersLinkProgressRead(ApiModel):
+    phase: str
+    completed: int
+    total: int
+    phase_completed: int = 0
+    phase_total: int = 0
 
 
 class AnswersHeadingResolveWrite(ApiModel):
