@@ -52,7 +52,6 @@ Thumbs.db
 # --- Local worktrees ---
 .worktrees/
 
-# --- Навыки агентов ---
-# Единственный источник — .agents/skills. .claude/skills — симлинк на него
-# для Claude Code; в git он попадать не должен, иначе появляется вторая копия.
-.claude/skills
+# --- Локальные инструменты и прогоны проверки ---
+.codebase-memory/
+output/
