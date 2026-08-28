@@ -11,7 +11,7 @@ When reviewing, slow the interface down: replay motion at 10% speed in the brows
 
 Preserve the project's component library, tokens, and density. Match its established motion language except where a principle below prescribes an exact interaction pattern.
 
-Typography (text wrapping, font rendering, tabular numbers, spacing) is covered by the `better-typography` skill; use that for anything text-related. Accessibility (hit areas, focus states, keyboard support, ARIA, reduced motion) is covered by the `better-accessibility` skill. Layout structure (grouping, spacing between sections, breakpoints, spatial RTL) is covered by the `better-layout` skill.
+In this project, typography, color and spacing scales are fixed by `DESIGN.md` and the `tentex-ui` skill: take values from `tokens.css`, never invent them here. Focus, keyboard handling and ARIA come from Radix Primitives and are not reimplemented.
 
 ## Quick Reference
 
@@ -102,7 +102,7 @@ No custom animation on high-frequency interactions: the attention cost repeats o
 
 ## Review Output Format
 
-Use this format only when the user asks for a standalone UI-polish review. When `better-interface` orchestrates the review, provide domain evidence and findings to that skill and let its output format, severity scale, consolidation rules, cap, and verdict take precedence.
+Use this format only when the user asks for a standalone UI-polish review.
 
 Present the standalone review in two parts.
 

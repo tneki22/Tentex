@@ -17,9 +17,9 @@ description: Как устроен и как трогать бэкенд Tentex 
 | Схемы | `<домен>/schemas.py` | Pydantic-модели запроса/ответа (`response_model`). |
 | Сервис | `<домен>/service.py`, `answers.py`, `program.py`, … | Вся бизнес-логика и работа с БД. |
 
-Домены: `projects`, `materials`, `bindings`. Роутер не лазит в БД напрямую и не собирает логику — зовёт функцию сервиса. Сервис не знает про `Request`/`Response`.
+Домены: `projects`, `materials`, `bindings`, `ai` (шлюз моделей), `exam` (чат, попытки, оценки). Роутер не лазит в БД напрямую и не собирает логику — зовёт функцию сервиса. Сервис не знает про `Request`/`Response`.
 
-Сессия приходит через зависимость: `session: Annotated[Session, Depends(get_session)]`. Не создавай `SessionLocal()` в обработчике запроса — это только для воркера и скриптов.
+Сессия приходит через зависимость: `session: Annotated[Session, Depends(get_session)]`. Не создавай `SessionLocal()` в обработчике запроса — это для воркера и скриптов. Единственное исключение — генератор `StreamingResponse`: зависимость закрывается до отправки тела, поэтому поток открывает свою сессию (пример и обоснование — `exam/router.py`).
 
 ## Ошибки — только доменные
 
@@ -69,7 +69,7 @@ description: Как устроен и как трогать бэкенд Tentex 
 ## Перед тем как сказать «готово»
 
 1. `cd backend && python -m ruff check .` — чисто (правила `E,F,I,UP,B,SIM`, line-length 100, py313).
-2. Затронул домен — прогони профильную проверку: `python backend/scripts/check_stage2.py` / `check_stage3.py` / `check_stage4.py` / `check_stage5.py` / `check_manual_binding.py`.
+2. Затронул домен — прогони профильную проверку из `backend/scripts/`: `check_stage2.py` · `check_stage3.py` · `check_stage4.py` · `check_stage5.py` · `check_manual_binding.py` · `check_ai_gateway.py` · `check_exam_chat.py` · `check_library_workspace.py`.
 3. Есть тест на поведение — `python -m pytest` в `backend/`. Новую логику покрывай тестом в `backend/tests/`.
 4. Меняешь контракт (путь, тело, код ответа, `code` ошибки) — обнови соответствующий `docs/architecture/*.md`.
 5. Новая настройка — только через `Settings` в `config.py` (префикс `TENTEX_`), не `os.environ` напрямую.
