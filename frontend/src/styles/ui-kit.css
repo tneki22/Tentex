@@ -649,6 +649,63 @@
   font-size: var(--text-sm);
 }
 
+/* Та же карточка фактов, но как список термин/значение — роль файла, проекты, счётчики */
+.consequences-facts {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font-size: var(--text-sm);
+}
+
+.consequences-fact {
+  display: grid;
+  gap: 2px;
+}
+
+.consequences-fact dt {
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+}
+
+.consequences-fact dd {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+/* Список тем, которые осиротеют: заголовок проекта и отдельная строка на каждую тему */
+.consequences-topics-block {
+  margin: 0 0 var(--space-4);
+}
+
+.consequences-topics-label {
+  margin: 0 0 var(--space-1);
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.consequences-topics {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  list-style: disc;
+  padding-left: calc(var(--space-4) + var(--space-3));
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+}
+
+.consequences-note {
+  margin: 0 0 var(--space-2);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
 /* --- Подсказка --- */
 
 .tooltip {

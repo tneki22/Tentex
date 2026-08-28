@@ -365,29 +365,53 @@ export function Library() {
         onConfirm={() => void removeMaterial()}
       >
         <p className="dialog-lead">Файл удалится из общей Библиотеки и отвяжется от всех проектов.</p>
-        <ul className="consequences">
-          {deletePreview?.material.usage.map((usage) => (
-            <li key={usage.project_id}>
-              {usage.project_name}: {usage.purposes.map((item) => PURPOSE[item]).join(", ")}
-            </li>
-          ))}
-          {deletePreview?.reference_answer_count ? (
-            <li>Эталонов из файла: {deletePreview.reference_answer_count}. Текст сохранится, источник станет недоступен.</li>
-          ) : null}
-          {deletePreview?.binding_count ? (
-            <li>Привязок к фрагментам: {deletePreview.binding_count}. Они уйдут вместе с файлом.</li>
-          ) : null}
-          {deletePreview?.affected_projects.map((affected) => (
-            <li key={affected.project_id}>
-              {affected.project_name}: без материала останутся — {affected.nodes_losing_material.join(", ")}.
-            </li>
-          ))}
-          {deletePreview?.active_task && <li>Текущая обработка будет остановлена вместе с файлом.</li>}
-          {deletePreview?.material.usage.length === 0
-            && !deletePreview.reference_answer_count
-            && !deletePreview.binding_count
-            && <li>Файл не используется ни одним проектом.</li>}
-        </ul>
+
+        {deletePreview?.material.usage.length
+          || deletePreview?.reference_answer_count
+          || deletePreview?.binding_count ? (
+          <dl className="consequences-facts">
+            {deletePreview?.material.usage.map((usage) => (
+              <div className="consequences-fact" key={usage.project_id}>
+                <dt>{usage.project_name}</dt>
+                <dd>{usage.purposes.map((item) => PURPOSE[item]).join(", ")}</dd>
+              </div>
+            ))}
+            {deletePreview?.reference_answer_count ? (
+              <div className="consequences-fact">
+                <dt>Эталонов из файла</dt>
+                <dd>{deletePreview.reference_answer_count} — текст сохранится, источник станет недоступен</dd>
+              </div>
+            ) : null}
+            {deletePreview?.binding_count ? (
+              <div className="consequences-fact">
+                <dt>Привязок к фрагментам</dt>
+                <dd>{deletePreview.binding_count} — уйдут вместе с файлом</dd>
+              </div>
+            ) : null}
+          </dl>
+        ) : null}
+
+        {deletePreview?.affected_projects.map((affected) => (
+          <div className="consequences-topics-block" key={affected.project_id}>
+            <p className="consequences-topics-label">
+              {affected.project_name}: без материала останутся
+            </p>
+            <ul className="consequences-topics">
+              {affected.nodes_losing_material.map((node) => (
+                <li key={node}>{node}</li>
+              ))}
+            </ul>
+          </div>
+        ))}
+
+        {deletePreview?.active_task ? (
+          <p className="consequences-note">Текущая обработка будет остановлена вместе с файлом.</p>
+        ) : null}
+
+        {deletePreview?.material.usage.length === 0
+          && !deletePreview.reference_answer_count
+          && !deletePreview.binding_count
+          && <p className="consequences-note">Файл не используется ни одним проектом.</p>}
       </ConfirmDialog>
     </div>
   );
