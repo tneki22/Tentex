@@ -19,11 +19,12 @@ from sqlalchemy.orm import Session
 
 from app.bindings import answer_sections
 from app.marker_labels import material_image_label
-from app.materials.schemas import MaterialPurpose
+from app.materials.schemas import ExamMaterialSlot, MaterialPurpose
 from app.models import (
     Binding,
     BindingMechanism,
     BindingStatus,
+    ExamKind,
     Material,
     MaterialFragment,
     MaterialPage,
@@ -44,6 +45,15 @@ from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.projects.heading_match import normalize_answer_heading
 
 STUDY_NODE_TYPES = {NodeType.TOPIC, NodeType.SUBPOINT}
+
+# Слот файла ответов сужает, какие узлы программы он вообще может закрыть:
+# ответы на вопросы не должны попасть в нумерацию решений задач и наоборот.
+# Файл без слота (старый общий эталон) видит всё дерево — `None` в значении.
+_ANSWERS_SLOT_KIND: dict[str | None, ExamKind | None] = {
+    ExamMaterialSlot.QUESTION_ANSWERS.value: ExamKind.QUESTION,
+    ExamMaterialSlot.TASK_ANSWERS.value: ExamKind.TASK,
+    None: None,
+}
 @dataclass(slots=True)
 class HeadingSuggestionCandidate:
     node_id: UUID
@@ -200,16 +210,23 @@ def _resolution_index(session: Session, project_id: UUID, material: Material) ->
     return index
 
 
-def _ordered_study_nodes(session: Session, project_id: UUID) -> list[ProgramNode]:
-    nodes = list(
-        session.scalars(
-            select(ProgramNode).where(
-                ProgramNode.project_id == project_id,
-                ProgramNode.is_in_current_program.is_(True),
-                ProgramNode.is_archived.is_(False),
-            )
-        )
-    )
+def _ordered_study_nodes(
+    session: Session, project_id: UUID, exam_kind: ExamKind | None = None
+) -> list[ProgramNode]:
+    """Изучаемые узлы в порядке обхода дерева, при необходимости — только
+
+    одного вида (`question` или `task`). Раздельная автопривязка ответов и
+    решений держится на этом сужении: без слота (`exam_kind=None`) видно всё
+    дерево, как у прежнего общего файла ответов.
+    """
+    filters = [
+        ProgramNode.project_id == project_id,
+        ProgramNode.is_in_current_program.is_(True),
+        ProgramNode.is_archived.is_(False),
+    ]
+    if exam_kind is not None:
+        filters.append(ProgramNode.exam_kind == exam_kind)
+    nodes = list(session.scalars(select(ProgramNode).where(*filters)))
     children: dict[UUID | None, list[ProgramNode]] = defaultdict(list)
     for node in nodes:
         children[node.parent_id].append(node)
@@ -366,7 +383,7 @@ def _fill_answers(
 
 def _require_answers_material(
     session: Session, project_id: UUID, material_id: UUID
-) -> tuple[Material, str]:
+) -> tuple[Material, str, ExamKind | None]:
     project = session.get(Project, project_id)
     if project is None or project.status != ProjectStatus.ACTIVE:
         raise ProjectNotFoundError("Активный проект не найден")
@@ -383,16 +400,17 @@ def _require_answers_material(
     material = session.get(Material, material_id)
     if material is None or material.status != MaterialState.READY:
         raise ProjectConflictError("Сначала завершите разбор файла", code="material_not_ready")
-    return material, link.display_name or material.original_name
+    exam_kind = _ANSWERS_SLOT_KIND.get(link.exam_slot)
+    return material, link.display_name or material.original_name, exam_kind
 
 
 def link_answers_material(
     session: Session, project_id: UUID, material_id: UUID
 ) -> AnswersLinkResult:
     """Вызывается из воркера после разбора и кнопкой «Привязать заново»."""
-    material, label = _require_answers_material(session, project_id, material_id)
+    material, label, exam_kind = _require_answers_material(session, project_id, material_id)
 
-    nodes = _ordered_study_nodes(session, project_id)
+    nodes = _ordered_study_nodes(session, project_id, exam_kind)
     ordered_fragments = _ordered_fragments(session, material)
     detection = answer_sections.detect_sections(
         nodes,
@@ -487,12 +505,12 @@ def resolve_answers_heading(
     Решение запоминается в `matched_title` созданного эталона, поэтому повторная
     привязка того же файла восстановит его сама (см. `_resolution_index`).
     """
-    material, label = _require_answers_material(session, project_id, material_id)
+    material, label, exam_kind = _require_answers_material(session, project_id, material_id)
     node = session.get(ProgramNode, node_id)
     if node is None or node.project_id != project_id or node.node_type not in STUDY_NODE_TYPES:
         raise ProjectNotFoundError("Вопрос программы не найден")
 
-    nodes = _ordered_study_nodes(session, project_id)
+    nodes = _ordered_study_nodes(session, project_id, exam_kind)
     ordered_fragments = _ordered_fragments(session, material)
     detected = answer_sections.section_for_resolution(
         nodes, ordered_fragments, anchor_fragment_id, node_id

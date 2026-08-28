@@ -3,6 +3,7 @@ import { Check, FileText, LibraryBig, Search } from "lucide-react";
 import {
   attachLibraryMaterial,
   listLibraryMaterials,
+  type ExamMaterialSlot,
   type LibraryMaterialDetailRead,
   type LibraryMaterialRead,
   type MaterialPurpose,
@@ -65,6 +66,7 @@ type AttachMaterial = (
     display_name?: string | null;
     source_role: SourceRole;
     purposes: MaterialPurpose[];
+    exam_slot?: ExamMaterialSlot | null;
   },
 ) => Promise<LibraryMaterialDetailRead>;
 
@@ -73,6 +75,8 @@ interface LibraryMaterialPickerDialogProps {
   projectId: string;
   title: string;
   purpose?: MaterialPurpose;
+  /** Экзаменационный слот составного трека — вопросы/задачи/их ответы. */
+  examSlot?: ExamMaterialSlot;
   multiple?: boolean;
   allowPurposeSelection?: boolean;
   existingStudySourceCount?: number;
@@ -105,6 +109,7 @@ export function LibraryMaterialPickerDialog({
   projectId,
   title,
   purpose: fixedPurpose,
+  examSlot,
   multiple = false,
   allowPurposeSelection = false,
   existingStudySourceCount = 0,
@@ -198,6 +203,7 @@ export function LibraryMaterialPickerDialog({
           project_id: projectId,
           source_role: roleFor(attached.length),
           purposes: [purpose],
+          exam_slot: examSlot ?? null,
         });
         attached.push(material);
       } catch (caught) {
@@ -221,6 +227,7 @@ export function LibraryMaterialPickerDialog({
               display_name: material.original_name,
               source_role: roleFor(attached.findIndex((item) => item.id === material.id)),
               purposes: [purpose],
+              exam_slot: examSlot ?? null,
             }],
           }
         : material) ?? current);

@@ -521,6 +521,7 @@ class ExamImportCounts(ApiModel):
     tickets: int = 0
     questions: int = 0
     tasks: int = 0
+    subpoints: int = 0
 
 
 class ExamImportResult(ApiModel):

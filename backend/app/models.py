@@ -453,6 +453,7 @@ class ProjectMaterial(Base):
     instruction: Mapped[str | None] = mapped_column(String, nullable=True)
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     purposes: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["study_source"])
+    exam_slot: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 

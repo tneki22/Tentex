@@ -4933,7 +4933,6 @@ button.wizard-back-projects {
 
 .wizard-material-card > button {
   width: 100%;
-  min-height: 150px;
   display: flex;
   align-items: flex-start;
   gap: var(--space-4);
@@ -4964,8 +4963,74 @@ button.wizard-back-projects {
 .wizard-material-card.is-selected .wizard-material-icon { background: var(--accent-wash-strong); color: var(--accent); }
 .wizard-material-card .checkbox-row { padding: var(--space-3) var(--space-5); border-top: 1px solid var(--line); }
 
+/* Карточка ответа/решения недоступна, пока не выбран её список: сама карточка
+   не тускнеет полностью, доступность передаётся текстом, а не только цветом. */
+.wizard-material-card.is-unavailable { background: var(--surface-sunken); }
+.wizard-material-card.is-unavailable:hover { border-color: var(--line); transform: none; box-shadow: var(--shadow-sm); }
+.wizard-material-card.is-unavailable > button { cursor: default; }
+.wizard-material-card.is-unavailable .wizard-material-icon { color: var(--faint); }
+.wizard-material-card.is-unavailable > button small { color: var(--muted); }
+
 .wizard-upload-stack { display: grid; gap: var(--space-4); }
 .wizard-upload-panel { padding: var(--space-5); border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); }
+
+/* --- Инструкция перед файлами составного трека --- */
+
+.wizard-import-guide {
+  margin-bottom: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--paper);
+}
+
+.wizard-import-guide .disclosure-trigger {
+  width: 100%;
+  padding: var(--space-1) 0;
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.wizard-import-guide .disclosure-trigger:hover,
+.wizard-import-guide .disclosure-trigger:focus-visible { color: var(--accent); }
+
+.wizard-import-guide .disclosure-inner {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.wizard-import-guide .disclosure-inner p { margin: 0; }
+
+.wizard-import-guide .disclosure-inner h3 {
+  margin: var(--space-2) 0 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.wizard-import-guide .disclosure-inner code {
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font-size: 0.9em;
+}
+
+.wizard-import-guide-example {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
 
 .wizard-upload-head {
   display: flex;

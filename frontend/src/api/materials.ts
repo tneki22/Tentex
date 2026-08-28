@@ -2,6 +2,11 @@ import { ProjectApiError, request, type ProgramChangeResult } from "./projects";
 import type { AiPreflight, AiUsage } from "./ai";
 
 export type MaterialPurpose = "exam_structure" | "reference_answers" | "study_source";
+export type ExamMaterialSlot =
+  | "question_list"
+  | "question_answers"
+  | "task_list"
+  | "task_answers";
 export type MaterialState =
   | "ready_to_process"
   | "queued"
@@ -42,6 +47,7 @@ export interface MaterialRead {
   priority: number;
   instruction: string | null;
   purposes: MaterialPurpose[];
+  exam_slot: ExamMaterialSlot | null;
   status: MaterialState;
   parser_mode: ParserMode | null;
   active_parse_revision: number;
@@ -58,7 +64,7 @@ export interface MaterialRead {
 }
 
 export type MaterialUpdateCommand = Partial<
-  Pick<MaterialRead, "display_name" | "source_role" | "priority" | "instruction" | "purposes">
+  Pick<MaterialRead, "display_name" | "source_role" | "priority" | "instruction" | "purposes" | "exam_slot">
 > & {
   replace_reference_answers?: boolean;
 };
@@ -121,6 +127,7 @@ export interface LibraryUsageRead {
   display_name: string;
   source_role: SourceRole;
   purposes: MaterialPurpose[];
+  exam_slot: ExamMaterialSlot | null;
 }
 
 export interface LibraryMaterialRead {
@@ -291,7 +298,7 @@ export interface CleanupRunRead {
 export interface ExamProgramPreview {
   material_id: string;
   material_name: string;
-  counts: { tickets: number; questions: number; tasks: number };
+  counts: { tickets: number; questions: number; tasks: number; subpoints?: number };
   warnings: string[];
   has_duplicates: boolean;
   nodes: Array<{
@@ -300,6 +307,12 @@ export interface ExamProgramPreview {
     title: string;
     depth: number;
   }>;
+}
+
+export interface ExamCompositeDraftImportResult {
+  change: ProgramChangeResult;
+  counts: { questions: number; tasks: number; subpoints: number };
+  warnings: string[];
 }
 
 const projectMaterialsPath = (projectId: string): string =>
@@ -378,11 +391,13 @@ export async function uploadMaterial(
   file: File,
   sourceRole: SourceRole,
   purposes: MaterialPurpose[],
+  examSlot?: ExamMaterialSlot | null,
 ): Promise<MaterialRead> {
   const form = new FormData();
   form.set("file", file);
   form.set("source_role", sourceRole);
   form.set("purposes", purposes.join(","));
+  if (examSlot) form.set("exam_slot", examSlot);
   return uploadResponse(await fetch(projectMaterialsPath(projectId), {
     method: "POST",
     headers: { Accept: "application/json" },
@@ -392,7 +407,13 @@ export async function uploadMaterial(
 
 export const createTextMaterial = (
   projectId: string,
-  command: { name: string; text: string; source_role: SourceRole; purposes: MaterialPurpose[] },
+  command: {
+    name: string;
+    text: string;
+    source_role: SourceRole;
+    purposes: MaterialPurpose[];
+    exam_slot?: ExamMaterialSlot | null;
+  },
 ): Promise<MaterialRead> => request(`${projectMaterialsPath(projectId)}/text`, {
   method: "POST",
   body: JSON.stringify(command),
@@ -405,6 +426,7 @@ export const createExternalMaterial = (
     url: string;
     source_role: SourceRole;
     purposes: MaterialPurpose[];
+    exam_slot?: ExamMaterialSlot | null;
   },
 ): Promise<MaterialRead> => request(`${projectMaterialsPath(projectId)}/external`, {
   method: "POST",
@@ -590,6 +612,7 @@ export const attachLibraryMaterial = (
     display_name?: string | null;
     source_role: SourceRole;
     purposes: MaterialPurpose[];
+    exam_slot?: ExamMaterialSlot | null;
   },
 ): Promise<LibraryMaterialDetailRead> => request(`${libraryPath(materialId)}/project-links`, {
   method: "POST",
@@ -772,4 +795,18 @@ export const importExamDraftProgramFromMaterial = (
       dedupe_duplicates: dedupeDuplicates,
     }),
   },
+);
+
+export const importCompositeExamDraftProgram = (
+  projectId: string,
+  command: {
+    expected_draft_revision: number;
+    expected_program_revision: number;
+    question_material_id?: string | null;
+    task_material_id?: string | null;
+    dedupe_duplicates?: boolean;
+  },
+): Promise<ExamCompositeDraftImportResult> => request(
+  `${projectMaterialsPath(projectId)}/exam-composite-draft-import`,
+  { method: "POST", body: JSON.stringify(command) },
 );

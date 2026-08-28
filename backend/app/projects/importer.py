@@ -8,6 +8,12 @@ from app.projects.numbered_series import select_numbered_series
 ITEM_RE = re.compile(
     r"^\s*(?:(?:\d+(?:\.\d+)*[.)])\s*|(?:\d+(?:\.\d+)*)\s+|[-—*•]\s+)(.+?)\s*$"
 )
+# Один уровень подпунктов: «N.M», «N.M.» или «N.M)» отдельной строкой. N должен
+# совпадать с номером последнего родительского пункта — проверяется на месте
+# использования, не в самом регулярном выражении.
+SUBPOINT_RE = re.compile(
+    r"^\s*(?P<parent>\d{1,4})\.(?P<child>\d{1,3})(?:[.)])?\s+(?P<text>\S.*?)\s*$"
+)
 # Разметчик PDF иногда сливает несколько нумерованных пунктов в один текстовый
 # блок (конец предложения одного пункта и начало следующего попадают в одну
 # строку). Режем по границе «конец предложения» + «следующий номер».
@@ -43,6 +49,7 @@ class ParsedExamProgram:
     tickets: int
     questions: int
     tasks: int
+    subpoints: int
     warnings: list[str]
     has_duplicates: bool = False
 
@@ -116,48 +123,37 @@ def dedupe_first_occurrence(parsed: ParsedExamProgram) -> ParsedExamProgram:
         result_nodes.append(replace(node, parent_index=parent_index, position=position))
 
     study_nodes = [node for node in result_nodes if node.node_type != NodeType.SECTION]
+    top_level = [node for node in study_nodes if node.node_type == NodeType.TOPIC]
+    subpoints = sum(node.node_type == NodeType.SUBPOINT for node in study_nodes)
     return ParsedExamProgram(
         nodes=result_nodes,
         tickets=sum(node.exam_kind == ExamKind.TICKET for node in result_nodes),
-        questions=sum(node.exam_kind == ExamKind.QUESTION for node in study_nodes),
-        tasks=sum(node.exam_kind == ExamKind.TASK for node in study_nodes),
+        questions=sum(node.exam_kind == ExamKind.QUESTION for node in top_level),
+        tasks=sum(node.exam_kind == ExamKind.TASK for node in top_level),
+        subpoints=subpoints,
         warnings=[],
         has_duplicates=False,
     )
 
 
-def _parse_flat(
-    lines: list[str], exam_format: ExamFormat, expected_item_count: int | None
-) -> tuple[list[ParsedNode], list[str]]:
-    lines = _split_inline_items(lines)
-    if exam_format == ExamFormat.QUESTIONS:
-        selection = select_numbered_series(lines, expected_item_count)
-        if selection.ambiguous:
-            raise ExamImportError("Не удалось однозначно выбрать основной нумерованный список")
-        if selection.items:
-            nodes = []
-            for item in selection.items:
-                kind, title = _kind_and_title(item.text, ExamKind.QUESTION)
-                nodes.append(
-                    ParsedNode(
-                        parent_index=None,
-                        node_type=NodeType.TOPIC,
-                        exam_kind=kind,
-                        title=title,
-                        position=len(nodes),
-                    )
-                )
-            return nodes, list(selection.warnings)
+def _parse_marker_list(
+    lines: list[str], default_kind: ExamKind, *, honor_headers: bool
+) -> list[ParsedNode]:
+    """Построчный разбор без опоры на сквозную нумерацию: маркер `N.`, `N)`, тире
 
+    или голая строка — каждый непустой пункт становится темой. Используется как
+    запасной вариант, когда сквозного номерного списка нет, и как единственный
+    путь для устаревшего формата «Вопросы и задачи» с заголовками разделов.
+    """
     marker_present = any(ITEM_RE.match(line) for line in lines)
     nodes: list[ParsedNode] = []
-    current_kind = ExamKind.QUESTION
+    current_kind = default_kind
 
     for line in lines:
         if QUESTION_HEADER_RE.match(line):
             current_kind = ExamKind.QUESTION
             continue
-        if exam_format == ExamFormat.QUESTIONS_TASKS and TASK_HEADER_RE.match(line):
+        if honor_headers and TASK_HEADER_RE.match(line):
             current_kind = ExamKind.TASK
             continue
 
@@ -181,7 +177,142 @@ def _parse_flat(
                     position=len(nodes),
                 )
             )
-    return nodes, []
+    return nodes
+
+
+def count_exam_nodes(nodes: list[ParsedNode]) -> tuple[int, int, int]:
+    study_nodes = [node for node in nodes if node.node_type != NodeType.SECTION]
+    top_level = [node for node in study_nodes if node.node_type == NodeType.TOPIC]
+    questions = sum(node.exam_kind == ExamKind.QUESTION for node in top_level)
+    tasks = sum(node.exam_kind == ExamKind.TASK for node in top_level)
+    subpoints = sum(node.node_type == NodeType.SUBPOINT for node in study_nodes)
+    return questions, tasks, subpoints
+
+
+def parse_exam_list(
+    raw_text: str,
+    default_kind: ExamKind,
+    *,
+    expected_item_count: int | None = None,
+) -> ParsedExamProgram:
+    """Разбирает один список вопросов или задач с поддержкой подпунктов `N.M`.
+
+    Строки-подпункты снимаются с общего потока до поиска основной нумерованной
+    серии — иначе `select_numbered_series` принял бы их текст за продолжение
+    родительского пункта. После выбора серии подпункты вставляются обратно по
+    позиции в исходном тексте и проверяются на совпадение родительского номера.
+    """
+    if len(raw_text) > 1_000_000:
+        raise ExamImportError("Текст списка не может быть длиннее 1 000 000 символов")
+    lines = _lines(raw_text)
+    if not lines:
+        raise ExamImportError("Вставьте хотя бы один вопрос или задачу")
+    lines = _split_inline_items(lines)
+
+    subpoint_lines: list[tuple[int, int, int, str]] = []
+    filtered_lines: list[str] = []
+    index_map: list[int] = []
+    for original_index, line in enumerate(lines):
+        match = SUBPOINT_RE.match(line)
+        if match:
+            subpoint_lines.append(
+                (
+                    original_index,
+                    int(match.group("parent")),
+                    int(match.group("child")),
+                    match.group("text").strip(),
+                )
+            )
+            continue
+        filtered_lines.append(line)
+        index_map.append(original_index)
+
+    selection = select_numbered_series(filtered_lines, expected_item_count)
+    if selection.ambiguous:
+        raise ExamImportError("Не удалось однозначно выбрать основной нумерованный список")
+
+    if not selection.items:
+        nodes = _parse_marker_list(lines, default_kind, honor_headers=False)
+        if not nodes:
+            raise ExamImportError("В списке не найдено ни одного изучаемого пункта")
+        questions, tasks, subpoints = count_exam_nodes(nodes)
+        duplicates = _duplicate_positions(nodes)
+        return ParsedExamProgram(
+            nodes=nodes,
+            tickets=0,
+            questions=questions,
+            tasks=tasks,
+            subpoints=subpoints,
+            warnings=_duplicate_warnings(nodes, duplicates),
+            has_duplicates=bool(duplicates),
+        )
+
+    nodes: list[ParsedNode] = []
+    top_positions: list[tuple[int, int, int]] = []  # (исходная строка, индекс узла, номер)
+    for item in selection.items:
+        original_index = index_map[item.source_index]
+        kind, title = _kind_and_title(item.text, default_kind)
+        nodes.append(
+            ParsedNode(
+                parent_index=None,
+                node_type=NodeType.TOPIC,
+                exam_kind=kind,
+                title=title,
+                position=len(nodes),
+            )
+        )
+        top_positions.append((original_index, len(nodes) - 1, item.number))
+
+    warnings = list(selection.warnings)
+    top_ptr = 0
+    parent_node_index: int | None = None
+    parent_number: int | None = None
+    last_node_index: int | None = None
+    sibling_count = 0
+    last_child_number = 0
+
+    for original_index, parent, child, text in subpoint_lines:
+        while top_ptr < len(top_positions) and top_positions[top_ptr][0] < original_index:
+            _, parent_node_index, parent_number = top_positions[top_ptr]
+            last_node_index = parent_node_index
+            sibling_count = 0
+            last_child_number = 0
+            top_ptr += 1
+
+        if parent_node_index is not None and parent == parent_number and child > last_child_number:
+            nodes.append(
+                ParsedNode(
+                    parent_index=parent_node_index,
+                    node_type=NodeType.SUBPOINT,
+                    exam_kind=nodes[parent_node_index].exam_kind,
+                    title=text,
+                    position=sibling_count,
+                )
+            )
+            sibling_count += 1
+            last_child_number = child
+            last_node_index = len(nodes) - 1
+        elif last_node_index is not None:
+            nodes[last_node_index].title = f"{nodes[last_node_index].title} {text}".strip()
+            shown_parent = parent_number if parent_number is not None else "—"
+            warnings.append(
+                f"Подпункт «{parent}.{child}» не продолжает пункт {shown_parent} "
+                "и сохранён как часть текста"
+            )
+        else:
+            warnings.append(f"Подпункт «{parent}.{child}» встретился до первого пункта и пропущен")
+
+    questions, tasks, subpoints = count_exam_nodes(nodes)
+    duplicates = _duplicate_positions(nodes)
+    return ParsedExamProgram(
+        nodes=nodes,
+        tickets=0,
+        questions=questions,
+        tasks=tasks,
+        subpoints=subpoints,
+        warnings=[*warnings, *_duplicate_warnings(nodes, duplicates)],
+        has_duplicates=bool(duplicates),
+    )
 
 
 def _parse_tickets(lines: list[str]) -> list[ParsedNode]:
@@ -247,6 +378,11 @@ def parse_exam_program(
     *,
     expected_item_count: int | None = None,
 ) -> ParsedExamProgram:
+    if exam_format == ExamFormat.QUESTIONS:
+        return parse_exam_list(
+            raw_text, ExamKind.QUESTION, expected_item_count=expected_item_count
+        )
+
     if len(raw_text) > 1_000_000:
         raise ExamImportError("Текст списка не может быть длиннее 1 000 000 символов")
     lines = _lines(raw_text)
@@ -254,9 +390,14 @@ def parse_exam_program(
         raise ExamImportError("Вставьте хотя бы один вопрос, задачу или билет")
     if exam_format == ExamFormat.TICKETS:
         nodes = _parse_tickets(lines)
-        parse_warnings: list[str] = []
-    elif exam_format in {ExamFormat.QUESTIONS, ExamFormat.QUESTIONS_TASKS}:
-        nodes, parse_warnings = _parse_flat(lines, exam_format, expected_item_count)
+    elif exam_format == ExamFormat.QUESTIONS_TASKS:
+        # Устаревший объединённый формат: заголовки «Вопросы»/«Задачи» переключают
+        # вид пункта, сквозная нумерация не проверяется, подпункты не выделяются —
+        # новый составной импорт (`parse_exam_list`) заменяет этот путь для новых
+        # черновиков, а этот остаётся только ради старых.
+        nodes = _parse_marker_list(
+            _split_inline_items(lines), ExamKind.QUESTION, honor_headers=True
+        )
     else:
         raise ExamImportError("Этот формат нельзя импортировать без материалов")
 
@@ -269,6 +410,7 @@ def parse_exam_program(
         tickets=sum(node.exam_kind == ExamKind.TICKET for node in nodes),
         questions=sum(node.exam_kind == ExamKind.QUESTION for node in study_nodes),
         tasks=sum(node.exam_kind == ExamKind.TASK for node in study_nodes),
-        warnings=[*parse_warnings, *_duplicate_warnings(nodes, duplicates)],
+        subpoints=0,
+        warnings=_duplicate_warnings(nodes, duplicates),
         has_duplicates=bool(duplicates),
     )

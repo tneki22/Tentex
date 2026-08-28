@@ -10,6 +10,7 @@ import {
   uploadMaterial,
 } from "../api/materials";
 import type {
+  ExamMaterialSlot,
   MaterialPurpose,
   MaterialRead,
   ParserMode,
@@ -78,19 +79,27 @@ export function useProjectMaterials(projectId: string | undefined) {
     busy,
     error,
     refresh,
-    upload: (file: File, sourceRole: SourceRole, purposes: MaterialPurpose[]) =>
-      projectId ? mutate(() => uploadMaterial(projectId, file, sourceRole, purposes)) : null,
+    upload: (
+      file: File,
+      sourceRole: SourceRole,
+      purposes: MaterialPurpose[],
+      examSlot?: ExamMaterialSlot | null,
+    ) => projectId
+      ? mutate(() => uploadMaterial(projectId, file, sourceRole, purposes, examSlot))
+      : null,
     createText: (command: {
       name: string;
       text: string;
       source_role: SourceRole;
       purposes: MaterialPurpose[];
+      exam_slot?: ExamMaterialSlot | null;
     }) => projectId ? mutate(() => createTextMaterial(projectId, command)) : null,
     createExternal: (command: {
       kind: "url" | "youtube";
       url: string;
       source_role: SourceRole;
       purposes: MaterialPurpose[];
+      exam_slot?: ExamMaterialSlot | null;
     }) => projectId ? mutate(() => createExternalMaterial(projectId, command)) : null,
     update: (materialId: string, command: Parameters<typeof updateMaterial>[2]) =>
       projectId ? mutate(() => updateMaterial(projectId, materialId, command)) : null,

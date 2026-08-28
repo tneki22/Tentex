@@ -6,7 +6,7 @@ import {
   useState,
 } from "react";
 import { FileText, LibraryBig, RotateCcw, UploadCloud, X } from "lucide-react";
-import type { MaterialRead } from "../../api/materials";
+import type { ExamMaterialSlot, MaterialRead } from "../../api/materials";
 import { Button, Card, SegmentedTabs } from "../../components/ui";
 
 export type ExamMaterialInputMode = "files" | "text";
@@ -15,6 +15,8 @@ interface ExamMaterialUploadPanelProps {
   icon: ReactNode;
   title: string;
   description: string;
+  /** Слот составного трека — определяет только подсказку в поле вставки текста. */
+  examSlot?: ExamMaterialSlot;
   allowText?: boolean;
   mode: ExamMaterialInputMode;
   onModeChange: (mode: ExamMaterialInputMode) => void;
@@ -27,6 +29,16 @@ interface ExamMaterialUploadPanelProps {
   onRemove: (material: MaterialRead) => Promise<void>;
   onRetry?: (material: MaterialRead) => Promise<void>;
 }
+
+const TEXT_PLACEHOLDERS: Record<ExamMaterialSlot, string> = {
+  question_list: "1. Понятие базы данных.\n2. Реляционная модель данных.\n3. Нормальные формы…",
+  question_answers: "1. Ответ: база данных — это…\n\n2. Ответ: реляционная модель…",
+  task_list: "1. Построить таблицу истинности для формулы.\n2. Найти нормальную форму отношения…",
+  task_answers: "1. Решение: строим таблицу истинности…\n\n2. Решение: приводим отношение к 3НФ…",
+};
+
+const LEGACY_PLACEHOLDER = "1. Понятие базы данных.\n2. Реляционная модель данных.\n3. Нормальные формы…";
+const LEGACY_ANSWERS_PLACEHOLDER = "1. Ответ: база данных — это…\n\n2. Ответ: реляционная модель…";
 
 const STATUS_LABELS: Record<MaterialRead["status"], string> = {
   ready_to_process: "Загружен",
@@ -41,6 +53,7 @@ export function ExamMaterialUploadPanel({
   icon,
   title,
   description,
+  examSlot,
   allowText = false,
   mode,
   onModeChange,
@@ -176,9 +189,9 @@ export function ExamMaterialUploadPanel({
             rows={8}
             value={text}
             onChange={(event) => onTextChange(event.target.value)}
-            placeholder={title === "Готовые ответы"
-              ? "1. Ответ: база данных — это…\n\n2. Ответ: реляционная модель…"
-              : "1. Понятие базы данных.\n2. Реляционная модель данных.\n3. Нормальные формы…"}
+            placeholder={examSlot
+              ? TEXT_PLACEHOLDERS[examSlot]
+              : title === "Готовые ответы" ? LEGACY_ANSWERS_PLACEHOLDER : LEGACY_PLACEHOLDER}
           />
         </div>
       )}

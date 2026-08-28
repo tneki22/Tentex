@@ -70,6 +70,7 @@ def run() -> None:
                 "tickets": 1,
                 "questions": 2,
                 "tasks": 0,
+                "subpoints": 0,
             }
             status, imported_draft = request(
                 server,

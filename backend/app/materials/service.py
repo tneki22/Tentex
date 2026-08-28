@@ -1,3 +1,4 @@
+from collections import defaultdict
 from pathlib import Path
 from uuid import UUID
 
@@ -5,7 +6,6 @@ from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.bindings import answers_link
 from app.bindings.service import delete_project_material_bindings
 from app.materials import library
 from app.materials.library import (
@@ -24,6 +24,9 @@ from app.materials.library import (
     task_read as _task_read,
 )
 from app.materials.schemas import (
+    ExamCompositeDraftImportResult,
+    ExamCompositeDraftImportWrite,
+    ExamMaterialSlot,
     ExamProgramDraftImportWrite,
     ExamProgramImportWrite,
     ExamProgramPreview,
@@ -42,11 +45,13 @@ from app.materials.schemas import (
 from app.materials.storage import material_path
 from app.models import (
     ExamFormat,
+    ExamKind,
     GoalPassport,
     Material,
     MaterialFragment,
     MaterialPage,
     MaterialState,
+    NodeType,
     ProcessingTask,
     Project,
     ProjectMaterial,
@@ -60,7 +65,10 @@ from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.projects.importer import (
     ExamImportError,
     ParsedExamProgram,
+    ParsedNode,
+    count_exam_nodes,
     dedupe_first_occurrence,
+    parse_exam_list,
     parse_exam_program,
 )
 from app.projects.schemas import ReferenceAnswerImportWrite
@@ -104,6 +112,7 @@ def _read(link: ProjectMaterial, material: Material, task: ProcessingTask | None
         priority=link.priority,
         instruction=link.instruction,
         purposes=purposes or [MaterialPurpose.STUDY_SOURCE],
+        exam_slot=link.exam_slot,
         status=material.status,
         parser_mode=material.parser_mode,
         active_parse_revision=material.active_parse_revision,
@@ -121,10 +130,27 @@ def _read(link: ProjectMaterial, material: Material, task: ProcessingTask | None
 
 
 def _release_existing_answers_file(
-    session: Session, project_id: UUID, material_id: UUID
+    session: Session,
+    project_id: UUID,
+    material_id: UUID,
+    exam_slot: ExamMaterialSlot | None,
 ) -> None:
     """Снимает назначение со старого эталона внутри транзакции обновления нового."""
-    existing = answers_link.find_answers_material(session, project_id)
+    candidates = session.scalars(
+        select(ProjectMaterial).where(
+            ProjectMaterial.project_id == project_id,
+            ProjectMaterial.material_id != material_id,
+            ProjectMaterial.exam_slot == (exam_slot.value if exam_slot else None),
+        )
+    )
+    existing = next(
+        (
+            link
+            for link in candidates
+            if MaterialPurpose.REFERENCE_ANSWERS.value in (link.purposes or [])
+        ),
+        None,
+    )
     if existing is None or existing.material_id == material_id:
         return
     purposes = [
@@ -142,6 +168,7 @@ def _attach(
     *,
     source_role: SourceRole,
     purposes: list[MaterialPurpose],
+    exam_slot: ExamMaterialSlot | None,
     duplicate_detail: str,
 ) -> ProjectMaterial:
     """Связь проекта с уже созданным общим материалом.
@@ -152,7 +179,7 @@ def _attach(
     """
     if session.get(ProjectMaterial, (project_id, material.id)) is not None:
         raise ProjectConflictError(duplicate_detail, code="material_already_attached")
-    _guard_single_answers_file(session, project_id, purposes, material.id)
+    _guard_single_answers_file(session, project_id, purposes, material.id, exam_slot)
     link = ProjectMaterial(
         project_id=project_id,
         material_id=material.id,
@@ -161,6 +188,7 @@ def _attach(
         affects_program=source_role != SourceRole.REFERENCE,
         purposes=[purpose.value for purpose in dict.fromkeys(purposes)]
         or [MaterialPurpose.STUDY_SOURCE.value],
+        exam_slot=exam_slot.value if exam_slot else None,
         created_at=utc_now(),
     )
     session.add(link)
@@ -174,6 +202,7 @@ async def upload_material(
     upload: UploadFile,
     source_role: SourceRole,
     purposes: list[MaterialPurpose],
+    exam_slot: ExamMaterialSlot | None = None,
 ) -> MaterialRead:
     _project(session, project_id, writable=True)
     session.rollback()
@@ -188,6 +217,7 @@ async def upload_material(
             material,
             source_role=source_role,
             purposes=purposes,
+            exam_slot=exam_slot,
             duplicate_detail="Этот файл уже добавлен в проект",
         )
         return _read(link, material, _latest_task(session, material.id))
@@ -207,6 +237,7 @@ def create_text_material(
             material,
             source_role=command.source_role,
             purposes=command.purposes,
+            exam_slot=command.exam_slot,
             duplicate_detail="Этот текст уже добавлен в проект",
         )
         return _read(link, material, _latest_task(session, material.id))
@@ -227,6 +258,7 @@ def create_external_material(
             material,
             source_role=command.source_role,
             purposes=command.purposes,
+            exam_slot=command.exam_slot,
             duplicate_detail="Этот источник уже добавлен в проект",
         )
         return _read(link, material, _latest_task(session, material.id))
@@ -265,11 +297,23 @@ def update_material(
             raise ProjectNotFoundError("Материал не найден")
         values = command.model_dump(exclude_unset=True)
         replace_reference_answers = values.pop("replace_reference_answers", False)
+        next_slot = values.get("exam_slot", link.exam_slot)
+        if isinstance(next_slot, str):
+            next_slot = ExamMaterialSlot(next_slot)
+        next_purposes = values.get(
+            "purposes", [MaterialPurpose(value) for value in link.purposes]
+        )
         if "purposes" in values:
             if replace_reference_answers:
-                _release_existing_answers_file(session, project_id, material_id)
-            _guard_single_answers_file(session, project_id, values["purposes"], material_id)
+                _release_existing_answers_file(
+                    session, project_id, material_id, next_slot
+                )
             values["purposes"] = [purpose.value for purpose in values["purposes"]]
+        _guard_single_answers_file(
+            session, project_id, next_purposes, material_id, next_slot
+        )
+        if "exam_slot" in values:
+            values["exam_slot"] = next_slot.value if next_slot else None
         for field, value in values.items():
             setattr(link, field, value)
         if command.source_role is not None:
@@ -417,7 +461,12 @@ def preview_exam_program(
     return ExamProgramPreview(
         material_id=material.id,
         material_name=link.display_name or material.original_name,
-        counts={"tickets": parsed.tickets, "questions": parsed.questions, "tasks": parsed.tasks},
+        counts={
+            "tickets": parsed.tickets,
+            "questions": parsed.questions,
+            "tasks": parsed.tasks,
+            "subpoints": parsed.subpoints,
+        },
         warnings=parsed.warnings,
         has_duplicates=parsed.has_duplicates,
         nodes=nodes,
@@ -464,6 +513,193 @@ def import_exam_draft_from_material(
         parsed=parsed,
         material_id=material_id,
         material_name=material_name,
+    )
+
+
+def _composite_slot_material(
+    session: Session,
+    project_id: UUID,
+    material_id: UUID,
+    expected_slot: ExamMaterialSlot,
+) -> tuple[Material, ProjectMaterial]:
+    link = _link(session, project_id, material_id)
+    if link.exam_slot != expected_slot.value:
+        raise ProjectConflictError(
+            "Материал не назначен в нужный слот составного импорта",
+            code="material_slot_mismatch",
+        )
+    if MaterialPurpose.EXAM_STRUCTURE.value not in (link.purposes or []):
+        raise ProjectConflictError(
+            "Сначала отметьте материал как список вопросов или задач",
+            code="material_not_exam_structure",
+        )
+    material = session.get(Material, material_id)
+    if material is None or material.status != MaterialState.READY:
+        raise ProjectConflictError("Сначала завершите разбор материала", code="material_not_ready")
+    return material, link
+
+
+def _material_raw_text(session: Session, material: Material) -> str:
+    pages = list(
+        session.scalars(
+            select(MaterialPage)
+            .where(
+                MaterialPage.material_id == material.id,
+                MaterialPage.revision == material.active_parse_revision,
+            )
+            .order_by(MaterialPage.page_number)
+        )
+    )
+    return "\n".join(page.text for page in pages if page.text.strip())
+
+
+def _merge_parsed_programs(
+    question: ParsedExamProgram | None, task: ParsedExamProgram | None
+) -> ParsedExamProgram:
+    """Склеивает независимо разобранные списки в одно дерево: вопросы, затем
+    задачи. `parent_index` задач сдвигается на длину списка вопросов, чтобы
+    ссылки на родителя-подпункта остались верными в общем списке узлов."""
+    if question is None and task is None:
+        raise ExamImportError("Нужен список вопросов или список задач")
+    if question is None:
+        return task
+    if task is None:
+        return question
+    offset = len(question.nodes)
+    # Верхнеуровневые позиции — общий счётчик соседей (`parent_id is None`),
+    # поэтому задачи получают позиции ПОСЛЕ вопросов; позиции подпунктов не
+    # трогаем — они считаются внутри своего родителя и от слияния не зависят.
+    top_position = sum(1 for node in question.nodes if node.parent_index is None)
+    merged_nodes = list(question.nodes)
+    for node in task.nodes:
+        if node.parent_index is None:
+            position = top_position
+            top_position += 1
+        else:
+            position = node.position
+        merged_nodes.append(
+            ParsedNode(
+                parent_index=node.parent_index + offset if node.parent_index is not None else None,
+                node_type=node.node_type,
+                exam_kind=node.exam_kind,
+                title=node.title,
+                position=position,
+            )
+        )
+    return ParsedExamProgram(
+        nodes=merged_nodes,
+        tickets=0,
+        questions=question.questions,
+        tasks=task.tasks,
+        subpoints=question.subpoints + task.subpoints,
+        warnings=[*question.warnings, *task.warnings],
+    )
+
+
+def _dedupe_top_level(nodes: list[ParsedNode]) -> list[ParsedNode]:
+    """Убирает повторные пункты верхнего уровня (без учёта регистра) вместе с их
+    подпунктами, оставляя первое вхождение. `parent_index` и позиции соседей
+    пересчитываются под сокращённый список."""
+    seen_titles: set[str] = set()
+    keep: set[int] = set()
+    for index, node in enumerate(nodes):
+        if node.node_type != NodeType.TOPIC:
+            continue
+        key = node.title.casefold()
+        if key in seen_titles:
+            continue
+        seen_titles.add(key)
+        keep.add(index)
+    for index, node in enumerate(nodes):
+        if node.node_type == NodeType.SUBPOINT and node.parent_index in keep:
+            keep.add(index)
+
+    remap: dict[int, int] = {}
+    result: list[ParsedNode] = []
+    top_position = 0
+    sibling_position: dict[int, int] = defaultdict(int)
+    for index, node in enumerate(nodes):
+        if index not in keep:
+            continue
+        remap[index] = len(result)
+        if node.node_type == NodeType.TOPIC:
+            position = top_position
+            top_position += 1
+        else:
+            parent_new = remap[node.parent_index]
+            position = sibling_position[parent_new]
+            sibling_position[parent_new] += 1
+        result.append(
+            ParsedNode(
+                parent_index=remap[node.parent_index] if node.parent_index is not None else None,
+                node_type=node.node_type,
+                exam_kind=node.exam_kind,
+                title=node.title,
+                position=position,
+            )
+        )
+    return result
+
+
+def import_composite_exam_draft(
+    session: Session, project_id: UUID, command: ExamCompositeDraftImportWrite
+) -> ExamCompositeDraftImportResult:
+    """Атомарно строит одну Программу из независимых слотов «список вопросов» и
+
+    «список задач»: используется объединённым мастером вместо двух раздельных
+    импортов, чтобы ревизия Программы увеличилась один раз.
+    """
+    project = _project(session, project_id, writable=True)
+    if project.workspace_variant.value != "exam":
+        raise ProjectConflictError("Составной импорт относится только к экзаменационному проекту")
+
+    def parsed_for(
+        material_id: UUID | None, slot: ExamMaterialSlot, kind: ExamKind
+    ) -> tuple[ParsedExamProgram | None, str | None]:
+        if material_id is None:
+            return None, None
+        material, link = _composite_slot_material(session, project_id, material_id, slot)
+        raw_text = _material_raw_text(session, material)
+        try:
+            parsed = parse_exam_list(raw_text, kind)
+        except ExamImportError as error:
+            raise ProjectConflictError(str(error), code="material_exam_parse_failed") from error
+        return parsed, link.display_name or material.original_name
+
+    question_parsed, question_name = parsed_for(
+        command.question_material_id, ExamMaterialSlot.QUESTION_LIST, ExamKind.QUESTION
+    )
+    task_parsed, task_name = parsed_for(
+        command.task_material_id, ExamMaterialSlot.TASK_LIST, ExamKind.TASK
+    )
+
+    try:
+        merged = _merge_parsed_programs(question_parsed, task_parsed)
+    except ExamImportError as error:
+        raise ProjectConflictError(str(error), code="material_exam_parse_failed") from error
+    if command.dedupe_duplicates:
+        merged.nodes = _dedupe_top_level(merged.nodes)
+        merged.questions, merged.tasks, merged.subpoints = count_exam_nodes(merged.nodes)
+
+    material_names = [name for name in (question_name, task_name) if name]
+    session.rollback()
+    change = program.replace_draft_program(
+        session,
+        project_id,
+        expected_draft_revision=command.expected_draft_revision,
+        expected_program_revision=command.expected_program_revision,
+        parsed=merged,
+        material_id=command.question_material_id or command.task_material_id,
+        material_name=" · ".join(material_names) or None,
+    )
+    return ExamCompositeDraftImportResult(
+        change=change,
+        counts={
+            "questions": merged.questions,
+            "tasks": merged.tasks,
+            "subpoints": merged.subpoints,
+        },
+        warnings=merged.warnings,
     )
 
 
