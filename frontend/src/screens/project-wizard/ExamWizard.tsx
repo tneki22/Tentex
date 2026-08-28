@@ -1152,44 +1152,6 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     }
   }
 
-  async function resolveDuplicates(resolution: "kept" | "removed") {
-    setActionError("");
-    try {
-      let nextWarnings = warnings;
-      let resolvedKey: string | null = null;
-      if (form.primaryMode === "text") {
-        resolvedKey = duplicatesKey(null);
-        if (resolution === "removed") {
-          const result = await controller.importExam(form.rawText, form.format as Exclude<ExamFormat, "unknown">, true);
-          nextWarnings = result.warnings;
-          setWarnings(result.warnings);
-          setCounts(result.counts);
-        }
-      } else {
-        const primary = materialsFor("exam_structure")[0];
-        if (primary) {
-          resolvedKey = duplicatesKey(primary.id);
-          await controller.enqueueProgramCommand((current) => importExamDraftProgramFromMaterial(
-            current.project.id,
-            primary.id,
-            current.draft.revision,
-            current.program.revision,
-            resolution === "removed",
-          ));
-          if (resolution === "removed") {
-            nextWarnings = [];
-            setWarnings([]);
-          }
-        }
-      }
-      setDuplicatesResolution(resolution);
-      setDuplicatesResolvedKey(resolvedKey);
-      await finishUpload(nextWarnings, resolution, resolvedKey);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Не удалось применить выбор по повторам");
-    }
-  }
-
   async function activate() {
     setActionError("");
     try {
