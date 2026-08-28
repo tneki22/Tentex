@@ -49,7 +49,7 @@ def create_exam_project(server: ApiServer) -> tuple[str, dict[str, object]]:
         },
     )
     assert status == 200
-    assert imported["counts"] == {"tickets": 0, "questions": 3, "tasks": 0}
+    assert imported["counts"] == {"tickets": 0, "questions": 3, "tasks": 0, "subpoints": 0}
     status, activated = request(
         server,
         "POST",

@@ -93,17 +93,17 @@ def check_import_variants(server: ApiServer) -> None:
         (
             "questions",
             "Вопросы:\n1. Индексы\n2. Транзакции",
-            {"tickets": 0, "questions": 2, "tasks": 0},
+            {"tickets": 0, "questions": 2, "tasks": 0, "subpoints": 0},
         ),
         (
             "questions",
             "Архитектура СУБД\nРеляционная модель",
-            {"tickets": 0, "questions": 2, "tasks": 0},
+            {"tickets": 0, "questions": 2, "tasks": 0, "subpoints": 0},
         ),
         (
             "questions_tasks",
             "Вопросы\n1. Индексы\nЗадачи\n1. Составить SQL-запрос",
-            {"tickets": 0, "questions": 1, "tasks": 1},
+            {"tickets": 0, "questions": 1, "tasks": 1, "subpoints": 0},
         ),
         (
             "tickets",
@@ -111,7 +111,7 @@ def check_import_variants(server: ApiServer) -> None:
                 "Билет № 1\n1. Транзакции и ACID,\n   уровни изоляции\n"
                 "2. Задача: нормализовать отношение"
             ),
-            {"tickets": 1, "questions": 1, "tasks": 1},
+            {"tickets": 1, "questions": 1, "tasks": 1, "subpoints": 0},
         ),
     ]
     for exam_format, raw_text, counts in cases:
