@@ -1,29 +1,26 @@
 import { useEffect, useState } from "react";
-import { FileText, Link2 } from "lucide-react";
+import { Link2 } from "lucide-react";
 import { Button, Dialog, RadioCards } from "../../components/ui";
 
 type AutoMatchMode = "headings" | "ai";
 
-interface AutoMatchDialogProps {
+interface AnswerMatchDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Режим «на основе заголовков»: нынешний разбор файла ответов. */
   onRunHeadings: () => void;
-  /** Запасной путь: разобрать ответы из сплошного текста страниц. */
-  onImportText: () => void;
 }
 
 /**
- * Одна точка входа автосопоставления вместо двух кнопок в разных вкладках.
+ * Сопоставление разделов готового файла ответов с вопросами программы.
  * Режим «на основе заголовков» — существующий детерминированный разбор файла
  * ответов; режим «с ИИ» — будущий проход 2 (этап 8), пока честная заглушка.
  */
-export function AutoMatchDialog({
+export function AnswerMatchDialog({
   open,
   onOpenChange,
   onRunHeadings,
-  onImportText,
-}: AutoMatchDialogProps) {
+}: AnswerMatchDialogProps) {
   const [mode, setMode] = useState<AutoMatchMode>("headings");
 
   // При каждом открытии возвращаемся к рекомендованному режиму.
@@ -35,8 +32,8 @@ export function AutoMatchDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title="Сопоставить ответы автоматически"
-      description="Разложить разделы файла ответов по вопросам программы."
+      title="Сопоставить с ответами"
+      description="Сопоставить разделы этого файла с вопросами программы."
       footer={
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Отмена</Button>
@@ -72,9 +69,6 @@ export function AutoMatchDialog({
         Чаще всего достаточно заголовков: если файл ответов подготовлен аккуратно,
         они сами лягут на вопросы. ИИ понадобится только для сложных случаев.
       </p>
-      <Button variant="ghost" onClick={() => { onOpenChange(false); onImportText(); }}>
-        <FileText size={14} /> Или вставить ответы текстом
-      </Button>
     </Dialog>
   );
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   confirmLibraryPageReview,
   controlLibraryProcessing,
@@ -12,7 +12,7 @@ import {
   type ParserMode,
   type ProcessingScope,
 } from "../../api/materials";
-import { LoadingState } from "../../components/ui";
+import { Button, ErrorState, LoadingState } from "../../components/ui";
 import { LibraryProcessingPanel } from "../library/LibraryProcessingPanel";
 import { MaterialRevisionPanel } from "../library/MaterialRevisionPanel";
 
@@ -48,8 +48,15 @@ export function MaterialProcessingPanels({
   const [revisions, setRevisions] = useState<MaterialRevisionRead[]>([]);
   const [busy, setBusy] = useState(false);
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const onErrorRef = useRef(onError);
+
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
+    setLoadError(null);
     try {
       const [next, history] = await Promise.all([
         getLibraryMaterial(materialId, signal),
@@ -60,15 +67,18 @@ export function MaterialProcessingPanels({
       setRevisions(history);
     } catch (caught) {
       if (signal?.aborted) return;
-      onError(caught instanceof Error ? caught.message : "Не удалось загрузить обработку файла");
+      const message = caught instanceof Error ? caught.message : "Не удалось загрузить обработку файла";
+      setLoadError(message);
+      onErrorRef.current(message);
     }
-  }, [materialId, onError]);
+  }, [materialId]);
 
   useEffect(() => {
     const controller = new AbortController();
     setDetail(null);
     setRevisions([]);
     setSelectedRevision(null);
+    setLoadError(null);
     void refresh(controller.signal);
     return () => controller.abort();
   }, [refresh]);
@@ -116,6 +126,14 @@ export function MaterialProcessingPanels({
     if (!page) return;
     void run(() => confirmLibraryPageReview(materialId, page.page_number));
   };
+
+  if (!detail && loadError) {
+    return (
+      <ErrorState title="Не удалось загрузить обработку" message={loadError}>
+        <Button variant="secondary" onClick={() => void refresh()}>Загрузить ещё раз</Button>
+      </ErrorState>
+    );
+  }
 
   if (!detail) return <LoadingState label="Загружаем обработку файла" />;
 

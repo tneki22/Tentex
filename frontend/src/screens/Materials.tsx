@@ -33,7 +33,6 @@ import { linkAnswersMaterial, listBindings, resolveAnswersHeading } from "../api
 import {
   getMaterialPage,
   materialFragmentAssetUrl,
-  importMaterialReferenceAnswers,
   materialPageImageUrl,
   updateMaterialPageText,
 } from "../api/materials";
@@ -68,7 +67,7 @@ import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTr
 import { AiCleanupPanel } from "./AiCleanupPanel";
 import { MaterialFileTab } from "./materials/MaterialFileTab";
 import { MaterialProcessingPanels } from "./materials/MaterialProcessingPanels";
-import { AutoMatchDialog } from "./materials/AutoMatchDialog";
+import { AnswerMatchDialog } from "./materials/AutoMatchDialog";
 import { StructuredPage } from "../components/domain/material-viewer";
 
 const EMPTY_STRING_SET: Set<string> = new Set();
@@ -737,8 +736,8 @@ interface BindingsTabProps {
   headingSuggestions: HeadingSuggestion[];
   onResolveHeading: (blockId: string, nodeId: string) => void;
   /** Файл эталонных ответов, разбор завершён — режим «по заголовкам» применим. */
-  canAutoMatch: boolean;
-  onOpenAutoMatch: () => void;
+  canMatchAnswers: boolean;
+  onOpenAnswerMatch: () => void;
 }
 
 /** «5. Реляционная модель…» — номер узла программы, если он известен. */
@@ -779,8 +778,8 @@ function BindingsTab({
   onRemoveAllInScope,
   headingSuggestions,
   onResolveHeading,
-  canAutoMatch,
-  onOpenAutoMatch,
+  canMatchAnswers,
+  onOpenAnswerMatch,
 }: BindingsTabProps) {
   const alreadyBoundToActive = activeNode
     ? focusedFragmentBindings.some((binding) => binding.program_node_id === activeNode.id)
@@ -798,14 +797,10 @@ function BindingsTab({
         ]}
       />
 
-      {canAutoMatch ? (
-        <Button variant="secondary" onClick={onOpenAutoMatch}>
-          <Sparkles size={14} /> Сопоставить автоматически
+      {canMatchAnswers && (
+        <Button variant="secondary" onClick={onOpenAnswerMatch}>
+          <Sparkles size={14} /> Сопоставить с ответами
         </Button>
-      ) : (
-        <Tooltip label="Автопривязка материала к темам появится на этапе 8 (проход 2) — тогда же появится подтверждение перед отправкой данных">
-          <Button variant="ghost" disabled>Сопоставить автоматически · этап 8</Button>
-        </Tooltip>
       )}
 
       <NoticeLine notice={notice} onDismiss={onDismissNotice} />
@@ -1141,7 +1136,7 @@ function MaterialSurface() {
   const [addOpen, setAddOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
-  const [autoMatchOpen, setAutoMatchOpen] = useState(false);
+  const [answerMatchOpen, setAnswerMatchOpen] = useState(false);
   const [pageNumber, setPageNumber] = useState(1);
   const [page, setPage] = useState<MaterialPageRead | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -1729,16 +1724,6 @@ function MaterialSurface() {
     }
   }
 
-  async function importAnswers() {
-    if (!material) return;
-    try {
-      const result = await importMaterialReferenceAnswers(projectId, material.id);
-      say(`Создано эталонов: ${result.created}; пропущено существующих: ${result.skipped_existing}.`, "success");
-    } catch (caught) {
-      say(caught instanceof Error ? caught.message : "Импорт не выполнен", "danger");
-    }
-  }
-
   async function saveFileSettings(command: MaterialUpdateCommand) {
     if (!material) return null;
     const updated = await store.update(material.id, command);
@@ -1977,8 +1962,8 @@ function MaterialSurface() {
             headingSuggestions:
               answersSuggestions?.materialId === material.id ? answersSuggestions.items : [],
             onResolveHeading: (blockId, nodeId) => void resolveHeading(blockId, nodeId),
-            canAutoMatch: material.status === "ready" && material.purposes.includes("reference_answers"),
-            onOpenAutoMatch: () => setAutoMatchOpen(true),
+            canMatchAnswers: material.status === "ready" && material.purposes.includes("reference_answers"),
+            onOpenAnswerMatch: () => setAnswerMatchOpen(true),
           }}
         />
       )}
@@ -1988,11 +1973,10 @@ function MaterialSurface() {
         tree={treeResult}
         onSelect={handlePickNode}
       />
-      <AutoMatchDialog
-        open={autoMatchOpen}
-        onOpenChange={setAutoMatchOpen}
+      <AnswerMatchDialog
+        open={answerMatchOpen}
+        onOpenChange={setAnswerMatchOpen}
         onRunHeadings={() => void linkAnswers()}
-        onImportText={() => void importAnswers()}
       />
       <AddMaterialDialog
         open={addOpen}
