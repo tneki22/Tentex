@@ -235,7 +235,6 @@ class AiRunRead(ApiModel):
     actual_model_id: str | None
     prompt_version: str
     request_hash: str
-    context_manifest: list[dict[str, Any]]
     estimated_input_tokens: int
     estimated_output_tokens: int
     estimated_cost_usd: Decimal | None

@@ -228,7 +228,6 @@ export interface AiRunRead {
   actual_model_id: string | null;
   prompt_version: string;
   request_hash: string;
-  context_manifest: Array<Record<string, unknown>>;
   estimated_input_tokens: number;
   estimated_output_tokens: number;
   estimated_cost_usd: DecimalValue | null;
