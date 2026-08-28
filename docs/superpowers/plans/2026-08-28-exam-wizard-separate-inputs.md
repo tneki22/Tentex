@@ -39,7 +39,7 @@
 - Produces: `exam_slot` support in upload, text creation, update and Library attachment commands.
 - Produces: `MaterialRead.exam_slot` and `ExamMaterialSlot` in the frontend API.
 
-- [ ] **Step 1: Add the model and migration**
+- [x] **Step 1: Add the model and migration**
 
 Add the enum and nullable indexed column:
 
@@ -56,13 +56,13 @@ exam_slot: Mapped[str | None] = mapped_column(String(32), nullable=True, index=T
 Migration `20260828_0025` uses the current Alembic head as `down_revision`, adds the
 column and a non-unique index, and leaves existing rows `NULL`.
 
-- [ ] **Step 2: Carry the slot through API schemas and reads**
+- [x] **Step 2: Carry the slot through API schemas and reads**
 
 Add `exam_slot: ExamMaterialSlot | None = None` to `TextMaterialCreate`, external/create
 inputs that attach to a project, `MaterialUpdate`, Library attach input and `MaterialRead`.
 Pass it through `_attach()`, `update_material()`, Library attachment and `_read()`.
 
-- [ ] **Step 3: Enforce slot invariants**
+- [x] **Step 3: Enforce slot invariants**
 
 Add a shared guard with this contract:
 
@@ -80,13 +80,13 @@ Question/task list slots require `exam_structure`; answer slots require
 `reference_answers`. Replace the old project-wide single-answer guard with one answer
 per explicit slot while preserving the legacy rule for `exam_slot is None`.
 
-- [ ] **Step 4: Update frontend material calls**
+- [x] **Step 4: Update frontend material calls**
 
 Extend `MaterialRead`, `uploadMaterial`, `createTextMaterial`, `updateMaterial` and
 Library attachment calls with optional `exam_slot`. Extend the material hook mutation
 arguments without changing callers that omit the field.
 
-- [ ] **Step 5: Test and verify the slot contract**
+- [x] **Step 5: Test and verify the slot contract**
 
 Add API tests for round-trip serialization, two different answer slots, rejection of a
 duplicate slot, purpose/slot mismatch and an unchanged legacy answer file. Run:
@@ -97,7 +97,7 @@ python -m pytest tests/test_materials_api.py -q
 python -m ruff check app/models.py app/materials tests/test_materials_api.py migrations/versions/20260828_0025_exam_material_slots.py
 ```
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 ```powershell
 git add backend/app/models.py backend/app/materials backend/migrations/versions/20260828_0025_exam_material_slots.py backend/tests/test_materials_api.py frontend/src/api/materials.ts frontend/src/hooks/useProjectMaterials.ts
@@ -123,7 +123,7 @@ git commit -m "feat: add exam material slots"
 - Produces: `ExamProgramPreview.subpoints` and `ExamImportCounts.subpoints`.
 - Consumes: `ProjectMaterial.exam_slot` from Task 1.
 
-- [ ] **Step 1: Parse deterministic subpoints**
+- [x] **Step 1: Parse deterministic subpoints**
 
 Add a strict marker:
 
@@ -138,7 +138,7 @@ When a marker follows its matching top-level number, create `ParsedNode` with
 `exam_kind`. Reject deeper decimal forms as continuation text and emit a warning for a
 parent mismatch. Keep top-level question/task counts separate from `subpoints`.
 
-- [ ] **Step 2: Extract a list parser with explicit default kind**
+- [x] **Step 2: Extract a list parser with explicit default kind**
 
 Introduce:
 
@@ -155,7 +155,7 @@ def parse_exam_list(
 `parse_exam_program()` delegates flat legacy formats to it. `QUESTIONS_TASKS` legacy
 input still honours `Вопросы` and `Задачи` section headers.
 
-- [ ] **Step 3: Add atomic composite material import**
+- [x] **Step 3: Add atomic composite material import**
 
 Add request shape:
 
@@ -174,12 +174,12 @@ task parent indexes after question nodes, merges warnings/duplicates and calls t
 existing draft-program replacement once. Expose it as
 `POST /projects/{project_id}/materials/exam-composite-draft-import`.
 
-- [ ] **Step 4: Update API counts and frontend call**
+- [x] **Step 4: Update API counts and frontend call**
 
 Add `subpoints` to preview/import counts with default `0` for compatibility. Add
 `importCompositeExamDraftProgram(projectId, command)` to `frontend/src/api/materials.ts`.
 
-- [ ] **Step 5: Test parsing and composite order**
+- [x] **Step 5: Test parsing and composite order**
 
 Cover `1.1`, `1.2`, `N.M)`, parent mismatch, one-level limit, top-level counts,
 question-only, task-only, both materials, duplicate handling and the single revision
@@ -191,7 +191,7 @@ python -m pytest tests/test_exam_importer.py tests/test_numbered_series.py tests
 python -m ruff check app/projects/importer.py app/materials tests/test_exam_importer.py tests/test_numbered_series.py tests/test_materials_api.py
 ```
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
 
 ```powershell
 git add backend/app/projects/importer.py backend/app/projects/schemas.py backend/app/materials backend/tests/test_exam_importer.py backend/tests/test_numbered_series.py backend/tests/test_materials_api.py frontend/src/api/materials.ts
@@ -210,20 +210,20 @@ git commit -m "feat: import separate question and task lists"
 - Produces: `_ordered_study_nodes(session, project_id, exam_kind=None)`.
 - Preserves: legacy answer materials without a slot see the full depth-first tree.
 
-- [ ] **Step 1: Scope answer nodes by slot**
+- [x] **Step 1: Scope answer nodes by slot**
 
 Change the ordered-node helper to accept `ExamKind | None`. In
 `link_answers_material()`, map `question_answers → QUESTION`,
 `task_answers → TASK`, and `None → no filter`. Keep parent-before-subpoint depth-first
 order inside each filtered set.
 
-- [ ] **Step 2: Keep replacement and worker behaviour slot-aware**
+- [x] **Step 2: Keep replacement and worker behaviour slot-aware**
 
 Ensure parsing each ready answer material links only its scoped nodes. Reprocessing one
 answer material removes and recreates only bindings sourced from that material; answers
 from the other slot remain intact.
 
-- [ ] **Step 3: Test independent numbering and subpoint headings**
+- [x] **Step 3: Test independent numbering and subpoint headings**
 
 Create a project with question #1, its subpoint, task #1 and its subpoint. Verify that
 two answer files both numbered from one link to their own kind, exact subpoint headings
@@ -237,7 +237,7 @@ python -m pytest tests/test_answers_link.py -q
 python -m ruff check app/bindings/answers_link.py app/materials/worker.py tests/test_answers_link.py
 ```
 
-- [ ] **Step 4: Commit Task 3**
+- [x] **Step 4: Commit Task 3**
 
 ```powershell
 git add backend/app/bindings/answers_link.py backend/app/materials/worker.py backend/tests/test_answers_link.py
@@ -259,41 +259,41 @@ git commit -m "feat: scope answer linking by exam slot"
 - Produces: `ExamImportGuide`, a default-open existing `Disclosure` with static copy.
 - Preserves: tickets and unknown-list paths; legacy drafts remain finishable.
 
-- [ ] **Step 1: Split wizard form state into four inputs**
+- [x] **Step 1: Split wizard form state into four inputs**
 
 Replace `rawText`, `answersText`, `hasAnswers`, `primaryMode`, `answersMode` with slot
 records for `question_list`, `question_answers`, `task_list`, `task_answers`. Restore new
 keys when present and map legacy keys to a legacy path. Derive `ExamFormat` as
 `questions_tasks` when the task list is selected, otherwise `questions`.
 
-- [ ] **Step 2: Replace the format and material cards**
+- [x] **Step 2: Replace the format and material cards**
 
 Offer only three format cards. The combined card uses the exact requested title and
 description. On step 2 render the five-card grid from the specification, require one
 list, disable dependent answer cards until their list is selected, and use concise
 inline recovery text.
 
-- [ ] **Step 3: Add the guide before upload panels**
+- [x] **Step 3: Add the guide before upload panels**
 
 Create `ExamImportGuide.tsx` using the existing `Disclosure`. Render it immediately
 after the step-3 intro and before the first `ExamMaterialUploadPanel`. Use the full copy
 and example from the design document, with `defaultOpen`/local state so it starts open.
 
-- [ ] **Step 4: Render and upload slot panels in fixed order**
+- [x] **Step 4: Render and upload slot panels in fixed order**
 
 Give `ExamMaterialUploadPanel` an `examSlot` prop and pass it into file/text creation.
 Render selected panels in order: questions, question answers, tasks, task answers,
 study materials. After required materials are ready, call composite import, show counts
 including subpoints, and preserve duplicate resolution behaviour.
 
-- [ ] **Step 5: Polish spacing without inventing tokens**
+- [x] **Step 5: Polish spacing without inventing tokens**
 
 Make step-2 cards content-height, keep the study card wide, and set exactly one existing
 spacing token between `.wizard-material-grid` and `.wizard-context-note`. Style the
 guide as a structural surface using existing paper/line/accent tokens. Check focus,
 hover, open and closed states and the existing 900px breakpoint.
 
-- [ ] **Step 6: Verify frontend compile**
+- [x] **Step 6: Verify frontend compile**
 
 Run:
 
@@ -302,7 +302,7 @@ npm run typecheck
 npm run build
 ```
 
-- [ ] **Step 7: Commit Task 4**
+- [x] **Step 7: Commit Task 4**
 
 ```powershell
 git add frontend/src/screens/project-wizard frontend/src/hooks/useWizardDraft.ts frontend/src/api frontend/src/styles/layout.css
@@ -320,13 +320,13 @@ git commit -m "feat: unify question and task wizard inputs"
 **Interfaces:**
 - Documents: final file format, slots, subpoints, ordering, UI states and compatibility.
 
-- [ ] **Step 1: Update documentation to factual behaviour**
+- [x] **Step 1: Update documentation to factual behaviour**
 
 Replace the old four-card and single-answer descriptions in `SCREENS.md`; document the
 new material slot/API contract in the architecture file. Mark this design `implemented`
 and check completed plan boxes only after the corresponding evidence exists.
 
-- [ ] **Step 2: Run full backend verification**
+- [x] **Step 2: Run full backend verification**
 
 ```powershell
 cd backend
@@ -339,7 +339,7 @@ python scripts/check_stage5.py
 
 Expected: every command exits `0`; pytest reports no failures.
 
-- [ ] **Step 3: Run full frontend verification**
+- [x] **Step 3: Run full frontend verification**
 
 ```powershell
 cd ..
@@ -350,7 +350,7 @@ npm run lint
 
 Expected: every command exits `0`.
 
-- [ ] **Step 4: Restart and inspect the live wizard**
+- [x] **Step 4: Restart and inspect the live wizard**
 
 ```powershell
 docker compose restart api web
@@ -360,6 +360,26 @@ Open `http://localhost:5173`, create an exam draft and verify steps 1–3 at des
 narrow desktop widths, guide open/closed and keyboard focus, independent selection of
 lists and answers, spacing before the system opinion, light/dark themes, and the upload
 order. Save screenshots under `output/playwright/`.
+
+**Deviation:** this worktree has no `docker-compose.yml`/`data/` (both are
+gitignored and only exist in the main checkout, not copied into `.worktrees/`).
+Ran `backend` (uvicorn on a scratch port) and `frontend` (`vite` dev server)
+directly instead, against a freshly migrated database. Verified live: format
+step shows three cards; materials step renders the five-slot grid, requires at
+least one list before continuing, and disables the dependent answer card with
+an explanatory reason until its list is picked; upload step shows the
+guide open by default, collapsible via click (state toggle confirmed both
+directions), panels in the fixed slot order; composite import of a pasted
+question list (with a `1.1`/`1.2` subpoint) and task list produced one Program
+with questions before tasks, the subpoint under the right parent, and
+`3 вопроса · 2 задачи · 2 подпункта`; after activating the project, a question-
+answers file and a task-answers file — both with identical per-node headings —
+auto-linked strictly to their own kind, verified against
+`ReferenceAnswer.source_material_id` directly in the database (no cross-slot
+bleed). Supplementary pass at 768×1024 with dark color-scheme emulation: no
+horizontal overflow, dark tokens applied, disabled-card background distinct
+from enabled. No screenshots saved (this session's browser pane could not
+render `computer` screenshots), so `output/playwright/` was not populated.
 
 - [ ] **Step 5: Review the final diff and commit documentation**
 
