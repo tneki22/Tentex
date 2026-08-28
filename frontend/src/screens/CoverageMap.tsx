@@ -6,12 +6,17 @@ import {
   Check,
   FileInput,
   FileText,
-  Paperclip,
   Save,
+  ScanLine,
   Trash2,
-  X,
 } from "lucide-react";
-import { listBindings, type BindingFragmentRead } from "../api/bindings";
+import {
+  linkAnswersMaterial,
+  listBindings,
+  resolveAnswersHeading,
+  type BindingFragmentRead,
+  type HeadingSuggestion,
+} from "../api/bindings";
 import { materialFragmentAssetUrl } from "../api/materials";
 import {
   addAnswerAttachment,
@@ -33,7 +38,16 @@ import {
   type ReferenceAnswerImportResult,
   type ReferenceAnswerSlot,
 } from "../api/projects";
-import { GOAL_LEVELS, ProjectNav, ReferenceAnswerBadge } from "../components/domain";
+import {
+  AnswerScanPages,
+  answerScanGroups,
+  AutoMatchDialog,
+  GOAL_LEVELS,
+  LibraryMaterialPickerDialog,
+  ProjectNav,
+  ReferenceAnswerBadge,
+  scanPageCount,
+} from "../components/domain";
 import {
   Button,
   ConfirmDialog,
@@ -43,11 +57,18 @@ import {
   Field,
   LoadingState,
   PageHead,
+  SegmentedTabs,
   Tooltip,
 } from "../components/ui";
 import { buildProgramTree, flattenProgramTree } from "./programTree";
 import { useRecentAnswers } from "../hooks/useRecentAnswers";
+import { useAnswerFileMode, useAnswerViewMode } from "../hooks/useAnswerViewMode";
+import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
+import { AnswerEditor } from "./answers/AnswerEditor";
+import { AnswerFileList, type AnswerFile } from "./answers/AnswerFileList";
+import { AnswerHeadingSuggestions } from "./answers/AnswerHeadingSuggestions";
+import { AnswerSourceDialog } from "./answers/AnswerSourceDialog";
 
 type CoverageFilter = "all" | "with_answer" | "missing" | "needs_review" | "outside";
 
@@ -62,12 +83,6 @@ function requestErrorMessage(error: unknown): string {
 
 function isStudyRow(row: CoverageMapRow): boolean {
   return row.node_type === "topic" || row.node_type === "subpoint";
-}
-
-function sizeLabel(bytes: number): string {
-  if (bytes < 1024) return `${bytes} Б`;
-  if (bytes < 1024 ** 2) return `${Math.round(bytes / 1024)} КБ`;
-  return `${(bytes / 1024 ** 2).toFixed(1)} МБ`;
 }
 
 function filterRows(rows: CoverageMapRow[], filter: CoverageFilter, query: string): CoverageMapRow[] {
@@ -134,11 +149,20 @@ export function CoverageMap() {
   const [importText, setImportText] = useState("");
   const [importSource, setImportSource] = useState("");
   const [importResult, setImportResult] = useState<ReferenceAnswerImportResult | null>(null);
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const [autoMatchOpen, setAutoMatchOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [suggestions, setSuggestions] = useState<HeadingSuggestion[]>([]);
   const [attachments, setAttachments] = useState<ReferenceAnswerAttachment[]>([]);
-  const [boundImages, setBoundImages] = useState<BindingFragmentRead[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [nodeBindings, setNodeBindings] = useState<BindingFragmentRead[]>([]);
   const answerTextRef = useRef<HTMLTextAreaElement>(null);
   const { recent, recordSave } = useRecentAnswers(projectId);
+  const { mode: viewMode, setMode: setViewMode } = useAnswerViewMode(projectId);
+  const { mode: fileMode, setMode: setFileMode } = useAnswerFileMode();
+  const store = useProjectMaterials(projectId);
+  const answersMaterial = store.materials.find(
+    (item) => item.purposes.includes("reference_answers"),
+  ) ?? null;
 
   async function load(signal?: AbortSignal) {
     setLoading(true);
@@ -193,16 +217,16 @@ export function CoverageMap() {
   useEffect(() => {
     if (!selectedId || detail?.project.workspace_variant !== "exam") {
       setAttachments([]);
-      setBoundImages([]);
+      setNodeBindings([]);
       return;
     }
     const controller = new AbortController();
     void listAnswerAttachments(projectId, selectedId, controller.signal)
       .then(setAttachments)
       .catch(() => undefined);
-    // Картинки из материала копировать не надо: они уже привязаны к вопросу.
+    // Привязки вопроса дают и страницы для режима сканов, и картинки для текста.
     void listBindings(projectId, { nodeId: selectedId }, controller.signal)
-      .then((items) => setBoundImages(items.filter((item) => item.text === IMAGE_PLACEHOLDER)))
+      .then(setNodeBindings)
       .catch(() => undefined);
     return () => controller.abort();
   }, [detail?.project.workspace_variant, projectId, selectedId]);
@@ -217,6 +241,10 @@ export function CoverageMap() {
     }
     return map;
   }, [detail?.program.nodes]);
+  const materialNames = useMemo(
+    () => new Map(store.materials.map((item) => [item.id, item.display_name])),
+    [store.materials],
+  );
   const shownRows = useMemo(
     () => filterRows(coverage?.rows ?? [], filter, query),
     [coverage?.rows, filter, query],
@@ -229,7 +257,49 @@ export function CoverageMap() {
     answerDraft !== (hasActiveAnswer ? slot?.answer?.text ?? "" : "")
     || sourceDraft !== (hasActiveAnswer ? slot?.answer?.source_label ?? "" : "")
   );
+  const scanGroups = useMemo(
+    () => answerScanGroups(slot?.answer ?? null, nodeBindings, materialNames),
+    [slot?.answer, nodeBindings, materialNames],
+  );
 
+  function attachmentMarker(file: ReferenceAnswerAttachment): string {
+    return file.media_type.startsWith("image/")
+      ? `[изображение: ${attachmentImageLabel(file.file_name, file.id)}]`
+      : `[файл: ${file.file_name}]`;
+  }
+
+  const answerFiles = useMemo<AnswerFile[]>(() => [
+    ...nodeBindings
+      .filter((binding) => ["image", "table"].includes(binding.element_kind) || binding.text === IMAGE_PLACEHOLDER)
+      .map((binding) => ({
+        key: binding.id,
+        kind: "image" as const,
+        origin: "material" as const,
+        name: binding.asset_label ?? `Изображение со страницы ${binding.page_number}`,
+        marker: binding.asset_label ? `[изображение: ${binding.asset_label}]` : IMAGE_PLACEHOLDER,
+        url: materialFragmentAssetUrl(projectId, binding.material_id, binding.fragment_id),
+        pageNumber: binding.page_number,
+      })),
+    ...attachments.map((file) => ({
+      key: file.id,
+      kind: file.media_type.startsWith("image/") ? "image" as const : "file" as const,
+      origin: "attachment" as const,
+      name: file.file_name,
+      marker: attachmentMarker(file),
+      url: answerAttachmentUrl(projectId, file.id),
+      sizeBytes: file.size_bytes,
+      attachmentId: file.id,
+    })),
+  ], [nodeBindings, attachments, projectId]);
+
+  async function reloadNode(nodeId: string) {
+    const [nextAttachments, nextBindings] = await Promise.all([
+      listAnswerAttachments(projectId, nodeId).catch(() => attachments),
+      listBindings(projectId, { nodeId }).catch(() => nodeBindings),
+    ]);
+    setAttachments(nextAttachments);
+    setNodeBindings(nextBindings);
+  }
 
   async function refresh(nextCoverage?: CoverageMapRead) {
     const map = nextCoverage ?? await getCoverageMap(projectId);
@@ -239,6 +309,7 @@ export function CoverageMap() {
       setSlot(nextSlot);
       setAnswerDraft(nextSlot.answer?.is_active ? nextSlot.answer.text : "");
       setSourceDraft(nextSlot.answer?.is_active ? nextSlot.answer.source_label ?? "" : "");
+      await reloadNode(selectedId);
     }
   }
 
@@ -287,16 +358,87 @@ export function CoverageMap() {
     }
   }
 
-  async function addAttachments(files: FileList | null) {
-    if (!files || files.length === 0 || !selectedRow) return;
-    const nodeId = selectedRow.node_id;
+  /** Кнопка одна, а состояний файла ответов четыре — развилка живёт здесь. */
+  function openAnswersFile() {
+    setCommandError("");
+    setNotice("");
+    if (answersMaterial?.status === "ready") setAutoMatchOpen(true);
+    else setSourceOpen(true);
+  }
+
+  async function runHeadingsMatch() {
+    if (!answersMaterial || busy) return;
+    setBusy(true);
+    setCommandError("");
+    setNotice("");
+    try {
+      const result = await linkAnswersMaterial(projectId, answersMaterial.id);
+      setSuggestions(result.suggestions);
+      await refresh();
+      const parts = [
+        `связано вопросов: ${result.linked_node_ids.length} из ${result.expected_questions}`,
+        `эталонов создано: ${result.created_answers}`,
+      ];
+      if (result.updated_answers) parts.push(`обновлено: ${result.updated_answers}`);
+      if (result.kept_answers) parts.push(`оставлено своих: ${result.kept_answers}`);
+      if (result.missing_node_ids.length) parts.push(`без ответа: ${result.missing_node_ids.length}`);
+      if (result.suggestions.length) parts.push(`нужно выбрать вопрос: ${result.suggestions.length}`);
+      setNotice(`Файл ответов разобран: ${parts.join(", ")}.`);
+    } catch (error) {
+      setCommandError(requestErrorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resolveHeading(anchorFragmentId: string, nodeId: string) {
+    if (!answersMaterial || busy) return;
     setBusy(true);
     setCommandError("");
     try {
-      for (const file of Array.from(files)) {
-        const created = await addAnswerAttachment(projectId, nodeId, file);
-        setAttachments((current) => [...current, created]);
-      }
+      const result = await resolveAnswersHeading(projectId, answersMaterial.id, {
+        anchorFragmentId,
+        programNodeId: nodeId,
+      });
+      setSuggestions(result.suggestions);
+      await refresh();
+      setNotice("Заголовок привязан к вопросу. Выбор запомнится для повторной привязки.");
+    } catch (error) {
+      setCommandError(requestErrorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadAnswersFile(file: File) {
+    setCommandError("");
+    const created = await store.upload(file, "reference", ["reference_answers"]);
+    if (!created) {
+      setCommandError(store.error ?? "Файл не загрузился");
+      return;
+    }
+    // Разбор запускается сразу: по его завершении воркер сам разложит ответы.
+    await store.start(created.id, "fast");
+    setNotice("Файл добавлен и отправлен на разбор. Ответы разложатся по вопросам автоматически.");
+  }
+
+  async function uploadAnswerImages(files: File[]): Promise<string[]> {
+    if (!selectedRow) return [];
+    const markers: string[] = [];
+    for (const file of files) {
+      const created = await addAnswerAttachment(projectId, selectedRow.node_id, file);
+      setAttachments((current) => [...current, created]);
+      markers.push(attachmentMarker(created));
+    }
+    return markers;
+  }
+
+  async function addAttachments(files: FileList | null) {
+    if (!files || files.length === 0 || !selectedRow) return;
+    setBusy(true);
+    setCommandError("");
+    try {
+      await uploadAnswerImages(Array.from(files));
       setNotice("Файл прикреплён к ответу.");
     } catch (error) {
       setCommandError(requestErrorMessage(error));
@@ -318,14 +460,7 @@ export function CoverageMap() {
     }
   }
 
-  function attachmentMarker(file: ReferenceAnswerAttachment): string {
-    return file.media_type.startsWith("image/")
-      ? `[изображение: ${attachmentImageLabel(file.file_name, file.id)}]`
-      : `[файл: ${file.file_name}]`;
-  }
-
-  function insertAttachmentMarker(file: ReferenceAnswerAttachment) {
-    const marker = attachmentMarker(file);
+  function insertMarker(marker: string) {
     const input = answerTextRef.current;
     const start = input?.selectionStart ?? answerDraft.length;
     const end = input?.selectionEnd ?? start;
@@ -376,11 +511,28 @@ export function CoverageMap() {
       <main className="program-main coverage-main">
         <PageHead
           title="Ответы"
-          actions={<Button disabled={readOnly} onClick={() => { setImportResult(null); setImportOpen(true); }}><FileInput size={15} />Импортировать</Button>}
+          actions={
+            <div className="coverage-head-actions">
+              <Button variant="secondary" disabled={readOnly} onClick={() => { setImportResult(null); setImportOpen(true); }}>
+                <FileText size={15} />Импортировать текстом
+              </Button>
+              <Button disabled={readOnly} onClick={openAnswersFile}>
+                <FileInput size={15} />Из файла ответов
+              </Button>
+            </div>
+          }
         />
         {readOnly && <p className="inline-warning">Проект доступен только для чтения. Верните его в активные, чтобы менять эталоны.</p>}
         {commandError && <p className="inline-error" role="alert">{commandError}</p>}
         {notice && <p className="coverage-notice" role="status">{notice}</p>}
+
+        <AnswerHeadingSuggestions
+          suggestions={suggestions}
+          nodeNumberById={numberByNodeId}
+          busy={busy}
+          onResolve={(anchor, nodeId) => void resolveHeading(anchor, nodeId)}
+          onDismiss={() => setSuggestions([])}
+        />
 
         <section className="coverage-summary" aria-label="Сводка по эталонам">
           <span><strong>{coverage.totals.with_answer}</strong> из {coverage.totals.study_nodes}<small>есть ответ</small></span>
@@ -392,9 +544,18 @@ export function CoverageMap() {
         <div className="coverage-toolbar">
           <label><span className="sr-only">Поиск по вопросам</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти вопрос" /></label>
           <label><span className="sr-only">Фильтр эталонов</span><select value={filter} onChange={(event) => setFilter(event.target.value as CoverageFilter)}><option value="all">Текущая программа</option><option value="with_answer">Есть ответ</option><option value="missing">Нет ответа</option><option value="needs_review">Нужно проверить</option><option value="outside">Вне текущей программы</option></select></label>
+          <SegmentedTabs
+            label="Как показывать ответ"
+            value={viewMode}
+            onChange={setViewMode}
+            tabs={[
+              { value: "text", label: "Текст и картинки" },
+              { value: "scans", label: "Страницы документа" },
+            ]}
+          />
         </div>
 
-        <div className="coverage-editor-grid">
+        <div className={`coverage-editor-grid ${viewMode === "scans" ? "is-scans" : ""}`.trim()}>
           <section className="coverage-list" aria-label="Вопросы и эталоны">
             {shownRows.map((row) => {
               const study = isStudyRow(row);
@@ -440,84 +601,84 @@ export function CoverageMap() {
                   пока здесь не появится текстовый эталон.
                 </p>
               )}
-              <Field label="Эталонный ответ" required><textarea ref={answerTextRef} rows={12} value={answerDraft} disabled={readOnly || busy} onChange={(event) => { setAnswerDraft(event.target.value); setNotice(""); }} placeholder="Добавьте короткий образцовый ответ по вопросу" /></Field>
+
+              {viewMode === "scans" && (
+                scanGroups.length > 0
+                  ? <AnswerScanPages projectId={projectId} groups={scanGroups} />
+                  : (
+                    <div className="answer-scans-empty">
+                      <ScanLine size={22} aria-hidden="true" />
+                      <b>У этого вопроса нет страниц в документе</b>
+                      <p>
+                        Страницы появляются у ответов из файла эталонных ответов и у вопросов
+                        с ручной привязкой в Материалах. Текст ответа можно вписать ниже.
+                      </p>
+                      <Button variant="secondary" disabled={readOnly} onClick={openAnswersFile}>
+                        <FileInput size={15} />Из файла ответов
+                      </Button>
+                    </div>
+                  )
+              )}
+
+              <Field
+                label="Эталонный ответ"
+                required={viewMode === "text"}
+                hint={viewMode === "scans"
+                  ? `Сверху — ${scanPageCount(scanGroups)} стр. оригинала. Здесь распознанный текст: его можно дополнить своими словами и картинками.`
+                  : undefined}
+              >
+                <AnswerEditor
+                  value={answerDraft}
+                  disabled={readOnly || busy}
+                  textareaRef={answerTextRef}
+                  onChange={(next) => { setAnswerDraft(next); setNotice(""); }}
+                  onUploadFiles={uploadAnswerImages}
+                />
+              </Field>
+
+              <AnswerFileList
+                files={answerFiles}
+                mode={fileMode}
+                onModeChange={setFileMode}
+                disabled={readOnly || busy}
+                onInsert={(file) => insertMarker(file.marker)}
+                onRemove={(attachmentId) => void removeAttachment(attachmentId)}
+                onAdd={(files) => void addAttachments(files)}
+              />
+
               <Field label="Источник" hint="Необязательно: название конспекта или документа"><input value={sourceDraft} disabled={readOnly || busy} onChange={(event) => setSourceDraft(event.target.value)} /></Field>
 
-              {boundImages.length > 0 && (
-                <div className="coverage-attachments-field">
-                  <div className="field-head"><label>Картинки из материала</label></div>
-                  <div className="coverage-bound-images">
-                    {boundImages.map((binding) => (
-                      <Link
-                        className="coverage-bound-image"
-                        key={binding.id}
-                        to={`/projects/${projectId}/materials/${binding.material_id}?page=${binding.page_number}&focus=${binding.fragment_id}`}
-                      >
-                        <img
-                          src={materialFragmentAssetUrl(projectId, binding.material_id, binding.fragment_id)}
-                          alt={`Изображение со страницы ${binding.page_number}`}
-                          loading="lazy"
-                        />
-                        <small>стр. {binding.page_number}</small>
-                      </Link>
-                    ))}
-                  </div>
-                  <small className="field-hint">
-                    Приехали из привязок этого вопроса. Убрать — сняв привязку в материалах.
-                  </small>
-                </div>
-              )}
-
-              <div className="coverage-attachments-field">
-                <div className="field-head"><label>Свои файлы к ответу</label></div>
-                <div className="coverage-attachments">
-                  {attachments.map((file) => (
-                    <span className="coverage-attachment-chip" key={file.id}>
-                      <Paperclip size={13} aria-hidden="true" />
-                      <a className="coverage-attachment-name" href={answerAttachmentUrl(projectId, file.id)} target="_blank" rel="noreferrer">{file.file_name}</a>
-                      <small>{sizeLabel(file.size_bytes)}</small>
-                      <span className="coverage-attachment-marker">{attachmentMarker(file)}</span>
-                      <button type="button" className="coverage-attachment-insert" disabled={readOnly || busy} onClick={() => insertAttachmentMarker(file)}>Вставить</button>
-                      <button type="button" disabled={readOnly || busy} onClick={() => void removeAttachment(file.id)} aria-label={`Убрать файл «${file.file_name}»`}><X size={12} /></button>
-                    </span>
-                  ))}
-                  <button type="button" className="coverage-attachment-add" disabled={readOnly || busy} onClick={() => fileInputRef.current?.click()}>
-                    <Paperclip size={14} />Прикрепить файл
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    accept="image/*,.pdf,.docx,.txt,.md"
-                    className="materials-file-input"
-                    onChange={(event) => { void addAttachments(event.target.files); event.target.value = ""; }}
-                  />
-                </div>
-                <small className="field-hint">Изображения, PDF, DOCX, TXT и MD — до 20 МБ. Хранятся вместе с проектом.</small>
-              </div>
-
-              <Button
-                className="coverage-primary-action"
-                disabled={readOnly || busy || !answerDraft.trim() || !dirty}
-                onClick={() => void run(
-                  () => putReferenceAnswer(projectId, selectedRow.node_id, { expected_revision: slot.answer?.revision ?? null, text: answerDraft, source_label: sourceDraft.trim() || null }),
-                  hasActiveAnswer ? "Ответ сохранён." : "Ответ добавлен.",
-                  () => recordSave(selectedRow.node_id),
+              <div className="coverage-inspector-actions">
+                <Button
+                  className="coverage-primary-action"
+                  disabled={readOnly || busy || !answerDraft.trim() || !dirty}
+                  onClick={() => void run(
+                    () => putReferenceAnswer(projectId, selectedRow.node_id, { expected_revision: slot.answer?.revision ?? null, text: answerDraft, source_label: sourceDraft.trim() || null }),
+                    hasActiveAnswer ? "Ответ сохранён." : "Ответ добавлен.",
+                    () => recordSave(selectedRow.node_id),
+                  )}
+                >
+                  <Save size={16} />Сохранить
+                </Button>
+                {slot.answer?.is_active && slot.status !== "confirmed" && slot.status !== "manual" && (
+                  <Button
+                    variant="secondary"
+                    className="coverage-primary-action"
+                    disabled={readOnly || busy}
+                    onClick={() => void run(() => confirmReferenceAnswer(projectId, selectedRow.node_id, slot.answer!.revision), "Автоматическое сопоставление подтверждено.")}
+                  >
+                    <Check size={16} />Подтвердить
+                  </Button>
                 )}
-              >
-                <Save size={16} />Сохранить
-              </Button>
-
-              {(slot.answer?.is_active) && (
-                <div className="coverage-inspector-actions">
-                  {slot.status !== "confirmed" && slot.status !== "manual" && <Button variant="secondary" disabled={readOnly || busy} onClick={() => void run(() => confirmReferenceAnswer(projectId, selectedRow.node_id, slot.answer!.revision), "Автоматическое сопоставление подтверждено.")}><Check size={15} />Подтвердить</Button>}
-                  <Button variant="ghost" disabled={readOnly || busy} onClick={() => setDeleteOpen(true)}><Trash2 size={15} />Убрать ответ</Button>
-                </div>
-              )}
-
-              <Tooltip label="Открыть тему в рабочей области">
-                <Link className="coverage-primary-action is-secondary" to={`/projects/${projectId}?topic=${selectedRow.node_id}`}><FileText size={16} />Открыть вопрос в рабочей области</Link>
-              </Tooltip>
+                {slot.answer?.is_active && (
+                  <Button variant="ghost" className="coverage-primary-action" disabled={readOnly || busy} onClick={() => setDeleteOpen(true)}>
+                    <Trash2 size={16} />Убрать ответ
+                  </Button>
+                )}
+                <Tooltip label="Открыть тему в рабочей области">
+                  <Link className="coverage-primary-action is-secondary" to={`/projects/${projectId}?topic=${selectedRow.node_id}`}><FileText size={16} />Открыть вопрос в рабочей области</Link>
+                </Tooltip>
+              </div>
             </> : <ErrorState message="Не удалось загрузить эталон" />}
           </aside>
         </div>
@@ -535,6 +696,37 @@ export function CoverageMap() {
         <Field label="Источник" hint="Необязательно"><input value={importSource} onChange={(event) => setImportSource(event.target.value)} placeholder="Например, конспект преподавателя" /></Field>
         {importResult && <div className="coverage-import-result" role="status"><strong>Добавлено: {importResult.created}</strong><span>Пропущено существующих: {importResult.skipped_existing.length}</span><span>Не найдено совпадений: {importResult.unmatched_sections.length}</span><span>Неоднозначных заголовков: {importResult.ambiguous.length}</span><span>Пустых разделов: {importResult.empty_sections.length}</span></div>}
       </Dialog>
+
+      <AnswerSourceDialog
+        open={sourceOpen}
+        onOpenChange={setSourceOpen}
+        projectId={projectId}
+        answersMaterial={answersMaterial}
+        busy={store.busy || busy}
+        onUploadFile={(file) => void uploadAnswersFile(file)}
+        onPickFromLibrary={() => { setSourceOpen(false); setLibraryOpen(true); }}
+        onImportText={() => { setSourceOpen(false); setImportResult(null); setImportOpen(true); }}
+        onStartProcessing={(materialId) => void store.start(materialId, "fast")}
+      />
+
+      <AutoMatchDialog
+        open={autoMatchOpen}
+        onOpenChange={setAutoMatchOpen}
+        onRunHeadings={() => void runHeadingsMatch()}
+        onImportText={() => { setImportResult(null); setImportOpen(true); }}
+      />
+
+      <LibraryMaterialPickerDialog
+        open={libraryOpen}
+        projectId={projectId}
+        title="Выбрать файл эталонных ответов"
+        purpose="reference_answers"
+        onOpenChange={setLibraryOpen}
+        onAttached={async () => {
+          await store.refresh();
+          setNotice("Файл ответов подключён. Разбор уже сделан — можно сопоставлять.");
+        }}
+      />
 
       <ConfirmDialog open={deleteOpen} onOpenChange={setDeleteOpen} title="Убрать эталонный ответ?" confirmLabel="Убрать ответ" destructive onConfirm={() => { if (selectedRow && slot?.answer) void run(() => deleteReferenceAnswer(projectId, selectedRow.node_id, slot.answer!.revision), "Ответ убран. Его можно добавить снова."); }}><p>Текст перестанет отображаться в рабочей области. Узел программы останется без изменений.</p></ConfirmDialog>
     </div>

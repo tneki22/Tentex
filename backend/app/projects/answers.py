@@ -486,6 +486,9 @@ async def add_attachment(
         allowed_suffixes=ATTACHMENT_SUFFIXES,
         max_bytes=MAX_ATTACHMENT_BYTES,
     )
+    # Ранняя проверка уже открыла транзакцию чтения: без её закрытия `begin()`
+    # падает с «A transaction is already begun» (тот же приём в materials/service).
+    session.rollback()
     with session.begin():
         _require_exam_project(session, project_id, writable=True)
         _require_study_node(session, project_id, node_id)

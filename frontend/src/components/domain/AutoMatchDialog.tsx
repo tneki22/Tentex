@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { FileText, Link2 } from "lucide-react";
-import { Button, Dialog, RadioCards } from "../../components/ui";
+import { Button, Dialog, RadioCards } from "../ui";
 
 type AutoMatchMode = "headings" | "ai";
 

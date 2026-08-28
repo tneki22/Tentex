@@ -47,7 +47,7 @@ import type {
   SourceRole,
 } from "../api/materials";
 import { getProject, undoProjectAction, type LatestUndoableAction, type ProjectDetail } from "../api/projects";
-import { LibraryMaterialPickerDialog, ProjectNav, QualityBadge } from "../components/domain";
+import { AutoMatchDialog, LibraryMaterialPickerDialog, ProjectNav, QualityBadge } from "../components/domain";
 import {
   Button,
   ConfirmDialog,
@@ -68,7 +68,6 @@ import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTr
 import { AiCleanupPanel } from "./AiCleanupPanel";
 import { MaterialFileTab } from "./materials/MaterialFileTab";
 import { MaterialProcessingPanels } from "./materials/MaterialProcessingPanels";
-import { AutoMatchDialog } from "./materials/AutoMatchDialog";
 import { StructuredPage } from "../components/domain/material-viewer";
 
 const EMPTY_STRING_SET: Set<string> = new Set();

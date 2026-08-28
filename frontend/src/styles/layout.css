@@ -5503,6 +5503,10 @@ button.wizard-back-projects {
 .inline-error { border: 1px solid color-mix(in srgb, var(--tone-danger) 35%, var(--line)); background: color-mix(in srgb, var(--tone-danger) 8%, var(--paper)); color: var(--tone-danger); }
 .inline-warning { border: 1px solid color-mix(in srgb, var(--tone-warning) 35%, var(--line)); background: color-mix(in srgb, var(--tone-warning) 8%, var(--paper)); color: var(--ink-soft); }
 
+.wizard-duplicate-choice { display: grid; gap: var(--space-3); margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.wizard-duplicate-choice p { color: var(--ink-soft); }
+.wizard-duplicate-choice-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+
 /* --- Ответы: утилитарный реестр эталонов этапа 4 --- */
 
 .coverage-main {
@@ -5608,10 +5612,13 @@ button.wizard-back-projects {
 
 .coverage-toolbar {
   display: grid;
-  grid-template-columns: minmax(12rem, 1fr) minmax(12rem, auto);
+  grid-template-columns: minmax(10rem, 1fr) minmax(11rem, auto) auto;
+  align-items: center;
   gap: var(--space-3);
   margin-bottom: var(--space-4);
 }
+
+.coverage-head-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
 .coverage-toolbar input,
 .coverage-toolbar select { width: 100%; }
@@ -5621,6 +5628,11 @@ button.wizard-back-projects {
   grid-template-columns: minmax(22rem, 0.9fr) minmax(24rem, 1.1fr);
   align-items: start;
   gap: var(--space-4);
+}
+
+/* Со сканами читают оригинал, а не список: место уходит правой колонке. */
+.coverage-editor-grid.is-scans {
+  grid-template-columns: minmax(15rem, 0.5fr) minmax(28rem, 1.5fr);
 }
 
 .coverage-list,
@@ -5688,7 +5700,10 @@ button.wizard-back-projects {
 .coverage-inspector-head h2 { margin: var(--space-1) 0 0; font-size: var(--text-lg); }
 .coverage-target-level { margin: 0; color: var(--muted); font-size: var(--text-sm); }
 .coverage-inspector textarea { min-height: 14rem; resize: vertical; }
-.coverage-inspector-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
+
+/* Каждое действие над ответом — своя строка во всю ширину: «Сохранить»,
+   «Подтвердить» и «Убрать» одинаково заметны и не жмутся в узкой панели. */
+.coverage-inspector-actions { display: grid; gap: var(--space-2); }
 .coverage-import-dialog { width: min(46rem, calc(100vw - var(--space-8))); }
 .coverage-import-result { display: grid; gap: var(--space-1); margin-top: var(--space-3); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--canvas); color: var(--ink-soft); font-size: var(--text-sm); }
 
@@ -5719,68 +5734,175 @@ button.wizard-back-projects {
   transform: translateY(-1px);
 }
 
-.coverage-attachments-field {
+/* ---------- Вкладка «Ответы»: страницы документа вместо текста ---------- */
+
+.answer-scans {
   display: grid;
-  gap: var(--space-2);
-}
-
-.coverage-attachments {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.coverage-attachment-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  max-width: 16rem;
-  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-md);
   background: var(--surface-sunken);
-  color: var(--ink-soft);
+  overflow: hidden;
+}
+
+.answer-scans-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--muted);
   font-size: var(--text-xs);
 }
 
-.coverage-attachment-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.answer-scans-toolbar > span:first-of-type { margin-inline-end: auto; }
+.answer-scans-toolbar > svg { flex: none; }
+.answer-scans-zoom { display: flex; align-items: center; gap: var(--space-1); }
+.answer-scans-zoom span { min-width: 3.2rem; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* Прокрутка только вбок: по вертикали листается сама панель, иначе
+   внутри скроллящегося инспектора появлялась бы вторая полоса. */
+.answer-scans-scroll {
+  --answer-scan-zoom: 1;
+  padding: var(--space-3);
+  overflow-x: auto;
+  overflow-y: visible;
+  overscroll-behavior-x: contain;
 }
 
-.coverage-attachment-marker {
-  overflow: hidden;
+.answer-scan-page {
+  width: calc(var(--answer-scan-zoom) * 100%);
+  margin: 0 0 var(--space-4);
+  display: grid;
+  gap: var(--space-1);
+}
+
+.answer-scan-page:last-child { margin-bottom: 0; }
+.answer-scan-page a { display: block; }
+
+.answer-scan-page img {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+}
+
+.answer-scan-page figcaption { color: var(--muted); font-size: var(--text-xs); }
+.answer-scan-missing { margin: 0; color: var(--muted); font-size: var(--text-sm); }
+
+/* Пустой режим сканов — это состояние данных, а не ошибка: без красного (FR-D17). */
+.answer-scans-empty {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
   color: var(--muted);
-  font-family: var(--font-mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: center;
 }
 
-.coverage-attachment-insert {
+.answer-scans-empty > svg { color: var(--faint); }
+.answer-scans-empty b { color: var(--ink); }
+.answer-scans-empty p { max-width: 34rem; margin: 0; font-size: var(--text-sm); }
+
+/* ---------- Поле ответа ---------- */
+
+.answer-editor { display: grid; gap: var(--space-2); }
+
+.answer-editor .answer-editor-input {
+  width: 100%;
+  min-height: 26rem;
+  resize: vertical;
+  line-height: var(--leading-normal);
+}
+
+.answer-editor.is-dropping .answer-editor-input {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.answer-editor-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.answer-editor-hint > svg { flex: none; }
+.answer-editor-hint.is-error { color: var(--tone-danger); }
+
+/* ---------- Файлы ответа ---------- */
+
+.answer-files { display: grid; gap: var(--space-2); }
+
+.answer-files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.answer-files-head label {
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.answer-file-items {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
   padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  cursor: pointer;
+  list-style: none;
 }
 
-.coverage-attachment-insert:disabled {
-  color: var(--faint);
-  cursor: not-allowed;
+.answer-file {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
 }
 
-.coverage-attachment-chip small {
-  color: var(--faint);
-  white-space: nowrap;
-}
-
-.coverage-attachment-chip button {
+.answer-file-thumb {
   display: grid;
   place-items: center;
-  padding: 1px;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--muted);
+  overflow: hidden;
+}
+
+.answer-file-items.is-preview .answer-file-thumb { width: 72px; height: 72px; }
+.answer-file-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.answer-file-copy { min-width: 0; display: grid; gap: var(--space-1); }
+
+.answer-file-name {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.answer-file-copy small { color: var(--muted); font-size: var(--text-xs); }
+.answer-file-actions { display: flex; align-items: center; gap: var(--space-1); }
+
+.answer-file-remove {
+  display: grid;
+  place-items: center;
+  padding: var(--space-1);
   border: 0;
   border-radius: var(--radius-xs);
   background: transparent;
@@ -5788,33 +5910,86 @@ button.wizard-back-projects {
   cursor: pointer;
 }
 
-.coverage-attachment-chip button:hover {
-  color: var(--tone-danger);
-}
+.answer-file-remove:hover:not(:disabled) { color: var(--tone-danger); }
+.answer-file-remove:disabled { color: var(--faint); cursor: not-allowed; }
+.answer-files-add { display: grid; justify-items: start; gap: var(--space-1); }
+.answer-files-add small { color: var(--muted); font-size: var(--text-xs); }
 
-.coverage-attachment-add {
-  display: inline-flex;
-  align-items: center;
+/* ---------- Заголовки, которым автоматика не выбрала вопрос ---------- */
+
+.answer-suggestions {
+  display: grid;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--ink-soft);
-  font-size: var(--text-xs);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--tone-warning);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+
+.answer-suggestions > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.answer-suggestions > small { color: var(--muted); font-size: var(--text-xs); }
+
+.answer-suggestion {
+  display: grid;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line);
+}
+
+.answer-suggestion small { color: var(--muted); font-size: var(--text-xs); }
+.answer-suggestion-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+/* ---------- Откуда взять файл эталонных ответов ---------- */
+
+.answer-source-dialog { width: min(34rem, calc(100vw - var(--space-8))); }
+.answer-source-choices { display: grid; gap: var(--space-2); }
+
+.answer-source-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas: "icon title" "icon copy";
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  text-align: start;
   cursor: pointer;
-  transition: border-color var(--ease-fast), color var(--ease-fast);
+  transition: border-color var(--ease-fast), background-color var(--ease-fast);
 }
 
-.coverage-attachment-add:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
+.answer-source-choice > svg { grid-area: icon; color: var(--accent); }
+.answer-source-choice b { grid-area: title; }
+.answer-source-choice small { grid-area: copy; color: var(--muted); font-size: var(--text-xs); }
+
+.answer-source-choice:hover:not(:disabled) {
+  border-color: var(--accent-edge);
+  background: var(--surface-hover);
 }
 
-.coverage-attachment-add:disabled {
-  cursor: not-allowed;
-  color: var(--faint);
+.answer-source-choice:disabled { color: var(--faint); cursor: not-allowed; }
+.answer-source-status { display: grid; gap: var(--space-2); }
+.answer-source-status p { margin: 0; color: var(--ink-soft); font-size: var(--text-sm); }
+
+.answer-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
+
+.workspace-reference-mode { justify-self: start; }
 
 .workspace-reference-answer {
   width: min(48rem, 100%);
@@ -6180,8 +6355,11 @@ button.wizard-back-projects {
 }
 
 @media (max-width: 1180px) {
-  .coverage-editor-grid { grid-template-columns: minmax(0, 1fr); }
+  .coverage-editor-grid,
+  .coverage-editor-grid.is-scans { grid-template-columns: minmax(0, 1fr); }
   .coverage-inspector { position: static; }
+  .coverage-toolbar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .coverage-toolbar .segmented-tabs { grid-column: 1 / -1; }
 }
 
 @media (max-width: 900px) {
@@ -8080,36 +8258,6 @@ button.wizard-back-projects {
 }
 
 .coverage-answer-origin > svg { flex: none; color: var(--tone-info); }
-
-/* Картинки, приехавшие из привязок: свои файлы лежат ниже отдельным списком. */
-.coverage-bound-images {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.coverage-bound-image {
-  display: grid;
-  gap: var(--space-1);
-  padding: var(--space-1);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--paper);
-  color: var(--faint);
-  font-size: 10px;
-  text-align: center;
-  text-decoration: none;
-}
-
-.coverage-bound-image:hover { border-color: var(--accent-edge); }
-
-.coverage-bound-image img {
-  display: block;
-  width: 116px;
-  height: 84px;
-  border-radius: var(--radius-xs);
-  object-fit: cover;
-}
 
 .materials-summary-table {
   display: grid;

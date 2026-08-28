@@ -8,6 +8,10 @@
  * карте покрытия и синим в среде темы.
  */
 export { AiFailureNotice } from "./AiFailureNotice";
+export { AnswerScanPages } from "./AnswerScanPages";
+export { answerScanGroups, scanPageCount } from "./answerPages";
+export type { AnswerScanGroup } from "./answerPages";
+export { AutoMatchDialog } from "./AutoMatchDialog";
 export { CostEstimate } from "./CostEstimate";
 export { GoalLevelPicker, GOAL_LEVELS, goalLevelEffect } from "./GoalLevel";
 export type { GoalLevelValue } from "./GoalLevel";

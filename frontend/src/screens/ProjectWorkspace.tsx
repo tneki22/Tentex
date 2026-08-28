@@ -47,6 +47,8 @@ import {
 import type { SearchHighlightRead, SearchResultRead } from "../api/search";
 import { searchProjectMaterials } from "../api/search";
 import {
+  AnswerScanPages,
+  answerScanGroups,
   PERSONAL_MARK_OPTIONS,
   PersonalMarkIcon,
   ProjectNav,
@@ -63,6 +65,7 @@ import {
   LoadingState,
   Menu,
   PanelResizeHandle,
+  SegmentedTabs,
   Tooltip,
 } from "../components/ui";
 import type { ContextMenuItem } from "../components/ui";
@@ -75,6 +78,7 @@ import {
 } from "./programTree";
 import { StudioPanel } from "./StudioPanel";
 import { usePersonalMarks } from "../hooks/usePersonalMarks";
+import { useAnswerViewMode } from "../hooks/useAnswerViewMode";
 import { ExamChatPanel } from "./workspace/chat/ExamChatPanel";
 import { AttemptHistory } from "./workspace/AttemptHistory";
 import { ReferenceAnswerContent, type ReferenceAnswerMedia } from "./workspace/ReferenceAnswerContent";
@@ -214,6 +218,7 @@ export function ProjectWorkspace() {
   const [studioExpanded, setStudioExpanded] = useState(false);
   const [activeGroupId, setActiveGroupId] = useState(DEFAULT_LAYOUT.groups[0].id);
   const { marks, setMark } = usePersonalMarks(projectId);
+  const { mode: answerViewMode, setMode: setAnswerViewMode } = useAnswerViewMode(projectId);
   const bindings = useBindings(projectId);
   const [sourceBindings, setSourceBindings] = useState<BindingFragmentRead[]>([]);
   const [sourceBindingsLoading, setSourceBindingsLoading] = useState(false);
@@ -589,11 +594,31 @@ export function ProjectWorkspace() {
           alt: attachment.file_name,
         })),
       ];
+      const scanGroups = answerScanGroups(answer, sourceBindings);
       referenceContent = (
         <article className="workspace-reference-answer">
           <header><ReferenceAnswerBadge status={answerSlot.status} /><span>{source} · {match}</span></header>
           <h2>{selected.title}</h2>
-          {answer.source_only ? (
+          <SegmentedTabs
+            className="workspace-reference-mode"
+            label="Как показывать ответ"
+            value={answerViewMode}
+            onChange={setAnswerViewMode}
+            tabs={[
+              { value: "text", label: "Текст" },
+              {
+                value: "scans",
+                label: "Страницы",
+                disabled: scanGroups.length === 0,
+                tooltip: scanGroups.length === 0
+                  ? "У этого ответа нет страниц в документе: он вписан вручную или импортирован текстом"
+                  : undefined,
+              },
+            ]}
+          />
+          {answerViewMode === "scans" && scanGroups.length > 0 ? (
+            <AnswerScanPages projectId={projectId} groups={scanGroups} compact />
+          ) : answer.source_only ? (
             <div className="workspace-reference-text">
               Ответ находится в источнике. Текстовая проверка недоступна.
             </div>

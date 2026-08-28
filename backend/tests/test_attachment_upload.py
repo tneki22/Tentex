@@ -88,6 +88,35 @@ async def test_attachment_names_are_unique_within_an_answer(
 
 
 @pytest.mark.asyncio
+async def test_attachment_upload_survives_a_cold_session(
+    session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ранняя проверка проекта не должна закрывать дорогу самой записи.
+
+    В запросе сессия своя и пустая: `session.get` идёт в базу и открывает
+    транзакцию чтения, после которой `session.begin()` падал с «A transaction
+    is already begun». В прочих тестах проект лежит в identity map, запроса нет
+    и ошибка не воспроизводится — поэтому здесь сессия чистится намеренно.
+    """
+    project = make_exam_project(session)
+    node = make_topic_node(session, project, title="Холодная сессия")
+    session.commit()
+    session.expunge_all()
+
+    async def store_pasted_image(*_args, **_kwargs):
+        return "answers/test/pasted.png", "image/png", 3, "Вставка 28.08 14-32-05.png"
+
+    monkeypatch.setattr(answers, "store_answer_upload", store_pasted_image)
+
+    attachment = await answers.add_attachment(
+        session, project.id, node.id, _upload("Вставка 28.08 14-32-05.png", b"png")
+    )
+
+    assert attachment.file_name == "Вставка 28.08 14-32-05.png"
+    assert attachment.media_type == "image/png"
+
+
+@pytest.mark.asyncio
 async def test_attachment_marker_label_replaces_bracket_delimiters(
     session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
