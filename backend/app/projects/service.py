@@ -245,7 +245,10 @@ def import_exam_program(
     return ExamImportResult(
         revision=result.draft_revision,
         counts=ExamImportCounts(
-            tickets=parsed.tickets, questions=parsed.questions, tasks=parsed.tasks
+            tickets=parsed.tickets,
+            questions=parsed.questions,
+            tasks=parsed.tasks,
+            subpoints=parsed.subpoints,
         ),
         warnings=parsed.warnings,
         program=result.program,

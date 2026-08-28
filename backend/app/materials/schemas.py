@@ -24,6 +24,7 @@ from app.models import (
     RecognitionSource,
     SourceRole,
 )
+from app.projects.schemas import ProgramChangeResult
 
 NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -365,6 +366,31 @@ class ExamProgramImportWrite(ApiModel):
 class ExamProgramDraftImportWrite(ApiModel):
     expected_draft_revision: int = Field(ge=0)
     expected_program_revision: int = Field(ge=0)
+
+
+class ExamCompositeDraftImportWrite(ApiModel):
+    """Атомарный импорт из независимых слотов «список вопросов» / «список задач»:
+
+    один или оба сразу. Ревизия Программы увеличивается один раз на весь вызов.
+    """
+
+    expected_draft_revision: int = Field(ge=0)
+    expected_program_revision: int = Field(ge=0)
+    question_material_id: UUID | None = None
+    task_material_id: UUID | None = None
+    dedupe_duplicates: bool = False
+
+    @model_validator(mode="after")
+    def at_least_one_material(self) -> "ExamCompositeDraftImportWrite":
+        if self.question_material_id is None and self.task_material_id is None:
+            raise ValueError("Нужен хотя бы один список: вопросов или задач")
+        return self
+
+
+class ExamCompositeDraftImportResult(ApiModel):
+    change: ProgramChangeResult
+    counts: dict[str, int]
+    warnings: list[str]
 
 
 class MaterialAnswerImportResult(ApiModel):

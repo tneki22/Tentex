@@ -10,6 +10,8 @@ from app.ai.gateway import ModelGateway
 from app.db import get_session
 from app.materials import ai_cleanup, library, service
 from app.materials.schemas import (
+    ExamCompositeDraftImportResult,
+    ExamCompositeDraftImportWrite,
     ExamMaterialSlot,
     ExamProgramDraftImportWrite,
     ExamProgramImportWrite,
@@ -323,6 +325,18 @@ def create_project_external_material(
     project_id: UUID, command: ExternalMaterialCreate, session: SessionDependency
 ) -> MaterialRead:
     return service.create_external_material(session, project_id, command)
+
+
+@router.post(
+    "/projects/{project_id}/materials/exam-composite-draft-import",
+    response_model=ExamCompositeDraftImportResult,
+)
+def import_composite_exam_draft(
+    project_id: UUID,
+    command: ExamCompositeDraftImportWrite,
+    session: SessionDependency,
+) -> ExamCompositeDraftImportResult:
+    return service.import_composite_exam_draft(session, project_id, command)
 
 
 @router.get("/projects/{project_id}/materials/{material_id}", response_model=MaterialRead)
