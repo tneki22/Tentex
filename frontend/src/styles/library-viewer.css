@@ -430,11 +430,6 @@
   color: var(--muted);
 }
 
-.library-stage-empty .library-stage-hint {
-  color: var(--ink-soft);
-  font-weight: var(--weight-medium);
-}
-
 .library-workspace.is-empty {
   place-items: center;
   padding: var(--space-12);

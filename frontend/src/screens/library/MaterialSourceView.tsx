@@ -10,7 +10,7 @@ import {
   type ParserMode,
 } from "../../api/materials";
 import { StructuredPage, TimedTranscript } from "../../components/domain/material-viewer";
-import { LoadingState, Switch } from "../../components/ui";
+import { EmptyState, LoadingState, Switch } from "../../components/ui";
 import { AudioTranscriptView } from "./AudioTranscriptView";
 import { WebSnapshotView } from "./WebSnapshotView";
 
@@ -205,6 +205,8 @@ interface MaterialTextViewProps {
   currentTime: number;
   onSeek: (seconds: number) => void;
   processing?: boolean;
+  /** У исходника ещё нет версии разбора, поэтому текстовой страницы быть не может. */
+  needsPreparation?: boolean;
   zoom?: number;
   /** Предлагать тумблер «фото фрагментов»: только у основного текста, не в сравнении версий. */
   allowSourcePhotos?: boolean;
@@ -222,6 +224,7 @@ export function MaterialTextView({
   currentTime,
   onSeek,
   processing = false,
+  needsPreparation = false,
   zoom = 1,
   allowSourcePhotos = false,
 }: MaterialTextViewProps) {
@@ -244,7 +247,13 @@ export function MaterialTextView({
   if (!page) {
     return (
       <div className="viewer-pane-scroll">
-        <LoadingState label={processing ? "Страница ещё обрабатывается" : "Открываем текст"} />
+        {needsPreparation ? (
+          <EmptyState title="Текст ещё не подготовлен">
+            <p>Запустите распознавание в панели обработки справа.</p>
+          </EmptyState>
+        ) : (
+          <LoadingState label={processing ? "Страница ещё обрабатывается" : "Открываем текст"} />
+        )}
       </div>
     );
   }

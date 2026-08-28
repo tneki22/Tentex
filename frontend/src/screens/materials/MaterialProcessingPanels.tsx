@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   confirmLibraryPageReview,
   controlLibraryProcessing,
@@ -49,6 +49,12 @@ export function MaterialProcessingPanels({
   const [busy, setBusy] = useState(false);
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null);
 
+  /** Родитель пересоздаёт onError на каждый свой рендер (листание страниц и т.п.) —
+   * держим актуальный колбэк в ref, чтобы это не меняло identity refresh и не гоняло
+   * эффекты ниже заново на каждый чих родителя. */
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
       const [next, history] = await Promise.all([
@@ -60,9 +66,9 @@ export function MaterialProcessingPanels({
       setRevisions(history);
     } catch (caught) {
       if (signal?.aborted) return;
-      onError(caught instanceof Error ? caught.message : "Не удалось загрузить обработку файла");
+      onErrorRef.current(caught instanceof Error ? caught.message : "Не удалось загрузить обработку файла");
     }
-  }, [materialId, onError]);
+  }, [materialId]);
 
   useEffect(() => {
     const controller = new AbortController();

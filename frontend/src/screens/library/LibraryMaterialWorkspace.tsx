@@ -235,7 +235,6 @@ export function LibraryMaterialWorkspace() {
   const hasOutline = Boolean(detail && detail.outline_source !== "none" && detail.outline.length > 0);
   const showOutline = hasOutline && outlineOpen && !narrow && !view.fullscreen && !editOpen;
   const showInspector = inspectorOpen && !narrow && !view.fullscreen && !editOpen;
-  const inspectorVisible = showInspector || (narrow && inspectorOpen);
 
   function setParam(key: string, value: string | null) {
     const next = new URLSearchParams(searchParams);
@@ -469,6 +468,7 @@ export function LibraryMaterialWorkspace() {
             currentTime={currentTime}
             onSeek={setCurrentTime}
             processing={building}
+            needsPreparation={!prepared && !building}
             allowSourcePhotos
           />
         )
@@ -503,43 +503,39 @@ export function LibraryMaterialWorkspace() {
           </div>
         </div>
 
-        {prepared && (
-          <ViewerToolbar
-            presentation={presentation}
-            mode={isVersionComparison ? "compare" : stageMode}
-            canCompare={!isVersionComparison && canCompare}
-            page={activePage}
-            pageCount={pageCount}
-            query={search.query}
-            zoom={view.zoom}
-            zoomPercent={view.zoomPercent}
-            showRegions={view.showRegions}
-            fullscreen={view.fullscreen}
-            searching={search.loading}
-            matchLabel={search.label}
-            versionComparison={comparisonLabels}
-            onEditText={detail.capabilities.can_edit_text
-              ? editOpen
-                ? () => requestLeave(closeEditor)
-                : openTextEditor
-              : undefined}
-            editDisabled={editOpen
-              ? editBusy
-              : !page || store.pageLoading || readOnly || isVersionComparison || store.busy
-                || Boolean(detail.task && ["running", "queued", "paused"].includes(detail.task.state))}
-            editing={editOpen}
-            panelTools={panelTools}
-            onModeChange={isVersionComparison ? () => undefined : setMode}
-            onPageChange={view.goToPage}
-            onQueryChange={search.setQuery}
-            onQuerySubmit={search.step}
-            onZoomChange={view.setZoom}
-            onToggleRegions={view.toggleRegions}
-            onToggleFullscreen={() => view.setFullscreen(!view.fullscreen)}
-          />
-        )}
-
-        {!prepared && panelTools}
+        <ViewerToolbar
+          presentation={presentation}
+          mode={isVersionComparison ? "compare" : stageMode}
+          canCompare={!isVersionComparison && canCompare}
+          page={activePage}
+          pageCount={pageCount}
+          query={search.query}
+          zoom={view.zoom}
+          zoomPercent={view.zoomPercent}
+          showRegions={view.showRegions}
+          fullscreen={view.fullscreen}
+          searching={search.loading}
+          matchLabel={search.label}
+          versionComparison={comparisonLabels}
+          onEditText={detail.capabilities.can_edit_text
+            ? editOpen
+              ? () => requestLeave(closeEditor)
+              : openTextEditor
+            : undefined}
+          editDisabled={editOpen
+            ? editBusy
+            : !page || store.pageLoading || readOnly || isVersionComparison || store.busy
+              || Boolean(detail.task && ["running", "queued", "paused"].includes(detail.task.state))}
+          editing={editOpen}
+          panelTools={panelTools}
+          onModeChange={isVersionComparison ? () => undefined : setMode}
+          onPageChange={view.goToPage}
+          onQueryChange={search.setQuery}
+          onQuerySubmit={search.step}
+          onZoomChange={view.setZoom}
+          onToggleRegions={view.toggleRegions}
+          onToggleFullscreen={() => view.setFullscreen(!view.fullscreen)}
+        />
       </header>
 
       {comparisonLabels && (
@@ -587,24 +583,7 @@ export function LibraryMaterialWorkspace() {
         )}
 
         <main className="library-workspace-main">
-          {!prepared && !building ? (
-            <div className="library-stage-empty">
-              <h2>Материал загружен</h2>
-              <p>Подготовьте текст, чтобы сравнивать его с исходником.</p>
-              {inspectorVisible ? (
-                <p className="library-stage-hint">Запустите обработку в панели справа.</p>
-              ) : (
-                <Button
-                  onClick={() => {
-                    setInspectorOpen(true);
-                    setParam("panel", "processing");
-                  }}
-                >
-                  Открыть панель обработки
-                </Button>
-              )}
-            </div>
-          ) : store.pageError && !store.pageLoading ? (
+          {store.pageError && !store.pageLoading ? (
             <div className="library-stage-empty">
               <ErrorState message={store.pageError}>
                 <p>
