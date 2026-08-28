@@ -38,12 +38,20 @@ class MaterialPurpose(StrEnum):
     STUDY_SOURCE = "study_source"
 
 
+class ExamMaterialSlot(StrEnum):
+    QUESTION_LIST = "question_list"
+    QUESTION_ANSWERS = "question_answers"
+    TASK_LIST = "task_list"
+    TASK_ANSWERS = "task_answers"
+
+
 class MaterialUpdate(ApiModel):
     display_name: NonBlank | None = None
     source_role: SourceRole | None = None
     priority: int | None = Field(default=None, ge=0)
     instruction: str | None = None
     purposes: list[MaterialPurpose] | None = None
+    exam_slot: ExamMaterialSlot | None = None
     replace_reference_answers: bool = False
 
     @field_validator("purposes")
@@ -72,6 +80,7 @@ class TextMaterialCreate(ApiModel):
     text: NonBlank
     source_role: SourceRole = SourceRole.ADDITIONAL
     purposes: list[MaterialPurpose] = Field(default_factory=lambda: [MaterialPurpose.STUDY_SOURCE])
+    exam_slot: ExamMaterialSlot | None = None
 
 
 class ExternalMaterialCreate(ApiModel):
@@ -79,6 +88,7 @@ class ExternalMaterialCreate(ApiModel):
     url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8, max_length=2048)]
     source_role: SourceRole = SourceRole.ADDITIONAL
     purposes: list[MaterialPurpose] = Field(default_factory=lambda: [MaterialPurpose.STUDY_SOURCE])
+    exam_slot: ExamMaterialSlot | None = None
 
 
 ProcessingScope = Literal["all", "needs_review", "range"]
@@ -129,6 +139,7 @@ class MaterialRead(ApiModel):
     priority: int
     instruction: str | None
     purposes: list[MaterialPurpose]
+    exam_slot: ExamMaterialSlot | None
     status: MaterialState
     parser_mode: ParserMode | None
     active_parse_revision: int
@@ -203,6 +214,7 @@ class LibraryUsageRead(ApiModel):
     display_name: str
     source_role: SourceRole
     purposes: list[MaterialPurpose]
+    exam_slot: ExamMaterialSlot | None
 
 
 class LibraryMaterialRead(ApiModel):
@@ -293,6 +305,7 @@ class LibraryMaterialAttachWrite(ApiModel):
     purposes: list[MaterialPurpose] = Field(
         default_factory=lambda: [MaterialPurpose.STUDY_SOURCE]
     )
+    exam_slot: ExamMaterialSlot | None = None
 
 
 class LibrarySearchHit(ApiModel):

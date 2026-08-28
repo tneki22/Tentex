@@ -22,7 +22,6 @@ from fastapi import UploadFile
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.orm import Session
 
-from app.bindings import answers_link
 from app.bindings.search import delete_material_index, reindex_material, search_fragments
 from app.bindings.service import (
     affected_projects_preview,
@@ -37,6 +36,7 @@ from app.materials.parsers.base import ParsedElement, ParsedPage
 from app.materials.parsers.native import inspect, parse_text_page
 from app.materials.schemas import (
     BlockRead,
+    ExamMaterialSlot,
     ExternalMaterialCreate,
     FragmentRead,
     LibraryMaterialAttachWrite,
@@ -322,6 +322,7 @@ def _usage_read(material: Material, aggregate: LibraryAggregate) -> list[Library
             display_name=link.display_name or material.original_name,
             source_role=link.source_role,
             purposes=[MaterialPurpose(value) for value in link.purposes if value in PURPOSE_VALUES],
+            exam_slot=link.exam_slot,
         )
         for link, project in aggregate.usage
     ]
@@ -880,24 +881,50 @@ def create_external_material_row(
 
 
 def guard_single_answers_file(
-    session: Session, project_id: UUID, purposes: list[MaterialPurpose], material_id: UUID | None
+    session: Session,
+    project_id: UUID,
+    purposes: list[MaterialPurpose],
+    material_id: UUID | None,
+    exam_slot: ExamMaterialSlot | None = None,
 ) -> None:
-    """Файл эталонных ответов у проекта один.
-
-    На этом держится автозаполнение: эталон вопроса собирается из привязок
-    ровно одного источника, иначе непонятно, чей текст побеждает. Учебных
-    материалов при этом сколько угодно.
-    """
-    if MaterialPurpose.REFERENCE_ANSWERS not in purposes:
+    """Один материал на явный экзаменационный слот; legacy-ответы по-прежнему одни."""
+    list_slots = {ExamMaterialSlot.QUESTION_LIST, ExamMaterialSlot.TASK_LIST}
+    answer_slots = {ExamMaterialSlot.QUESTION_ANSWERS, ExamMaterialSlot.TASK_ANSWERS}
+    if exam_slot in list_slots and MaterialPurpose.EXAM_STRUCTURE not in purposes:
+        raise ProjectConflictError(
+            "Слот списка требует назначения «структура экзамена»",
+            code="exam_slot_purpose_mismatch",
+        )
+    if exam_slot in answer_slots and MaterialPurpose.REFERENCE_ANSWERS not in purposes:
+        raise ProjectConflictError(
+            "Слот ответов требует назначения «эталонные ответы»",
+            code="exam_slot_purpose_mismatch",
+        )
+    if exam_slot is None and MaterialPurpose.REFERENCE_ANSWERS not in purposes:
         return
-    existing = answers_link.find_answers_material(session, project_id)
+    candidates = session.scalars(
+        select(ProjectMaterial).where(
+            ProjectMaterial.project_id == project_id,
+            ProjectMaterial.material_id != material_id,
+            ProjectMaterial.exam_slot == (exam_slot.value if exam_slot else None),
+        )
+    )
+    existing = next(
+        (
+            link
+            for link in candidates
+            if exam_slot is not None
+            or MaterialPurpose.REFERENCE_ANSWERS.value in (link.purposes or [])
+        ),
+        None,
+    )
     if existing is None or existing.material_id == material_id:
         return
     material = session.get(Material, existing.material_id)
     name = existing.display_name or (material.original_name if material else "")
     raise ProjectConflictError(
-        f"Эталонные ответы уже загружены: «{name}». Сначала снимите это назначение",
-        code="reference_answers_already_set",
+        f"Для этого входа уже выбран материал: «{name}». Сначала уберите его",
+        code="exam_slot_already_set" if exam_slot else "reference_answers_already_set",
         context={"material_id": str(existing.material_id), "display_name": name},
     )
 
@@ -923,7 +950,9 @@ def attach_material_to_project(
                 "Этот материал уже подключён к проекту", code="material_already_attached"
             )
         purposes = list(dict.fromkeys(command.purposes)) or [MaterialPurpose.STUDY_SOURCE]
-        guard_single_answers_file(session, command.project_id, purposes, material_id)
+        guard_single_answers_file(
+            session, command.project_id, purposes, material_id, command.exam_slot
+        )
         session.add(
             ProjectMaterial(
                 project_id=command.project_id,
@@ -933,6 +962,7 @@ def attach_material_to_project(
                 affects_program=command.source_role != SourceRole.REFERENCE,
                 display_name=command.display_name,
                 purposes=[purpose.value for purpose in purposes],
+                exam_slot=command.exam_slot.value if command.exam_slot else None,
                 created_at=utc_now(),
             )
         )

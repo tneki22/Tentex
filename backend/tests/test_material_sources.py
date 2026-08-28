@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.materials import service
 from app.materials.external import _ReadableHtml, _validate_public_url, _youtube_id
 from app.materials.parsers.native import inspect
-from app.materials.schemas import MaterialPurpose, MaterialUpdate
+from app.materials.schemas import ExamMaterialSlot, MaterialPurpose, MaterialUpdate
 from app.models import ExamFormat, ProjectMaterial, SourceRole
 from app.projects.errors import ProjectConflictError, ProjectDomainError
 from app.projects.importer import parse_exam_program
@@ -91,6 +91,81 @@ def test_second_answers_file_requires_explicit_replacement(session: Session) -> 
         )
 
     assert caught.value.code == "reference_answers_already_set"
+
+
+def test_separate_question_and_task_answer_slots_are_allowed(session: Session) -> None:
+    project = make_exam_project(session)
+    question_answers = make_material(session, "f6")
+    task_answers = make_material(session, "f7")
+    link_material(session, project, question_answers)
+    link_material(session, project, task_answers)
+    session.commit()
+
+    question_result = service.update_material(
+        session,
+        project.id,
+        question_answers.id,
+        MaterialUpdate(
+            purposes=[MaterialPurpose.REFERENCE_ANSWERS],
+            exam_slot=ExamMaterialSlot.QUESTION_ANSWERS,
+        ),
+    )
+    task_result = service.update_material(
+        session,
+        project.id,
+        task_answers.id,
+        MaterialUpdate(
+            purposes=[MaterialPurpose.REFERENCE_ANSWERS],
+            exam_slot=ExamMaterialSlot.TASK_ANSWERS,
+        ),
+    )
+
+    assert question_result.exam_slot == ExamMaterialSlot.QUESTION_ANSWERS
+    assert task_result.exam_slot == ExamMaterialSlot.TASK_ANSWERS
+
+
+def test_duplicate_exam_slot_is_rejected(session: Session) -> None:
+    project = make_exam_project(session)
+    current = make_material(session, "f8")
+    duplicate = make_material(session, "f9")
+    current_link = link_material(session, project, current)
+    current_link.purposes = [MaterialPurpose.EXAM_STRUCTURE.value]
+    current_link.exam_slot = ExamMaterialSlot.QUESTION_LIST.value
+    link_material(session, project, duplicate)
+    session.commit()
+
+    with pytest.raises(ProjectConflictError) as caught:
+        service.update_material(
+            session,
+            project.id,
+            duplicate.id,
+            MaterialUpdate(
+                purposes=[MaterialPurpose.EXAM_STRUCTURE],
+                exam_slot=ExamMaterialSlot.QUESTION_LIST,
+            ),
+        )
+
+    assert caught.value.code == "exam_slot_already_set"
+
+
+def test_exam_slot_requires_matching_purpose(session: Session) -> None:
+    project = make_exam_project(session)
+    material = make_material(session, "fa")
+    link_material(session, project, material)
+    session.commit()
+
+    with pytest.raises(ProjectConflictError) as caught:
+        service.update_material(
+            session,
+            project.id,
+            material.id,
+            MaterialUpdate(
+                purposes=[MaterialPurpose.STUDY_SOURCE],
+                exam_slot=ExamMaterialSlot.TASK_ANSWERS,
+            ),
+        )
+
+    assert caught.value.code == "exam_slot_purpose_mismatch"
 
 
 def test_confirmed_answers_replacement_is_atomic(session: Session) -> None:

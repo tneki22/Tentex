@@ -5,7 +5,6 @@ from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.bindings import answers_link
 from app.bindings.service import delete_project_material_bindings
 from app.materials import library
 from app.materials.library import (
@@ -24,6 +23,7 @@ from app.materials.library import (
     task_read as _task_read,
 )
 from app.materials.schemas import (
+    ExamMaterialSlot,
     ExamProgramDraftImportWrite,
     ExamProgramImportWrite,
     ExamProgramPreview,
@@ -99,6 +99,7 @@ def _read(link: ProjectMaterial, material: Material, task: ProcessingTask | None
         priority=link.priority,
         instruction=link.instruction,
         purposes=purposes or [MaterialPurpose.STUDY_SOURCE],
+        exam_slot=link.exam_slot,
         status=material.status,
         parser_mode=material.parser_mode,
         active_parse_revision=material.active_parse_revision,
@@ -116,10 +117,27 @@ def _read(link: ProjectMaterial, material: Material, task: ProcessingTask | None
 
 
 def _release_existing_answers_file(
-    session: Session, project_id: UUID, material_id: UUID
+    session: Session,
+    project_id: UUID,
+    material_id: UUID,
+    exam_slot: ExamMaterialSlot | None,
 ) -> None:
     """Снимает назначение со старого эталона внутри транзакции обновления нового."""
-    existing = answers_link.find_answers_material(session, project_id)
+    candidates = session.scalars(
+        select(ProjectMaterial).where(
+            ProjectMaterial.project_id == project_id,
+            ProjectMaterial.material_id != material_id,
+            ProjectMaterial.exam_slot == (exam_slot.value if exam_slot else None),
+        )
+    )
+    existing = next(
+        (
+            link
+            for link in candidates
+            if MaterialPurpose.REFERENCE_ANSWERS.value in (link.purposes or [])
+        ),
+        None,
+    )
     if existing is None or existing.material_id == material_id:
         return
     purposes = [
@@ -137,6 +155,7 @@ def _attach(
     *,
     source_role: SourceRole,
     purposes: list[MaterialPurpose],
+    exam_slot: ExamMaterialSlot | None,
     duplicate_detail: str,
 ) -> ProjectMaterial:
     """Связь проекта с уже созданным общим материалом.
@@ -147,7 +166,7 @@ def _attach(
     """
     if session.get(ProjectMaterial, (project_id, material.id)) is not None:
         raise ProjectConflictError(duplicate_detail, code="material_already_attached")
-    _guard_single_answers_file(session, project_id, purposes, material.id)
+    _guard_single_answers_file(session, project_id, purposes, material.id, exam_slot)
     link = ProjectMaterial(
         project_id=project_id,
         material_id=material.id,
@@ -156,6 +175,7 @@ def _attach(
         affects_program=source_role != SourceRole.REFERENCE,
         purposes=[purpose.value for purpose in dict.fromkeys(purposes)]
         or [MaterialPurpose.STUDY_SOURCE.value],
+        exam_slot=exam_slot.value if exam_slot else None,
         created_at=utc_now(),
     )
     session.add(link)
@@ -169,6 +189,7 @@ async def upload_material(
     upload: UploadFile,
     source_role: SourceRole,
     purposes: list[MaterialPurpose],
+    exam_slot: ExamMaterialSlot | None = None,
 ) -> MaterialRead:
     _project(session, project_id, writable=True)
     session.rollback()
@@ -183,6 +204,7 @@ async def upload_material(
             material,
             source_role=source_role,
             purposes=purposes,
+            exam_slot=exam_slot,
             duplicate_detail="Этот файл уже добавлен в проект",
         )
         return _read(link, material, _latest_task(session, material.id))
@@ -202,6 +224,7 @@ def create_text_material(
             material,
             source_role=command.source_role,
             purposes=command.purposes,
+            exam_slot=command.exam_slot,
             duplicate_detail="Этот текст уже добавлен в проект",
         )
         return _read(link, material, _latest_task(session, material.id))
@@ -222,6 +245,7 @@ def create_external_material(
             material,
             source_role=command.source_role,
             purposes=command.purposes,
+            exam_slot=command.exam_slot,
             duplicate_detail="Этот источник уже добавлен в проект",
         )
         return _read(link, material, _latest_task(session, material.id))
@@ -260,11 +284,23 @@ def update_material(
             raise ProjectNotFoundError("Материал не найден")
         values = command.model_dump(exclude_unset=True)
         replace_reference_answers = values.pop("replace_reference_answers", False)
+        next_slot = values.get("exam_slot", link.exam_slot)
+        if isinstance(next_slot, str):
+            next_slot = ExamMaterialSlot(next_slot)
+        next_purposes = values.get(
+            "purposes", [MaterialPurpose(value) for value in link.purposes]
+        )
         if "purposes" in values:
             if replace_reference_answers:
-                _release_existing_answers_file(session, project_id, material_id)
-            _guard_single_answers_file(session, project_id, values["purposes"], material_id)
+                _release_existing_answers_file(
+                    session, project_id, material_id, next_slot
+                )
             values["purposes"] = [purpose.value for purpose in values["purposes"]]
+        _guard_single_answers_file(
+            session, project_id, next_purposes, material_id, next_slot
+        )
+        if "exam_slot" in values:
+            values["exam_slot"] = next_slot.value if next_slot else None
         for field, value in values.items():
             setattr(link, field, value)
         if command.source_role is not None:

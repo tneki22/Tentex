@@ -10,6 +10,7 @@ from app.ai.gateway import ModelGateway
 from app.db import get_session
 from app.materials import ai_cleanup, library, service
 from app.materials.schemas import (
+    ExamMaterialSlot,
     ExamProgramDraftImportWrite,
     ExamProgramImportWrite,
     ExamProgramPreview,
@@ -285,6 +286,7 @@ async def upload_project_material(
     file: Annotated[UploadFile, File()],
     source_role: Annotated[SourceRole, Form()] = SourceRole.ADDITIONAL,
     purposes: Annotated[str, Form()] = MaterialPurpose.STUDY_SOURCE.value,
+    exam_slot: Annotated[ExamMaterialSlot | None, Form()] = None,
 ) -> MaterialRead:
     try:
         parsed_purposes = [
@@ -296,7 +298,9 @@ async def upload_project_material(
             status=422,
             code="material_purpose_invalid",
         ) from error
-    return await service.upload_material(session, project_id, file, source_role, parsed_purposes)
+    return await service.upload_material(
+        session, project_id, file, source_role, parsed_purposes, exam_slot
+    )
 
 
 @router.post(
