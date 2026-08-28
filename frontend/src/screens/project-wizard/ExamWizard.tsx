@@ -294,6 +294,9 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
   const [form, setForm] = useState<ExamForm>(EMPTY_FORM);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [counts, setCounts] = useState({ tickets: 0, questions: 0, tasks: 0 });
+  const [hasDuplicates, setHasDuplicates] = useState(false);
+  const [duplicatesResolution, setDuplicatesResolution] = useState<"kept" | "removed" | null>(null);
+  const [duplicatesResolvedKey, setDuplicatesResolvedKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
   const [reviewRepairOpen, setReviewRepairOpen] = useState(false);
   const [libraryPurpose, setLibraryPurpose] = useState<MaterialPurpose | null>(null);
@@ -342,8 +345,16 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     const restoredWarnings = Array.isArray(state.warnings)
       ? state.warnings.filter((warning): warning is string => typeof warning === "string")
       : [];
+    const restoredDuplicatesResolution = state.duplicates_resolution === "kept" || state.duplicates_resolution === "removed"
+      ? state.duplicates_resolution
+      : null;
+    const restoredDuplicatesResolvedKey = typeof state.duplicates_resolved_key === "string"
+      ? state.duplicates_resolved_key
+      : null;
     setStep(detail.draft.current_step);
     setWarnings(restoredWarnings);
+    setDuplicatesResolution(restoredDuplicatesResolution);
+    setDuplicatesResolvedKey(restoredDuplicatesResolvedKey);
     setPreparationSuggestion(restoredSuggestion(state.preparation_suggestion));
     setCounts({
       tickets: detail.program.nodes.filter((node) => node.exam_kind === "ticket").length,
@@ -410,7 +421,12 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     };
   }
 
-  function command(nextStep: number, nextWarnings = warnings) {
+  function command(
+    nextStep: number,
+    nextWarnings = warnings,
+    nextDuplicatesResolution = duplicatesResolution,
+    nextDuplicatesResolvedKey = duplicatesResolvedKey,
+  ) {
     return {
       current_step: nextStep,
       max_completed_step: Math.max(nextStep, controller.detail?.draft.max_completed_step ?? 1),
@@ -432,6 +448,8 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
         has_theory: form.format === "unknown" || form.hasTheory,
         input_modes: { primary: form.primaryMode, answers: form.answersMode },
         warnings: nextWarnings,
+        duplicates_resolution: nextDuplicatesResolution,
+        duplicates_resolved_key: nextDuplicatesResolvedKey,
         preparation_suggestion: preparationSuggestion,
       },
     };
@@ -444,7 +462,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
       void controller.queueSave(command(step)).catch(() => undefined);
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [form, preparationSuggestion, step, warnings]);
+  }, [form, preparationSuggestion, step, warnings, duplicatesResolution, duplicatesResolvedKey]);
 
   useEffect(() => {
     if (!preparationSuggestion) return;
@@ -624,21 +642,77 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     }));
   }
 
+  /** Ключ формулировок, для которых сделан выбор по дублям: правка текста или смена файла требует решения заново. */
+  function duplicatesKey(primaryMaterialId: string | null): string {
+    return form.primaryMode === "text" ? `text:${form.rawText}` : `file:${primaryMaterialId ?? ""}`;
+  }
+
+  async function finishUpload(
+    nextWarnings = warnings,
+    nextDuplicatesResolution = duplicatesResolution,
+    nextDuplicatesResolvedKey = duplicatesResolvedKey,
+  ) {
+    const answerMaterials = materialsFor("reference_answers");
+    const theoryMaterials = materialsFor("study_source");
+
+    if (form.hasAnswers) {
+      if (form.answersMode === "text") {
+        if (!form.answersText.trim()) throw new Error("Вставьте готовые ответы или выберите файл");
+        if (answerMaterials.length === 0) {
+          await createTextMaterial(controller.detail!.project.id, {
+            name: "Готовые ответы.txt",
+            text: form.answersText,
+            source_role: "reference",
+            purposes: ["reference_answers"],
+          });
+        }
+      } else if (answerMaterials.length === 0) {
+        throw new Error("Добавьте файл с готовыми ответами");
+      }
+    }
+
+    if ((form.format === "unknown" || form.hasTheory) && theoryMaterials.length === 0) {
+      throw new Error("Добавьте хотя бы один учебный материал");
+    }
+
+    await projectMaterials.refresh();
+    await controller.queueSave(command(4, nextWarnings, nextDuplicatesResolution, nextDuplicatesResolvedKey));
+    changeStep(4);
+  }
+
   async function continueFromUpload() {
     if (!form.format) return;
     setActionError("");
     try {
       await controller.queueSave(command(3));
       const primaryMaterials = materialsFor("exam_structure");
-      const answerMaterials = materialsFor("reference_answers");
-      const theoryMaterials = materialsFor("study_source");
+      let nextWarnings = warnings;
+      let nextDuplicatesResolution = duplicatesResolution;
+      let nextDuplicatesResolvedKey = duplicatesResolvedKey;
 
       if (form.format !== "unknown") {
         if (form.primaryMode === "text") {
           if (!form.rawText.trim()) throw new Error("Вставьте список вопросов или выберите файл");
-          const result = await controller.importExam(form.rawText, form.format);
+          const key = duplicatesKey(null);
+          const alreadyResolved = duplicatesResolution !== null && duplicatesResolvedKey === key;
+          const result = await controller.importExam(form.rawText, form.format, alreadyResolved && duplicatesResolution === "removed");
+          nextWarnings = result.warnings;
           setWarnings(result.warnings);
           setCounts(result.counts);
+          setHasDuplicates(result.has_duplicates);
+          if (result.has_duplicates && !alreadyResolved) {
+            nextDuplicatesResolution = null;
+            nextDuplicatesResolvedKey = null;
+            setDuplicatesResolution(null);
+            setDuplicatesResolvedKey(null);
+            return;
+          }
+          if (!result.has_duplicates) {
+            nextDuplicatesResolution = null;
+            nextDuplicatesResolvedKey = null;
+            setDuplicatesResolution(null);
+            setDuplicatesResolvedKey(null);
+          }
         } else {
           const primary = primaryMaterials[0];
           if (!primary) throw new Error("Добавьте файл со списком вопросов или билетов");
@@ -647,43 +721,84 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
               ? primary.error || "Не удалось разобрать файл вопросов"
               : "Дождитесь завершения быстрого разбора файла вопросов");
           }
+          const key = duplicatesKey(primary.id);
+          const alreadyResolved = duplicatesResolution !== null && duplicatesResolvedKey === key;
           const preview = await previewExamProgram(controller.detail!.project.id, primary.id);
+          nextWarnings = preview.warnings;
+          setWarnings(preview.warnings);
+          setCounts(preview.counts);
+          setHasDuplicates(preview.has_duplicates);
+          if (preview.has_duplicates && !alreadyResolved) {
+            nextDuplicatesResolution = null;
+            nextDuplicatesResolvedKey = null;
+            setDuplicatesResolution(null);
+            setDuplicatesResolvedKey(null);
+            return;
+          }
+          const dedupe = alreadyResolved && duplicatesResolution === "removed";
           await controller.enqueueProgramCommand((current) => importExamDraftProgramFromMaterial(
             current.project.id,
             primary.id,
             current.draft.revision,
             current.program.revision,
+            dedupe,
           ));
-          setWarnings(preview.warnings);
-          setCounts(preview.counts);
-        }
-      }
-
-      if (form.hasAnswers) {
-        if (form.answersMode === "text") {
-          if (!form.answersText.trim()) throw new Error("Вставьте готовые ответы или выберите файл");
-          if (answerMaterials.length === 0) {
-            await createTextMaterial(controller.detail!.project.id, {
-              name: "Готовые ответы.txt",
-              text: form.answersText,
-              source_role: "reference",
-              purposes: ["reference_answers"],
-            });
+          if (dedupe) {
+            nextWarnings = [];
+            setWarnings([]);
           }
-        } else if (answerMaterials.length === 0) {
-          throw new Error("Добавьте файл с готовыми ответами");
+          if (!preview.has_duplicates) {
+            nextDuplicatesResolution = null;
+            nextDuplicatesResolvedKey = null;
+            setDuplicatesResolution(null);
+            setDuplicatesResolvedKey(null);
+          }
         }
+      } else {
+        setHasDuplicates(false);
       }
 
-      if ((form.format === "unknown" || form.hasTheory) && theoryMaterials.length === 0) {
-        throw new Error("Добавьте хотя бы один учебный материал");
-      }
-
-      await projectMaterials.refresh();
-      await controller.queueSave(command(4));
-      changeStep(4);
+      await finishUpload(nextWarnings, nextDuplicatesResolution, nextDuplicatesResolvedKey);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Не удалось подготовить материалы");
+    }
+  }
+
+  async function resolveDuplicates(resolution: "kept" | "removed") {
+    setActionError("");
+    try {
+      let nextWarnings = warnings;
+      let resolvedKey: string | null = null;
+      if (form.primaryMode === "text") {
+        resolvedKey = duplicatesKey(null);
+        if (resolution === "removed") {
+          const result = await controller.importExam(form.rawText, form.format as Exclude<ExamFormat, "unknown">, true);
+          nextWarnings = result.warnings;
+          setWarnings(result.warnings);
+          setCounts(result.counts);
+        }
+      } else {
+        const primary = materialsFor("exam_structure")[0];
+        if (primary) {
+          resolvedKey = duplicatesKey(primary.id);
+          await controller.enqueueProgramCommand((current) => importExamDraftProgramFromMaterial(
+            current.project.id,
+            primary.id,
+            current.draft.revision,
+            current.program.revision,
+            resolution === "removed",
+          ));
+          if (resolution === "removed") {
+            nextWarnings = [];
+            setWarnings([]);
+          }
+        }
+      }
+      setDuplicatesResolution(resolution);
+      setDuplicatesResolvedKey(resolvedKey);
+      await finishUpload(nextWarnings, resolution, resolvedKey);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Не удалось применить выбор по повторам");
     }
   }
 
@@ -813,6 +928,19 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                 <h2>Предварительный разбор</h2>
                 {formatDetectedCounts(counts) && <p>{formatDetectedCounts(counts)}</p>}
                 {warnings.map((warning) => <p className="inline-warning" key={warning}>{warning}</p>)}
+                {hasDuplicates && duplicatesResolution === null && (
+                  <div className="wizard-duplicate-choice">
+                    <p>Среди вопросов есть повторяющиеся формулировки. Как быть с ними?</p>
+                    <div className="wizard-duplicate-choice-actions">
+                      <Button variant="secondary" disabled={busy} onClick={() => void resolveDuplicates("kept")}>
+                        Оставить как есть
+                      </Button>
+                      <Button disabled={busy} onClick={() => void resolveDuplicates("removed")}>
+                        Убрать дубли
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </Card>
             )}
             {form.hasAnswers && (
@@ -856,7 +984,10 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
             {form.format !== "unknown" && !form.hasAnswers && !form.hasTheory && <Button variant="secondary" disabled={busy} onClick={() => void go(4)}>
               Добавить вопросы позже
             </Button>}
-            <Button disabled={busy || projectMaterials.loading} onClick={() => void continueFromUpload()}>
+            <Button
+              disabled={busy || projectMaterials.loading || (hasDuplicates && duplicatesResolution === null)}
+              onClick={() => void continueFromUpload()}
+            >
               <Upload size={15} aria-hidden="true" />Сохранить и продолжить
             </Button>
           </div>

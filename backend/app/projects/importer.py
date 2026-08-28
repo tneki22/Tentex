@@ -1,5 +1,6 @@
 import re
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, replace
 
 from app.models import ExamFormat, ExamKind, NodeType
 from app.projects.numbered_series import select_numbered_series
@@ -43,6 +44,7 @@ class ParsedExamProgram:
     questions: int
     tasks: int
     warnings: list[str]
+    has_duplicates: bool = False
 
 
 def _lines(raw_text: str) -> list[str]:
@@ -65,7 +67,7 @@ def _kind_and_title(text: str, default_kind: ExamKind) -> tuple[ExamKind, str]:
     return default_kind, text.strip()
 
 
-def _duplicate_warnings(nodes: list[ParsedNode]) -> list[str]:
+def _duplicate_positions(nodes: list[ParsedNode]) -> dict[str, list[int]]:
     positions: dict[str, list[int]] = {}
     study_index = 0
     for node in nodes:
@@ -73,16 +75,55 @@ def _duplicate_warnings(nodes: list[ParsedNode]) -> list[str]:
             continue
         study_index += 1
         positions.setdefault(node.title.casefold(), []).append(study_index)
+    return {key: indexes for key, indexes in positions.items() if len(indexes) > 1}
+
+
+def _duplicate_warnings(nodes: list[ParsedNode], duplicates: dict[str, list[int]]) -> list[str]:
     warnings: list[str] = []
-    for key, indexes in positions.items():
-        if len(indexes) <= 1:
-            continue
+    for key, indexes in duplicates.items():
         title = next(node.title for node in nodes if node.title.casefold() == key)
         number_list = ", ".join(map(str, indexes))
         warnings.append(
             f"Формулировка «{title}» повторяется в пунктах {number_list}"
         )
     return warnings
+
+
+def dedupe_first_occurrence(parsed: ParsedExamProgram) -> ParsedExamProgram:
+    """Оставляет только первое вхождение повторяющейся формулировки вопроса или подпункта.
+
+    Родителей (билеты, разделы) дубли не задевают — среди изучаемых пунктов
+    дубль всегда лист, поэтому удаление не оставляет висячих ссылок `parent_index`.
+    """
+    seen: set[str] = set()
+    old_to_new: dict[int, int] = {}
+    kept: list[ParsedNode] = []
+    for old_index, node in enumerate(parsed.nodes):
+        if node.node_type in {NodeType.TOPIC, NodeType.SUBPOINT}:
+            key = node.title.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+        old_to_new[old_index] = len(kept)
+        kept.append(node)
+
+    sibling_counts: dict[int | None, int] = defaultdict(int)
+    result_nodes: list[ParsedNode] = []
+    for node in kept:
+        parent_index = old_to_new[node.parent_index] if node.parent_index is not None else None
+        position = sibling_counts[parent_index]
+        sibling_counts[parent_index] += 1
+        result_nodes.append(replace(node, parent_index=parent_index, position=position))
+
+    study_nodes = [node for node in result_nodes if node.node_type != NodeType.SECTION]
+    return ParsedExamProgram(
+        nodes=result_nodes,
+        tickets=sum(node.exam_kind == ExamKind.TICKET for node in result_nodes),
+        questions=sum(node.exam_kind == ExamKind.QUESTION for node in study_nodes),
+        tasks=sum(node.exam_kind == ExamKind.TASK for node in study_nodes),
+        warnings=[],
+        has_duplicates=False,
+    )
 
 
 def _parse_flat(
@@ -222,10 +263,12 @@ def parse_exam_program(
     study_nodes = [node for node in nodes if node.node_type != NodeType.SECTION]
     if not study_nodes:
         raise ExamImportError("В списке не найдено ни одного изучаемого пункта")
+    duplicates = _duplicate_positions(nodes)
     return ParsedExamProgram(
         nodes=nodes,
         tickets=sum(node.exam_kind == ExamKind.TICKET for node in nodes),
         questions=sum(node.exam_kind == ExamKind.QUESTION for node in study_nodes),
         tasks=sum(node.exam_kind == ExamKind.TASK for node in study_nodes),
-        warnings=[*parse_warnings, *_duplicate_warnings(nodes)],
+        warnings=[*parse_warnings, *_duplicate_warnings(nodes, duplicates)],
+        has_duplicates=bool(duplicates),
     )

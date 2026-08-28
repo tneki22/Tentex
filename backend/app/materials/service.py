@@ -57,7 +57,12 @@ from app.models import (
 )
 from app.projects import answers, program
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
-from app.projects.importer import ExamImportError, ParsedExamProgram, parse_exam_program
+from app.projects.importer import (
+    ExamImportError,
+    ParsedExamProgram,
+    dedupe_first_occurrence,
+    parse_exam_program,
+)
 from app.projects.schemas import ReferenceAnswerImportWrite
 
 
@@ -414,6 +419,7 @@ def preview_exam_program(
         material_name=link.display_name or material.original_name,
         counts={"tickets": parsed.tickets, "questions": parsed.questions, "tasks": parsed.tasks},
         warnings=parsed.warnings,
+        has_duplicates=parsed.has_duplicates,
         nodes=nodes,
     )
 
@@ -426,6 +432,8 @@ def import_exam_program_from_material(
 ):
     parsed, material, link = _parsed_exam_from_material(session, project_id, material_id)
     material_name = link.display_name or material.original_name
+    if command.dedupe_duplicates and parsed.has_duplicates:
+        parsed = dedupe_first_occurrence(parsed)
     session.rollback()
     return program.replace_active_exam_program(
         session,
@@ -445,6 +453,8 @@ def import_exam_draft_from_material(
 ):
     parsed, material, link = _parsed_exam_from_material(session, project_id, material_id)
     material_name = link.display_name or material.original_name
+    if command.dedupe_duplicates and parsed.has_duplicates:
+        parsed = dedupe_first_occurrence(parsed)
     session.rollback()
     return program.replace_draft_program(
         session,

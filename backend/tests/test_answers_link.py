@@ -195,6 +195,54 @@ def test_numbered_relink_is_idempotent_and_preserves_manual_answer(session: Sess
     assert repeated.created_answers == 0
 
 
+def test_duplicate_program_titles_receive_the_same_answer(session: Session) -> None:
+    """Импорт с сохранением дублей не должен оставлять второй вопрос без эталона."""
+    project = make_exam_project(session)
+    titles = ["Repeated question", "Other question", "Repeated question"]
+    nodes = [
+        ProgramNode(
+            id=uuid4(),
+            project_id=project.id,
+            parent_id=None,
+            node_type=NodeType.TOPIC,
+            exam_kind=ExamKind.QUESTION,
+            sort_order=index,
+            title=title,
+            is_in_current_program=True,
+            needs_material=False,
+            is_archived=False,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        for index, title in enumerate(titles)
+    ]
+    session.add_all(nodes)
+    session.commit()
+    material = _answers_material(
+        session,
+        project,
+        [
+            ("Repeated question", [("Shared answer text", "paragraph", None)]),
+            ("Other question", [("Other answer text", "paragraph", None)]),
+        ],
+    )
+
+    result = link_answers_material(session, project.id, material.id)
+
+    assert set(result.linked_node_ids) == {node.id for node in nodes}
+    assert result.missing_node_ids == []
+    first_dup, other, second_dup = nodes
+    first_answer = session.get(ReferenceAnswer, (project.id, first_dup.id))
+    second_answer = session.get(ReferenceAnswer, (project.id, second_dup.id))
+    other_answer = session.get(ReferenceAnswer, (project.id, other.id))
+    assert first_answer is not None
+    assert second_answer is not None
+    assert other_answer is not None
+    assert first_answer.text == second_answer.text
+    assert "Shared answer text" in first_answer.text
+    assert other_answer.text != first_answer.text
+
+
 def test_ordinal_linking_fails_closed_on_gap(session: Session) -> None:
     project, _nodes = _program(session, 2)
     material = _answers_material(

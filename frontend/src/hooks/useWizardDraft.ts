@@ -31,7 +31,7 @@ export interface WizardDraftController {
   queueSave: (command: Omit<WizardDraftCommand, "expected_revision">) => Promise<WizardDraftDetail>;
   enqueueProgramCommand: (command: (detail: WizardDraftDetail) => Promise<ProgramChangeResult>) => Promise<ProgramChangeResult>;
   undo: () => Promise<ActionUndoResult>;
-  importExam: (rawText: string, examFormat: Exclude<ExamFormat, "unknown">) => Promise<ExamImportResult>;
+  importExam: (rawText: string, examFormat: Exclude<ExamFormat, "unknown">, dedupeDuplicates?: boolean) => Promise<ExamImportResult>;
   activate: () => Promise<ProjectDetail>;
   discard: () => Promise<void>;
   flush: () => Promise<void>;
@@ -195,7 +195,7 @@ export function useWizardDraft({
     }
   }), [accept, enqueue, ensureDraft, fail]);
 
-  const importExam = useCallback((rawText: string, examFormat: Exclude<ExamFormat, "unknown">) => enqueue(async () => {
+  const importExam = useCallback((rawText: string, examFormat: Exclude<ExamFormat, "unknown">, dedupeDuplicates = false) => enqueue(async () => {
     const current = await ensureDraft();
     setStatus("saving");
     try {
@@ -205,6 +205,7 @@ export function useWizardDraft({
         expected_program_revision: latest.program.revision,
         exam_format: examFormat,
         raw_text: rawText,
+        dedupe_duplicates: dedupeDuplicates,
       });
       accept({
         ...latest,

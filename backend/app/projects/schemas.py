@@ -192,6 +192,7 @@ class ExamImportWrite(ApiModel):
     expected_program_revision: int = Field(ge=0)
     exam_format: Literal[ExamFormat.QUESTIONS, ExamFormat.QUESTIONS_TASKS, ExamFormat.TICKETS]
     raw_text: str = Field(min_length=1, max_length=1_000_000)
+    dedupe_duplicates: bool = False
 
 
 class WorkspaceTab(StrEnum):
@@ -526,5 +527,6 @@ class ExamImportResult(ApiModel):
     revision: int
     counts: ExamImportCounts
     warnings: list[str]
+    has_duplicates: bool
     program: ProgramState
     latest_undoable_action: LatestUndoableAction | None

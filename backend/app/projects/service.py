@@ -29,7 +29,7 @@ from app.projects.errors import (
     ProjectInvariantError,
     ProjectNotFoundError,
 )
-from app.projects.importer import ExamImportError, parse_exam_program
+from app.projects.importer import ExamImportError, dedupe_first_occurrence, parse_exam_program
 from app.projects.schemas import (
     ExamImportCounts,
     ExamImportResult,
@@ -234,6 +234,11 @@ def import_exam_program(
         )
     except ExamImportError as error:
         raise ProjectInvariantError(str(error)) from error
+    has_duplicates = parsed.has_duplicates
+    warnings = parsed.warnings
+    if command.dedupe_duplicates and has_duplicates:
+        parsed = dedupe_first_occurrence(parsed)
+        warnings = parsed.warnings
     result = program.replace_draft_program(
         session,
         project_id,
@@ -247,7 +252,8 @@ def import_exam_program(
         counts=ExamImportCounts(
             tickets=parsed.tickets, questions=parsed.questions, tasks=parsed.tasks
         ),
-        warnings=parsed.warnings,
+        warnings=warnings,
+        has_duplicates=has_duplicates,
         program=result.program,
         latest_undoable_action=result.latest_undoable_action,
     )

@@ -342,16 +342,19 @@ class ExamProgramPreview(ApiModel):
     material_name: str
     counts: dict[str, int]
     warnings: list[str]
+    has_duplicates: bool
     nodes: list[ExamProgramPreviewNode]
 
 
 class ExamProgramImportWrite(ApiModel):
     expected_program_revision: int = Field(ge=0)
+    dedupe_duplicates: bool = False
 
 
 class ExamProgramDraftImportWrite(ApiModel):
     expected_draft_revision: int = Field(ge=0)
     expected_program_revision: int = Field(ge=0)
+    dedupe_duplicates: bool = False
 
 
 class MaterialAnswerImportResult(ApiModel):

@@ -293,6 +293,7 @@ export interface ExamProgramPreview {
   material_name: string;
   counts: { tickets: number; questions: number; tasks: number };
   warnings: string[];
+  has_duplicates: boolean;
   nodes: Array<{
     node_type: "section" | "topic" | "subpoint";
     exam_kind: "question" | "task" | "ticket";
@@ -743,9 +744,16 @@ export const importExamProgramFromMaterial = (
   projectId: string,
   materialId: string,
   expectedProgramRevision: number,
+  dedupeDuplicates = false,
 ): Promise<ProgramChangeResult> => request(
   `${materialPath(projectId, materialId)}/exam-program-import`,
-  { method: "POST", body: JSON.stringify({ expected_program_revision: expectedProgramRevision }) },
+  {
+    method: "POST",
+    body: JSON.stringify({
+      expected_program_revision: expectedProgramRevision,
+      dedupe_duplicates: dedupeDuplicates,
+    }),
+  },
 );
 
 export const importExamDraftProgramFromMaterial = (
@@ -753,6 +761,7 @@ export const importExamDraftProgramFromMaterial = (
   materialId: string,
   expectedDraftRevision: number,
   expectedProgramRevision: number,
+  dedupeDuplicates = false,
 ): Promise<ProgramChangeResult> => request(
   `${materialPath(projectId, materialId)}/exam-draft-import`,
   {
@@ -760,6 +769,7 @@ export const importExamDraftProgramFromMaterial = (
     body: JSON.stringify({
       expected_draft_revision: expectedDraftRevision,
       expected_program_revision: expectedProgramRevision,
+      dedupe_duplicates: dedupeDuplicates,
     }),
   },
 );

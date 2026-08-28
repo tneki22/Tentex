@@ -335,6 +335,7 @@ export interface ExamImportResult {
   revision: number;
   counts: { tickets: number; questions: number; tasks: number };
   warnings: string[];
+  has_duplicates: boolean;
   program: ProgramState;
   latest_undoable_action: LatestUndoableAction | null;
 }
@@ -613,6 +614,7 @@ export const importExamProgram = (
     expected_program_revision: number;
     exam_format: Exclude<ExamFormat, "unknown">;
     raw_text: string;
+    dedupe_duplicates?: boolean;
   },
 ): Promise<ExamImportResult> => request(`${draftPath(projectId)}/exam-import`, {
   method: "POST",

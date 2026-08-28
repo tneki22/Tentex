@@ -117,6 +117,32 @@ def _could_match_question(
     return False
 
 
+def _collapse_duplicate_titles(
+    ranked: tuple[HeadingCandidate, ...],
+    nodes: list[ProgramNode],
+    node_index: dict[UUID, int],
+) -> list[HeadingCandidate]:
+    """Несколько узлов с дословно одинаковой формулировкой — не спор, а один вопрос.
+
+    `HeadingIndex.rank` честно возвращает каждый узел с точным совпадением
+    заголовка, включая задублированные при импорте вопросы программы. Ниже по
+    конвейеру это читается как «второй кандидат дышит в затылок первому» и рубит
+    привязку вовсе. Схлопываем дублей в самое раннее вхождение до расчёта отрыва —
+    остальные вхождения получат тот же эталон позже, в `_expand_duplicate_sections`.
+    """
+    best_by_title: dict[str, HeadingCandidate] = {}
+    order: list[str] = []
+    for candidate in ranked:
+        title_key = nodes[node_index[candidate.node_id]].title.casefold()
+        current = best_by_title.get(title_key)
+        if current is None:
+            order.append(title_key)
+            best_by_title[title_key] = candidate
+        elif node_index[candidate.node_id] < node_index[current.node_id]:
+            best_by_title[title_key] = candidate
+    return [best_by_title[key] for key in order]
+
+
 def _candidate_for_anchor(
     rows: list[tuple[MaterialFragment, int]],
     anchor: int,
@@ -183,8 +209,9 @@ def _candidate_for_anchor(
             continue
         if not ranked:
             continue
-        best = ranked[0]
-        runner_up = ranked[1].score if len(ranked) > 1 else 0.0
+        collapsed = _collapse_duplicate_titles(ranked, nodes, node_index)
+        best = collapsed[0]
+        runner_up = collapsed[1].score if len(collapsed) > 1 else 0.0
         choices.append(
             _Candidate(
                 anchor,

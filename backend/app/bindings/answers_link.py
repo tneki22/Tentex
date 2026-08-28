@@ -129,6 +129,46 @@ class _Section:
         return "\n".join(body)
 
 
+def _expand_duplicate_sections(
+    nodes: list[ProgramNode], sections: list[_Section]
+) -> list[_Section]:
+    """Одинаковая формулировка вопроса — одинаковый эталон на все её вхождения.
+
+    Заголовок в файле ответов встречается один раз даже если вопрос в программе
+    задублирован (импортирован с сохранением исходной нумерации), поэтому раздел
+    находит только один узел. Здесь раздел раздаётся на всех тёзок сразу — так же,
+    как если бы автор ответов расписал эталон под каждым повтором отдельно.
+    """
+    node_by_id = {node.id: node for node in nodes}
+    groups: dict[str, list[UUID]] = defaultdict(list)
+    for node in nodes:
+        groups[node.title.casefold()].append(node.id)
+
+    expanded: list[_Section] = []
+    for section in sections:
+        ids: list[UUID] = []
+        seen: set[UUID] = set()
+        for node_id in section.node_ids:
+            node = node_by_id.get(node_id)
+            group = groups[node.title.casefold()] if node is not None else [node_id]
+            for group_id in group:
+                if group_id not in seen:
+                    seen.add(group_id)
+                    ids.append(group_id)
+        expanded.append(
+            _Section(
+                node_ids=ids,
+                title=section.title,
+                fragments=section.fragments,
+                page_from=section.page_from,
+                page_to=section.page_to,
+                method=section.method,
+                header_fragment_ids=section.header_fragment_ids,
+            )
+        )
+    return expanded
+
+
 def find_answers_material(session: Session, project_id: UUID) -> ProjectMaterial | None:
     """Файл эталонных ответов у проекта ровно один — на этом держится автозаполнение."""
     for link in session.scalars(
@@ -371,6 +411,7 @@ def link_answers_material(
         )
         for section in detection.sections
     ]
+    sections = _expand_duplicate_sections(nodes, sections)
     suggestions = [
         HeadingSuggestion(
             anchor_fragment_id=item.anchor_fragment_id,
@@ -408,6 +449,7 @@ def link_answers_material(
             )
         )
     session.flush()
+    linked_ids = {node_id for section in sections for node_id in section.node_ids}
     return AnswersLinkResult(
         linked_sections=len(sections),
         linked_fragments=linked_fragments,
@@ -426,8 +468,8 @@ def link_answers_material(
         duplicate_headings=[],
         suggestions=suggestions,
         expected_questions=len(nodes),
-        linked_node_ids=list(detection.linked_node_ids),
-        missing_node_ids=list(detection.missing_node_ids),
+        linked_node_ids=[node.id for node in nodes if node.id in linked_ids],
+        missing_node_ids=[node.id for node in nodes if node.id not in linked_ids],
         ambiguous_sections=[item.heading for item in detection.ambiguous],
         ambiguous_pages=sorted({item.page for item in detection.ambiguous}),
     )
@@ -466,8 +508,14 @@ def resolve_answers_heading(
         method=detected.method,
         header_fragment_ids=set(detected.header_fragment_ids),
     )
-    linked_fragments, created_ids = _bind_section(session, project_id, material, section)
-    created, updated, kept = _fill_answers(session, project_id, material, label, [section])
+    sections = _expand_duplicate_sections(nodes, [section])
+    linked_fragments = 0
+    created_ids: list[UUID] = []
+    for item in sections:
+        item_linked, item_created = _bind_section(session, project_id, material, item)
+        linked_fragments += item_linked
+        created_ids.extend(item_created)
+    created, updated, kept = _fill_answers(session, project_id, material, label, sections)
     if created_ids:
         session.add(
             ProjectActionLog(
@@ -480,6 +528,7 @@ def resolve_answers_heading(
             )
         )
     session.flush()
+    linked_ids = {item for sec in sections for item in sec.node_ids}
     return AnswersLinkResult(
         linked_sections=1,
         linked_fragments=linked_fragments,
@@ -487,6 +536,6 @@ def resolve_answers_heading(
         updated_answers=updated,
         kept_answers=kept,
         expected_questions=len(nodes),
-        linked_node_ids=[node.id],
-        missing_node_ids=[item.id for item in nodes if item.id != node.id],
+        linked_node_ids=[item.id for item in nodes if item.id in linked_ids],
+        missing_node_ids=[item.id for item in nodes if item.id not in linked_ids],
     )
