@@ -333,7 +333,7 @@ export interface ActionUndoResult {
 
 export interface ExamImportResult {
   revision: number;
-  counts: { tickets: number; questions: number; tasks: number };
+  counts: { tickets: number; questions: number; tasks: number; subpoints: number };
   warnings: string[];
   program: ProgramState;
   latest_undoable_action: LatestUndoableAction | null;

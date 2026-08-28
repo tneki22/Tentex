@@ -1,14 +1,18 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { Brain, CalendarDays, Check, FileCheck2, FileText, Files, LibraryBig, ListChecks, Pencil, Sparkles, TicketCheck, Upload } from "lucide-react";
+import { Brain, Calculator, CalendarDays, Check, ClipboardCheck, FileCheck2, FileText, Files, LibraryBig, ListChecks, Pencil, Sparkles, TicketCheck, Upload } from "lucide-react";
 import {
   controlMaterialProcessing,
   createTextMaterial,
   detachMaterial,
+  importCompositeExamDraftProgram,
   importExamDraftProgramFromMaterial,
   importMaterialReferenceAnswers,
+  listMaterials,
   previewExamProgram,
   startMaterialProcessing,
   uploadMaterial,
+  type ExamCompositeDraftImportResult,
+  type ExamMaterialSlot,
   type LibraryMaterialRead,
   type MaterialPurpose,
   type MaterialRead,
@@ -39,6 +43,29 @@ import {
   ExamMaterialUploadPanel,
   type ExamMaterialInputMode,
 } from "./ExamMaterialUploadPanel";
+import { ExamImportGuide } from "./ExamImportGuide";
+
+interface SlotInput {
+  selected: boolean;
+  mode: ExamMaterialInputMode;
+  text: string;
+}
+
+const EMPTY_SLOT: SlotInput = { selected: false, mode: "files", text: "" };
+
+/** UI-выбор шага 1: не вводит новое значение `ExamFormat` — «combined»
+
+ * разворачивается в «questions» или «questions_tasks» в зависимости от того,
+ * выбран ли список задач (см. `trackFor`/`deriveCombinedFormat`).
+ */
+type WizardTrack = "combined" | "tickets" | "unknown";
+
+function trackFor(format: ExamFormat | null): WizardTrack | null {
+  if (format === "tickets") return "tickets";
+  if (format === "unknown") return "unknown";
+  if (format === "questions" || format === "questions_tasks") return "combined";
+  return null;
+}
 
 interface ExamForm {
   format: ExamFormat | null;
@@ -48,6 +75,10 @@ interface ExamForm {
   hasTheory: boolean;
   primaryMode: ExamMaterialInputMode;
   answersMode: ExamMaterialInputMode;
+  questionList: SlotInput;
+  questionAnswers: SlotInput;
+  taskList: SlotInput;
+  taskAnswers: SlotInput;
   subject: string;
   deadline: string;
   examTime: string;
@@ -72,6 +103,10 @@ const EMPTY_FORM: ExamForm = {
   hasTheory: false,
   primaryMode: "files",
   answersMode: "files",
+  questionList: EMPTY_SLOT,
+  questionAnswers: EMPTY_SLOT,
+  taskList: EMPTY_SLOT,
+  taskAnswers: EMPTY_SLOT,
   subject: "",
   deadline: "",
   examTime: "",
@@ -88,9 +123,8 @@ const EMPTY_FORM: ExamForm = {
   sessionMinutes: "45",
 };
 
-const FORMAT_OPTIONS: Array<RadioCardOption<ExamFormat>> = [
-  { value: "questions", title: "Отдельные вопросы", description: "Общий список теоретических вопросов без заранее собранных билетов.", icon: <ListChecks size={18} aria-hidden="true" /> },
-  { value: "questions_tasks", title: "Вопросы и задачи", description: "Теория и практические задания перечислены отдельно, без группировки.", icon: <FileCheck2 size={18} aria-hidden="true" /> },
+const FORMAT_OPTIONS: Array<RadioCardOption<WizardTrack>> = [
+  { value: "combined", title: "Отдельные вопросы / задачи", description: "Общий список теоретических вопросов и/или задач без заранее собранных билетов.", icon: <ListChecks size={18} aria-hidden="true" /> },
   { value: "tickets", title: "Готовые билеты", description: "Состав каждого билета известен: вопросы, задачи или их комбинация.", icon: <TicketCheck size={18} aria-hidden="true" /> },
   { value: "unknown", title: "Точного списка пока нет", description: "Сохраним источники сейчас, а официальный список вы добавите позже.", icon: <LibraryBig size={18} aria-hidden="true" /> },
 ];
@@ -205,6 +239,23 @@ function getMaterialOpinion(form: ExamForm) {
   if (form.format === "unknown") {
     return "Сохраним учебные материалы. Когда появится официальный список, вы добавите его и получите программу экзамена.";
   }
+  if (trackFor(form.format) === "combined") {
+    const hasStructure = form.questionList.selected || form.taskList.selected;
+    const hasAnswers = form.questionAnswers.selected || form.taskAnswers.selected;
+    if (!hasStructure) {
+      return "Добавьте список вопросов или список задач — без него не из чего собрать программу.";
+    }
+    if (hasAnswers && form.hasTheory) {
+      return "Отличный набор: готовые ответы и решения дадут основу для повторения, а учебные материалы помогут глубже разобраться и уточнить сложные темы.";
+    }
+    if (hasAnswers) {
+      return "Отлично: у вас уже есть всё, чтобы повторять ответы и тренироваться по вопросам и задачам.";
+    }
+    if (form.hasTheory) {
+      return "Учебные материалы помогут не только запомнить ответы, но и разобраться в темах глубже. Готовые ответы и решения можно добавить позже.";
+    }
+    return "Списка достаточно, чтобы создать программу и начать подготовку. Ответы, решения и учебные материалы можно добавить позже.";
+  }
   if (form.hasAnswers && form.hasTheory) {
     return "Отличный набор: готовые ответы дадут основу для повторения, а учебные материалы помогут глубже разобраться и уточнить сложные темы.";
   }
@@ -217,13 +268,44 @@ function getMaterialOpinion(form: ExamForm) {
   return "Списка вопросов достаточно, чтобы создать программу и начать подготовку. Ответы и учебные материалы можно добавить позже.";
 }
 
-function formatDetectedCounts(counts: { tickets: number; questions: number; tasks: number }) {
+function formatDetectedCounts(counts: { tickets: number; questions: number; tasks: number; subpoints?: number }) {
   return [
     counts.tickets > 0 ? `${counts.tickets} ${plural(counts.tickets, "билет", "билета", "билетов")}` : null,
     counts.questions > 0 ? `${counts.questions} ${plural(counts.questions, "вопрос", "вопроса", "вопросов")}` : null,
     counts.tasks > 0 ? `${counts.tasks} ${plural(counts.tasks, "задача", "задачи", "задач")}` : null,
+    counts.subpoints ? `${counts.subpoints} ${plural(counts.subpoints, "подпункт", "подпункта", "подпунктов")}` : null,
   ].filter((value): value is string => value !== null).join(" · ");
 }
+
+type SlotKey = "questionList" | "questionAnswers" | "taskList" | "taskAnswers";
+
+const SLOT_VALUE: Record<SlotKey, ExamMaterialSlot> = {
+  questionList: "question_list",
+  questionAnswers: "question_answers",
+  taskList: "task_list",
+  taskAnswers: "task_answers",
+};
+
+const SLOT_PURPOSE: Record<SlotKey, MaterialPurpose> = {
+  questionList: "exam_structure",
+  questionAnswers: "reference_answers",
+  taskList: "exam_structure",
+  taskAnswers: "reference_answers",
+};
+
+const SLOT_LABEL: Record<SlotKey, string> = {
+  questionList: "список вопросов",
+  questionAnswers: "готовые ответы на вопросы",
+  taskList: "список задач",
+  taskAnswers: "решения задач",
+};
+
+const SLOT_FILE_NAME: Record<SlotKey, string> = {
+  questionList: "Список вопросов",
+  questionAnswers: "Готовые ответы",
+  taskList: "Список задач",
+  taskAnswers: "Решения задач",
+};
 
 interface PreparationSuggestion {
   inputKey: string;
@@ -293,10 +375,11 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<ExamForm>(EMPTY_FORM);
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [counts, setCounts] = useState({ tickets: 0, questions: 0, tasks: 0 });
+  const [counts, setCounts] = useState({ tickets: 0, questions: 0, tasks: 0, subpoints: 0 });
   const [actionError, setActionError] = useState("");
   const [reviewRepairOpen, setReviewRepairOpen] = useState(false);
   const [libraryPurpose, setLibraryPurpose] = useState<MaterialPurpose | null>(null);
+  const [librarySlot, setLibrarySlot] = useState<SlotKey | null>(null);
   const [aiSettings, setAiSettings] = useState<AiSettingsRead | null>(null);
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false);
   const [estimatePending, setEstimatePending] = useState(false);
@@ -339,6 +422,26 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     const inputModes = state.input_modes && typeof state.input_modes === "object"
       ? state.input_modes as Record<string, unknown>
       : {};
+    const restoredHasAnswers = state.has_answers === true;
+    const restoredRawText = typeof state.raw_text === "string" ? state.raw_text : "";
+    const restoredAnswersText = typeof state.answer_text === "string" ? state.answer_text : "";
+    const restoredPrimaryMode: ExamMaterialInputMode = inputModes.primary === "text" ? "text" : "files";
+    const restoredAnswersMode: ExamMaterialInputMode = inputModes.answers === "text" ? "text" : "files";
+    const rawSlots = state.slots && typeof state.slots === "object"
+      ? state.slots as Record<string, Partial<SlotInput>>
+      : null;
+    const restoreSlot = (key: string, legacyFallback: SlotInput): SlotInput => {
+      const raw = rawSlots?.[key];
+      if (!raw) return legacyFallback;
+      return {
+        selected: raw.selected === true,
+        mode: raw.mode === "text" ? "text" : "files",
+        text: typeof raw.text === "string" ? raw.text : "",
+      };
+    };
+    // Старый черновик (`questions`/`questions_tasks`, ещё без `state.slots`):
+    // прежний список занимает слот вопросов «как один legacy-вход», прежний
+    // общий файл ответов — слот ответов на вопросы. Разделять не обязательно.
     const restoredWarnings = Array.isArray(state.warnings)
       ? state.warnings.filter((warning): warning is string => typeof warning === "string")
       : [];
@@ -347,17 +450,34 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     setPreparationSuggestion(restoredSuggestion(state.preparation_suggestion));
     setCounts({
       tickets: detail.program.nodes.filter((node) => node.exam_kind === "ticket").length,
-      questions: detail.program.nodes.filter((node) => node.exam_kind === "question").length,
-      tasks: detail.program.nodes.filter((node) => node.exam_kind === "task").length,
+      questions: detail.program.nodes.filter(
+        (node) => node.exam_kind === "question" && node.node_type === "topic",
+      ).length,
+      tasks: detail.program.nodes.filter(
+        (node) => node.exam_kind === "task" && node.node_type === "topic",
+      ).length,
+      subpoints: detail.program.nodes.filter((node) => node.node_type === "subpoint").length,
     });
     setForm({
       format: restoredFormat,
-      rawText: typeof state.raw_text === "string" ? state.raw_text : "",
-      answersText: typeof state.answer_text === "string" ? state.answer_text : "",
-      hasAnswers: state.has_answers === true,
+      rawText: restoredRawText,
+      answersText: restoredAnswersText,
+      hasAnswers: restoredHasAnswers,
       hasTheory: restoredFormat === "unknown" || state.has_theory === true,
-      primaryMode: inputModes.primary === "text" ? "text" : "files",
-      answersMode: inputModes.answers === "text" ? "text" : "files",
+      primaryMode: restoredPrimaryMode,
+      answersMode: restoredAnswersMode,
+      questionList: restoreSlot("question_list", {
+        selected: trackFor(restoredFormat) === "combined",
+        mode: restoredPrimaryMode,
+        text: restoredRawText,
+      }),
+      questionAnswers: restoreSlot("question_answers", {
+        selected: trackFor(restoredFormat) === "combined" && restoredHasAnswers,
+        mode: restoredAnswersMode,
+        text: restoredAnswersText,
+      }),
+      taskList: restoreSlot("task_list", EMPTY_SLOT),
+      taskAnswers: restoreSlot("task_answers", EMPTY_SLOT),
       subject: goal?.subject ?? "",
       deadline: detail.project.deadline ?? "",
       examTime: goal?.exam_time?.slice(0, 5) ?? "",
@@ -431,6 +551,12 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
         has_answers: form.hasAnswers,
         has_theory: form.format === "unknown" || form.hasTheory,
         input_modes: { primary: form.primaryMode, answers: form.answersMode },
+        slots: {
+          question_list: form.questionList,
+          question_answers: form.questionAnswers,
+          task_list: form.taskList,
+          task_answers: form.taskAnswers,
+        },
         warnings: nextWarnings,
         preparation_suggestion: preparationSuggestion,
       },
@@ -542,6 +668,11 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     (material) => material.purposes.includes(purpose),
   );
 
+  function openLibraryPicker(purpose: MaterialPurpose, slot?: SlotKey) {
+    setLibraryPurpose(purpose);
+    setLibrarySlot(slot ?? null);
+  }
+
   async function addFiles(purpose: MaterialPurpose, files: File[]) {
     const draft = await controller.ensureDraft();
     const existingStudyCount = materialsFor("study_source").length;
@@ -624,61 +755,260 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     }));
   }
 
+  /** Материалы конкретного слота. Единственный материал без слота считается
+   * прежним объединённым/общим файлом старого черновика — так завершить его
+   * можно без обязательного разделения (см. FR составного импорта). */
+  function materialsForSlot(key: SlotKey): MaterialRead[] {
+    const purpose = SLOT_PURPOSE[key];
+    const slotValue = SLOT_VALUE[key];
+    const exact = projectMaterials.materials.filter(
+      (material) => material.purposes.includes(purpose) && material.exam_slot === slotValue,
+    );
+    if (exact.length > 0) return exact;
+    if (key !== "questionList" && key !== "questionAnswers") return [];
+    const unslotted = projectMaterials.materials.filter(
+      (material) => material.purposes.includes(purpose) && !material.exam_slot,
+    );
+    return unslotted.length === 1 ? unslotted : [];
+  }
+
+  async function addSlotFiles(key: SlotKey, files: File[]) {
+    const draft = await controller.ensureDraft();
+    const purpose = SLOT_PURPOSE[key];
+    const slotValue = SLOT_VALUE[key];
+    for (const file of files) {
+      const material = await uploadMaterial(draft.project.id, file, "reference", [purpose], slotValue);
+      if (purpose === "exam_structure" && material.status === "ready_to_process") {
+        await startMaterialProcessing(draft.project.id, material.id, "fast");
+      }
+    }
+    await projectMaterials.refresh();
+  }
+
+  async function changeSlotMode(key: SlotKey, nextMode: ExamMaterialInputMode) {
+    const slot = form[key];
+    if (slot.mode === nextMode) return;
+    const existing = materialsForSlot(key);
+    if (nextMode === "text" && existing.length > 0) {
+      if (!window.confirm("Файл будет убран из проекта. Переключиться на вставку текста?")) return;
+      await Promise.all(existing.map(removeMaterial));
+    }
+    if (nextMode === "files" && slot.text.trim()) {
+      if (!window.confirm("Вставленный текст будет очищен. Переключиться на файлы?")) return;
+    }
+    setForm((current) => ({
+      ...current,
+      [key]: { ...current[key], mode: nextMode, text: nextMode === "files" ? "" : current[key].text },
+    }));
+  }
+
+  function slotText(key: SlotKey, text: string) {
+    setForm((current) => ({ ...current, [key]: { ...current[key], text } }));
+  }
+
+  /** Список и его ответы связаны: снятие списка отключает и файл ответов —
+   * мастер предупреждает об этом одним подтверждением на оба файла. */
+  async function toggleListSlot(listKey: "questionList" | "taskList", selected: boolean) {
+    const answersKey: SlotKey = listKey === "questionList" ? "questionAnswers" : "taskAnswers";
+    const listMaterials = materialsForSlot(listKey);
+    const answerMaterials = selected ? [] : materialsForSlot(answersKey);
+    const toRemove = [...listMaterials, ...answerMaterials];
+    if (!selected && toRemove.length > 0) {
+      const noun = listKey === "questionList" ? "список вопросов и связанные с ним ответы" : "список задач и связанные с ним решения";
+      if (!window.confirm(`Файл будет отключён от проекта (${noun}). Продолжить?`)) return;
+    }
+    if (!selected) await Promise.all(toRemove.map(removeMaterial));
+    setForm((current) => {
+      const next: ExamForm = {
+        ...current,
+        [listKey]: { ...current[listKey], selected, text: selected ? current[listKey].text : "" },
+      };
+      if (!selected) next[answersKey] = EMPTY_SLOT;
+      if (listKey === "taskList") {
+        next.format = selected ? "questions_tasks" : (next.questionList.selected ? "questions" : current.format);
+      }
+      next.hasAnswers = next.questionAnswers.selected || next.taskAnswers.selected;
+      return next;
+    });
+  }
+
+  async function toggleAnswersSlot(key: "questionAnswers" | "taskAnswers", selected: boolean) {
+    const existing = materialsForSlot(key);
+    if (!selected && existing.length > 0) {
+      if (!window.confirm("Файл будет отключён от проекта. Продолжить?")) return;
+      await Promise.all(existing.map(removeMaterial));
+    }
+    setForm((current) => {
+      const next: ExamForm = {
+        ...current,
+        [key]: { ...current[key], selected, text: selected ? current[key].text : "" },
+      };
+      next.hasAnswers = next.questionAnswers.selected || next.taskAnswers.selected;
+      return next;
+    });
+  }
+
+  async function continueLegacyTrack() {
+    const primaryMaterials = materialsFor("exam_structure");
+    const answerMaterials = materialsFor("reference_answers");
+
+    if (form.format !== "unknown") {
+      if (form.primaryMode === "text") {
+        if (!form.rawText.trim()) throw new Error("Вставьте список вопросов или выберите файл");
+        const result = await controller.importExam(form.rawText, form.format as Exclude<ExamFormat, "unknown">);
+        setWarnings(result.warnings);
+        setCounts(result.counts);
+      } else {
+        const primary = primaryMaterials[0];
+        if (!primary) throw new Error("Добавьте файл со списком вопросов или билетов");
+        if (primary.status !== "ready") {
+          throw new Error(primary.status === "failed"
+            ? primary.error || "Не удалось разобрать файл вопросов"
+            : "Дождитесь завершения быстрого разбора файла вопросов");
+        }
+        const preview = await previewExamProgram(controller.detail!.project.id, primary.id);
+        await controller.enqueueProgramCommand((current) => importExamDraftProgramFromMaterial(
+          current.project.id,
+          primary.id,
+          current.draft.revision,
+          current.program.revision,
+        ));
+        setWarnings(preview.warnings);
+        setCounts({ ...preview.counts, subpoints: preview.counts.subpoints ?? 0 });
+      }
+    }
+
+    if (form.hasAnswers) {
+      if (form.answersMode === "text") {
+        if (!form.answersText.trim()) throw new Error("Вставьте готовые ответы или выберите файл");
+        if (answerMaterials.length === 0) {
+          await createTextMaterial(controller.detail!.project.id, {
+            name: "Готовые ответы.txt",
+            text: form.answersText,
+            source_role: "reference",
+            purposes: ["reference_answers"],
+          });
+        }
+      } else if (answerMaterials.length === 0) {
+        throw new Error("Добавьте файл с готовыми ответами");
+      }
+    }
+
+    if ((form.format === "unknown" || form.hasTheory) && materialsFor("study_source").length === 0) {
+      throw new Error("Добавьте хотя бы один учебный материал");
+    }
+  }
+
+  async function continueCombinedTrack() {
+    const projectId = controller.detail!.project.id;
+    const listKeys: SlotKey[] = ["questionList", "questionAnswers", "taskList", "taskAnswers"];
+    if (!form.questionList.selected && !form.taskList.selected) {
+      throw new Error("Добавьте список вопросов или список задач");
+    }
+
+    // Материалы, создаваемые прямо здесь (вставленный текст), читаем из
+    // возвращаемого значения запроса, а не из хука материалов: React ещё не
+    // перерисовал компонент с новым состоянием внутри той же цепочки await,
+    // поэтому `projectMaterials.materials` в этом вызове остаётся старым.
+    const materialBySlot: Partial<Record<SlotKey, MaterialRead>> = {};
+    for (const key of listKeys) {
+      const slot = form[key];
+      if (!slot.selected) continue;
+      if (slot.mode === "text") {
+        if (!slot.text.trim()) throw new Error(`Вставьте текст в раздел «${SLOT_LABEL[key]}» или выберите файл`);
+        const existing = materialsForSlot(key)[0];
+        if (existing) {
+          materialBySlot[key] = existing;
+          continue;
+        }
+        const material = await createTextMaterial(projectId, {
+          name: `${SLOT_FILE_NAME[key]}.txt`,
+          text: slot.text,
+          source_role: "reference",
+          purposes: [SLOT_PURPOSE[key]],
+          exam_slot: SLOT_VALUE[key],
+        });
+        if (SLOT_PURPOSE[key] === "exam_structure" && material.status === "ready_to_process") {
+          await startMaterialProcessing(projectId, material.id, "fast");
+        }
+        materialBySlot[key] = material;
+      } else {
+        const existing = materialsForSlot(key)[0];
+        if (!existing) throw new Error(`Добавьте файл в раздел «${SLOT_LABEL[key]}»`);
+        materialBySlot[key] = existing;
+      }
+    }
+
+    // Быстрый разбор списков вопросов/задач может ещё идти — опрашиваем сервер
+    // напрямую (не через хук) и ждём короткое время, прежде чем сдаться.
+    for (const key of (["questionList", "taskList"] as const)) {
+      let material = materialBySlot[key];
+      if (!material) continue;
+      for (let attempt = 0; attempt < 30 && material.status !== "ready" && material.status !== "failed"; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
+        const fresh = await listMaterials(projectId);
+        material = fresh.find((item) => item.id === material!.id) ?? material;
+      }
+      materialBySlot[key] = material;
+      if (material.status !== "ready") {
+        throw new Error(material.status === "failed"
+          ? material.error || `Не удалось разобрать файл: ${SLOT_LABEL[key]}`
+          : `Дождитесь завершения быстрого разбора файла: ${SLOT_LABEL[key]}`);
+      }
+    }
+
+    await projectMaterials.refresh();
+
+    const questionMaterial = materialBySlot.questionList;
+    const taskMaterial = materialBySlot.taskList;
+    const isLegacyQuestionOnly = Boolean(questionMaterial && !questionMaterial.exam_slot && !taskMaterial);
+
+    if (isLegacyQuestionOnly && questionMaterial) {
+      // Старый черновик до этого слота: файл ещё не разделён на вопросы/задачи —
+      // завершаем его прежним однослотовым импортом, как раньше.
+      const preview = await previewExamProgram(controller.detail!.project.id, questionMaterial.id);
+      await controller.enqueueProgramCommand((current) => importExamDraftProgramFromMaterial(
+        current.project.id,
+        questionMaterial.id,
+        current.draft.revision,
+        current.program.revision,
+      ));
+      setWarnings(preview.warnings);
+      setCounts({ ...preview.counts, subpoints: preview.counts.subpoints ?? 0 });
+    } else if (questionMaterial || taskMaterial) {
+      let captured: Awaited<ReturnType<typeof importCompositeExamDraftProgram>> | null = null;
+      await controller.enqueueProgramCommand(async (current) => {
+        const result = await importCompositeExamDraftProgram(current.project.id, {
+          expected_draft_revision: current.draft.revision,
+          expected_program_revision: current.program.revision,
+          question_material_id: questionMaterial?.id ?? null,
+          task_material_id: taskMaterial?.id ?? null,
+        });
+        captured = result;
+        return result.change;
+      });
+      if (captured) {
+        const result = captured as ExamCompositeDraftImportResult;
+        setWarnings(result.warnings);
+        setCounts({ tickets: 0, ...result.counts });
+      }
+    }
+
+    if (form.hasTheory && materialsFor("study_source").length === 0) {
+      throw new Error("Добавьте хотя бы один учебный материал");
+    }
+  }
+
   async function continueFromUpload() {
     if (!form.format) return;
     setActionError("");
     try {
       await controller.queueSave(command(3));
-      const primaryMaterials = materialsFor("exam_structure");
-      const answerMaterials = materialsFor("reference_answers");
-      const theoryMaterials = materialsFor("study_source");
-
-      if (form.format !== "unknown") {
-        if (form.primaryMode === "text") {
-          if (!form.rawText.trim()) throw new Error("Вставьте список вопросов или выберите файл");
-          const result = await controller.importExam(form.rawText, form.format);
-          setWarnings(result.warnings);
-          setCounts(result.counts);
-        } else {
-          const primary = primaryMaterials[0];
-          if (!primary) throw new Error("Добавьте файл со списком вопросов или билетов");
-          if (primary.status !== "ready") {
-            throw new Error(primary.status === "failed"
-              ? primary.error || "Не удалось разобрать файл вопросов"
-              : "Дождитесь завершения быстрого разбора файла вопросов");
-          }
-          const preview = await previewExamProgram(controller.detail!.project.id, primary.id);
-          await controller.enqueueProgramCommand((current) => importExamDraftProgramFromMaterial(
-            current.project.id,
-            primary.id,
-            current.draft.revision,
-            current.program.revision,
-          ));
-          setWarnings(preview.warnings);
-          setCounts(preview.counts);
-        }
+      if (trackFor(form.format) === "combined") {
+        await continueCombinedTrack();
+      } else {
+        await continueLegacyTrack();
       }
-
-      if (form.hasAnswers) {
-        if (form.answersMode === "text") {
-          if (!form.answersText.trim()) throw new Error("Вставьте готовые ответы или выберите файл");
-          if (answerMaterials.length === 0) {
-            await createTextMaterial(controller.detail!.project.id, {
-              name: "Готовые ответы.txt",
-              text: form.answersText,
-              source_role: "reference",
-              purposes: ["reference_answers"],
-            });
-          }
-        } else if (answerMaterials.length === 0) {
-          throw new Error("Добавьте файл с готовыми ответами");
-        }
-      }
-
-      if ((form.format === "unknown" || form.hasTheory) && theoryMaterials.length === 0) {
-        throw new Error("Добавьте хотя бы один учебный материал");
-      }
-
       await projectMaterials.refresh();
       await controller.queueSave(command(4));
       changeStep(4);
@@ -734,52 +1064,113 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
       {(actionError || controller.error || projectMaterials.error) && <p className="inline-error" role="alert">{actionError || controller.error?.message || projectMaterials.error}</p>}
       {controller.conflict && <Card><h2>Черновик изменился в другой вкладке</h2><p>Загрузите серверную версию, чтобы не затереть изменения.</p><Button onClick={() => void controller.reload()}>Загрузить серверную версию</Button></Card>}
 
-      {step === 1 && <section className="wizard-step"><PageHead eyebrow="Сначала — структура" title="Как устроен ваш экзамен?" /><p>Это определит, как Tentex сохранит формулировки и соберёт из них программу.</p><RadioCards label="Формат экзамена" value={form.format} options={FORMAT_OPTIONS} onChange={(format) => setForm((current) => ({ ...current, format, hasTheory: format === "unknown" || current.hasTheory }))} className="wizard-format-options" />{form.format === "unknown" && <div className="wizard-context-note"><LibraryBig size={18} aria-hidden="true" /><span><b>Официальный список добавите позже</b>Сейчас сохраним учебные источники. Без прохода 1 предварительную программу по ним не выдумываем.</span></div>}<div className="wizard-actions"><Button disabled={busy || !form.format} onClick={() => void go(2)}>Продолжить</Button></div></section>}
+      {step === 1 && <section className="wizard-step"><PageHead eyebrow="Сначала — структура" title="Как устроен ваш экзамен?" /><p>Это определит, как Tentex сохранит формулировки и соберёт из них программу.</p><RadioCards label="Формат экзамена" value={trackFor(form.format)} options={FORMAT_OPTIONS} onChange={(track) => setForm((current) => ({ ...current, format: track === "combined" ? (current.taskList.selected ? "questions_tasks" : "questions") : track, hasTheory: track === "unknown" || current.hasTheory }))} className="wizard-format-options" />{form.format === "unknown" && <div className="wizard-context-note"><LibraryBig size={18} aria-hidden="true" /><span><b>Официальный список добавите позже</b>Сейчас сохраним учебные источники. Без прохода 1 предварительную программу по ним не выдумываем.</span></div>}<div className="wizard-actions"><Button disabled={busy || !form.format} onClick={() => void go(2)}>Продолжить</Button></div></section>}
 
       {step === 2 && (
         <section className="wizard-step">
           <PageHead eyebrow="Материалы" title="Что у вас уже есть?" />
           <p>{form.format === "unknown"
             ? "Раз точного списка нет, начнём с учебных материалов. Официальные вопросы можно будет добавить позже."
-            : "Список вопросов или билетов уже считаем основой. Отметьте, есть ли что-то ещё."}</p>
-          <div className={`wizard-material-grid${form.format === "unknown" ? " has-one" : ""}`}>
-            {form.format !== "unknown" && (
+            : trackFor(form.format) === "combined"
+              ? "Список вопросов и список задач независимы — принесите один из них или оба."
+              : "Список вопросов или билетов уже считаем основой. Отметьте, есть ли что-то ещё."}</p>
+          {trackFor(form.format) === "combined" ? (
+            <div className="wizard-material-grid">
               <SelectableMaterial
-                selected
-                locked
+                selected={form.questionList.selected}
+                onChange={(selected) => void toggleListSlot("questionList", selected)}
                 icon={<ListChecks size={22} aria-hidden="true" />}
-                title={form.format === "tickets" ? "Билеты" : "Список вопросов"}
-                description="Главная структура экзамена — файл или вставленный текст."
-                action="Добавить список"
+                title="Список вопросов"
+                description="Отдельный файл или вставленный текст с формулировками вопросов."
+                action="Добавить список вопросов"
               />
-            )}
-            {form.format !== "unknown" && (
               <SelectableMaterial
-                selected={form.hasAnswers}
-                onChange={(selected) => void setOptionalMaterial("answers", selected)}
+                selected={form.questionAnswers.selected}
+                disabledReason={form.questionList.selected ? undefined : "Сначала добавьте список вопросов"}
+                onChange={(selected) => void toggleAnswersSlot("questionAnswers", selected)}
                 icon={<FileCheck2 size={22} aria-hidden="true" />}
-                title="Готовые ответы"
+                title="Готовые ответы на них"
                 description="На все вопросы или только на часть — сопоставим после разбора."
                 action="Добавить ответы"
               />
-            )}
-            <SelectableMaterial
-              wide
-              selected={form.format === "unknown" || form.hasTheory}
-              locked={form.format === "unknown"}
-              onChange={(selected) => void setOptionalMaterial("theory", selected)}
-              icon={<Files size={22} aria-hidden="true" />}
-              title="Учебные материалы"
-              description="Учебники, методички, лекции, конспекты, статьи, веб-страницы и видеолекции по ссылке на YouTube. Файлы можно загрузить в мастере, остальные источники — выбрать из Библиотеки."
-              action="Добавить материалы"
-            />
-          </div>
+              <SelectableMaterial
+                selected={form.taskList.selected}
+                onChange={(selected) => void toggleListSlot("taskList", selected)}
+                icon={<Calculator size={22} aria-hidden="true" />}
+                title="Список задач"
+                description="Отдельный файл или вставленный текст с формулировками задач."
+                action="Добавить список задач"
+              />
+              <SelectableMaterial
+                selected={form.taskAnswers.selected}
+                disabledReason={form.taskList.selected ? undefined : "Сначала добавьте список задач"}
+                onChange={(selected) => void toggleAnswersSlot("taskAnswers", selected)}
+                icon={<ClipboardCheck size={22} aria-hidden="true" />}
+                title="Решения / ответы к ним"
+                description="На все задачи или только на часть — сопоставим после разбора."
+                action="Добавить решения"
+              />
+              <SelectableMaterial
+                wide
+                selected={form.hasTheory}
+                onChange={(selected) => void setOptionalMaterial("theory", selected)}
+                icon={<Files size={22} aria-hidden="true" />}
+                title="Учебные материалы"
+                description="Учебники, методички, лекции, конспекты, статьи, веб-страницы и видеолекции по ссылке на YouTube. Файлы можно загрузить в мастере, остальные источники — выбрать из Библиотеки."
+                action="Добавить материалы"
+              />
+            </div>
+          ) : (
+            <div className={`wizard-material-grid${form.format === "unknown" ? " has-one" : ""}`}>
+              {form.format !== "unknown" && (
+                <SelectableMaterial
+                  selected
+                  locked
+                  icon={<ListChecks size={22} aria-hidden="true" />}
+                  title="Билеты"
+                  description="Главная структура экзамена — файл или вставленный текст."
+                  action="Добавить список"
+                />
+              )}
+              {form.format !== "unknown" && (
+                <SelectableMaterial
+                  selected={form.hasAnswers}
+                  onChange={(selected) => void setOptionalMaterial("answers", selected)}
+                  icon={<FileCheck2 size={22} aria-hidden="true" />}
+                  title="Готовые ответы"
+                  description="На все вопросы или только на часть — сопоставим после разбора."
+                  action="Добавить ответы"
+                />
+              )}
+              <SelectableMaterial
+                wide
+                selected={form.format === "unknown" || form.hasTheory}
+                locked={form.format === "unknown"}
+                onChange={(selected) => void setOptionalMaterial("theory", selected)}
+                icon={<Files size={22} aria-hidden="true" />}
+                title="Учебные материалы"
+                description="Учебники, методички, лекции, конспекты, статьи, веб-страницы и видеолекции по ссылке на YouTube. Файлы можно загрузить в мастере, остальные источники — выбрать из Библиотеки."
+                action="Добавить материалы"
+              />
+            </div>
+          )}
+          {trackFor(form.format) === "combined" && !form.questionList.selected && !form.taskList.selected && (
+            <p className="inline-error" role="alert">Добавьте список вопросов или список задач</p>
+          )}
           <div className="wizard-context-note is-hint">
             <Brain size={18} aria-hidden="true" />
             <span>{getMaterialOpinion(form)}</span>
           </div>
           {form.format === "unknown" && <p className="wizard-quiet-note">Если ваша цель — изучать конкретную методичку, удобнее соседний маршрут «Изучение по учебнику».</p>}
-          <div className="wizard-actions"><Button variant="ghost" onClick={() => changeStep(1)}>Назад</Button><Button onClick={() => void go(3)}>Продолжить</Button></div>
+          <div className="wizard-actions">
+            <Button variant="ghost" onClick={() => changeStep(1)}>Назад</Button>
+            <Button
+              disabled={trackFor(form.format) === "combined" && !form.questionList.selected && !form.taskList.selected}
+              onClick={() => void go(3)}
+            >
+              Продолжить
+            </Button>
+          </div>
         </section>
       )}
 
@@ -790,70 +1181,174 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
             title="Добавьте то, что у вас есть"
           />
           <p>Добавьте список вопросов, готовые ответы и дополнительные источники. Список разберём сразу; ответы и учебные материалы начнём обрабатывать после создания проекта.</p>
+          {trackFor(form.format) === "combined" && <ExamImportGuide />}
           <div className="wizard-upload-stack">
-            {form.format !== "unknown" && (
-              <ExamMaterialUploadPanel
-                icon={form.format === "tickets" ? <TicketCheck size={20} aria-hidden="true" /> : <ListChecks size={20} aria-hidden="true" />}
-                title={form.format === "tickets" ? "Билеты" : "Вопросы и задачи"}
-                description="Главная структура экзамена"
-                allowText
-                mode={form.primaryMode}
-                onModeChange={(mode) => void changeInputMode("primary", mode)}
-                materials={materialsFor("exam_structure")}
-                text={form.rawText}
-                onTextChange={(rawText) => setForm((current) => ({ ...current, rawText }))}
-                onFiles={(files) => addFiles("exam_structure", files)}
-                onChooseLibrary={() => setLibraryPurpose("exam_structure")}
-                onRemove={removeMaterial}
-                onRetry={retryMaterial}
-              />
-            )}
-            {(counts.tickets > 0 || counts.questions > 0 || counts.tasks > 0 || warnings.length > 0) && (
-              <Card className="wizard-import-result" aria-live="polite">
-                <h2>Предварительный разбор</h2>
-                {formatDetectedCounts(counts) && <p>{formatDetectedCounts(counts)}</p>}
-                {warnings.map((warning) => <p className="inline-warning" key={warning}>{warning}</p>)}
-              </Card>
-            )}
-            {form.hasAnswers && (
-              <ExamMaterialUploadPanel
-                icon={<FileCheck2 size={20} aria-hidden="true" />}
-                title="Готовые ответы"
-                description="На все формулировки или только на часть"
-                allowText
-                mode={form.answersMode}
-                onModeChange={(mode) => void changeInputMode("answers", mode)}
-                materials={materialsFor("reference_answers")}
-                text={form.answersText}
-                onTextChange={(answersText) => setForm((current) => ({ ...current, answersText }))}
-                onFiles={(files) => addFiles("reference_answers", files)}
-                onChooseLibrary={() => setLibraryPurpose("reference_answers")}
-                onRemove={removeMaterial}
-                onRetry={retryMaterial}
-              />
-            )}
-            {(form.format === "unknown" || form.hasTheory) && (
-              <ExamMaterialUploadPanel
-                icon={<LibraryBig size={20} aria-hidden="true" />}
-                title="Учебные материалы"
-                description="Источники для просмотра, поиска и ручной привязки"
-                mode="files"
-                onModeChange={() => undefined}
-                materials={materialsFor("study_source")}
-                multiple
-                text=""
-                onTextChange={() => undefined}
-                onFiles={(files) => addFiles("study_source", files)}
-                onChooseLibrary={() => setLibraryPurpose("study_source")}
-                onRemove={removeMaterial}
-                onRetry={retryMaterial}
-              />
+            {trackFor(form.format) === "combined" ? (
+              <>
+                {form.questionList.selected && (
+                  <ExamMaterialUploadPanel
+                    icon={<ListChecks size={20} aria-hidden="true" />}
+                    title="Список вопросов"
+                    description="Главная структура — вопросы экзамена"
+                    examSlot="question_list"
+                    allowText
+                    mode={form.questionList.mode}
+                    onModeChange={(mode) => void changeSlotMode("questionList", mode)}
+                    materials={materialsForSlot("questionList")}
+                    text={form.questionList.text}
+                    onTextChange={(text) => slotText("questionList", text)}
+                    onFiles={(files) => addSlotFiles("questionList", files)}
+                    onChooseLibrary={() => openLibraryPicker("exam_structure", "questionList")}
+                    onRemove={removeMaterial}
+                    onRetry={retryMaterial}
+                  />
+                )}
+                {form.questionAnswers.selected && (
+                  <ExamMaterialUploadPanel
+                    icon={<FileCheck2 size={20} aria-hidden="true" />}
+                    title="Готовые ответы на вопросы"
+                    description="На все вопросы или только на часть"
+                    examSlot="question_answers"
+                    allowText
+                    mode={form.questionAnswers.mode}
+                    onModeChange={(mode) => void changeSlotMode("questionAnswers", mode)}
+                    materials={materialsForSlot("questionAnswers")}
+                    text={form.questionAnswers.text}
+                    onTextChange={(text) => slotText("questionAnswers", text)}
+                    onFiles={(files) => addSlotFiles("questionAnswers", files)}
+                    onChooseLibrary={() => openLibraryPicker("reference_answers", "questionAnswers")}
+                    onRemove={removeMaterial}
+                    onRetry={retryMaterial}
+                  />
+                )}
+                {form.taskList.selected && (
+                  <ExamMaterialUploadPanel
+                    icon={<Calculator size={20} aria-hidden="true" />}
+                    title="Список задач"
+                    description="Главная структура — задачи экзамена"
+                    examSlot="task_list"
+                    allowText
+                    mode={form.taskList.mode}
+                    onModeChange={(mode) => void changeSlotMode("taskList", mode)}
+                    materials={materialsForSlot("taskList")}
+                    text={form.taskList.text}
+                    onTextChange={(text) => slotText("taskList", text)}
+                    onFiles={(files) => addSlotFiles("taskList", files)}
+                    onChooseLibrary={() => openLibraryPicker("exam_structure", "taskList")}
+                    onRemove={removeMaterial}
+                    onRetry={retryMaterial}
+                  />
+                )}
+                {form.taskAnswers.selected && (
+                  <ExamMaterialUploadPanel
+                    icon={<ClipboardCheck size={20} aria-hidden="true" />}
+                    title="Решения / ответы к задачам"
+                    description="На все задачи или только на часть"
+                    examSlot="task_answers"
+                    allowText
+                    mode={form.taskAnswers.mode}
+                    onModeChange={(mode) => void changeSlotMode("taskAnswers", mode)}
+                    materials={materialsForSlot("taskAnswers")}
+                    text={form.taskAnswers.text}
+                    onTextChange={(text) => slotText("taskAnswers", text)}
+                    onFiles={(files) => addSlotFiles("taskAnswers", files)}
+                    onChooseLibrary={() => openLibraryPicker("reference_answers", "taskAnswers")}
+                    onRemove={removeMaterial}
+                    onRetry={retryMaterial}
+                  />
+                )}
+                {form.hasTheory && (
+                  <ExamMaterialUploadPanel
+                    icon={<LibraryBig size={20} aria-hidden="true" />}
+                    title="Учебные материалы"
+                    description="Источники для просмотра, поиска и ручной привязки"
+                    mode="files"
+                    onModeChange={() => undefined}
+                    materials={materialsFor("study_source")}
+                    multiple
+                    text=""
+                    onTextChange={() => undefined}
+                    onFiles={(files) => addFiles("study_source", files)}
+                    onChooseLibrary={() => openLibraryPicker("study_source")}
+                    onRemove={removeMaterial}
+                    onRetry={retryMaterial}
+                  />
+                )}
+                {(counts.tickets > 0 || counts.questions > 0 || counts.tasks > 0 || warnings.length > 0) && (
+                  <Card className="wizard-import-result" aria-live="polite">
+                    <h2>Предварительный разбор</h2>
+                    {formatDetectedCounts(counts) && <p>{formatDetectedCounts(counts)}</p>}
+                    {warnings.map((warning) => <p className="inline-warning" key={warning}>{warning}</p>)}
+                  </Card>
+                )}
+              </>
+            ) : (
+              <>
+                {form.format !== "unknown" && (
+                  <ExamMaterialUploadPanel
+                    icon={form.format === "tickets" ? <TicketCheck size={20} aria-hidden="true" /> : <ListChecks size={20} aria-hidden="true" />}
+                    title={form.format === "tickets" ? "Билеты" : "Вопросы и задачи"}
+                    description="Главная структура экзамена"
+                    allowText
+                    mode={form.primaryMode}
+                    onModeChange={(mode) => void changeInputMode("primary", mode)}
+                    materials={materialsFor("exam_structure")}
+                    text={form.rawText}
+                    onTextChange={(rawText) => setForm((current) => ({ ...current, rawText }))}
+                    onFiles={(files) => addFiles("exam_structure", files)}
+                    onChooseLibrary={() => openLibraryPicker("exam_structure")}
+                    onRemove={removeMaterial}
+                    onRetry={retryMaterial}
+                  />
+                )}
+                {(counts.tickets > 0 || counts.questions > 0 || counts.tasks > 0 || warnings.length > 0) && (
+                  <Card className="wizard-import-result" aria-live="polite">
+                    <h2>Предварительный разбор</h2>
+                    {formatDetectedCounts(counts) && <p>{formatDetectedCounts(counts)}</p>}
+                    {warnings.map((warning) => <p className="inline-warning" key={warning}>{warning}</p>)}
+                  </Card>
+                )}
+                {form.hasAnswers && (
+                  <ExamMaterialUploadPanel
+                    icon={<FileCheck2 size={20} aria-hidden="true" />}
+                    title="Готовые ответы"
+                    description="На все формулировки или только на часть"
+                    allowText
+                    mode={form.answersMode}
+                    onModeChange={(mode) => void changeInputMode("answers", mode)}
+                    materials={materialsFor("reference_answers")}
+                    text={form.answersText}
+                    onTextChange={(answersText) => setForm((current) => ({ ...current, answersText }))}
+                    onFiles={(files) => addFiles("reference_answers", files)}
+                    onChooseLibrary={() => openLibraryPicker("reference_answers")}
+                    onRemove={removeMaterial}
+                    onRetry={retryMaterial}
+                  />
+                )}
+                {(form.format === "unknown" || form.hasTheory) && (
+                  <ExamMaterialUploadPanel
+                    icon={<LibraryBig size={20} aria-hidden="true" />}
+                    title="Учебные материалы"
+                    description="Источники для просмотра, поиска и ручной привязки"
+                    mode="files"
+                    onModeChange={() => undefined}
+                    materials={materialsFor("study_source")}
+                    multiple
+                    text=""
+                    onTextChange={() => undefined}
+                    onFiles={(files) => addFiles("study_source", files)}
+                    onChooseLibrary={() => openLibraryPicker("study_source")}
+                    onRemove={removeMaterial}
+                    onRetry={retryMaterial}
+                  />
+                )}
+              </>
             )}
           </div>
 
           <div className="wizard-actions">
             <Button variant="ghost" onClick={() => changeStep(2)}>Назад</Button>
-            {form.format !== "unknown" && !form.hasAnswers && !form.hasTheory && <Button variant="secondary" disabled={busy} onClick={() => void go(4)}>
+            {trackFor(form.format) !== "combined" && form.format !== "unknown" && !form.hasAnswers && !form.hasTheory && <Button variant="secondary" disabled={busy} onClick={() => void go(4)}>
               Добавить вопросы позже
             </Button>}
             <Button disabled={busy || projectMaterials.loading} onClick={() => void continueFromUpload()}>
@@ -1113,18 +1608,21 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
         <LibraryMaterialPickerDialog
           open
           projectId={controller.detail.project.id}
-          title={libraryPurpose === "exam_structure"
-            ? "Выбрать список вопросов из Библиотеки"
-            : libraryPurpose === "reference_answers"
-              ? "Выбрать эталонные ответы из Библиотеки"
-              : "Выбрать учебные материалы из Библиотеки"}
+          title={librarySlot
+            ? `Выбрать «${SLOT_LABEL[librarySlot]}» из Библиотеки`
+            : libraryPurpose === "exam_structure"
+              ? "Выбрать список вопросов из Библиотеки"
+              : libraryPurpose === "reference_answers"
+                ? "Выбрать эталонные ответы из Библиотеки"
+                : "Выбрать учебные материалы из Библиотеки"}
           purpose={libraryPurpose}
+          examSlot={librarySlot ? SLOT_VALUE[librarySlot] : undefined}
           multiple={libraryPurpose === "study_source"}
           existingStudySourceCount={materialsFor("study_source").length}
           studyRoleMode="first-main"
-          onOpenChange={(open) => { if (!open) setLibraryPurpose(null); }}
+          onOpenChange={(open) => { if (!open) { setLibraryPurpose(null); setLibrarySlot(null); } }}
           onAttached={attachedLibraryMaterials}
-          onCreateNew={() => setLibraryPurpose(null)}
+          onCreateNew={() => { setLibraryPurpose(null); setLibrarySlot(null); }}
         />
       )}
       <Dialog
@@ -1170,6 +1668,7 @@ function SelectableMaterial({
   wide = false,
   selected,
   locked = false,
+  disabledReason,
   onChange,
   icon,
   title,
@@ -1179,32 +1678,38 @@ function SelectableMaterial({
   wide?: boolean;
   selected: boolean;
   locked?: boolean;
+  /** Карточка недоступна, пока не выполнено условие (например, не выбран список
+   * вопросов) — текст объясняет, что нужно сделать сначала, вместо чекбокса. */
+  disabledReason?: string;
   onChange?: (value: boolean) => void;
   icon: ReactNode;
   title: string;
   description: string;
   action: string;
 }) {
+  const unavailable = Boolean(disabledReason) && !selected;
   return (
-    <div className={`wizard-material-card${selected ? " is-selected" : ""}${wide ? " is-wide" : ""}`}>
+    <div className={`wizard-material-card${selected ? " is-selected" : ""}${wide ? " is-wide" : ""}${unavailable ? " is-unavailable" : ""}`}>
       <button
         type="button"
-        disabled={locked}
+        disabled={locked || unavailable}
         aria-pressed={selected}
         onClick={() => onChange?.(!selected)}
       >
         <span className="wizard-material-icon">{icon}</span>
         <span>
           <b>{title}</b>
-          <small>{description}</small>
+          <small>{unavailable ? disabledReason : description}</small>
         </span>
       </button>
-      <Checkbox
-        checked={selected}
-        disabled={locked}
-        onCheckedChange={(value) => onChange?.(value)}
-        label={action}
-      />
+      {!unavailable && (
+        <Checkbox
+          checked={selected}
+          disabled={locked}
+          onCheckedChange={(value) => onChange?.(value)}
+          label={action}
+        />
+      )}
     </div>
   );
 }

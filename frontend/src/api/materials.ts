@@ -298,7 +298,7 @@ export interface CleanupRunRead {
 export interface ExamProgramPreview {
   material_id: string;
   material_name: string;
-  counts: { tickets: number; questions: number; tasks: number };
+  counts: { tickets: number; questions: number; tasks: number; subpoints?: number };
   warnings: string[];
   nodes: Array<{
     node_type: "section" | "topic" | "subpoint";
@@ -306,6 +306,12 @@ export interface ExamProgramPreview {
     title: string;
     depth: number;
   }>;
+}
+
+export interface ExamCompositeDraftImportResult {
+  change: ProgramChangeResult;
+  counts: { questions: number; tasks: number; subpoints: number };
+  warnings: string[];
 }
 
 const projectMaterialsPath = (projectId: string): string =>
@@ -779,4 +785,18 @@ export const importExamDraftProgramFromMaterial = (
       expected_program_revision: expectedProgramRevision,
     }),
   },
+);
+
+export const importCompositeExamDraftProgram = (
+  projectId: string,
+  command: {
+    expected_draft_revision: number;
+    expected_program_revision: number;
+    question_material_id?: string | null;
+    task_material_id?: string | null;
+    dedupe_duplicates?: boolean;
+  },
+): Promise<ExamCompositeDraftImportResult> => request(
+  `${projectMaterialsPath(projectId)}/exam-composite-draft-import`,
+  { method: "POST", body: JSON.stringify(command) },
 );
