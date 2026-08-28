@@ -56,6 +56,8 @@ def _answers_material(
     session: Session,
     project,
     sections: list[tuple[str, list[tuple[str, str, int | None]]]],
+    *,
+    exam_slot: str | None = None,
 ):
     material = make_material(session, uuid4().hex)
     session.add(
@@ -66,6 +68,7 @@ def _answers_material(
             priority=0,
             affects_program=False,
             purposes=["reference_answers"],
+            exam_slot=exam_slot,
             created_at=utc_now(),
         )
     )
@@ -119,6 +122,125 @@ def _answers_material(
             fragment_order += 1
     session.commit()
     return material
+
+
+def _question_and_task_node(session: Session) -> tuple[object, ProgramNode, ProgramNode]:
+    """Вопрос и задача с одинаковой формулировкой — без учёта слота файл ответов
+
+    привязался бы к обоим узлам сразу; со слотом видит только свой вид.
+    """
+    project = make_exam_project(session)
+    question = ProgramNode(
+        id=uuid4(),
+        project_id=project.id,
+        parent_id=None,
+        node_type=NodeType.TOPIC,
+        exam_kind=ExamKind.QUESTION,
+        sort_order=0,
+        title="Общая формулировка 1",
+        is_in_current_program=True,
+        needs_material=False,
+        is_archived=False,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    task = ProgramNode(
+        id=uuid4(),
+        project_id=project.id,
+        parent_id=None,
+        node_type=NodeType.TOPIC,
+        exam_kind=ExamKind.TASK,
+        sort_order=1,
+        title="Общая формулировка 1",
+        is_in_current_program=True,
+        needs_material=False,
+        is_archived=False,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    session.add_all([question, task])
+    session.commit()
+    return project, question, task
+
+
+def test_answer_slots_link_only_to_their_own_exam_kind(session: Session) -> None:
+    project, question, task = _question_and_task_node(session)
+    question_answers = _answers_material(
+        session,
+        project,
+        [("Общая формулировка 1", [("Ответ на вопрос", "paragraph", None)])],
+        exam_slot="question_answers",
+    )
+    task_answers = _answers_material(
+        session,
+        project,
+        [("Общая формулировка 1", [("Решение задачи", "paragraph", None)])],
+        exam_slot="task_answers",
+    )
+
+    link_answers_material(session, project.id, question_answers.id)
+    link_answers_material(session, project.id, task_answers.id)
+
+    question_answer = session.get(ReferenceAnswer, (project.id, question.id))
+    task_answer = session.get(ReferenceAnswer, (project.id, task.id))
+    assert question_answer is not None and "Ответ на вопрос" in question_answer.text
+    assert task_answer is not None and "Решение задачи" in task_answer.text
+    assert question_answer.source_material_id == question_answers.id
+    assert task_answer.source_material_id == task_answers.id
+
+
+def test_legacy_unslotted_answers_file_still_sees_the_whole_tree(session: Session) -> None:
+    project = make_exam_project(session)
+    question = ProgramNode(
+        id=uuid4(),
+        project_id=project.id,
+        parent_id=None,
+        node_type=NodeType.TOPIC,
+        exam_kind=ExamKind.QUESTION,
+        sort_order=0,
+        title="Нормальные формы базы данных",
+        is_in_current_program=True,
+        needs_material=False,
+        is_archived=False,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    task = ProgramNode(
+        id=uuid4(),
+        project_id=project.id,
+        parent_id=None,
+        node_type=NodeType.TOPIC,
+        exam_kind=ExamKind.TASK,
+        sort_order=1,
+        title="Построить график функции",
+        is_in_current_program=True,
+        needs_material=False,
+        is_archived=False,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    session.add_all([question, task])
+    session.commit()
+    # Общий старый файл без слота (`exam_slot=None`) должен связать вопрос и
+    # задачу из одного дерева, а не только свой вид, как со слотом.
+    material = _answers_material(
+        session,
+        project,
+        [
+            (question.title, [("Ответ про нормальные формы", "paragraph", None)]),
+            (task.title, [("Решение с графиком", "paragraph", None)]),
+        ],
+    )
+
+    result = link_answers_material(session, project.id, material.id)
+
+    assert result.expected_questions == 2
+    linked_ids = set(result.linked_node_ids)
+    assert linked_ids == {question.id, task.id}
+    question_answer = session.get(ReferenceAnswer, (project.id, question.id))
+    task_answer = session.get(ReferenceAnswer, (project.id, task.id))
+    assert question_answer is not None and "нормальные формы" in question_answer.text
+    assert task_answer is not None and "графиком" in task_answer.text
 
 
 def _numbered_sections() -> list[tuple[str, list[tuple[str, str, int | None]]]]:
