@@ -12,7 +12,7 @@ import {
   type ParserMode,
   type ProcessingScope,
 } from "../../api/materials";
-import { LoadingState } from "../../components/ui";
+import { Button, ErrorState, LoadingState } from "../../components/ui";
 import { LibraryProcessingPanel } from "../library/LibraryProcessingPanel";
 import { MaterialRevisionPanel } from "../library/MaterialRevisionPanel";
 
@@ -48,6 +48,7 @@ export function MaterialProcessingPanels({
   const [revisions, setRevisions] = useState<MaterialRevisionRead[]>([]);
   const [busy, setBusy] = useState(false);
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   /** Родитель пересоздаёт onError на каждый свой рендер (листание страниц и т.п.) —
    * держим актуальный колбэк в ref, чтобы это не меняло identity refresh и не гоняло
@@ -56,6 +57,7 @@ export function MaterialProcessingPanels({
   onErrorRef.current = onError;
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
+    setLoadError(null);
     try {
       const [next, history] = await Promise.all([
         getLibraryMaterial(materialId, signal),
@@ -66,7 +68,9 @@ export function MaterialProcessingPanels({
       setRevisions(history);
     } catch (caught) {
       if (signal?.aborted) return;
-      onErrorRef.current(caught instanceof Error ? caught.message : "Не удалось загрузить обработку файла");
+      const message = caught instanceof Error ? caught.message : "Не удалось загрузить обработку файла";
+      setLoadError(message);
+      onErrorRef.current(message);
     }
   }, [materialId]);
 
@@ -75,6 +79,7 @@ export function MaterialProcessingPanels({
     setDetail(null);
     setRevisions([]);
     setSelectedRevision(null);
+    setLoadError(null);
     void refresh(controller.signal);
     return () => controller.abort();
   }, [refresh]);
@@ -122,6 +127,14 @@ export function MaterialProcessingPanels({
     if (!page) return;
     void run(() => confirmLibraryPageReview(materialId, page.page_number));
   };
+
+  if (!detail && loadError) {
+    return (
+      <ErrorState title="Не удалось загрузить обработку" message={loadError}>
+        <Button variant="secondary" onClick={() => void refresh()}>Загрузить ещё раз</Button>
+      </ErrorState>
+    );
+  }
 
   if (!detail) return <LoadingState label="Загружаем обработку файла" />;
 

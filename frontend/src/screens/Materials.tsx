@@ -32,8 +32,8 @@ import type { BindingFragmentRead, HeadingSuggestion, NodeBindingSummary } from 
 import { linkAnswersMaterial, listBindings, resolveAnswersHeading } from "../api/bindings";
 import {
   getMaterialPage,
-  materialFragmentAssetUrl,
   importMaterialReferenceAnswers,
+  materialFragmentAssetUrl,
   materialPageImageUrl,
   updateMaterialPageText,
 } from "../api/materials";
