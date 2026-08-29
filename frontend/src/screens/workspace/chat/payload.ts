@@ -4,7 +4,9 @@ import type {
   ChatMessageRead,
   GradeMethod,
   GradeUsageRead,
+  MaterialSearchResultItem,
   RubricPointRead,
+  ToolResultPayload,
   VerdictPayload,
 } from "../../../api/chat";
 
@@ -12,6 +14,7 @@ export type ParsedPayload =
   | { kind: "none" }
   | { kind: "answer_form"; data: AnswerFormPayload }
   | { kind: "verdict"; data: VerdictPayload }
+  | { kind: "tool_result"; data: ToolResultPayload }
   | { kind: "unknown" };
 
 const OUTCOMES = new Set<AttemptOutcome>(["passed", "partial", "failed", "unscored"]);
@@ -91,7 +94,73 @@ function verdictPayload(value: unknown): VerdictPayload | null {
   };
 }
 
-/** Разбор по дискриминанту `payload_kind`. Вердикт, задание и интерактив — итерация 1b/2. */
+function materialSearchItems(value: unknown): MaterialSearchResultItem[] | null {
+  if (!Array.isArray(value)) return null;
+  const items: MaterialSearchResultItem[] = [];
+  for (const item of value) {
+    const record = item as Record<string, unknown>;
+    if (
+      !record ||
+      typeof record.fragment_id !== "string" ||
+      typeof record.material_id !== "string" ||
+      typeof record.material_name !== "string" ||
+      typeof record.page_from !== "number" ||
+      typeof record.page_to !== "number" ||
+      typeof record.excerpt !== "string" ||
+      (record.quality !== "native" && record.quality !== "ocr" && record.quality !== "ocr_low")
+    ) return null;
+    items.push({
+      fragment_id: record.fragment_id,
+      material_id: record.material_id,
+      material_name: record.material_name,
+      block_title: typeof record.block_title === "string" ? record.block_title : null,
+      page_from: record.page_from,
+      page_to: record.page_to,
+      excerpt: record.excerpt,
+      quality: record.quality,
+      already_bound: Boolean(record.already_bound),
+    });
+  }
+  return items;
+}
+
+function toolQuery(value: unknown): string {
+  const record = value as Record<string, unknown> | undefined;
+  return typeof record?.query === "string" ? record.query : "";
+}
+
+function toolResultPayload(value: unknown): ToolResultPayload | null {
+  const record = value as Record<string, unknown>;
+  if (
+    !record ||
+    typeof record.tool_key !== "string" ||
+    typeof record.output_kind !== "string" ||
+    (record.state !== "succeeded" && record.state !== "failed")
+  ) return null;
+  const query = toolQuery(record.input);
+  if (record.output_kind === "material_search_results") {
+    const items = materialSearchItems((record.result as Record<string, unknown> | undefined)?.items);
+    if (!items) return null;
+    return {
+      tool_key: record.tool_key,
+      output_kind: record.output_kind,
+      state: record.state,
+      query,
+      result: { items },
+    };
+  }
+  // Будущие output_kind (source_search_results и т.п.) распознаются позже —
+  // сейчас такие Tools вообще не запускаются (недоступны в registry).
+  return {
+    tool_key: record.tool_key,
+    output_kind: record.output_kind,
+    state: record.state,
+    query,
+    result: (record.result as Record<string, unknown>) ?? {},
+  };
+}
+
+/** Разбор по дискриминанту `payload_kind`. Задание и интерактив — итерация 2. */
 export function parsePayload(message: ChatMessageRead): ParsedPayload {
   if (message.payload_kind === "answer_form" && isAnswerFormPayload(message.payload)) {
     return { kind: "answer_form", data: message.payload };
@@ -99,6 +168,10 @@ export function parsePayload(message: ChatMessageRead): ParsedPayload {
   if (message.payload_kind === "verdict") {
     const verdict = verdictPayload(message.payload);
     return verdict ? { kind: "verdict", data: verdict } : { kind: "unknown" };
+  }
+  if (message.payload_kind === "tool_result") {
+    const tool = toolResultPayload(message.payload);
+    return tool ? { kind: "tool_result", data: tool } : { kind: "unknown" };
   }
   if (message.payload_kind === "none") return { kind: "none" };
   return { kind: "unknown" };

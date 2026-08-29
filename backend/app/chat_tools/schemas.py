@@ -11,6 +11,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models import PageQuality
+
 
 class ToolApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -30,6 +32,7 @@ class MaterialSearchResultItem(ToolApiModel):
     page_from: int
     page_to: int
     excerpt: str
+    quality: PageQuality
     already_bound: bool
 
 

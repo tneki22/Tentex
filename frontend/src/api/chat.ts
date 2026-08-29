@@ -1,12 +1,30 @@
+import type { PageQuality } from "./materials";
 import { ProjectApiError, request } from "./projects";
 
 export type ChatMessageRole = "user" | "examiner" | "system";
 export type ChatStreamState = "complete" | "stopped" | "failed";
-export type ChatPayloadKind = "none" | "answer_form" | "verdict" | "task" | "interactive";
+export type ChatPayloadKind = "none" | "answer_form" | "verdict" | "task" | "interactive" | "tool_result";
 export type ExaminerPersona = "calm_teacher" | "neutral_examiner" | "strict_reviewer";
 export type ExaminerStrictness = "soft" | "normal" | "strict";
+export type ChatMode = "exam" | "study";
+export type ChatToolRunState = "queued" | "running" | "succeeded" | "failed";
 export type AttemptOutcome = "passed" | "partial" | "failed" | "unscored";
 export type GradeMethod = "exact_match" | "key_terms" | "sql" | "semantic" | "ai_judge" | "self_assessment";
+
+export const CONTEXT_FLAG_KEYS = [
+  "profile",
+  "reference",
+  "fragments",
+  "attempts",
+  "section_memory",
+] as const;
+export type ContextFlagKey = (typeof CONTEXT_FLAG_KEYS)[number];
+export type ChatContextFlags = Record<ContextFlagKey, boolean>;
+
+export interface ChatModelOverride {
+  provider_id: string;
+  model_id: string;
+}
 
 export interface AnswerFormPayload {
   question: string;
@@ -99,6 +117,7 @@ export interface ChatMessageRead {
   payload_kind: ChatPayloadKind;
   payload: Record<string, unknown>;
   context_snapshot: Record<string, unknown>;
+  skill: string | null;
   ai_run_id: string | null;
   attempt_id: string | null;
   grade_attempt_id: string | null;
@@ -122,12 +141,23 @@ export interface ChatSessionDetail {
   program_node_id: string;
   section_scope_node_id: string | null;
   title: string;
+  mode: ChatMode;
   persona: ExaminerPersona;
   strictness: ExaminerStrictness;
+  model_override: ChatModelOverride | null;
+  context_flags: ChatContextFlags;
   draft_text: string;
   created_at: string;
   updated_at: string;
   messages: ChatMessageRead[];
+}
+
+export interface ChatSettingsPatch {
+  mode?: ChatMode;
+  persona?: ExaminerPersona;
+  strictness?: ExaminerStrictness;
+  model_override?: ChatModelOverride | null;
+  context_flags?: Partial<ChatContextFlags>;
 }
 
 export interface ChatDraftRead {
@@ -135,13 +165,81 @@ export interface ChatDraftRead {
   updated_at: string;
 }
 
-export interface ChatContextRead {
+export interface ManifestEntry {
+  kind: string;
+  id: string | null;
+  included: boolean;
+  truncated: boolean;
+  bytes: number;
+  count: number | null;
+  reason: string | null;
+}
+
+export interface ChatContextPreview {
+  session_id: string;
   node_id: string;
   question: string;
-  reference_included: boolean;
-  material_count: number;
-  tail_limit: number;
+  persona: ExaminerPersona;
+  strictness: ExaminerStrictness;
+  model_source: "auto" | "override";
+  model_id: string | null;
+  manifest: ManifestEntry[];
+  fingerprint: string;
+  total_bytes: number;
 }
+
+export interface ChatCapability {
+  key: string;
+  title: string;
+  available: boolean;
+  unavailable_reason: string | null;
+}
+
+export interface ChatCapabilities {
+  modes: ChatCapability[];
+  skills: ChatCapability[];
+  tools: ChatCapability[];
+}
+
+export interface ChatToolRun {
+  id: string;
+  session_id: string;
+  tool_key: string;
+  state: ChatToolRunState;
+  result: Record<string, unknown> | null;
+  error_code: string | null;
+  message_id: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface MaterialSearchResultItem {
+  fragment_id: string;
+  material_id: string;
+  material_name: string;
+  block_title: string | null;
+  page_from: number;
+  page_to: number;
+  excerpt: string;
+  quality: PageQuality;
+  already_bound: boolean;
+}
+
+export type ToolResultPayload =
+  | {
+      tool_key: string;
+      output_kind: "material_search_results";
+      state: "succeeded" | "failed";
+      query: string;
+      result: { items: MaterialSearchResultItem[] };
+    }
+  | {
+      tool_key: string;
+      output_kind: string;
+      state: "succeeded" | "failed";
+      query: string;
+      result: Record<string, unknown>;
+    };
 
 export interface ChatAnswerResult {
   messages: ChatMessageRead[];
@@ -152,7 +250,13 @@ export interface ChatAnswerResult {
 export type ChatStreamEvent =
   | { type: "started"; messageId: string; runId: string }
   | { type: "delta"; text: string }
-  | { type: "completed"; messageId: string; usage: Record<string, unknown>; cached: boolean }
+  | {
+      type: "completed";
+      messageId: string;
+      message: ChatMessageRead;
+      usage: Record<string, unknown>;
+      cached: boolean;
+    }
   | { type: "error"; code: string; detail: string };
 
 const chatPath = (projectId: string): string =>
@@ -191,12 +295,38 @@ export const saveChatDraft = (
   { method: "PUT", body: JSON.stringify({ text }) },
 );
 
-export const getChatContext = (
+export const updateChatSettings = (
+  projectId: string,
+  sessionId: string,
+  patch: ChatSettingsPatch,
+): Promise<ChatSessionDetail> => request(
+  `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/settings`,
+  { method: "PUT", body: JSON.stringify(patch) },
+);
+
+export const getChatContextPreview = (
+  projectId: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<ChatContextPreview> =>
+  request(`${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/context`, { signal });
+
+export const getChatCapabilities = (
   projectId: string,
   nodeId: string,
   signal?: AbortSignal,
-): Promise<ChatContextRead> =>
-  request(`${chatPath(projectId)}/context?node_id=${encodeURIComponent(nodeId)}`, { signal });
+): Promise<ChatCapabilities> =>
+  request(`${chatPath(projectId)}/capabilities?node_id=${encodeURIComponent(nodeId)}`, { signal });
+
+export const runChatTool = (
+  projectId: string,
+  sessionId: string,
+  toolKey: string,
+  input: Record<string, unknown>,
+): Promise<ChatToolRun> => request(
+  `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/tools/${encodeURIComponent(toolKey)}/runs`,
+  { method: "POST", body: JSON.stringify({ input }) },
+);
 
 export const submitChatAnswer = (
   projectId: string,
@@ -259,6 +389,7 @@ function parseFrame(raw: string): ChatStreamEvent | null {
     return {
       type: "completed",
       messageId: String(payload.message_id),
+      message: payload.message as ChatMessageRead,
       usage: (payload.usage as Record<string, unknown>) ?? {},
       cached: Boolean(payload.cached),
     };

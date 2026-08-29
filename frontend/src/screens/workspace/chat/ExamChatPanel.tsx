@@ -1,28 +1,15 @@
-import { useEffect, useRef, useState } from "react";
-import { History, MessageSquare, Plus } from "lucide-react";
-import {
-  createChatSession,
-  checkAttempt,
-  getChatContext,
-  getChatSession,
-  listChatSessions,
-  saveChatDraft,
-  setAttemptSelfAssessment,
-  streamMessage,
-  submitChatAnswer,
-  type ChatContextRead,
-  type ChatMessageRead,
-  type ChatSessionDetail,
-  type ChatSessionSummary,
-  type AttemptOutcome,
-} from "../../../api/chat";
-import { ProjectApiError, type ProgramNodeRead } from "../../../api/projects";
-import { Button, EmptyState, ErrorState, IconButton, LoadingState, Popover } from "../../../components/ui";
+import { useRef, useState } from "react";
+import { BookOpenCheck, MessageSquare, Search, Send } from "lucide-react";
+import type { ProgramNodeRead } from "../../../api/projects";
+import { Button, EmptyState, ErrorState, LoadingState } from "../../../components/ui";
 import { AnswerFormCard } from "./AnswerFormCard";
-import { ChatComposer } from "./ChatComposer";
-import { ChatTimeline, type PendingTurn, type StreamFailure } from "./ChatTimeline";
-
-const DRAFT_DEBOUNCE_MS = 800;
+import { ChatComposer, type ChatComposerHandle } from "./ChatComposer";
+import { ChatHeader } from "./ChatHeader";
+import { ChatTimeline } from "./ChatTimeline";
+import { ContextChips } from "./ContextChips";
+import { SkillPalette } from "./SkillPalette";
+import type { PaletteCommandDef } from "./skills";
+import { useExamChat } from "./useExamChat";
 
 interface ExamChatPanelProps {
   projectId: string;
@@ -30,338 +17,188 @@ interface ExamChatPanelProps {
   onAttemptsChanged?: () => void;
 }
 
-function sessionTime(iso: string): string {
-  return new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
-}
-
-function nextOrdinal(messages: ChatMessageRead[]): number {
+function nextOrdinal(messages: { payload_kind: string }[]): number {
   return messages.filter((message) => message.payload_kind === "answer_form").length + 1;
 }
 
+function MaterialSearchPrompt({
+  busy, onSubmit, onCancel,
+}: {
+  busy: boolean;
+  onSubmit: (query: string) => void;
+  onCancel: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const ref = useRef<HTMLInputElement>(null);
+  return (
+    <form
+      className="chat-material-search-prompt"
+      onSubmit={(event) => { event.preventDefault(); if (query.trim()) onSubmit(query.trim()); }}
+    >
+      <Search size={15} aria-hidden="true" />
+      <input
+        ref={ref}
+        autoFocus
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Что искать в материалах проекта?"
+        aria-label="Запрос по материалам"
+        disabled={busy}
+      />
+      <Button variant="ghost" onClick={onCancel} disabled={busy}>Отменить</Button>
+      <Button type="submit" disabled={busy || !query.trim()}>
+        {busy ? "Ищем…" : "Найти"}
+      </Button>
+    </form>
+  );
+}
+
 export function ExamChatPanel({ projectId, node, onAttemptsChanged }: ExamChatPanelProps) {
-  const [sessions, setSessions] = useState<ChatSessionSummary[] | null>(null);
-  const [loadError, setLoadError] = useState("");
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<ChatSessionDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState("");
-  const [contextInfo, setContextInfo] = useState<ChatContextRead | null>(null);
-  const [draft, setDraft] = useState("");
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [pending, setPending] = useState<PendingTurn | null>(null);
-  const [failure, setFailure] = useState<StreamFailure | null>(null);
+  const chat = useExamChat({ projectId, node, onAttemptsChanged });
   const [answering, setAnswering] = useState(false);
-  const [submittingAnswer, setSubmittingAnswer] = useState(false);
-  const [sessionsReloadKey, setSessionsReloadKey] = useState(0);
-  const [detailReloadKey, setDetailReloadKey] = useState(0);
-  const abortRef = useRef<AbortController | null>(null);
-  const loadToken = useRef(0);
-
-  // Список чатов узла: если ещё ни одного нет, первый чат создаётся сразу —
-  // отдельного «пустого» состояния без сессии не вводим, черновику всё равно
-  // нужна сессия, чтобы пережить закрытие вкладки.
-  useEffect(() => {
-    if (!node) {
-      setSessions(null);
-      setActiveSessionId(null);
-      return;
-    }
-    const controller = new AbortController();
-    const token = ++loadToken.current;
-    setLoadError("");
-    setSessions(null);
-    (async () => {
-      try {
-        const list = await listChatSessions(projectId, node.id, controller.signal);
-        if (loadToken.current !== token) return;
-        if (list.length === 0) {
-          const created = await createChatSession(projectId, node.id);
-          if (loadToken.current !== token) return;
-          setSessions([{
-            id: created.id,
-            project_id: created.project_id,
-            program_node_id: created.program_node_id,
-            title: created.title,
-            updated_at: created.updated_at,
-            message_count: 0,
-            last_outcome: null,
-          }]);
-          setActiveSessionId(created.id);
-        } else {
-          setSessions(list);
-          setActiveSessionId(list[0].id);
-        }
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setLoadError(error instanceof Error ? error.message : "Не удалось открыть чат");
-      }
-    })();
-    return () => controller.abort();
-  }, [projectId, node?.id, sessionsReloadKey]);
-
-  useEffect(() => {
-    if (!node) {
-      setContextInfo(null);
-      return;
-    }
-    const controller = new AbortController();
-    getChatContext(projectId, node.id, controller.signal).then(setContextInfo).catch(() => undefined);
-    return () => controller.abort();
-  }, [projectId, node?.id]);
-
-  useEffect(() => {
-    if (!activeSessionId) {
-      setDetail(null);
-      return;
-    }
-    const controller = new AbortController();
-    setDetailLoading(true);
-    setDetailError("");
-    getChatSession(projectId, activeSessionId, controller.signal)
-      .then((value) => {
-        setDetail(value);
-        setDraft(value.draft_text);
-        setAnswering(false);
-        setFailure(null);
-      })
-      .catch((error) => {
-        if (controller.signal.aborted) return;
-        setDetailError(error instanceof Error ? error.message : "Не удалось открыть чат");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setDetailLoading(false);
-      });
-    return () => controller.abort();
-  }, [projectId, activeSessionId, detailReloadKey]);
-
-  useEffect(() => {
-    if (!activeSessionId) return;
-    const timer = window.setTimeout(() => {
-      void saveChatDraft(projectId, activeSessionId, draft).catch(() => undefined);
-    }, DRAFT_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft, activeSessionId]);
-
-  async function refreshDetail() {
-    if (!activeSessionId) return;
-    try {
-      const value = await getChatSession(projectId, activeSessionId);
-      setDetail(value);
-    } catch {
-      // Лента останется прежней; следующее действие пользователя попробует снова.
-    }
-  }
-
-  async function sendMessage(retryText?: string) {
-    const text = (retryText ?? draft).trim();
-    if (!activeSessionId || !text || sending) return;
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setSending(true);
-    setFailure(null);
-    setPending({ userText: text, examinerText: "", streaming: true });
-    setDraft("");
-    try {
-      for await (const event of streamMessage(projectId, activeSessionId, text, controller.signal)) {
-        if (event.type === "delta") {
-          setPending((current) => current && { ...current, examinerText: current.examinerText + event.text });
-        } else if (event.type === "error") {
-          setFailure({ code: event.code, detail: event.detail, retryText: text });
-        }
-      }
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        // Остановлено пользователем — итоговое сообщение придёт с сервера ниже.
-      } else if (error instanceof ProjectApiError) {
-        setFailure({ code: error.code ?? "unknown", detail: error.message, retryText: text });
-      } else {
-        setFailure({ code: "unknown", detail: "Ответ не получен", retryText: text });
-      }
-    } finally {
-      setPending(null);
-      setSending(false);
-      abortRef.current = null;
-      await refreshDetail();
-    }
-  }
-
-  function stopMessage() {
-    abortRef.current?.abort();
-  }
-
-  async function submitAnswer() {
-    const text = draft.trim();
-    if (!activeSessionId || !text || submittingAnswer) return;
-    setSubmittingAnswer(true);
-    try {
-      await submitChatAnswer(projectId, activeSessionId, text);
-      setDraft("");
-      await saveChatDraft(projectId, activeSessionId, "");
-      setAnswering(false);
-      await refreshDetail();
-      onAttemptsChanged?.();
-    } catch (error) {
-      setFailure({
-        code: error instanceof ProjectApiError ? error.code ?? "unknown" : "unknown",
-        detail: error instanceof Error ? error.message : "Ответ не сохранён",
-      });
-      // Дорогая ступень может упасть уже после фиксации Attempt. Перечитываем
-      // ленту, чтобы сохранённая форма сразу предложила «Проверить ещё раз».
-      await refreshDetail();
-      onAttemptsChanged?.();
-    } finally {
-      setSubmittingAnswer(false);
-    }
-  }
-
-  async function retryAttempt(attemptId: string) {
-    setFailure(null);
-    try {
-      await checkAttempt(projectId, attemptId);
-      await refreshDetail();
-      onAttemptsChanged?.();
-    } catch (error) {
-      setFailure({
-        code: error instanceof ProjectApiError ? error.code ?? "unknown" : "unknown",
-        detail: error instanceof Error ? error.message : "Проверка не завершена",
-      });
-    }
-  }
-
-  async function assessAttempt(
-    attemptId: string,
-    outcome: Exclude<AttemptOutcome, "unscored">,
-  ) {
-    try {
-      await setAttemptSelfAssessment(projectId, attemptId, outcome);
-      await refreshDetail();
-      onAttemptsChanged?.();
-    } catch (error) {
-      setFailure({
-        code: error instanceof ProjectApiError ? error.code ?? "unknown" : "unknown",
-        detail: error instanceof Error ? error.message : "Самооценка не сохранилась",
-      });
-    }
-  }
-
-  async function startNewChat() {
-    if (!node) return;
-    setHistoryOpen(false);
-    const created = await createChatSession(projectId, node.id);
-    setSessions((current) => [
-      { id: created.id, project_id: created.project_id, program_node_id: created.program_node_id, title: created.title, updated_at: created.updated_at, message_count: 0, last_outcome: null },
-      ...(current ?? []),
-    ]);
-    setActiveSessionId(created.id);
-  }
+  const [answerDraft, setAnswerDraft] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [toolBusy, setToolBusy] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const composerRef = useRef<ChatComposerHandle | null>(null);
 
   if (!node) {
     return <EmptyState title="Выберите вопрос слева" icon={<MessageSquare size={26} />}><p>Чат откроется для выбранного вопроса.</p></EmptyState>;
   }
 
-  if (loadError) {
+  if (chat.loadError) {
     return (
       <div className="chat-panel-error">
-        <ErrorState title="Чат не открылся" message={loadError} />
-        <Button onClick={() => setSessionsReloadKey((key) => key + 1)}>Повторить</Button>
+        <ErrorState title="Чат не открылся" message={chat.loadError} />
+        <Button onClick={chat.reloadSessions}>Повторить</Button>
       </div>
     );
   }
 
-  if (sessions === null) return <LoadingState label="Загружаем чат" />;
+  if (chat.sessions === null) return <LoadingState label="Загружаем чат" />;
 
-  const contextLine = contextInfo && (
-    `В запрос уходит: вопрос · ${contextInfo.reference_included ? "эталон · " : ""}материал (${contextInfo.material_count}) · последние ${contextInfo.tail_limit} сообщений`
-  );
+  function runCommand(def: PaletteCommandDef) {
+    if (def.key === "answer") {
+      setAnswerDraft(chat.draft);
+      setAnswering(true);
+      return;
+    }
+    if (def.key === "search_project_materials") {
+      setSearching(true);
+      return;
+    }
+    // Остальные ключи в палитре недоступны (available=false) и сюда не доходят —
+    // SkillPalette блокирует выбор в choose().
+  }
+
+  async function submitSearch(query: string) {
+    setToolBusy(true);
+    try {
+      await chat.runTool("search_project_materials", { query, node_id: node?.id });
+    } finally {
+      setToolBusy(false);
+      setSearching(false);
+    }
+  }
+
+  const isEmpty = chat.messages.length === 0 && !chat.preparing && !answering && !searching;
 
   return (
     <div className="exam-chat-panel">
-      <header className="chat-panel-header">
-        <div className="chat-panel-heading">
-          <p className="chat-panel-question">{node.title}</p>
-          <span className="chat-panel-title">{detail?.title ?? "…"}</span>
-        </div>
-        <div className="chat-panel-header-actions">
-          <Popover
-            open={historyOpen}
-            onOpenChange={setHistoryOpen}
-            title="Чаты этого вопроса"
-            trigger={<IconButton label="История чатов"><History size={15} /></IconButton>}
-          >
-            <div className="chat-history-list">
-              {sessions.map((item) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  className={`chat-history-item ${item.id === activeSessionId ? "is-active" : ""}`}
-                  onClick={() => { setActiveSessionId(item.id); setHistoryOpen(false); }}
-                >
-                  <span className="chat-history-title">{item.title}</span>
-                  <span className="chat-history-meta">{sessionTime(item.updated_at)} · {item.message_count} сообщ.</span>
-                </button>
-              ))}
-            </div>
-          </Popover>
-          <Button variant="secondary" onClick={() => void startNewChat()}><Plus size={14} />Новый чат</Button>
-        </div>
-      </header>
+      <ChatHeader
+        question={node.title}
+        sessions={chat.sessions}
+        activeSessionId={chat.activeSessionId}
+        session={chat.session}
+        settingsError={chat.settingsError}
+        onSelectSession={chat.setActiveSessionId}
+        onNewChat={() => void chat.startNewChat()}
+        onSettingsChange={chat.updateSettings}
+      />
 
-      {detailLoading && <LoadingState label="Загружаем переписку" />}
-      {detailError && (
+      {chat.detailLoading && <LoadingState label="Загружаем переписку" />}
+      {chat.detailError && (
         <div className="chat-panel-error">
-          <ErrorState title="Переписка не загрузилась" message={detailError} />
-          <Button onClick={() => setDetailReloadKey((key) => key + 1)}>Повторить</Button>
+          <ErrorState title="Переписка не загрузилась" message={chat.detailError} />
+          <Button onClick={chat.reloadDetail}>Повторить</Button>
         </div>
       )}
 
-      {detail && !detailLoading && !detailError && (
+      {chat.session && !chat.detailLoading && !chat.detailError && (
         <>
-          {detail.messages.length === 0 && !pending && !answering ? (
+          {isEmpty ? (
             <div className="chat-empty-invite">
               <p>Выберите действие или задайте вопрос</p>
-              <Button onClick={() => setAnswering(true)}><MessageSquare size={14} />Сдать ответ</Button>
+              <div className="chat-empty-actions">
+                <Button onClick={() => { setAnswerDraft(""); setAnswering(true); }}>
+                  <BookOpenCheck size={14} />Сдать ответ
+                </Button>
+                <Button variant="secondary" onClick={() => composerRef.current?.focus()}>
+                  <Send size={14} />Задать вопрос
+                </Button>
+                <Button variant="secondary" onClick={() => setSearching(true)}>
+                  <Search size={14} />Найти в материалах
+                </Button>
+              </div>
             </div>
           ) : (
             <ChatTimeline
-              messages={detail.messages}
-              pending={pending}
-              failure={failure}
-              onRetry={() => {
-                if (failure?.retryText) void sendMessage(failure.retryText);
-              }}
-              onAnswerAgain={() => { setDraft(""); setAnswering(true); }}
-              onCheckAgain={retryAttempt}
-              onSelfAssessment={assessAttempt}
+              projectId={projectId}
+              messages={chat.messages}
+              streamingMessageId={chat.streamingMessageId}
+              preparing={chat.preparing}
+              failure={chat.failure}
+              onRetry={() => { if (chat.failure?.retryText) void chat.sendMessage(chat.failure.retryText); }}
+              onAnswerAgain={() => { setAnswerDraft(""); setAnswering(true); }}
+              onCheckAgain={chat.retryAttempt}
+              onSelfAssessment={chat.assessAttempt}
             />
           )}
 
-          {contextLine && <p className="chat-context-line">{contextLine}</p>}
+          <ContextChips
+            preview={chat.contextPreview}
+            contextFlags={chat.session.context_flags}
+            onToggleFlag={(key, value) => void chat.updateSettings({ context_flags: { [key]: value } })}
+          />
 
           {answering ? (
             <AnswerFormCard
               mode="composing"
               question={node.title}
-              ordinal={nextOrdinal(detail.messages)}
-              value={draft}
-              onChange={setDraft}
-              onSubmit={() => void submitAnswer()}
+              ordinal={nextOrdinal(chat.messages)}
+              value={answerDraft}
+              onChange={setAnswerDraft}
+              onSubmit={() => { void chat.submitAnswer(answerDraft); setAnswering(false); }}
               onCancel={() => setAnswering(false)}
-              busy={submittingAnswer}
+              busy={chat.submittingAnswer}
+            />
+          ) : searching ? (
+            <MaterialSearchPrompt
+              busy={toolBusy}
+              onSubmit={(query) => void submitSearch(query)}
+              onCancel={() => setSearching(false)}
             />
           ) : (
             <ChatComposer
-              value={draft}
-              onChange={setDraft}
-              onSend={() => void sendMessage()}
-              onStop={stopMessage}
-              onAnswerClick={() => setAnswering(true)}
-              sending={sending}
+              ref={composerRef}
+              value={chat.draft}
+              onChange={chat.setDraft}
+              onSend={() => void chat.sendMessage()}
+              onStop={chat.stopMessage}
+              onOpenPalette={() => setPaletteOpen(true)}
+              modes={chat.capabilities?.modes ?? []}
+              sending={chat.sending}
             />
           )}
         </>
       )}
+
+      <SkillPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        capabilities={chat.capabilities}
+        onSelect={runCommand}
+      />
     </div>
   );
 }

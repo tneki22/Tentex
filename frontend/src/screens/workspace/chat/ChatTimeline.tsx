@@ -3,16 +3,8 @@ import { ArrowDown } from "lucide-react";
 import type { AttemptOutcome, ChatMessageRead } from "../../../api/chat";
 import { OfflineNotice } from "../../../components/domain";
 import { Button } from "../../../components/ui";
-import { AnswerFormCard } from "./AnswerFormCard";
-import { Markdown } from "./Markdown";
+import { TypedMessage } from "./TypedMessage";
 import { parsePayload } from "./payload";
-import { VerdictCard } from "./VerdictCard";
-
-export interface PendingTurn {
-  userText: string;
-  examinerText: string;
-  streaming: boolean;
-}
 
 export interface StreamFailure {
   code: string;
@@ -24,8 +16,10 @@ const OFFLINE_CODES = new Set(["ai_disabled", "ai_role_disabled", "ai_model_not_
 const UNREACHABLE_CODES = new Set(["ai_provider_unavailable", "ai_timeout", "ai_rate_limited"]);
 
 interface ChatTimelineProps {
+  projectId: string;
   messages: ChatMessageRead[];
-  pending: PendingTurn | null;
+  streamingMessageId: string | null;
+  preparing: boolean;
   onAnswerAgain: () => void;
   onCheckAgain: (attemptId: string) => Promise<void>;
   onSelfAssessment: (
@@ -36,74 +30,9 @@ interface ChatTimelineProps {
   failure: StreamFailure | null;
 }
 
-function MessageBubble({
-  message,
-  answerText,
-  needsCheck,
-  onAnswerAgain,
-  onCheckAgain,
-  onSelfAssessment,
-  headingRef,
-}: {
-  message: ChatMessageRead;
-  answerText: string;
-  needsCheck: boolean;
-  onAnswerAgain: () => void;
-  onCheckAgain: (attemptId: string) => Promise<void>;
-  onSelfAssessment: (
-    attemptId: string,
-    outcome: Exclude<AttemptOutcome, "unscored">,
-  ) => Promise<void>;
-  headingRef: (node: HTMLHeadingElement | null) => void;
-}) {
-  const payload = parsePayload(message);
-  if (payload.kind === "answer_form") {
-    return (
-      <AnswerFormCard
-        mode="submitted"
-        payload={payload.data}
-        createdAt={message.created_at}
-        onAnswerAgain={onAnswerAgain}
-        onCheckAgain={needsCheck && message.attempt_id
-          ? () => { void onCheckAgain(message.attempt_id as string); }
-          : undefined}
-        headingRef={headingRef}
-      />
-    );
-  }
-  if (payload.kind === "verdict" && message.grade_attempt_id) {
-    return (
-      <VerdictCard
-        verdict={payload.data}
-        answer={answerText}
-        attemptId={message.grade_attempt_id}
-        onSelfAssessment={onSelfAssessment}
-        headingRef={headingRef}
-      />
-    );
-  }
-  if (message.role === "system") {
-    return <p className="chat-system-note">{message.text}</p>;
-  }
-  return (
-    <div className={`chat-bubble is-${message.role}`}>
-      {message.role === "examiner" ? <Markdown text={message.text} /> : <p>{message.text}</p>}
-      {message.stream_state === "stopped" && <span className="chat-stream-flag">Ответ остановлен</span>}
-      {message.stream_state === "failed" && !message.text.trim() && (
-        <span className="chat-stream-flag is-failed">Ответ не получен</span>
-      )}
-    </div>
-  );
-}
-
 export function ChatTimeline({
-  messages,
-  pending,
-  onAnswerAgain,
-  onCheckAgain,
-  onSelfAssessment,
-  onRetry,
-  failure,
+  projectId, messages, streamingMessageId, preparing,
+  onAnswerAgain, onCheckAgain, onSelfAssessment, onRetry, failure,
 }: ChatTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
@@ -140,7 +69,7 @@ export function ChatTimeline({
       setShowJump(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, pending?.examinerText, pending?.userText]);
+  }, [messages.length, messages.at(-1)?.text]);
 
   useEffect(() => {
     const current = new Set(
@@ -153,7 +82,7 @@ export function ChatTimeline({
     headingRefs.current.get(inserted.at(-1) ?? "")?.focus();
   }, [messages]);
 
-  const streaming = Boolean(pending?.streaming);
+  const streaming = streamingMessageId !== null;
   useEffect(() => {
     if (streaming && !wasStreaming.current) {
       setStreamAnnouncement("Экзаменатор отвечает");
@@ -199,8 +128,10 @@ export function ChatTimeline({
         <div className="chat-timeline-rail">
           {messages.map((message) => (
             <div className="chat-timeline-item" key={message.id}>
-              <MessageBubble
+              <TypedMessage
+                projectId={projectId}
                 message={message}
+                isStreaming={message.id === streamingMessageId}
                 answerText={message.grade_attempt_id
                   ? answerTextByAttempt.get(message.grade_attempt_id) ?? ""
                   : ""}
@@ -217,18 +148,10 @@ export function ChatTimeline({
               />
             </div>
           ))}
-          {pending && (
-            <>
-              <div className="chat-timeline-item">
-                <div className="chat-bubble is-user"><p>{pending.userText}</p></div>
-              </div>
-              <div className="chat-timeline-item">
-                <div className="chat-bubble is-examiner">
-                  <Markdown text={pending.examinerText} />
-                  {pending.streaming && <span className="chat-typing" aria-hidden="true" />}
-                </div>
-              </div>
-            </>
+          {preparing && (
+            <div className="chat-timeline-item">
+              <p className="chat-status-line" role="status">Готовлю ответ…</p>
+            </div>
           )}
           {failureView && <div className="chat-timeline-item">{failureView}</div>}
         </div>

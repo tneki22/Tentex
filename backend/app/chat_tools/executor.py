@@ -110,6 +110,7 @@ def run_tool(
                 "tool_key": tool_key,
                 "output_kind": spec.output_kind,
                 "state": "succeeded",
+                "input": run.tool_input,
                 "result": result,
             },
             skill=tool_key,

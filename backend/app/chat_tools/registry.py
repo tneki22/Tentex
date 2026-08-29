@@ -76,6 +76,7 @@ def _handle_search_project_materials(ctx: ToolContext, value: BaseModel) -> Base
                 "page_from": hit.page_from,
                 "page_to": hit.page_to,
                 "excerpt": hit.text[:400],
+                "quality": hit.quality,
                 "already_bound": hit.already_bound,
             }
         )
