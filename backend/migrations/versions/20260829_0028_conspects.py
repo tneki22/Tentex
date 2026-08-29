@@ -1,7 +1,7 @@
 """add conspect and conspect image tables
 
-Revision ID: 20260829_0026
-Revises: 20260828_0025
+Revision ID: 20260829_0028
+Revises: 20260829_0027
 Create Date: 2026-08-29
 """
 
@@ -10,8 +10,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "20260829_0026"
-down_revision: str | Sequence[str] | None = "20260828_0025"
+revision: str = "20260829_0028"
+down_revision: str | Sequence[str] | None = "20260829_0027"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
