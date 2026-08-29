@@ -6,6 +6,7 @@ import sys
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from uuid import UUID
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -22,6 +23,7 @@ from app.ai.provider import (  # noqa: E402
     ProviderStreamEvent,
     ProviderUsage,
 )
+from app.bindings.search import reindex_material  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import Base  # noqa: E402
 from app.exam import attempts as attempt_service  # noqa: E402
@@ -30,22 +32,37 @@ from app.exam import router as chat_router  # noqa: E402
 from app.exam.schemas import (  # noqa: E402
     ChatAnswerWrite,
     ChatMessageWrite,
+    ChatModelOverrideWrite,
+    ChatSettingsWrite,
     SelfAssessmentWrite,
+    ToolRunCreateWrite,
 )
 from app.models import (  # noqa: E402
     AiModelCatalogEntry,
     AiProviderConnection,
     AiSettings,
     AttemptOutcome,
+    BlockClass,
+    ExaminerPersona,
+    ExaminerStrictness,
     ExamKind,
     GradeMethod,
+    Material,
+    MaterialBlock,
+    MaterialFragment,
+    MaterialPage,
+    MaterialSourceKind,
+    MaterialState,
     NodeType,
+    PageQuality,
     ProgramNode,
     Project,
+    ProjectMaterial,
     ProjectStatus,
     ReferenceAnswer,
     ReferenceAnswerMatchMethod,
     ReferenceAnswerOrigin,
+    SourceRole,
     TemplateKey,
     WorkspaceVariant,
     utc_now,
@@ -132,6 +149,77 @@ def _seed_exam(session: Session) -> tuple[Project, ProgramNode]:
     )
     session.commit()
     return project, node
+
+
+def _seed_material(session: Session, project_id: UUID) -> None:
+    material = Material(
+        sha256="b" * 64,
+        original_name="Конспект.txt",
+        storage_path="text/check-exam-chat.txt",
+        media_type="text/plain",
+        source_kind=MaterialSourceKind.TEXT,
+        size_bytes=64,
+        page_count=1,
+        status=MaterialState.READY,
+        active_parse_revision=1,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    session.add(material)
+    session.flush()
+    session.add(
+        ProjectMaterial(
+            project_id=project_id,
+            material_id=material.id,
+            source_role=SourceRole.ADDITIONAL,
+            priority=0,
+            affects_program=False,
+            purposes=["study_source"],
+            created_at=utc_now(),
+        )
+    )
+    page = MaterialPage(
+        material_id=material.id,
+        revision=1,
+        page_number=1,
+        width=595,
+        height=842,
+        text="Индекс — вспомогательная структура для быстрого поиска строк.",
+        markdown="Индекс — вспомогательная структура для быстрого поиска строк.",
+        quality=PageQuality.NATIVE,
+        elements=[],
+        diagnostics=[],
+        created_at=utc_now(),
+    )
+    session.add(page)
+    session.flush()
+    block = MaterialBlock(
+        material_id=material.id,
+        revision=1,
+        sort_order=0,
+        title="Индексы",
+        block_class=BlockClass.CONTENT,
+        page_from=1,
+        page_to=1,
+    )
+    session.add(block)
+    session.flush()
+    session.add(
+        MaterialFragment(
+            material_id=material.id,
+            page_id=page.id,
+            block_id=block.id,
+            sort_order=0,
+            text="Индекс — вспомогательная структура для быстрого поиска строк.",
+            bbox=[0, 0, 1, 1],
+            element_kind="paragraph",
+            degraded_structure=False,
+            quality=PageQuality.NATIVE,
+        )
+    )
+    session.commit()
+    reindex_material(session, material.id)
+    session.commit()
 
 
 def _judge_completion() -> ProviderCompletion:
@@ -280,6 +368,99 @@ async def _run(engine: object, session: Session) -> None:
         session.commit()
         stored = attempt_service.list_attempts(session, project.id, node.id)
         assert len(stored) == 4
+        session.commit()
+
+        # Захватываем id заранее: rollback ниже истощает атрибуты загруженных
+        # ORM-объектов, а повторное обращение к project.id/chat.id после отката
+        # само по себе автоначинает транзакцию и ломает следующий `with session.begin()`.
+        project_id, node_id, chat_id = project.id, node.id, chat.id
+
+        # Настройки: частичный PATCH не сбрасывает неуказанные поля.
+        chat_router.patch_chat_settings(
+            project_id, chat_id,
+            ChatSettingsWrite(strictness=ExaminerStrictness.STRICT), session,
+        )
+        session.commit()
+        after_strictness = chat_router.patch_chat_settings(
+            project_id, chat_id,
+            ChatSettingsWrite(persona=ExaminerPersona.CALM_TEACHER), session,
+        )
+        assert after_strictness.persona == ExaminerPersona.CALM_TEACHER.value
+        assert after_strictness.strictness == ExaminerStrictness.STRICT.value
+        assert after_strictness.context_flags["profile"] is True
+        session.commit()
+
+        # study — зарегистрирован, но стабильно недоступен.
+        try:
+            chat_router.patch_chat_settings(
+                project_id, chat_id, ChatSettingsWrite(mode="study"), session
+            )
+        except Exception as error:  # noqa: BLE001 — проверяем стабильный код домена
+            assert getattr(error, "code", None) == "chat_mode_unavailable"
+        else:
+            raise AssertionError("study должен быть недоступен в первой итерации")
+        session.commit()
+
+        # Неизвестная модель отклоняется без сохранения.
+        try:
+            chat_router.patch_chat_settings(
+                project_id, chat_id,
+                ChatSettingsWrite(
+                    model_override=ChatModelOverrideWrite(
+                        provider_id="00000000-0000-0000-0000-000000000000",
+                        model_id="ghost-model",
+                    )
+                ),
+                session,
+            )
+        except Exception as error:  # noqa: BLE001
+            assert getattr(error, "code", None) == "ai_model_not_in_catalog"
+        else:
+            raise AssertionError("неизвестная модель должна быть отклонена")
+        session.commit()
+
+        capabilities = chat_router.get_chat_capabilities(project_id, node_id, session)
+        modes = {item.key: item.available for item in capabilities.modes}
+        assert modes == {"exam": True, "study": False}
+        tools = {item.key: item.available for item in capabilities.tools}
+        assert tools["search_project_materials"] is True
+        assert tools["search_external_sources"] is False
+        session.commit()
+
+        preview = chat_router.get_chat_context(project_id, chat_id, session)
+        assert preview.fingerprint
+        session.commit()
+
+        # BM25 Tool: настоящий поиск через общий реестр, без обращения к модели.
+        _seed_material(session, project_id)
+        calls_before_tool = fake.complete_calls
+        run = chat_router.post_tool_run(
+            project_id, chat_id, "search_project_materials",
+            ToolRunCreateWrite(input={"query": "индекс"}), session,
+        )
+        assert run.state == "succeeded"
+        assert run.result is not None
+        assert len(run.result["items"]) == 1
+        assert fake.complete_calls == calls_before_tool
+        session.commit()
+
+        detail_with_tool = chat_service.get_session_detail(session, project_id, chat_id)
+        tool_messages = [
+            m for m in detail_with_tool.messages if m.payload_kind.value == "tool_result"
+        ]
+        assert len(tool_messages) == 1
+        assert tool_messages[0].skill == "search_project_materials"
+        session.commit()
+
+        try:
+            chat_router.post_tool_run(
+                project_id, chat_id, "no_such_tool",
+                ToolRunCreateWrite(input={"query": "индекс"}), session,
+            )
+        except Exception as error:  # noqa: BLE001
+            assert getattr(error, "code", None) == "chat_tool_not_found"
+        else:
+            raise AssertionError("неизвестный Tool должен быть отклонён")
     finally:
         gateway_module.production_transport = original_transport
         chat_router.SessionLocal = original_session_local
