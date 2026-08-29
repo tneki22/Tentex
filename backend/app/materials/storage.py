@@ -1,3 +1,4 @@
+import contextlib
 import hashlib
 import mimetypes
 from pathlib import Path
@@ -121,25 +122,29 @@ def store_material_asset(owner: str, name: str, data: bytes) -> str:
     return relative_path.as_posix()
 
 
-async def store_answer_upload(
-    project_id: str,
+async def store_namespaced_upload(
+    namespace: str,
+    owner_id: str,
     upload: UploadFile,
     *,
     allowed_suffixes: set[str],
     max_bytes: int,
-) -> tuple[str, str, int, str]:
-    """Вложение к эталону: пишем потоком во временный файл и обрубаем на лету.
+    unsupported_message: str,
+    error_code_prefix: str,
+) -> tuple[str, int, str]:
+    """Потоковая запись вложения в `<namespace>/<owner_id>/<uuid><suffix>`.
 
-    В отличие от прежнего `await file.read()`, гигантский файл не попадает в
-    память целиком — превышение ловится посреди потока и временный файл удаляется.
+    Общий вынос из прежнего `store_answer_upload`: другому домену (конспектам)
+    нужен тот же потоковый предел на файл, но не общий вывод media type — это
+    решает вызывающий, у которого разные требования к доверию `content_type`.
+    В отличие от `await file.read()`, гигантский файл не попадает в память
+    целиком — превышение ловится посреди потока и временный файл удаляется.
     """
     original_name = Path(upload.filename or "файл").name
     suffix = Path(original_name).suffix.lower()
     if suffix not in allowed_suffixes:
         raise ProjectDomainError(
-            "К ответу прикрепляются изображения, PDF, DOCX, TXT и MD",
-            status=422,
-            code="attachment_unsupported",
+            unsupported_message, status=422, code=f"{error_code_prefix}_unsupported"
         )
     temporary_dir = settings.storage_dir / "tmp"
     temporary_dir.mkdir(parents=True, exist_ok=True)
@@ -151,26 +156,47 @@ async def store_answer_upload(
                 size += len(chunk)
                 if size > max_bytes:
                     raise ProjectDomainError(
-                        "Файл больше 20 МБ", status=413, code="attachment_too_large"
+                        f"Файл больше {max_bytes // (1024 * 1024)} МБ",
+                        status=413,
+                        code=f"{error_code_prefix}_too_large",
                     )
                 target.write(chunk)
         if size == 0:
-            raise ProjectDomainError("Файл пуст", status=422, code="attachment_empty")
-        relative_path = Path("answers") / project_id / f"{uuid4().hex}{suffix}"
+            raise ProjectDomainError("Файл пуст", status=422, code=f"{error_code_prefix}_empty")
+        relative_path = Path(namespace) / owner_id / f"{uuid4().hex}{suffix}"
         final_path = settings.storage_dir / relative_path
         final_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path.replace(final_path)
-        media_type = (
-            upload.content_type
-            or mimetypes.guess_type(original_name)[0]
-            or "application/octet-stream"
-        )
-        return relative_path.as_posix(), media_type, size, original_name
+        return relative_path.as_posix(), size, original_name
     except Exception:
         temporary_path.unlink(missing_ok=True)
         raise
     finally:
         await upload.close()
+
+
+async def store_answer_upload(
+    project_id: str,
+    upload: UploadFile,
+    *,
+    allowed_suffixes: set[str],
+    max_bytes: int,
+) -> tuple[str, str, int, str]:
+    """Совместимая обёртка над `store_namespaced_upload` для вложений к эталонам."""
+    content_type = upload.content_type
+    relative_path, size, original_name = await store_namespaced_upload(
+        "answers",
+        project_id,
+        upload,
+        allowed_suffixes=allowed_suffixes,
+        max_bytes=max_bytes,
+        unsupported_message="К ответу прикрепляются изображения, PDF, DOCX, TXT и MD",
+        error_code_prefix="attachment",
+    )
+    media_type = (
+        content_type or mimetypes.guess_type(original_name)[0] or "application/octet-stream"
+    )
+    return relative_path, media_type, size, original_name
 
 
 def material_path(storage_path: str) -> Path:
@@ -179,3 +205,13 @@ def material_path(storage_path: str) -> Path:
     if root not in candidate.parents:
         raise RuntimeError("Material path escaped storage root")
     return candidate
+
+
+def remove_storage_dir_if_empty(relative_dir: str) -> None:
+    """Убирает каталог хранилища, если он существует и уже пуст.
+
+    Молчит, если каталога нет или в нём остались файлы: вызывающая очистка
+    (например, удаление проекта) не должна падать из-за гонки или недомёта.
+    """
+    with contextlib.suppress(OSError):
+        material_path(relative_dir).rmdir()
