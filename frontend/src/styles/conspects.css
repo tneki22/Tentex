@@ -1,0 +1,214 @@
+/*
+ * «Мой конспект» и «Сводный конспект»: Milkdown Crepe поверх токенов Tentex.
+ * Ниже — единственное место, где определяются переменные --crepe-*: пакетную
+ * тему (classic/nord/frame, свет/тьма) не подключаем, чтобы цвет оставался
+ * только через `tokens.css`. `--font-serif` — тот же выбор, что у эталонного
+ * ответа и учебникового текста: конспект тоже длинное чтение, а не интерфейс.
+ */
+
+.conspect-editor,
+.conspect-summary {
+  --crepe-color-background: var(--paper);
+  --crepe-color-on-background: var(--ink);
+  --crepe-color-surface: var(--paper-strong);
+  --crepe-color-surface-low: var(--surface-sunken);
+  --crepe-color-on-surface: var(--ink);
+  --crepe-color-on-surface-variant: var(--muted);
+  --crepe-color-outline: var(--line);
+  --crepe-color-primary: var(--accent);
+  --crepe-color-secondary: var(--accent-wash-strong);
+  --crepe-color-on-secondary: var(--ink);
+  --crepe-color-inverse: var(--tooltip-surface);
+  --crepe-color-on-inverse: var(--tooltip-ink);
+  --crepe-color-inline-code: var(--ink);
+  --crepe-color-error: var(--tone-danger);
+  --crepe-color-hover: var(--surface-hover);
+  --crepe-color-selected: var(--accent-wash-strong);
+  --crepe-color-inline-area: var(--surface-sunken);
+  --crepe-color-diff-added: var(--tone-success);
+  --crepe-color-diff-added-bg: color-mix(in srgb, var(--tone-success) 12%, transparent);
+  --crepe-color-diff-added-text: var(--ink);
+  --crepe-color-diff-removed: var(--tone-danger);
+  --crepe-color-diff-removed-bg: color-mix(in srgb, var(--tone-danger) 12%, transparent);
+  --crepe-color-diff-removed-text: var(--ink);
+
+  --crepe-base-font-size: var(--text-base);
+  --crepe-font-title: var(--font-serif);
+  --crepe-font-default: var(--font-serif);
+  --crepe-font-code: var(--font-mono);
+
+  --crepe-shadow-1: var(--shadow-sm);
+  --crepe-shadow-2: var(--shadow-md);
+}
+
+/* --- Карточка редактора: рамка и радиус свои, Crepe красит только нутро --- */
+
+.conspect-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  height: 100%;
+  min-height: 0;
+}
+
+.conspect-editor-surface {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  transition: border-color var(--ease-fast);
+}
+
+.conspect-editor-surface:focus-within {
+  border-color: var(--accent-edge);
+}
+
+.conspect-editor .milkdown {
+  min-height: 100%;
+  padding: var(--space-2) var(--space-2) var(--space-8);
+}
+
+.conspect-editor .milkdown .ProseMirror {
+  padding: var(--space-4) var(--space-6);
+  line-height: var(--leading-relaxed);
+}
+
+/* Изображения конспекта — как карточка материала: скругление и мягкая тень,
+   а не голый <img> встык с текстом. */
+.conspect-editor .milkdown img {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Блочная формула читается свободнее с небольшим воздухом сверху и снизу */
+.conspect-editor .milkdown .katex-display {
+  margin: var(--space-4) 0;
+}
+
+/* --- Индикатор сохранения: одна и та же плашка плавно меняет тон и текст --- */
+
+.conspect-save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  transition: color var(--ease-fast), background-color var(--ease-fast), border-color var(--ease-fast);
+}
+
+.conspect-save-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.conspect-save-status.is-saving .conspect-save-status-dot {
+  animation: conspect-save-pulse 1.1s var(--motion-ease) infinite;
+}
+
+@keyframes conspect-save-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conspect-save-status.is-saving .conspect-save-status-dot {
+    animation: none;
+  }
+}
+
+.conspect-editor-conflict {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--tone-warning) 32%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--tone-warning) 8%, transparent);
+  color: var(--ink);
+}
+
+/* --- Плавная смена loading → ready: контент проявляется, а не выпрыгивает --- */
+
+.conspect-editor-fade-enter {
+  animation: conspect-fade-in var(--motion-slow) var(--motion-ease-out);
+}
+
+@keyframes conspect-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conspect-editor-fade-enter {
+    animation: none;
+  }
+}
+
+/* --- Сводный конспект: тот же документ, но только для чтения --- */
+
+.conspect-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  height: 100%;
+  min-height: 0;
+}
+
+.conspect-summary-index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper-strong);
+}
+
+.conspect-summary-index-item {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  transition: background-color var(--ease-fast), color var(--ease-fast);
+}
+
+.conspect-summary-index-item:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.conspect-summary-document {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+}
+
+.conspect-summary-document .milkdown {
+  padding: var(--space-2) var(--space-2) var(--space-8);
+}
+
+.conspect-summary-document .milkdown .ProseMirror {
+  padding: var(--space-4) var(--space-6);
+  line-height: var(--leading-relaxed);
+  cursor: default;
+}
+
+.conspect-summary-document .milkdown img {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.conspect-summary-document .milkdown hr {
+  margin: var(--space-6) 0;
+  border: none;
+  border-top: 1px solid var(--line);
+}
