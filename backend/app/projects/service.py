@@ -5,9 +5,11 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.materials.schemas import MaterialPurpose
+from app.materials.storage import material_path, remove_storage_dir_if_empty
 from app.models import (
     Attempt,
     ChatSession,
+    ConspectImage,
     GoalPassport,
     Material,
     NodeType,
@@ -539,6 +541,14 @@ def delete_project(session: Session, project_id: UUID) -> None:
         if project is None or project.status == ProjectStatus.DRAFT:
             raise ProjectNotFoundError()
         was_active = project.status == ProjectStatus.ACTIVE
+        # Строки конспектов и их изображений каскадно уйдут вместе с узлами
+        # программы ниже — пути собираем заранее, файлы удаляем после commit.
+        conspect_image_paths = [
+            material_path(image.storage_path)
+            for image in session.scalars(
+                select(ConspectImage).where(ConspectImage.project_id == project_id)
+            )
+        ]
         # Самоссылка дерева использует RESTRICT, поэтому одного CASCADE от
         # projects недостаточно: сначала удаляем листья, затем сам проект.
         program.delete_program_tree(session, project_id)
@@ -547,6 +557,9 @@ def delete_project(session: Session, project_id: UUID) -> None:
         if was_active:
             _normalize_active_order(session)
             session.flush()
+    for path in conspect_image_paths:
+        path.unlink(missing_ok=True)
+    remove_storage_dir_if_empty(f"conspects/{project_id}")
 
 
 def save_workspace_state(

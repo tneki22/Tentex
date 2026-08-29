@@ -13,6 +13,13 @@ export { AnswerMatchStatus } from "./AnswerMatchStatus";
 export { answerScanGroups, scanPageCount } from "./answerPages";
 export type { AnswerScanGroup } from "./answerPages";
 export { AutoMatchDialog } from "./AutoMatchDialog";
+// ConspectEditor/ConspectSummary НЕ реэкспортируются как значения: этот файл
+// импортируется эагерно почти всеми экранами, и статический реэкспорт тянет
+// Milkdown в стартовый бандл (rolldown это явно ловит: INEFFECTIVE_DYNAMIC_IMPORT).
+// Компонент подключается только прямым `import("./ConspectEditor")` — так,
+// как это уже делает ProjectWorkspace через React.lazy.
+export type { ConspectEditorHandle, ConspectEditorProps } from "./ConspectEditor";
+export type { ConspectSummaryProps } from "./ConspectSummary";
 export { CostEstimate } from "./CostEstimate";
 export { GoalLevelPicker, GOAL_LEVELS, goalLevelEffect } from "./GoalLevel";
 export type { GoalLevelValue } from "./GoalLevel";
