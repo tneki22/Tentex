@@ -12,6 +12,7 @@ import {
   Info,
   Link2,
   LibraryBig,
+  ListTree,
   Maximize2,
   Minimize2,
   Plus,
@@ -26,7 +27,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import type { BindingFragmentRead, HeadingSuggestion, NodeBindingSummary } from "../api/bindings";
 import { listBindings, resolveAnswersHeading } from "../api/bindings";
@@ -58,6 +59,7 @@ import {
   Button,
   ConfirmDialog,
   Dialog,
+  EmptyState,
   ErrorState,
   IconButton,
   Kbd,
@@ -68,6 +70,13 @@ import {
 } from "../components/ui";
 import { MetricList } from "../components/domain";
 import { useBindings } from "../hooks/useBindings";
+import { useConspectSummary } from "../hooks/useConspect";
+
+// Прямой импорт файла, а не барреля components/domain: тянет Milkdown только
+// когда реально открыт «Сводный конспект» (см. ProjectWorkspace.tsx).
+const ConspectSummary = lazy(() =>
+  import("../components/domain/ConspectSummary").then((module) => ({ default: module.ConspectSummary })),
+);
 import { useAnswerAutoMatch, type AnswerAutoMatchState } from "../hooks/useAnswerAutoMatch";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { useViewerFullscreen } from "../hooks/useViewerFullscreen";
@@ -122,6 +131,8 @@ interface CatalogProps {
   onQuery: (value: string) => void;
   onAdd: () => void;
   onChooseLibrary: () => void;
+  hasConspects: boolean;
+  conspectSummaryActive: boolean;
 }
 
 function MaterialCatalog({
@@ -133,6 +144,8 @@ function MaterialCatalog({
   onQuery,
   onAdd,
   onChooseLibrary,
+  hasConspects,
+  conspectSummaryActive,
 }: CatalogProps) {
   const textbook = project?.project.workspace_variant === "textbook";
   const visible = materials.filter((material) =>
@@ -140,6 +153,8 @@ function MaterialCatalog({
   const examFiles = visible.filter((material) => material.purposes.some((purpose) =>
     purpose === "exam_structure" || purpose === "reference_answers"));
   const sources = visible.filter((material) => !examFiles.includes(material));
+  const conspectQueryMatches = !query.trim()
+    || "сводный конспект".includes(query.toLocaleLowerCase("ru").trim());
 
   const items = (group: MaterialRead[]) => group.map((material) => (
     <div
@@ -189,12 +204,26 @@ function MaterialCatalog({
         />
       </label>
       <nav className="materials-catalog-list">
-        <Link className={!selectedId ? "materials-catalog-overview is-active" : "materials-catalog-overview"} to={`/projects/${projectId}/materials`}>
+        <Link
+          className={!selectedId && !conspectSummaryActive ? "materials-catalog-overview is-active" : "materials-catalog-overview"}
+          to={`/projects/${projectId}/materials`}
+        >
           <Files size={15} />
           <span><strong>Все материалы</strong><small>{fileCountLabel(materials.length)}</small></span>
         </Link>
         {examFiles.length > 0 && <section><h2>Экзамен</h2>{items(examFiles)}</section>}
         {sources.length > 0 && <section><h2>Учебные источники</h2>{items(sources)}</section>}
+        {hasConspects && conspectQueryMatches && (
+          <section>
+            <h2>Конспекты</h2>
+            <div className={`materials-catalog-item ${conspectSummaryActive ? "is-active" : ""}`.trim()}>
+              <Link to={`/projects/${projectId}/materials?view=conspect-summary`}>
+                <ListTree size={15} aria-hidden="true" />
+                <span><strong>Сводный конспект</strong></span>
+              </Link>
+            </div>
+          </section>
+        )}
       </nav>
       <ProjectNav
         projectId={projectId}
@@ -1204,6 +1233,9 @@ function MaterialSurface() {
   const hasOriginal = material?.media_type === "application/pdf"
     || material?.media_type.startsWith("image/");
   const textbook = project?.project.workspace_variant === "textbook";
+  const conspectSummary = useConspectSummary(projectId);
+  const hasConspects = !textbook && conspectSummary.entries.length > 0;
+  const conspectSummaryActive = !textbook && searchParams.get("view") === "conspect-summary";
   // Список вопросов сам себя не привязывает: у него нет фрагментов, которые
   // имело бы смысл сопоставлять с темами программы (см. пояснение к вкладке).
   const isExamStructureFile = material?.purposes.includes("exam_structure") ?? false;
@@ -1768,10 +1800,27 @@ function MaterialSurface() {
         onQuery={setQuery}
         onAdd={() => setAddOpen(true)}
         onChooseLibrary={() => setLibraryOpen(true)}
+        hasConspects={hasConspects}
+        conspectSummaryActive={conspectSummaryActive}
       />
       <main className="materials-document-area">
         {store.error && <p className="materials-action-note" role="alert">{store.error}</p>}
-        {!material ? (
+        {conspectSummaryActive ? (
+          <div className="materials-conspect-summary">
+            {conspectSummary.loading ? (
+              <LoadingState label="Загружаем сводный конспект" />
+            ) : hasConspects ? (
+              <Suspense fallback={<LoadingState label="Загружаем сводный конспект" />}>
+                <ConspectSummary projectId={projectId} />
+              </Suspense>
+            ) : (
+              <EmptyState title="Конспектов пока нет">
+                <p>Сводный конспект появится, как только сохранится личный конспект темы.</p>
+                <Link className="secondary-button" to={`/projects/${projectId}`}>Вернуться в рабочую область</Link>
+              </EmptyState>
+            )}
+          </div>
+        ) : !material ? (
           <MaterialOverview
             materials={store.materials}
             onOpen={(id) => navigate(`/projects/${projectId}/materials/${id}`)}

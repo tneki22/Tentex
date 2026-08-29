@@ -224,3 +224,27 @@
   border: none;
   border-top: 1px solid var(--line);
 }
+
+/* --- Виртуальная категория «Конспекты» в Материалах ---
+   .materials-document-area — grid из двух строк (тулбар + сцена документа);
+   у сводки нет тулбара, поэтому ей отдаётся обе строки, иначе высота
+   считается по auto-строке и внутренний overflow-y сводки не сработает. */
+
+.materials-conspect-summary {
+  grid-row: 1 / -1;
+  min-height: 0;
+  height: 100%;
+  padding: var(--space-6);
+  overflow: hidden;
+}
+
+.materials-conspect-summary .conspect-summary {
+  height: 100%;
+}
+
+/* Пустота/загрузка — не документ на всю высоту, а карточка по центру сцены */
+.materials-conspect-summary:has(> .empty-state),
+.materials-conspect-summary:has(> .loading-state) {
+  display: grid;
+  place-items: center;
+}
