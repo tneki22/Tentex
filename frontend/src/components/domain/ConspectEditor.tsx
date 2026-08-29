@@ -89,10 +89,12 @@ function ConspectSaveStatus({
   status,
   error,
   onReload,
+  onRetry,
 }: {
   status: ReturnType<typeof useConspect>["status"];
   error: Error | null;
   onReload: () => void;
+  onRetry: () => void;
 }) {
   if (status === "conflict") {
     return (
@@ -110,7 +112,7 @@ function ConspectSaveStatus({
       <div className="conspect-save-status is-error" role="status" aria-live="polite">
         <TriangleAlert size={16} aria-hidden="true" />
         <span>{error?.message ?? "Не удалось сохранить"}</span>
-        <Button variant="secondary" onClick={onReload}>Повторить</Button>
+        <Button variant="secondary" onClick={onRetry}>Повторить</Button>
       </div>
     );
   }
@@ -136,7 +138,7 @@ function ConspectSaveStatus({
 export const ConspectEditor = forwardRef<ConspectEditorHandle, ConspectEditorProps>(
   function ConspectEditor({ projectId, nodeId, onSaved }, ref) {
     const controller = useConspect(projectId, nodeId);
-    const { status, error, flush, reload, scheduleSave, revision } = controller;
+    const { status, error, flush, reload, retry, scheduleSave, revision } = controller;
 
     useImperativeHandle(ref, () => ({ flush }), [flush]);
 
@@ -165,7 +167,7 @@ export const ConspectEditor = forwardRef<ConspectEditorHandle, ConspectEditorPro
 
     return (
       <div className="conspect-editor conspect-editor-fade-enter">
-        <ConspectSaveStatus status={status} error={error} onReload={() => void reload()} />
+        <ConspectSaveStatus status={status} error={error} onReload={() => void reload()} onRetry={retry} />
         <div className="conspect-editor-surface">
           <MilkdownProvider>
             <ConspectMilkdown

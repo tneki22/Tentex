@@ -18,6 +18,7 @@
 | Экзаменационный чат | `exam-chat.md` | `check_exam_chat.py` |
 | Экзаменационный мастер | `exam-wizard-material-onboarding.md` | `check_stage5.py` |
 | Глобальная Библиотека | `global-library-material-workspace.md` | `check_library_workspace.py` |
+| Конспекты | `conspects.md` | pytest |
 
 `ai-provider-model-settings.md` заменяет старую модель двух жёстких подключений из
 `ai-model-gateway.md`. Если историческая граница говорит «не входит в этап», проверяй

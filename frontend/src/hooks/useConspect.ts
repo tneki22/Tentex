@@ -15,6 +15,8 @@ export interface ConspectController {
   scheduleSave: (markdown: string, retainedImageIds: string[]) => void;
   flush: () => Promise<void>;
   reload: () => Promise<void>;
+  /** Повторить сохранение после сетевой ошибки — не reload(), иначе локальная правка потеряется. */
+  retry: () => void;
 }
 
 const AUTOSAVE_DELAY_MS = 800;
@@ -49,6 +51,9 @@ export function useConspect(projectId: string, nodeId: string): ConspectControll
   const revisionRef = useRef(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<PendingSave | null>(null);
+  // Снимок последней неудачной попытки — не для восстановления после reload(),
+  // а чтобы «Повторить» могло переслать именно то, что не ушло, не трогая сервер.
+  const lastFailedRef = useRef<PendingSave | null>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   const conflictRef = useRef(false);
 
@@ -86,6 +91,7 @@ export function useConspect(projectId: string, nodeId: string): ConspectControll
     }).then(
       (result) => {
         if (!isCurrent()) return;
+        lastFailedRef.current = null;
         revisionRef.current = result.revision;
         setRevision(result.revision);
         setContent(result.content_markdown);
@@ -97,10 +103,12 @@ export function useConspect(projectId: string, nodeId: string): ConspectControll
         if (caught instanceof ProjectApiError && caught.code === "stale_conspect_revision") {
           conflictRef.current = true;
           pendingRef.current = null;
+          lastFailedRef.current = null;
           setError(caught);
           setStatus("conflict");
           return;
         }
+        lastFailedRef.current = { markdown, retainedImageIds };
         setError(caught instanceof Error ? caught : new Error("Не удалось сохранить конспект"));
         setStatus("error");
       },
@@ -139,6 +147,7 @@ export function useConspect(projectId: string, nodeId: string): ConspectControll
     revisionRef.current = 0;
     conflictRef.current = false;
     pendingRef.current = null;
+    lastFailedRef.current = null;
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
@@ -183,11 +192,22 @@ export function useConspect(projectId: string, nodeId: string): ConspectControll
       debounceRef.current = null;
     }
     pendingRef.current = null;
+    lastFailedRef.current = null;
     conflictRef.current = false;
     await load();
   }, [load]);
 
-  return { content, revision, images, hydrationVersion, status, error, scheduleSave, flush, reload };
+  const retry = useCallback(() => {
+    if (conflictRef.current) return;
+    // Пока печатали дальше — pendingRef уже свежее, чем неудачная попытка,
+    // и именно его нужно отправить; иначе пересылаем то, что не ушло.
+    if (!pendingRef.current && lastFailedRef.current) {
+      pendingRef.current = lastFailedRef.current;
+    }
+    void flush();
+  }, [flush]);
+
+  return { content, revision, images, hydrationVersion, status, error, scheduleSave, flush, reload, retry };
 }
 
 export interface ConspectSummaryController {
