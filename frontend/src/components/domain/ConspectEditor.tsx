@@ -4,6 +4,7 @@ import { Check, TriangleAlert } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { conspectImageUrl, uploadConspectImage } from "../../api/conspects";
 import { useConspect } from "../../hooks/useConspect";
+import { CONSPECT_FEATURE_TEXT } from "./conspectEditorText";
 import { Button } from "../ui/Button";
 import { ErrorState } from "../ui/ErrorState";
 import { LoadingState } from "../ui/LoadingState";
@@ -57,16 +58,15 @@ function ConspectMilkdown({
       root,
       defaultValue: initialMarkdown,
       featureConfigs: {
+        ...CONSPECT_FEATURE_TEXT,
         [Crepe.Feature.ImageBlock]: {
+          ...CONSPECT_FEATURE_TEXT[Crepe.Feature.ImageBlock],
           onUpload: async (file: File) => {
             const image = await uploadConspectImage(projectId, nodeId, file);
             return conspectImageUrl(projectId, image.id);
           },
           proxyDomURL: (url: string) =>
             isOwnConspectImageUrl(url, projectId) ? url : BLOCKED_IMAGE_PLACEHOLDER,
-        },
-        [Crepe.Feature.Latex]: {
-          katexOptions: { throwOnError: false },
         },
       },
     });

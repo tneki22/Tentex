@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
@@ -83,6 +83,16 @@ import { ExamChatPanel } from "./workspace/chat/ExamChatPanel";
 import { AttemptHistory } from "./workspace/AttemptHistory";
 import { ReferenceAnswerContent, type ReferenceAnswerMedia } from "./workspace/ReferenceAnswerContent";
 import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
+import type { ConspectEditorHandle } from "../components/domain/ConspectEditor";
+
+// Прямой динамический импорт файла, а не барреля components/domain: так Milkdown
+// гарантированно уезжает в свой чанк и не раздувает стартовый бандл (задача 3 плана).
+const ConspectEditor = lazy(() =>
+  import("../components/domain/ConspectEditor").then((module) => ({ default: module.ConspectEditor })),
+);
+const ConspectSummary = lazy(() =>
+  import("../components/domain/ConspectSummary").then((module) => ({ default: module.ConspectSummary })),
+);
 
 const DEFAULT_LAYOUT: WorkspaceLayout = {
   selected_node_id: null,
@@ -103,6 +113,12 @@ const TAB_ICONS = {
   chat: MessageSquare,
   summary: ListTree,
 } satisfies Record<WorkspaceTab, typeof BookOpen>;
+
+const WORKSPACE_TABS: WorkspaceTab[] = ["answer", "source", "lesson", "conspect", "history", "chat", "summary"];
+
+function isWorkspaceTab(value: string | null): value is WorkspaceTab {
+  return value !== null && (WORKSPACE_TABS as string[]).includes(value);
+}
 
 function allowedTabs(project: Pick<ProjectRead, "workspace_variant" | "enabled_modules"> | null): WorkspaceTab[] {
   if (!project) return ["answer", "source"];
@@ -170,6 +186,7 @@ function sanitizeLayout(
   nodes: ProgramNodeRead[],
   preferredNodeId: string | null,
   availableTabs: WorkspaceTab[],
+  preferredTab: WorkspaceTab | null = null,
 ): WorkspaceLayout {
   const visibleNodes = nodes.filter((node) => node.is_in_current_program && !node.is_archived);
   const currentIds = new Set(visibleNodes.map((node) => node.id));
@@ -189,12 +206,28 @@ function sanitizeLayout(
       active_tab: group.active_tab && validTabs.includes(group.active_tab) ? group.active_tab : validTabs[0] ?? null,
     };
   });
+  const finalGroups = groups.length ? groups : DEFAULT_LAYOUT.groups.map((group) => ({ ...group }));
+  if (preferredTab && availableTabs.includes(preferredTab)) {
+    // Уже открыт где-то — делаем активной ту зону вместо второй вкладки того же документа.
+    const existingIndex = finalGroups.findIndex((group) => group.tabs.includes(preferredTab));
+    if (existingIndex >= 0) {
+      finalGroups[existingIndex] = { ...finalGroups[existingIndex], active_tab: preferredTab };
+    } else {
+      finalGroups[0] = {
+        ...finalGroups[0],
+        tabs: finalGroups[0].tabs.includes(preferredTab)
+          ? finalGroups[0].tabs
+          : [...finalGroups[0].tabs, preferredTab],
+        active_tab: preferredTab,
+      };
+    }
+  }
   return {
     selected_node_id: selected,
     expanded_node_ids: [...new Set(source?.expanded_node_ids ?? visibleNodes.filter((node) => node.node_type === "section").map((node) => node.id))].filter((id) => currentIds.has(id)),
     tree_width: Math.round(Math.min(460, Math.max(260, source?.tree_width ?? 320))),
-    groups: groups.length ? groups : DEFAULT_LAYOUT.groups,
-    group_weights: groups.map((_, index) => source?.group_weights[index] && source.group_weights[index] > 0 ? source.group_weights[index] : 1),
+    groups: finalGroups,
+    group_weights: finalGroups.map((_, index) => source?.group_weights[index] && source.group_weights[index] > 0 ? source.group_weights[index] : 1),
   };
 }
 
@@ -203,6 +236,8 @@ export function ProjectWorkspace() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const preferredTopic = searchParams.get("topic");
+  const preferredTabParam = searchParams.get("tab");
+  const preferredTab = isWorkspaceTab(preferredTabParam) ? preferredTabParam : null;
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [layout, setLayout] = useState<WorkspaceLayout>(DEFAULT_LAYOUT);
   const [loading, setLoading] = useState(true);
@@ -233,13 +268,15 @@ export function ProjectWorkspace() {
   const resizeReadyRef = useRef(false);
   const layoutRef = useRef<WorkspaceLayout>(DEFAULT_LAYOUT);
   const editorGridRef = useRef<HTMLDivElement>(null);
+  const conspectHandleRef = useRef<ConspectEditorHandle | null>(null);
+  const [conspectRefreshKey, setConspectRefreshKey] = useState(0);
 
   async function load(signal?: AbortSignal) {
     setLoading(true);
     setLoadError(null);
     try {
       const next = await getProject(projectId, signal);
-      const sanitized = sanitizeLayout(next.workspace_state?.layout, next.program.nodes, preferredTopic, allowedTabs(next.project));
+      const sanitized = sanitizeLayout(next.workspace_state?.layout, next.program.nodes, preferredTopic, allowedTabs(next.project), preferredTab);
       setDetail(next);
       layoutRef.current = sanitized;
       setLayout(sanitized);
@@ -263,7 +300,8 @@ export function ProjectWorkspace() {
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [projectId, preferredTopic]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, preferredTopic, preferredTab]);
 
   function updateLayout(nextOrUpdater: WorkspaceLayout | ((current: WorkspaceLayout) => WorkspaceLayout)) {
     const next = typeof nextOrUpdater === "function" ? nextOrUpdater(layoutRef.current) : nextOrUpdater;
@@ -434,7 +472,16 @@ export function ProjectWorkspace() {
     }
   }
 
-  function selectNode(nodeId: string) {
+  async function selectNode(nodeId: string) {
+    const handle = conspectHandleRef.current;
+    if (handle) {
+      try {
+        await handle.flush();
+      } catch {
+        setSaveError("Не удалось сохранить конспект — тема не переключена.");
+        return;
+      }
+    }
     persist((current) => ({ ...current, selected_node_id: nodeId }));
   }
 
@@ -461,6 +508,19 @@ export function ProjectWorkspace() {
 
   function openTab(tab: WorkspaceTab, groupId = activeGroupId) {
     if (!availableTabs.includes(tab)) return;
+    if (tab === "conspect") {
+      // Один документ — один редактор: если конспект уже открыт в другой
+      // зоне, переключаемся туда вместо второй вкладки того же узла.
+      const existingGroup = layoutRef.current.groups.find((group) => group.tabs.includes(tab));
+      if (existingGroup) {
+        persist((current) => ({
+          ...current,
+          groups: current.groups.map((group) => group.id === existingGroup.id ? { ...group, active_tab: tab } : group),
+        }));
+        setActiveGroupId(existingGroup.id);
+        return;
+      }
+    }
     persist((current) => ({
       ...current,
       groups: current.groups.map((group) => group.id === groupId
@@ -523,14 +583,12 @@ export function ProjectWorkspace() {
     }));
   }
 
-  function renderTabStub(tab: Exclude<WorkspaceTab, "answer" | "source">) {
+  function renderTabStub(tab: Exclude<WorkspaceTab, "answer" | "source" | "conspect" | "summary">) {
     const TabIcon = TAB_ICONS[tab];
     const copy = {
       lesson: "Уроки пока доступны только в прототипном разделе.",
-      conspect: "Личный конспект пока не подключён к хранилищу.",
       history: "История появится после первых учебных активностей.",
       chat: "Учебниковый чат появится в своей вертикали.",
-      summary: "Сводный конспект появится после сохранения личных конспектов.",
     }[tab];
     return <div className="workspace-empty-copy"><TabIcon size={26} /><h2>{tabLabel(tab, Boolean(textbook))}</h2><p>{copy}</p></div>;
   }
@@ -545,6 +603,26 @@ export function ProjectWorkspace() {
           node={selected}
           onAttemptsChanged={() => setAttemptsReloadKey((value) => value + 1)}
         />
+      );
+    }
+    if (tab === "conspect") {
+      if (!selected) return null;
+      return (
+        <Suspense fallback={<LoadingState label="Загружаем конспект" />}>
+          <ConspectEditor
+            ref={conspectHandleRef}
+            projectId={projectId}
+            nodeId={selected.id}
+            onSaved={() => setConspectRefreshKey((value) => value + 1)}
+          />
+        </Suspense>
+      );
+    }
+    if (tab === "summary") {
+      return (
+        <Suspense fallback={<LoadingState label="Загружаем сводный конспект" />}>
+          <ConspectSummary projectId={projectId} refreshKey={conspectRefreshKey} showTopicIndex />
+        </Suspense>
       );
     }
     return renderTabStub(tab);

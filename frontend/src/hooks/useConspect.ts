@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getConspect, saveConspect } from "../api/conspects";
-import type { ConspectImageRead } from "../api/conspects";
+import { getConspect, listConspects, saveConspect } from "../api/conspects";
+import type { ConspectImageRead, ConspectSummaryEntry } from "../api/conspects";
 import { ProjectApiError } from "../api/projects";
 
 export type ConspectStatus = "loading" | "ready" | "saving" | "saved" | "error" | "conflict";
@@ -188,4 +188,46 @@ export function useConspect(projectId: string, nodeId: string): ConspectControll
   }, [load]);
 
   return { content, revision, images, hydrationVersion, status, error, scheduleSave, flush, reload };
+}
+
+export interface ConspectSummaryController {
+  entries: ConspectSummaryEntry[];
+  loading: boolean;
+  error: Error | null;
+  reload: () => Promise<void>;
+}
+
+/**
+ * Сводный конспект проекта. `refreshKey` меняется снаружи (открытый рядом
+ * редактор сообщает об очередном сохранении через `onSaved`) — без него
+ * сводка не узнала бы, что появился новый текст, до следующего перехода.
+ */
+export function useConspectSummary(projectId: string, refreshKey = 0): ConspectSummaryController {
+  const [entries, setEntries] = useState<ConspectSummaryEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const load = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await listConspects(projectId, signal);
+      if (signal?.aborted) return;
+      setEntries(result.entries);
+    } catch (caught) {
+      if (signal?.aborted) return;
+      setError(caught instanceof Error ? caught : new Error("Не удалось загрузить сводный конспект"));
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load, refreshKey]);
+
+  return { entries, loading, error, reload: () => load() };
 }
