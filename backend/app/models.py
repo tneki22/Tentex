@@ -1171,3 +1171,49 @@ class OcrEngineConfig(Base):
     executor: Mapped[str | None] = mapped_column(String, nullable=True)
     extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class Conspect(Base):
+    """Личный конспект темы — одна строка на пару (проект, узел программы)."""
+
+    __tablename__ = "conspects"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "program_node_id"],
+            ["program_nodes.project_id", "program_nodes.id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("revision >= 1", name="conspect_revision_positive"),
+        Index("ix_conspects_project", "project_id"),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    program_node_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    content_markdown: Mapped[str] = mapped_column(Text, default="")
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class ConspectImage(Base):
+    """Изображение конспекта. Живёт, пока на него ссылается сохранённый Markdown узла."""
+
+    __tablename__ = "conspect_images"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "program_node_id"],
+            ["program_nodes.project_id", "program_nodes.id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("size_bytes >= 0", name="conspect_image_size_nonnegative"),
+        Index("ix_conspect_images_project_node", "project_id", "program_node_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    program_node_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    file_name: Mapped[str] = mapped_column(String)
+    storage_path: Mapped[str] = mapped_column(String)
+    media_type: Mapped[str] = mapped_column(String)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
