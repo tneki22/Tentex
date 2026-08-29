@@ -11,7 +11,6 @@ import {
   Trash2,
 } from "lucide-react";
 import {
-  linkAnswersMaterial,
   listBindings,
   resolveAnswersHeading,
   type BindingFragmentRead,
@@ -40,6 +39,7 @@ import {
 } from "../api/projects";
 import {
   AnswerScanPages,
+  AnswerMatchStatus,
   answerScanGroups,
   AutoMatchDialog,
   GOAL_LEVELS,
@@ -62,6 +62,7 @@ import {
 } from "../components/ui";
 import { buildProgramTree, flattenProgramTree } from "./programTree";
 import { useRecentAnswers } from "../hooks/useRecentAnswers";
+import { useAnswerAutoMatch } from "../hooks/useAnswerAutoMatch";
 import { useAnswerFileMode, useAnswerViewMode } from "../hooks/useAnswerViewMode";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
@@ -163,6 +164,14 @@ export function CoverageMap() {
   const answersMaterial = store.materials.find(
     (item) => item.purposes.includes("reference_answers"),
   ) ?? null;
+  const answerMatch = useAnswerAutoMatch(
+    projectId,
+    answersMaterial?.id ?? null,
+    async (result) => {
+      setSuggestions(result.suggestions);
+      await refresh();
+    },
+  );
 
   async function load(signal?: AbortSignal) {
     setLoading(true);
@@ -257,7 +266,7 @@ export function CoverageMap() {
     answerDraft !== (hasActiveAnswer ? slot?.answer?.text ?? "" : "")
     || sourceDraft !== (hasActiveAnswer ? slot?.answer?.source_label ?? "" : "")
   );
-  const scanGroups = useMemo(
+  const linkedSourceGroups = useMemo(
     () => answerScanGroups(slot?.answer ?? null, nodeBindings, materialNames),
     [slot?.answer, nodeBindings, materialNames],
   );
@@ -364,31 +373,6 @@ export function CoverageMap() {
     setNotice("");
     if (answersMaterial?.status === "ready") setAutoMatchOpen(true);
     else setSourceOpen(true);
-  }
-
-  async function runHeadingsMatch() {
-    if (!answersMaterial || busy) return;
-    setBusy(true);
-    setCommandError("");
-    setNotice("");
-    try {
-      const result = await linkAnswersMaterial(projectId, answersMaterial.id);
-      setSuggestions(result.suggestions);
-      await refresh();
-      const parts = [
-        `связано вопросов: ${result.linked_node_ids.length} из ${result.expected_questions}`,
-        `эталонов создано: ${result.created_answers}`,
-      ];
-      if (result.updated_answers) parts.push(`обновлено: ${result.updated_answers}`);
-      if (result.kept_answers) parts.push(`оставлено своих: ${result.kept_answers}`);
-      if (result.missing_node_ids.length) parts.push(`без ответа: ${result.missing_node_ids.length}`);
-      if (result.suggestions.length) parts.push(`нужно выбрать вопрос: ${result.suggestions.length}`);
-      setNotice(`Файл ответов разобран: ${parts.join(", ")}.`);
-    } catch (error) {
-      setCommandError(requestErrorMessage(error));
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function resolveHeading(anchorFragmentId: string, nodeId: string) {
@@ -516,7 +500,7 @@ export function CoverageMap() {
               <Button variant="secondary" disabled={readOnly} onClick={() => { setImportResult(null); setImportOpen(true); }}>
                 <FileText size={15} />Импортировать текстом
               </Button>
-              <Button disabled={readOnly} onClick={openAnswersFile}>
+              <Button disabled={readOnly || answerMatch.isRunning} onClick={openAnswersFile}>
                 <FileInput size={15} />Из файла ответов
               </Button>
             </div>
@@ -525,6 +509,11 @@ export function CoverageMap() {
         {readOnly && <p className="inline-warning">Проект доступен только для чтения. Верните его в активные, чтобы менять эталоны.</p>}
         {commandError && <p className="inline-error" role="alert">{commandError}</p>}
         {notice && <p className="coverage-notice" role="status">{notice}</p>}
+        <AnswerMatchStatus
+          state={answerMatch.state}
+          onRetry={() => void answerMatch.run()}
+          onDismiss={answerMatch.dismiss}
+        />
 
         <AnswerHeadingSuggestions
           suggestions={suggestions}
@@ -602,9 +591,19 @@ export function CoverageMap() {
                 </p>
               )}
 
+              {slot.status === "missing" && linkedSourceGroups.length > 0 && (
+                <div className="answer-linked-pages-notice" role="status">
+                  <ScanLine size={19} aria-hidden="true" />
+                  <div>
+                    <strong>Связанные страницы найдены, но эталон ещё не создан.</strong>
+                    <p>Сопоставьте файл ответов ещё раз или добавьте эталон вручную.</p>
+                  </div>
+                </div>
+              )}
+
               {viewMode === "scans" && (
-                scanGroups.length > 0
-                  ? <AnswerScanPages projectId={projectId} groups={scanGroups} />
+                linkedSourceGroups.length > 0
+                  ? <AnswerScanPages projectId={projectId} groups={linkedSourceGroups} />
                   : (
                     <div className="answer-scans-empty">
                       <ScanLine size={22} aria-hidden="true" />
@@ -624,7 +623,7 @@ export function CoverageMap() {
                 label="Эталонный ответ"
                 required={viewMode === "text"}
                 hint={viewMode === "scans"
-                  ? `Сверху — ${scanPageCount(scanGroups)} стр. оригинала. Здесь распознанный текст: его можно дополнить своими словами и картинками.`
+                   ? `Сверху — ${scanPageCount(linkedSourceGroups)} стр. оригинала. Здесь распознанный текст: его можно дополнить своими словами и картинками.`
                   : undefined}
               >
                 <AnswerEditor
@@ -702,7 +701,7 @@ export function CoverageMap() {
         onOpenChange={setSourceOpen}
         projectId={projectId}
         answersMaterial={answersMaterial}
-        busy={store.busy || busy}
+        busy={store.busy || busy || answerMatch.isRunning}
         onUploadFile={(file) => void uploadAnswersFile(file)}
         onPickFromLibrary={() => { setSourceOpen(false); setLibraryOpen(true); }}
         onImportText={() => { setSourceOpen(false); setImportResult(null); setImportOpen(true); }}
@@ -712,7 +711,7 @@ export function CoverageMap() {
       <AutoMatchDialog
         open={autoMatchOpen}
         onOpenChange={setAutoMatchOpen}
-        onRunHeadings={() => void runHeadingsMatch()}
+        onRunHeadings={() => void answerMatch.run()}
         onImportText={() => { setImportResult(null); setImportOpen(true); }}
       />
 

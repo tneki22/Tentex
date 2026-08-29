@@ -1,5 +1,5 @@
 import type { PageQuality } from "./materials";
-import { request, type LatestUndoableAction } from "./projects";
+import { ProjectApiError, request, type LatestUndoableAction } from "./projects";
 
 export type BindingStatus = "manual" | "confirmed" | "machine" | "removed" | "orphaned";
 export type BindingMechanism = "manual" | "search" | "answers_file" | "pass_two";
@@ -23,7 +23,9 @@ export interface AnswersLinkRead {
   linked_fragments: number;
   created_answers: number;
   updated_answers: number;
-  kept_answers: number;
+  restored_answers: number;
+  unchanged_answers: number;
+  preserved_answers: number;
   numbered_sections: number;
   extra_sections: number;
   ordinal_rejected_reason: string | null;
@@ -32,11 +34,28 @@ export interface AnswersLinkRead {
   duplicate_headings: string[];
   suggestions: HeadingSuggestion[];
   expected_questions: number;
-  linked_node_ids: string[];
+  matched_node_ids: string[];
+  available_node_ids: string[];
+  unavailable_node_ids: string[];
   missing_node_ids: string[];
   ambiguous_sections: string[];
   ambiguous_pages: number[];
+  complete: boolean;
 }
+
+export type AnswerLinkPhase = "preparing" | "matching" | "binding" | "importing" | "verifying";
+
+export interface AnswersLinkProgress {
+  phase: AnswerLinkPhase;
+  completed: number;
+  total: number;
+  phase_completed: number;
+  phase_total: number;
+}
+
+export type AnswersLinkStreamEvent =
+  | { type: "progress"; progress: AnswersLinkProgress }
+  | { type: "completed"; result: AnswersLinkRead };
 
 export interface BindingFragmentRead {
   id: string;
@@ -131,6 +150,65 @@ export const linkAnswersMaterial = (
   `/api/projects/${encodeURIComponent(projectId)}/materials/${encodeURIComponent(materialId)}/link-answers`,
   { method: "POST" },
 );
+
+function parseAnswerLinkFrame(raw: string): AnswersLinkStreamEvent | null {
+  let event = "";
+  let data = "";
+  for (const line of raw.split("\n")) {
+    if (line.startsWith("event: ")) event = line.slice(7).trim();
+    else if (line.startsWith("data: ")) data += line.slice(6);
+  }
+  if (!event || !data) return null;
+  const payload = JSON.parse(data) as Record<string, unknown>;
+  if (event === "progress") {
+    return { type: "progress", progress: payload as unknown as AnswersLinkProgress };
+  }
+  if (event === "completed") {
+    return { type: "completed", result: payload as unknown as AnswersLinkRead };
+  }
+  if (event === "error") {
+    throw new ProjectApiError(
+      409,
+      String(payload.detail ?? "Не удалось сопоставить ответы"),
+      String(payload.code ?? "answer_matching_failed"),
+    );
+  }
+  return null;
+}
+
+export async function* streamAnswersLink(
+  projectId: string,
+  materialId: string,
+  signal: AbortSignal,
+): AsyncGenerator<AnswersLinkStreamEvent> {
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/materials/${encodeURIComponent(materialId)}/link-answers/stream`,
+    { method: "POST", signal },
+  );
+  if (!response.ok || !response.body) {
+    const payload = await response.json().catch(() => null) as { detail?: string; code?: string } | null;
+    throw new ProjectApiError(
+      response.status,
+      payload?.detail ?? "Не удалось сопоставить ответы",
+      payload?.code ?? null,
+    );
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let split = buffer.indexOf("\n\n");
+    while (split >= 0) {
+      const event = parseAnswerLinkFrame(buffer.slice(0, split));
+      if (event) yield event;
+      buffer = buffer.slice(split + 2);
+      split = buffer.indexOf("\n\n");
+    }
+  }
+}
 
 export const resolveAnswersHeading = (
   projectId: string,

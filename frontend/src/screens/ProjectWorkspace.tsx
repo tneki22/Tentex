@@ -594,7 +594,7 @@ export function ProjectWorkspace() {
           alt: attachment.file_name,
         })),
       ];
-      const scanGroups = answerScanGroups(answer, sourceBindings);
+      const linkedSourceGroups = answerScanGroups(answer, sourceBindings);
       referenceContent = (
         <article className="workspace-reference-answer">
           <header><ReferenceAnswerBadge status={answerSlot.status} /><span>{source} · {match}</span></header>
@@ -609,15 +609,15 @@ export function ProjectWorkspace() {
               {
                 value: "scans",
                 label: "Страницы",
-                disabled: scanGroups.length === 0,
-                tooltip: scanGroups.length === 0
+                disabled: linkedSourceGroups.length === 0,
+                tooltip: linkedSourceGroups.length === 0
                   ? "У этого ответа нет страниц в документе: он вписан вручную или импортирован текстом"
                   : undefined,
               },
             ]}
           />
-          {answerViewMode === "scans" && scanGroups.length > 0 ? (
-            <AnswerScanPages projectId={projectId} groups={scanGroups} compact />
+          {answerViewMode === "scans" && linkedSourceGroups.length > 0 ? (
+            <AnswerScanPages projectId={projectId} groups={linkedSourceGroups} compact />
           ) : answer.source_only ? (
             <div className="workspace-reference-text">
               Ответ находится в источнике. Текстовая проверка недоступна.
@@ -631,6 +631,15 @@ export function ProjectWorkspace() {
           )}
           <Link to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть и изменить эталон</Link>
         </article>
+      );
+    } else if (sourceBindings.length > 0) {
+      referenceContent = (
+        <div className="workspace-empty-copy is-answer-reference">
+          <BookOpen size={26} />
+          <h2>Для вопроса есть связанные материалы, но нет эталонного ответа</h2>
+          <p>Откройте «Ответы», чтобы создать или сопоставить эталон.</p>
+          <Link className="secondary-button" to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть ответы</Link>
+        </div>
       );
     } else {
       referenceContent = (

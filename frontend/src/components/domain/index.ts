@@ -9,6 +9,7 @@
  */
 export { AiFailureNotice } from "./AiFailureNotice";
 export { AnswerScanPages } from "./AnswerScanPages";
+export { AnswerMatchStatus } from "./AnswerMatchStatus";
 export { answerScanGroups, scanPageCount } from "./answerPages";
 export type { AnswerScanGroup } from "./answerPages";
 export { AutoMatchDialog } from "./AutoMatchDialog";

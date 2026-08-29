@@ -7,6 +7,166 @@
  * только «верь осторожно». Метрика цветом не красится вообще (FR-D17).
  */
 
+/* --- Сопоставление файла ответов --- */
+
+.answer-match-status {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  box-shadow: var(--shadow-xs);
+}
+
+.answer-match-status.is-running {
+  border-color: var(--accent-edge);
+  background: color-mix(in srgb, var(--accent) 5%, var(--paper));
+}
+
+.answer-match-status.is-complete {
+  border-color: color-mix(in srgb, var(--tone-success) 38%, var(--line));
+  background: color-mix(in srgb, var(--tone-success) 5%, var(--paper));
+}
+
+.answer-match-status.is-attention {
+  border-color: color-mix(in srgb, var(--tone-warning) 42%, var(--line));
+  background: color-mix(in srgb, var(--tone-warning) 6%, var(--paper));
+}
+
+.answer-match-status.is-error {
+  border-color: color-mix(in srgb, var(--tone-danger) 42%, var(--line));
+  background: color-mix(in srgb, var(--tone-danger) 5%, var(--paper));
+}
+
+.answer-match-status-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-3);
+}
+
+.answer-match-status-head > svg {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.answer-match-status.is-complete .answer-match-status-head > svg { color: var(--tone-success); }
+.answer-match-status.is-attention .answer-match-status-head > svg { color: var(--tone-warning); }
+.answer-match-status.is-error .answer-match-status-head > svg { color: var(--tone-danger); }
+.answer-match-status.is-running .answer-match-status-head > svg { color: var(--accent); }
+
+.answer-match-status-head strong,
+.answer-match-status-head p,
+.answer-match-unchanged {
+  margin: 0;
+}
+
+.answer-match-status-head strong {
+  display: block;
+  color: var(--ink);
+  line-height: 1.35;
+}
+
+.answer-match-status-head p,
+.answer-match-unchanged {
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.answer-match-status-head > b {
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.answer-match-status > .progress {
+  width: 100%;
+}
+
+.answer-match-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.answer-match-metrics > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+
+.answer-match-metrics strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.answer-match-metrics small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.answer-match-status > .primary-button,
+.answer-match-status > .secondary-button,
+.answer-match-status > .text-button {
+  justify-self: start;
+}
+
+.answer-match-status.is-compact {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+
+.answer-match-status.is-compact .answer-match-metrics > span {
+  padding: var(--space-1) var(--space-2);
+}
+
+.answer-match-spinner {
+  animation: answer-match-spin 900ms linear infinite;
+}
+
+.answer-linked-pages-notice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--tone-warning) 38%, var(--line));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--tone-warning) 6%, var(--paper));
+  color: var(--ink-soft);
+}
+
+.answer-linked-pages-notice > svg {
+  margin-top: 2px;
+  color: var(--tone-warning);
+}
+
+.answer-linked-pages-notice strong,
+.answer-linked-pages-notice p {
+  margin: 0;
+}
+
+.answer-linked-pages-notice p {
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+@keyframes answer-match-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-match-spinner { animation: none; }
+}
+
 /* --- Оценка стоимости до запуска --- */
 
 .cost-estimate {

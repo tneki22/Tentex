@@ -27,6 +27,7 @@ import {
   Tooltip,
 } from "../components/ui";
 import {
+  AnswerMatchStatus,
   CostEstimate,
   GOAL_LEVELS,
   GoalLevelPicker,
@@ -49,6 +50,7 @@ import {
 } from "../components/domain";
 import type { GoalLevelValue, ProjectColor } from "../components/domain";
 import type { AiModelRead, AiModelSelection, AiProviderRead } from "../api/ai";
+import type { AnswersLinkRead } from "../api/bindings";
 import type { LibraryMaterialDetailRead, LibraryMaterialRead } from "../api/materials";
 
 const DEMO_LIBRARY_MATERIAL: LibraryMaterialRead = {
@@ -73,6 +75,32 @@ const DEMO_LIBRARY_MATERIAL: LibraryMaterialRead = {
 
 const loadDemoLibraryMaterials = async () => [DEMO_LIBRARY_MATERIAL];
 const attachDemoLibraryMaterial = async () => ({ ...DEMO_LIBRARY_MATERIAL } as LibraryMaterialDetailRead);
+
+const DEMO_MATCHED_IDS = Array.from({ length: 42 }, (_, index) => `question-${index + 1}`);
+const DEMO_ANSWER_MATCH_RESULT: AnswersLinkRead = {
+  linked_sections: 42,
+  linked_fragments: 902,
+  created_answers: 0,
+  updated_answers: 0,
+  restored_answers: 2,
+  unchanged_answers: 40,
+  preserved_answers: 0,
+  numbered_sections: 0,
+  extra_sections: 0,
+  ordinal_rejected_reason: null,
+  fuzzy_headings: [],
+  unmatched_headings: [],
+  duplicate_headings: [],
+  suggestions: [],
+  expected_questions: 42,
+  matched_node_ids: DEMO_MATCHED_IDS,
+  available_node_ids: DEMO_MATCHED_IDS,
+  unavailable_node_ids: [],
+  missing_node_ids: [],
+  ambiguous_sections: [],
+  ambiguous_pages: [],
+  complete: true,
+};
 
 /** Поверхности и текст показываются парами «за что отвечает — как называется». */
 const SURFACE_TOKENS = [
@@ -501,6 +529,47 @@ export function UiKit() {
           <StatusBadge tone="info">привязано</StatusBadge>
           <QualityBadge quality="ocr_low" showReview={false} />
           <StatusBadge tone="danger">разбор упал</StatusBadge>
+        </div>
+      </section>
+
+      <section className="kit-section">
+        <h2>Сопоставление ответов</h2>
+        <p className="kit-hint">
+          Один и тот же статус используется в Материалах и Ответах. Полоса отражает
+          серверные контрольные точки, а итог отдельно показывает совпадения и доступные эталоны.
+        </p>
+        <div className="kit-grid">
+          <AnswerMatchStatus
+            state={{
+              status: "running",
+              progress: { phase: "importing", completed: 57, total: 86, phase_completed: 14, phase_total: 42 },
+            }}
+            onRetry={() => undefined}
+            onDismiss={() => undefined}
+          />
+          <AnswerMatchStatus
+            state={{ status: "complete", result: DEMO_ANSWER_MATCH_RESULT }}
+            onRetry={() => undefined}
+            onDismiss={() => undefined}
+          />
+          <AnswerMatchStatus
+            state={{
+              status: "attention",
+              result: {
+                ...DEMO_ANSWER_MATCH_RESULT,
+                available_node_ids: DEMO_MATCHED_IDS.slice(0, 40),
+                unavailable_node_ids: DEMO_MATCHED_IDS.slice(40),
+                complete: false,
+              },
+            }}
+            onRetry={() => undefined}
+            onDismiss={() => undefined}
+          />
+          <AnswerMatchStatus
+            state={{ status: "error", message: "Файл ответов недоступен. Проверьте разбор и повторите." }}
+            onRetry={() => undefined}
+            onDismiss={() => undefined}
+          />
         </div>
       </section>
 

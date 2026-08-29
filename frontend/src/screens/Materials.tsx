@@ -29,7 +29,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import type { BindingFragmentRead, HeadingSuggestion, NodeBindingSummary } from "../api/bindings";
-import { linkAnswersMaterial, listBindings, resolveAnswersHeading } from "../api/bindings";
+import { listBindings, resolveAnswersHeading } from "../api/bindings";
 import {
   getMaterialPage,
   importMaterialReferenceAnswers,
@@ -47,7 +47,13 @@ import type {
   SourceRole,
 } from "../api/materials";
 import { getProject, undoProjectAction, type LatestUndoableAction, type ProjectDetail } from "../api/projects";
-import { AutoMatchDialog, LibraryMaterialPickerDialog, ProjectNav, QualityBadge } from "../components/domain";
+import {
+  AnswerMatchStatus,
+  AutoMatchDialog,
+  LibraryMaterialPickerDialog,
+  ProjectNav,
+  QualityBadge,
+} from "../components/domain";
 import {
   Button,
   ConfirmDialog,
@@ -62,6 +68,7 @@ import {
 } from "../components/ui";
 import { MetricList } from "../components/domain";
 import { useBindings } from "../hooks/useBindings";
+import { useAnswerAutoMatch, type AnswerAutoMatchState } from "../hooks/useAnswerAutoMatch";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { useViewerFullscreen } from "../hooks/useViewerFullscreen";
 import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTreeNode } from "./programTree";
@@ -738,6 +745,10 @@ interface BindingsTabProps {
   /** Файл эталонных ответов, разбор завершён — режим «по заголовкам» применим. */
   canAutoMatch: boolean;
   onOpenAutoMatch: () => void;
+  answerMatchState: AnswerAutoMatchState;
+  answerMatchRunning: boolean;
+  onRetryAutoMatch: () => void;
+  onDismissAutoMatch: () => void;
 }
 
 /** «5. Реляционная модель…» — номер узла программы, если он известен. */
@@ -780,6 +791,10 @@ function BindingsTab({
   onResolveHeading,
   canAutoMatch,
   onOpenAutoMatch,
+  answerMatchState,
+  answerMatchRunning,
+  onRetryAutoMatch,
+  onDismissAutoMatch,
 }: BindingsTabProps) {
   const alreadyBoundToActive = activeNode
     ? focusedFragmentBindings.some((binding) => binding.program_node_id === activeNode.id)
@@ -798,7 +813,7 @@ function BindingsTab({
       />
 
       {canAutoMatch ? (
-        <Button variant="secondary" onClick={onOpenAutoMatch}>
+        <Button variant="secondary" disabled={answerMatchRunning} onClick={onOpenAutoMatch}>
           <Sparkles size={14} /> Сопоставить автоматически
         </Button>
       ) : (
@@ -806,6 +821,13 @@ function BindingsTab({
           <Button variant="ghost" disabled>Сопоставить автоматически · этап 8</Button>
         </Tooltip>
       )}
+
+      <AnswerMatchStatus
+        state={answerMatchState}
+        onRetry={onRetryAutoMatch}
+        onDismiss={onDismissAutoMatch}
+        compact
+      />
 
       <NoticeLine notice={notice} onDismiss={onDismissNotice} />
 
@@ -1199,6 +1221,16 @@ function MaterialSurface() {
   const activeNode = studyNodes.find((node) => node.id === activeNodeId) ?? null;
   const nodeNumberById = useMemo(() => new Map(studyNodes.map((node) => [node.id, node.number])), [studyNodes]);
   const refreshBindingData = useCallback(() => setDataVersion((value) => value + 1), []);
+  const answerMatch = useAnswerAutoMatch(
+    projectId,
+    material?.id ?? null,
+    async (result) => {
+      refreshBindingData();
+      await bindings.refreshSummary();
+      setAnswersSuggestions({ materialId: material?.id ?? "", items: result.suggestions });
+      if (result.suggestions.length) setInspectorTab("bindings");
+    },
+  );
 
   const pageCount = material?.page_count ?? 1;
   // Размеры листа заданы в layout.css (.materials-page): держим их синхронно,
@@ -1662,47 +1694,6 @@ function MaterialSurface() {
     return true;
   }
 
-  async function linkAnswers() {
-    if (!material) return;
-    try {
-      const result = await linkAnswersMaterial(projectId, material.id);
-      refreshBindingData();
-      void bindings.refreshSummary();
-      setAnswersSuggestions({ materialId: material.id, items: result.suggestions });
-      const parts = [
-        `Связано вопросов: ${result.linked_node_ids.length} из ${result.expected_questions}`,
-        `фрагментов: ${result.linked_fragments}`,
-        `эталонов создано: ${result.created_answers}`,
-      ];
-      if (result.missing_node_ids.length) {
-        parts.push(`не найдено: ${result.missing_node_ids.length}`);
-      }
-      if (result.ambiguous_sections.length) {
-        parts.push(`неоднозначно: ${result.ambiguous_sections.length}`);
-      }
-      if (result.numbered_sections) parts.push(`по порядку номеров: ${result.numbered_sections}`);
-      if (result.extra_sections) parts.push(`вне текущей программы: ${result.extra_sections}`);
-      if (result.fuzzy_headings.length) {
-        parts.push(`по близкой формулировке: ${result.fuzzy_headings.length}`);
-      }
-      if (result.updated_answers) parts.push(`обновлено: ${result.updated_answers}`);
-      if (result.kept_answers) parts.push(`оставлено своих: ${result.kept_answers}`);
-      if (result.unmatched_headings.length) {
-        parts.push(`нужно выбрать вопрос вручную: ${result.unmatched_headings.length}`);
-      }
-      if (result.duplicate_headings.length) {
-        parts.push(`формулировка повторяется в программе: ${result.duplicate_headings.length}`);
-      }
-      if (result.ordinal_rejected_reason) parts.push(result.ordinal_rejected_reason);
-      const complete = result.missing_node_ids.length === 0
-        && result.ambiguous_sections.length === 0;
-      say(`${parts.join(", ")}.`, complete ? "success" : "danger");
-      if (result.suggestions.length) setInspectorTab("bindings");
-    } catch (caught) {
-      say(caught instanceof Error ? caught.message : "Не удалось связать ответы с вопросами", "danger");
-    }
-  }
-
   /** Пользователь указал вопрос для заголовка, который система не опознала. */
   async function resolveHeading(anchorFragmentId: string, nodeId: string) {
     if (!material) return;
@@ -1978,6 +1969,10 @@ function MaterialSurface() {
             onResolveHeading: (blockId, nodeId) => void resolveHeading(blockId, nodeId),
             canAutoMatch: material.status === "ready" && material.purposes.includes("reference_answers"),
             onOpenAutoMatch: () => setAutoMatchOpen(true),
+            answerMatchState: answerMatch.state,
+            answerMatchRunning: answerMatch.isRunning,
+            onRetryAutoMatch: () => void answerMatch.run(),
+            onDismissAutoMatch: answerMatch.dismiss,
           }}
         />
       )}
@@ -1990,7 +1985,7 @@ function MaterialSurface() {
       <AutoMatchDialog
         open={autoMatchOpen}
         onOpenChange={setAutoMatchOpen}
-        onRunHeadings={() => void linkAnswers()}
+        onRunHeadings={() => void answerMatch.run()}
         onImportText={() => void importAnswers()}
       />
       <AddMaterialDialog
