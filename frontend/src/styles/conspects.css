@@ -93,14 +93,26 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
   transition: color var(--ease-fast), background-color var(--ease-fast), border-color var(--ease-fast);
 }
+
+.conspect-save-status > svg {
+  flex: 0 0 auto;
+}
+
+.conspect-save-status.is-saved > svg { color: var(--tone-success); }
+.conspect-save-status.is-error > svg,
+.conspect-save-status.is-conflict > svg { color: var(--tone-danger); }
+.conspect-save-status.is-error span:first-of-type,
+.conspect-save-status.is-conflict span:first-of-type { color: var(--ink); }
 
 .conspect-save-status-dot {
   width: 6px;
   height: 6px;
   border-radius: var(--radius-pill);
-  background: currentColor;
+  background: var(--accent);
   flex: 0 0 auto;
 }
 

@@ -13,6 +13,8 @@ export { AnswerMatchStatus } from "./AnswerMatchStatus";
 export { answerScanGroups, scanPageCount } from "./answerPages";
 export type { AnswerScanGroup } from "./answerPages";
 export { AutoMatchDialog } from "./AutoMatchDialog";
+export { ConspectEditor } from "./ConspectEditor";
+export type { ConspectEditorHandle, ConspectEditorProps } from "./ConspectEditor";
 export { CostEstimate } from "./CostEstimate";
 export { GoalLevelPicker, GOAL_LEVELS, goalLevelEffect } from "./GoalLevel";
 export type { GoalLevelValue } from "./GoalLevel";

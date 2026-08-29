@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { CSSProperties } from "react";
-import { Bookmark, Highlighter, Inbox, MoreHorizontal, Star, Trash2 } from "lucide-react";
+import { Bookmark, Check, Highlighter, Inbox, MoreHorizontal, Star, Trash2, TriangleAlert } from "lucide-react";
 import {
   Button,
   Card,
@@ -529,6 +529,27 @@ export function UiKit() {
           <StatusBadge tone="info">привязано</StatusBadge>
           <QualityBadge quality="ocr_low" showReview={false} />
           <StatusBadge tone="danger">разбор упал</StatusBadge>
+        </div>
+        <p className="kit-hint" style={{ marginTop: "var(--space-4)" }}>
+          Индикатор автосохранения конспекта: точка пульсирует только в «Сохранении…».
+        </p>
+        <div className="kit-row">
+          <div className="conspect-save-status is-saving">
+            <span className="conspect-save-status-dot" aria-hidden="true" />
+            <span>Сохранение…</span>
+          </div>
+          <div className="conspect-save-status is-saved">
+            <Check size={14} aria-hidden="true" />
+            <span>Сохранено</span>
+          </div>
+          <div className="conspect-save-status is-error">
+            <TriangleAlert size={16} aria-hidden="true" />
+            <span>Не удалось сохранить</span>
+          </div>
+          <div className="conspect-save-status is-conflict">
+            <TriangleAlert size={16} aria-hidden="true" />
+            <span>Изменили в другой вкладке</span>
+          </div>
         </div>
       </section>
 
