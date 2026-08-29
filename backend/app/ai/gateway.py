@@ -67,6 +67,9 @@ class AiTextRequest[T: BaseModel]:
     request_model_override: AiModelSelection | None = None
     confirmed: bool = False
     parameters: dict[str, object] = field(default_factory=dict)
+    # Лимит completion у рассуждающих моделей расходуется и на скрытые
+    # рассуждения. Операция задаёт нижнюю границу для полезного JSON-ответа.
+    minimum_output_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -117,8 +120,10 @@ class ModelGateway:
         model = self._catalog_model(resolved)
         response_schema = self._response_schema(request)
         parameters = self._parameters(resolved, request.parameters)
+        configured_output_tokens = int(parameters.get("max_output_tokens", 2000))
+        output_tokens = max(configured_output_tokens, request.minimum_output_tokens)
+        parameters = {**parameters, "max_output_tokens": output_tokens}
         input_tokens = self._estimate_input(request.messages, response_schema)
-        output_tokens = int(parameters.get("max_output_tokens", 2000))
         request_hash = self._request_hash(request, resolved, parameters, response_schema)
         cached = bool(
             resolved.role.cache_policy != "none" and self.session.get(AiCacheEntry, request_hash)
@@ -190,7 +195,10 @@ class ModelGateway:
                 messages=[item.model_dump() for item in request.messages],
                 response_schema=request.response_model.model_json_schema(),
                 max_output_tokens=preflight.estimated_output_tokens,
-                parameters=self._parameters(resolved, request.parameters),
+                parameters=self._parameters(resolved, {
+                    **request.parameters,
+                    "max_output_tokens": preflight.estimated_output_tokens,
+                }),
             )
             value = request.response_model.model_validate_json(result.content)
         except (ValidationError, ValueError, json.JSONDecodeError) as error:
@@ -241,7 +249,10 @@ class ModelGateway:
                 model=resolved.model_id,
                 messages=[item.model_dump() for item in request.messages],
                 max_output_tokens=preflight.estimated_output_tokens,
-                parameters=self._parameters(resolved, request.parameters),
+                parameters=self._parameters(resolved, {
+                    **request.parameters,
+                    "max_output_tokens": preflight.estimated_output_tokens,
+                }),
             ):
                 if event.usage is not None:
                     final_usage = event.usage
@@ -284,7 +295,10 @@ class ModelGateway:
                 messages=[item.model_dump() for item in request.messages],
                 response_schema=None,
                 max_output_tokens=preflight.estimated_output_tokens,
-                parameters=self._parameters(resolved, request.parameters),
+                parameters=self._parameters(resolved, {
+                    **request.parameters,
+                    "max_output_tokens": preflight.estimated_output_tokens,
+                }),
             )
         except ProviderError as error:
             self._fail_run(run.id, error.code, started)
@@ -479,6 +493,7 @@ class ModelGateway:
                 output_tokens=0,
                 actual_cost_usd=ZERO,
                 actual_cost_rub=ZERO,
+                response_payload=cache.response_payload,
                 cached_from_run_id=cache.source_run_id,
                 completed_at=utc_now(),
             )
@@ -522,6 +537,7 @@ class ModelGateway:
             run.provider_cached_tokens = provider_usage.cached_tokens
             run.actual_cost_usd = actual_usd
             run.actual_cost_rub = actual_rub
+            run.response_payload = payload
             run.duration_ms = round((time.monotonic() - started) * 1000)
             run.completed_at = utc_now()
             if cache:

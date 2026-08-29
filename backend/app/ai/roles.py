@@ -67,7 +67,7 @@ ROLE_SPECS = {
             "text",
             frozenset({"structured_output"}),
             "exact",
-            "grouping-v1",
+            "grouping-v2",
             {"max_output_tokens": 4000},
         ),
         AiRoleSpec(
@@ -79,7 +79,7 @@ ROLE_SPECS = {
             "text",
             frozenset({"structured_output"}),
             "exact",
-            "import-repair-v2",
+            "import-repair-v3",
             {"max_output_tokens": 8000},
         ),
         AiRoleSpec(

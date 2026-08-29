@@ -79,12 +79,14 @@ def _question_payload(
     source_indices: list[int],
     subpoints: list[str] | None = None,
     kind: str = "question",
+    ticket_index: int | None = None,
 ) -> dict:
     return {
         "kind": kind,
         "title": text,
         "subpoints": subpoints or [],
         "source_indices": source_indices,
+        "ticket_index": ticket_index,
     }
 
 
@@ -551,15 +553,17 @@ async def test_program_repair_supports_ticket_format(session: Session, ai_config
         completions=[
             _completion(
                 [
-                    {
-                        "kind": "ticket",
-                        "title": "Билет 1",
-                        "source_indices": [1],
-                        "items": [
-                            _question_payload("Вопрос А (исправлено).", source_indices=[2]),
-                            _question_payload("Вопрос Б (исправлено).", source_indices=[3]),
-                        ],
-                    }
+                    _question_payload("Билет 1", source_indices=[1], kind="ticket"),
+                    _question_payload(
+                        "Вопрос А (исправлено).",
+                        source_indices=[2],
+                        ticket_index=1,
+                    ),
+                    _question_payload(
+                        "Вопрос Б (исправлено).",
+                        source_indices=[3],
+                        ticket_index=1,
+                    ),
                 ]
             )
         ]

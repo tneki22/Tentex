@@ -202,6 +202,7 @@ def _request(snapshot: ProgramSnapshot, confirmed: bool) -> AiTextRequest:
             "source_hash": snapshot.source_hash,
         },
         confirmed=confirmed,
+        minimum_output_tokens=8000,
     )
 
 

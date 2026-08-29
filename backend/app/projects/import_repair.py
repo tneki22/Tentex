@@ -33,7 +33,7 @@ from app.projects.errors import (
 )
 from app.projects.schemas import ProgramChangeResult
 
-REPAIR_PROMPT_VERSION = "import-repair-v2"
+REPAIR_PROMPT_VERSION = "import-repair-v3"
 REPAIR_SYSTEM_PROMPT = """Ты чинишь пронумерованный список пунктов экзамена (вопросы, задачи,
 билеты), повреждённый при разборе файла: слипшиеся без пробела слова, потерянные переносы
 по дефису, заголовки или пояснительный текст, случайно распознанные как отдельные пункты,
@@ -101,6 +101,27 @@ class ImportRepairSuggestion(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[RepairedQuestion | RepairedTicket] = Field(min_length=1, max_length=500)
+    dropped: list[DroppedItem] = Field(default_factory=list, max_length=500)
+    changes: list[str] = Field(default_factory=list, max_length=100)
+    warnings: list[str] = Field(default_factory=list, max_length=100)
+
+
+# Плоский контракт не содержит anyOf/recursive schema, которые часть
+# OpenAI-совместимых провайдеров (в том числе маршруты Google) отклоняет.
+class RepairWireItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["question", "task", "ticket"]
+    title: ShortText
+    subpoints: list[SubpointText] = Field(default_factory=list, max_length=20)
+    source_indices: SourceIndices
+    ticket_index: int | None = Field(default=None, ge=1)
+
+
+class RepairWireSuggestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[RepairWireItem] = Field(min_length=1, max_length=500)
     dropped: list[DroppedItem] = Field(default_factory=list, max_length=500)
     changes: list[str] = Field(default_factory=list, max_length=100)
     warnings: list[str] = Field(default_factory=list, max_length=100)
@@ -249,13 +270,12 @@ def _repair_request(
         for index, position in enumerate(positions, start=1)
     )
     shape_note = (
-        'Формат — билеты: верхний уровень items состоит только из kind="ticket", '
-        'внутри каждого билета — его вопросы и задачи (kind="question"/"task") с их '
-        "подпунктами."
+        'Формат — билеты: items — плоский список. Сначала идут билеты '
+        '(kind="ticket", ticket_index=null), затем вопросы и задачи '
+        '(kind="question"/"task") с ticket_index — номером билета в этом ответе, начиная с 1.'
         if has_tickets
-        else 'Формат плоский: верхний уровень items — сразу вопросы и задачи '
-        '(kind="question"/"task") с их подпунктами; билетов (kind="ticket") в этом '
-        "списке быть не может."
+        else 'Формат плоский: items — вопросы и задачи (kind="question"/"task") с '
+        'подпунктами; ticket_index=null, билетов (kind="ticket") быть не может.'
     )
     user_instruction = instruction or "Дополнительной инструкции нет."
     return AiTextRequest(
@@ -274,7 +294,7 @@ def _repair_request(
                 ),
             ),
         ],
-        response_model=ImportRepairSuggestion,
+        response_model=RepairWireSuggestion,
         context_manifest=[
             {
                 "kind": "import_repair_list",
@@ -294,6 +314,53 @@ def _repair_request(
             "instruction_hash": instruction_hash,
         },
         confirmed=confirmed,
+        minimum_output_tokens=12000,
+    )
+
+
+def _wire_question(item: RepairWireItem) -> RepairedQuestion:
+    return RepairedQuestion(
+        kind=item.kind,
+        title=item.title,
+        subpoints=item.subpoints,
+        source_indices=item.source_indices,
+    )
+
+
+def _wire_to_suggestion(value: RepairWireSuggestion, has_tickets: bool) -> ImportRepairSuggestion:
+    if not has_tickets:
+        if any(item.kind == "ticket" or item.ticket_index is not None for item in value.items):
+            raise ProjectInvariantError("В плоском списке не должно быть билетов")
+        return ImportRepairSuggestion(
+            items=[_wire_question(item) for item in value.items],
+            dropped=value.dropped,
+            changes=value.changes,
+            warnings=value.warnings,
+        )
+    ticket_headers: list[RepairWireItem] = []
+    children: dict[int, list[RepairedQuestion]] = defaultdict(list)
+    for item in value.items:
+        if item.kind == "ticket":
+            if item.ticket_index is not None:
+                raise ProjectInvariantError("У билета не указывается ticket_index")
+            ticket_headers.append(item)
+        else:
+            if item.ticket_index is None:
+                raise ProjectInvariantError("У вопроса в билете должен быть ticket_index")
+            children[item.ticket_index].append(_wire_question(item))
+    valid_indices = {index for index in range(1, len(ticket_headers) + 1) if children.get(index)}
+    if len(valid_indices) != len(children) or len(valid_indices) != len(ticket_headers):
+        raise ProjectInvariantError("В ответе нарушена структура билетов")
+    tickets = [
+        RepairedTicket(
+            title=header.title,
+            source_indices=header.source_indices,
+            items=children[index],
+        )
+        for index, header in enumerate(ticket_headers, start=1)
+    ]
+    return ImportRepairSuggestion(
+        items=tickets, dropped=value.dropped, changes=value.changes, warnings=value.warnings
     )
 
 
@@ -467,10 +534,9 @@ async def run_program_repair(
         command.confirmed,
     )
     result = await gateway.complete(request)
-    covered = _validate_items_shape(
-        result.value.items, len(snapshot.positions), snapshot.has_tickets
-    )
-    _validate_full_coverage(covered, result.value.dropped, len(snapshot.positions))
+    suggestion = _wire_to_suggestion(result.value, snapshot.has_tickets)
+    covered = _validate_items_shape(suggestion.items, len(snapshot.positions), snapshot.has_tickets)
+    _validate_full_coverage(covered, suggestion.dropped, len(snapshot.positions))
     return ProgramRepairRunRead(
         run_id=result.run_id,
         program_revision=snapshot.project.program_revision,
@@ -480,10 +546,10 @@ async def run_program_repair(
             _rendered_text(position.node, position.subpoint_nodes)
             for position in snapshot.positions
         ],
-        items=result.value.items,
-        dropped=result.value.dropped,
-        changes=result.value.changes,
-        warnings=result.value.warnings,
+        items=suggestion.items,
+        dropped=suggestion.dropped,
+        changes=suggestion.changes,
+        warnings=suggestion.warnings,
         usage=result.usage,
         requested_model_id=result.requested_model_id,
         actual_model_id=result.actual_model_id,

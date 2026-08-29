@@ -993,6 +993,9 @@ class AiRun(Base):
     actual_cost_rub: Mapped[Decimal | None] = mapped_column(Numeric(24, 12), nullable=True)
     pricing_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     provider_request_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Валидированный ответ нужен не только кэшу: пользователь может закрыть
+    # диалог, пока модель работает, и позже вернуться к предложению.
+    response_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     cached_from_run_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True
     )
