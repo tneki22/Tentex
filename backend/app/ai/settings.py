@@ -40,6 +40,45 @@ from app.projects.errors import ProjectDomainError
 Modality = Literal["text", "speech"]
 
 
+def model_capabilities(row: AiModelCatalogEntry) -> set[str]:
+    """Возможности модели, выведенные из каталога.
+
+    Пустой `supported_parameters` — «каталог параметров не заполнен» (так у
+    моделей, добавленных вручную), а не «модель не умеет»: гейт срабатывает
+    только на положительном свидетельстве. Общая точка для `ModelGateway` и
+    для валидации `ChatSession.model_override` — обе стороны должны видеть
+    один и тот же набор возможностей одной модели.
+    """
+    capabilities = {"streaming"}
+    if not row.supported_parameters or "response_format" in row.supported_parameters:
+        capabilities.add("structured_output")
+    if "audio" in row.input_modalities:
+        capabilities.add("audio_transcription")
+    return capabilities
+
+
+def validate_model_selection(
+    session: Session, selection: AiModelSelection, *, required: frozenset[str]
+) -> AiModelCatalogEntry:
+    """Проверяет provider_id+model_id по каталогу и требуемые возможности разом.
+
+    Нужна явному override вне обычного `resolve_model` — сейчас настройкам
+    чата (AI-CHATS.md §21.4): одна выбранная модель должна одновременно
+    уметь потоковый ответ и structured output, чтобы обслуживать и обычную
+    реплику, и судью той же сессии.
+    """
+    model = _model_for_selection(session, selection, modality="text")
+    missing = required - model_capabilities(model)
+    if missing:
+        raise ProjectDomainError(
+            f"Модель «{selection.model_id}» не поддерживает: {', '.join(sorted(missing))}",
+            status=422,
+            code="ai_capability_unsupported",
+            context={"model_id": selection.model_id, "missing": sorted(missing)},
+        )
+    return model
+
+
 class AiGatewayError(ProjectDomainError):
     def __init__(
         self,

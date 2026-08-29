@@ -30,7 +30,13 @@ from app.ai.schemas import (
     AiPreflight,
     AiUsage,
 )
-from app.ai.settings import AiGatewayError, ResolvedModel, credential, resolve_model
+from app.ai.settings import (
+    AiGatewayError,
+    ResolvedModel,
+    credential,
+    model_capabilities,
+    resolve_model,
+)
 from app.models import (
     AiCacheEntry,
     AiModelCatalogEntry,
@@ -316,18 +322,7 @@ class ModelGateway:
                 code="ai_capability_unsupported",
                 context={"model_id": resolved.model_id},
             )
-        capabilities = {"streaming"}
-        # Пустой supported_parameters — «каталог параметров не заполнен» (так у
-        # добавленных вручную моделей), а не «модель не умеет». Блокировать по
-        # отсутствию данных нельзя: гейт срабатывает только на положительном
-        # свидетельстве — непустом списке, где response_format реально нет.
-        # Тот же принцип, что у output_modalities в _model_for_selection; реальную
-        # способность проверит сам вызов (ответ не пройдёт разбор — честная ошибка).
-        if not row.supported_parameters or "response_format" in row.supported_parameters:
-            capabilities.add("structured_output")
-        if "audio" in row.input_modalities:
-            capabilities.add("audio_transcription")
-        missing = resolved.role.required_capabilities - capabilities
+        missing = resolved.role.required_capabilities - model_capabilities(row)
         if missing:
             labels = ", ".join(_CAPABILITY_LABELS.get(item, item) for item in sorted(missing))
             raise AiGatewayError(

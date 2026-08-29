@@ -246,6 +246,10 @@ async def submit_answer(
             or 0
         ) + 1
         snapshot = _context_snapshot(ctx)
+        # Замораживаем выбранную модель вместе с persona/strictness: повторная
+        # проверка судит той же моделью, что была выбрана на момент сдачи,
+        # даже если пользователь позже сменит override в настройках чата.
+        snapshot["model_override"] = chat_row.model_override
         attempt = Attempt(
             project_id=project_id,
             program_node_id=chat_row.program_node_id,

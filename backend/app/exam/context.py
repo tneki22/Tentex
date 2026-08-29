@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -9,7 +10,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.bindings.service import list_bindings
-from app.models import ChatMessage, ChatSession, NodeType, ProgramNode, ReferenceAnswer
+from app.models import (
+    ChatMessage,
+    ChatSession,
+    ExamFormat,
+    GoalPassport,
+    NodeType,
+    ProgramNode,
+    ReferenceAnswer,
+    TargetOutcome,
+)
 from app.projects.answer_lifecycle import is_reference_answer_available
 
 # Бюджеты зафиксированы константами и не «настраиваются» — см. план вертикали.
@@ -17,6 +27,51 @@ TAIL_MESSAGES = 12
 MAX_FRAGMENTS = 6
 FRAGMENT_CHARS = 1500
 CONTEXT_CHARS = 12_000
+
+# Ключи ChatSession.context_flags — AI-CHATS.md §21.4. attempts и
+# section_memory зарегистрированы в модели заранее, но контекст их пока не
+# заполняет: соответствующая часть не существует до итерации 2.
+CONTEXT_FLAG_KEYS = frozenset({"profile", "reference", "fragments", "attempts", "section_memory"})
+
+TARGET_OUTCOME_LABELS = {
+    TargetOutcome.AWARENESS: "иметь общее представление",
+    TargetOutcome.UNDERSTANDING: "понимать и уметь объяснить",
+    TargetOutcome.APPLICATION: "уверенно применять",
+    TargetOutcome.MASTERY: "владеть в совершенстве",
+}
+
+EXAM_FORMAT_LABELS = {
+    ExamFormat.QUESTIONS: "список вопросов",
+    ExamFormat.QUESTIONS_TASKS: "вопросы и практические задачи",
+    ExamFormat.TICKETS: "билеты",
+    ExamFormat.UNKNOWN: "не указан",
+}
+
+
+def build_profile_card(passport: GoalPassport | None) -> dict[str, str]:
+    """Компактная карточка профиля — только поля, реально заполненные в проекте.
+
+    Пустые поля не превращаются в догадки (AI-CHATS.md §5.3): их просто нет
+    в карточке, и модель должна честно сказать, что этого в профиле нет.
+    """
+    if passport is None:
+        return {}
+    card: dict[str, str] = {}
+    if passport.subject:
+        card["subject"] = passport.subject
+    if passport.target_outcome is not None:
+        card["target_outcome"] = TARGET_OUTCOME_LABELS[passport.target_outcome]
+    if passport.exam_format is not None:
+        card["exam_format"] = EXAM_FORMAT_LABELS[passport.exam_format]
+    if passport.instructor_requirements:
+        card["instructor_requirements"] = passport.instructor_requirements
+    if passport.exam_procedure:
+        card["exam_procedure"] = passport.exam_procedure
+    if passport.important:
+        card["important"] = passport.important
+    if passport.excluded:
+        card["excluded"] = passport.excluded
+    return card
 
 
 @dataclass(frozen=True)
@@ -34,8 +89,10 @@ class ChatContext:
     reference_text: str | None
     fragments: list[FragmentSnippet]
     tail: list[ChatMessage]
+    profile: dict[str, str]
     manifest: list[dict[str, Any]]
     snapshot: dict[str, Any]
+    fingerprint: str
 
 
 def section_scope(session: Session, node: ProgramNode) -> UUID | None:
@@ -139,19 +196,38 @@ def _budget_fragments(
 def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> ChatContext:
     node = session.get(ProgramNode, chat.program_node_id)
     assert node is not None
+    flags = chat.context_flags or {}
+    include_reference = flags.get("reference", True)
+    include_fragments = flags.get("fragments", True)
+    include_profile = flags.get("profile", True)
+
     answer = session.get(ReferenceAnswer, (chat.project_id, chat.program_node_id))
-    reference_text = (
-        answer.text
-        if is_reference_answer_available(answer) and answer.text.strip()
-        else None
+    reference_available = is_reference_answer_available(answer) and bool(
+        answer and answer.text.strip()
     )
-    all_fragments = bound_fragments(session, chat.project_id, chat.program_node_id)
+    reference_text = answer.text if include_reference and reference_available else None
+
+    all_bound_fragments = bound_fragments(session, chat.project_id, chat.program_node_id)
+    all_fragments = all_bound_fragments if include_fragments else []
     # Хвост сообщений судье не передаётся вообще (FR-V7): роль судьи получает
     # тот же вопрос, эталон и фрагменты, но не переписку чата.
     tail = [] if for_judge else _tail(session, chat)
 
+    passport = session.get(GoalPassport, chat.project_id)
+    profile = build_profile_card(passport) if include_profile else {}
+
     budget = CONTEXT_CHARS - len(reference_text or "")
     fragments, fragment_entries = _budget_fragments(all_fragments, max(budget, 0))
+    if not include_fragments and all_bound_fragments:
+        fragment_entries = [
+            {
+                "kind": "fragment",
+                "id": None,
+                "included": False,
+                "reason": "excluded_by_user",
+                "bytes": 0,
+            }
+        ]
 
     manifest: list[dict[str, Any]] = [
         {
@@ -162,12 +238,33 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
             "included": True,
         },
         {
+            "kind": "profile",
+            "id": str(chat.project_id),
+            "sha256": _sha256(json.dumps(profile, ensure_ascii=False, sort_keys=True)),
+            "bytes": len(json.dumps(profile, ensure_ascii=False).encode()),
+            "included": include_profile and bool(profile),
+            "reason": (
+                "excluded_by_user"
+                if not include_profile
+                else None
+                if profile
+                else "profile_empty"
+            ),
+        },
+        {
             "kind": "reference_answer",
             "id": f"{chat.project_id}:{chat.program_node_id}",
             "revision": answer.revision if answer is not None else None,
             "sha256": _sha256(reference_text) if reference_text is not None else None,
             "bytes": len(reference_text.encode()) if reference_text is not None else 0,
             "included": reference_text is not None,
+            "reason": (
+                None
+                if reference_text is not None
+                else "excluded_by_user"
+                if not include_reference
+                else "reference_missing"
+            ),
         },
         *fragment_entries,
         {
@@ -177,7 +274,20 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
             "bytes": sum(len(message.text.encode()) for message in tail),
             "included": bool(tail),
         },
+        {
+            "kind": "attempts_digest",
+            "id": None,
+            "included": False,
+            "reason": "not_implemented",
+        },
+        {
+            "kind": "section_memory",
+            "id": None,
+            "included": False,
+            "reason": "not_implemented",
+        },
     ]
+    fingerprint = _sha256(json.dumps(manifest, ensure_ascii=False, sort_keys=True, default=str))
 
     snapshot = {
         "question": node.title,
@@ -185,12 +295,19 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
         "fragment_count": len(fragments),
         "tail_count": len(tail),
         "for_judge": for_judge,
+        "profile": profile,
+        "persona": chat.persona.value,
+        "strictness": chat.strictness.value,
+        "manifest": manifest,
+        "fingerprint": fingerprint,
     }
     return ChatContext(
         node=node,
         reference_text=reference_text,
         fragments=fragments,
         tail=tail,
+        profile=profile,
         manifest=manifest,
         snapshot=snapshot,
+        fingerprint=fingerprint,
     )

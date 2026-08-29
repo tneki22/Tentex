@@ -6,22 +6,29 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.schemas import AiModelSelection
+from app.ai.settings import validate_model_selection
 from app.exam.context import (
-    TAIL_MESSAGES,
+    CONTEXT_FLAG_KEYS,
     ChatContext,
-    bound_fragments,
     build_context,
     section_scope,
 )
 from app.exam.schemas import (
-    ChatContextRead,
+    CapabilityRead,
+    ChatCapabilitiesRead,
+    ChatContextPreviewRead,
     ChatMessageRead,
+    ChatModelOverrideRead,
     ChatSessionDetail,
     ChatSessionSummary,
+    ChatSettingsWrite,
+    ManifestEntryRead,
 )
 from app.models import (
     ChatMessage,
     ChatMessageRole,
+    ChatMode,
     ChatPayloadKind,
     ChatSession,
     ChatStreamState,
@@ -31,12 +38,14 @@ from app.models import (
     ProgramNode,
     Project,
     ProjectStatus,
-    ReferenceAnswer,
     WorkspaceVariant,
     utc_now,
 )
-from app.projects.answer_lifecycle import is_reference_answer_available
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
+
+# Требуются одновременно и streaming, и structured output: одна выбранная
+# модель обслуживает и обычный ответ, и судью той же сессии (AI-CHATS.md §21.3).
+REQUIRED_MODEL_CAPABILITIES = frozenset({"streaming", "structured_output"})
 
 STUDY_NODE_TYPES = {NodeType.TOPIC, NodeType.SUBPOINT}
 TITLE_MAX_LEN = 60
@@ -159,6 +168,12 @@ def get_node(session: Session, project_id: UUID, node_id: UUID) -> ProgramNode:
     return _require_chat_node(session, project_id, node_id)
 
 
+def _model_override_read(chat: ChatSession) -> ChatModelOverrideRead | None:
+    if not chat.model_override:
+        return None
+    return ChatModelOverrideRead.model_validate(chat.model_override)
+
+
 def get_session_detail(session: Session, project_id: UUID, chat_id: UUID) -> ChatSessionDetail:
     _require_exam_project(session, project_id)
     chat = _require_session(session, project_id, chat_id)
@@ -173,8 +188,11 @@ def get_session_detail(session: Session, project_id: UUID, chat_id: UUID) -> Cha
         program_node_id=chat.program_node_id,
         section_scope_node_id=chat.section_scope_node_id,
         title=chat.title,
+        mode=chat.mode,
         persona=chat.persona,
         strictness=chat.strictness,
+        model_override=_model_override_read(chat),
+        context_flags=chat.context_flags,
         draft_text=chat.draft_text,
         created_at=chat.created_at,
         updated_at=chat.updated_at,
@@ -193,17 +211,74 @@ def save_draft(session: Session, project_id: UUID, chat_id: UUID, text: str) -> 
     return chat
 
 
-def context_preview(session: Session, project_id: UUID, node_id: UUID) -> ChatContextRead:
+def update_settings(
+    session: Session, project_id: UUID, chat_id: UUID, command: ChatSettingsWrite
+) -> ChatSession:
+    """Частичный PATCH: поле трогается, только если явно прислано (`model_fields_set`)."""
+    fields = command.model_fields_set
+    with session.begin():
+        _require_exam_project(session, project_id)
+        chat = _require_session(session, project_id, chat_id)
+        if "mode" in fields and command.mode is not None:
+            if command.mode is ChatMode.STUDY:
+                raise ProjectDomainError(
+                    "Режим «Разобраться» пока недоступен",
+                    status=422,
+                    code="chat_mode_unavailable",
+                )
+            chat.mode = command.mode
+        if "persona" in fields and command.persona is not None:
+            chat.persona = command.persona
+        if "strictness" in fields and command.strictness is not None:
+            chat.strictness = command.strictness
+        if "model_override" in fields:
+            if command.model_override is None:
+                chat.model_override = None
+            else:
+                selection = AiModelSelection(
+                    provider_id=command.model_override.provider_id,
+                    model_id=command.model_override.model_id,
+                )
+                validate_model_selection(session, selection, required=REQUIRED_MODEL_CAPABILITIES)
+                chat.model_override = {
+                    "provider_id": str(selection.provider_id),
+                    "model_id": selection.model_id,
+                }
+        if "context_flags" in fields and command.context_flags is not None:
+            unknown = set(command.context_flags) - CONTEXT_FLAG_KEYS
+            if unknown:
+                raise ProjectDomainError(
+                    "Неизвестная часть контекста",
+                    status=422,
+                    code="chat_context_flag_unknown",
+                    context={"keys": sorted(unknown)},
+                )
+            chat.context_flags = {**chat.context_flags, **command.context_flags}
+        chat.updated_at = utc_now()
+        session.flush()
+        session.refresh(chat)
+    return chat
+
+
+def context_preview(
+    session: Session, project_id: UUID, chat_id: UUID
+) -> ChatContextPreviewRead:
     _require_exam_project(session, project_id)
-    node = _require_chat_node(session, project_id, node_id)
-    answer = session.get(ReferenceAnswer, (project_id, node_id))
-    fragments = bound_fragments(session, project_id, node_id)
-    return ChatContextRead(
-        node_id=node.id,
-        question=node.title,
-        reference_included=is_reference_answer_available(answer),
-        material_count=len(fragments),
-        tail_limit=TAIL_MESSAGES,
+    chat = _require_session(session, project_id, chat_id)
+    ctx = build_context(session, chat, for_judge=False)
+    manifest = [ManifestEntryRead.model_validate(entry) for entry in ctx.manifest]
+    override = _model_override_read(chat)
+    return ChatContextPreviewRead(
+        session_id=chat.id,
+        node_id=chat.program_node_id,
+        question=ctx.node.title,
+        persona=chat.persona,
+        strictness=chat.strictness,
+        model_source="override" if override else "auto",
+        model_id=override.model_id if override else None,
+        manifest=manifest,
+        fingerprint=ctx.fingerprint,
+        total_bytes=sum(entry.bytes for entry in manifest),
     )
 
 
@@ -217,6 +292,7 @@ def _append_message_row(
     payload_kind: ChatPayloadKind = ChatPayloadKind.NONE,
     payload: dict[str, Any] | None = None,
     context_snapshot: dict[str, Any] | None = None,
+    skill: str | None = None,
     ai_run_id: UUID | None = None,
     attempt_id: UUID | None = None,
     grade_attempt_id: UUID | None = None,
@@ -246,6 +322,7 @@ def _append_message_row(
         payload_kind=payload_kind,
         payload=payload or {},
         context_snapshot=context_snapshot or {},
+        skill=skill,
         ai_run_id=ai_run_id,
         attempt_id=attempt_id,
         grade_attempt_id=grade_attempt_id,
@@ -298,3 +375,53 @@ def finish_turn(
             stream_state=stream_state,
             ai_run_id=ai_run_id,
         )
+
+
+# Шесть экзаменационных навыков из AI-CHATS.md §8/§21.2. Только «Сдать ответ»
+# реально работает в первой итерации: он открывает локальную форму и вообще
+# не требует модели. Остальные честно помечены — команда объясняет причину,
+# не вызывает API и не создаёт сообщение.
+_SKILL_TITLES: dict[str, str] = {
+    "answer": "Сдать ответ",
+    "ask_question": "Попросить вопрос",
+    "hint": "Получить подсказку",
+    "task": "Получить задание",
+    "accuracy": "Проверить точность",
+    "ticket": "Вытянуть билет",
+}
+_AVAILABLE_SKILLS = frozenset({"answer"})
+
+
+def get_capabilities(session: Session, project_id: UUID, node_id: UUID) -> ChatCapabilitiesRead:
+    from app.chat_tools.registry import list_tool_specs
+
+    _require_exam_project(session, project_id)
+    _require_chat_node(session, project_id, node_id)
+    modes = [
+        CapabilityRead(key="exam", title="Экзамен", available=True),
+        CapabilityRead(
+            key="study",
+            title="Разобраться",
+            available=False,
+            unavailable_reason="chat_mode_unavailable",
+        ),
+    ]
+    skills = [
+        CapabilityRead(
+            key=key,
+            title=title,
+            available=key in _AVAILABLE_SKILLS,
+            unavailable_reason=None if key in _AVAILABLE_SKILLS else "skill_not_implemented",
+        )
+        for key, title in _SKILL_TITLES.items()
+    ]
+    tools = [
+        CapabilityRead(
+            key=spec.key,
+            title=spec.title,
+            available=spec.available,
+            unavailable_reason=spec.unavailable_reason,
+        )
+        for spec in list_tool_specs()
+    ]
+    return ChatCapabilitiesRead(modes=modes, skills=skills, tools=tools)

@@ -9,7 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.ai.gateway import AiTextRequest, ModelGateway
-from app.ai.schemas import AiMessage, AiUsage
+from app.ai.schemas import AiMessage, AiModelSelection, AiUsage
 from app.exam.checking import RubricPoint, locate_quote
 from app.exam.prompts import ANSWER_JUDGE_SYSTEM_PROMPT
 from app.models import Attempt, AttemptOutcome, ExaminerPersona, ExaminerStrictness
@@ -73,14 +73,14 @@ def _messages(attempt: Attempt) -> list[AiMessage]:
         f"Персона: {PERSONA_LABELS[attempt.persona]}. "
         f"Строгость: {STRICTNESS_LABELS[attempt.strictness]}."
     )
-    user = "\n\n".join(
-        [
-            _data_block("question", snapshot.get("question", "")),
-            _data_block("reference", snapshot.get("reference_text")),
-            _data_block("fragment", snapshot.get("fragments", [])),
-            _data_block("answer", attempt.text),
-        ]
-    )
+    blocks = [_data_block("question", snapshot.get("question", ""))]
+    profile = snapshot.get("profile")
+    if profile:
+        blocks.append(_data_block("profile", profile))
+    blocks.append(_data_block("reference", snapshot.get("reference_text")))
+    blocks.append(_data_block("fragment", snapshot.get("fragments", [])))
+    blocks.append(_data_block("answer", attempt.text))
+    user = "\n\n".join(blocks)
     return [AiMessage(role="system", content=system), AiMessage(role="user", content=user)]
 
 
@@ -99,6 +99,13 @@ def _rubric_points(answer: str, points: list[JudgePoint]) -> list[RubricPoint]:
     return verified
 
 
+def _model_override(snapshot: dict) -> AiModelSelection | None:
+    raw = snapshot.get("model_override")
+    if not raw:
+        return None
+    return AiModelSelection(provider_id=raw["provider_id"], model_id=raw["model_id"])
+
+
 async def judge_attempt(gateway: ModelGateway, attempt: Attempt) -> JudgeResult:
     """Судит один неизменяемый снимок попытки и проверяет все цитаты локально."""
     snapshot = attempt.context_snapshot
@@ -112,6 +119,7 @@ async def judge_attempt(gateway: ModelGateway, attempt: Attempt) -> JudgeResult:
             response_model=JudgeVerdict,
             project_id=attempt.project_id,
             context_manifest=manifest,
+            request_model_override=_model_override(snapshot),
             source_fingerprint={
                 "program_node_id": str(attempt.program_node_id),
                 "answer_sha256": hashlib.sha256(attempt.text.encode()).hexdigest(),

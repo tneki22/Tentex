@@ -99,7 +99,7 @@ ROLE_SPECS = {
             "text",
             frozenset({"streaming"}),
             "none",
-            "chat-reply-v1",
+            "chat-reply-v2",
             {"max_output_tokens": 3000},
             True,
         ),

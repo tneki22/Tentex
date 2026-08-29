@@ -13,19 +13,21 @@ from sqlalchemy.orm import Session
 
 from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import AiTextRequest, ModelGateway
-from app.ai.schemas import AiMessage
+from app.ai.schemas import AiMessage, AiModelSelection
+from app.chat_tools.executor import run_tool
 from app.db import SessionLocal, get_session
 from app.exam import attempts as attempt_service
 from app.exam import chat as chat_service
 from app.exam.context import ChatContext
-from app.exam.prompts import CHAT_REPLY_SYSTEM_PROMPT
+from app.exam.prompts import build_chat_reply_prompt
 from app.exam.schemas import (
     AttemptDetailRead,
     AttemptRead,
     AttemptSummaryRead,
     ChatAnswerResult,
     ChatAnswerWrite,
-    ChatContextRead,
+    ChatCapabilitiesRead,
+    ChatContextPreviewRead,
     ChatDraftRead,
     ChatDraftWrite,
     ChatMessageRead,
@@ -33,9 +35,12 @@ from app.exam.schemas import (
     ChatSessionCreateWrite,
     ChatSessionDetail,
     ChatSessionSummary,
+    ChatSettingsWrite,
+    ChatToolRunRead,
     GradeRead,
     GradeUsageRead,
     SelfAssessmentWrite,
+    ToolRunCreateWrite,
 )
 from app.models import AiRun, ChatMessage, ChatMessageRole, ChatSession, ChatStreamState, Grade
 from app.projects.errors import ProjectDomainError
@@ -79,11 +84,52 @@ def put_chat_draft(
     return ChatDraftRead(text=chat.draft_text, updated_at=chat.updated_at)
 
 
-@router.get("/projects/{project_id}/chat/context", response_model=ChatContextRead)
+@router.put(
+    "/projects/{project_id}/chat/sessions/{session_id}/settings",
+    response_model=ChatSessionDetail,
+)
+def patch_chat_settings(
+    project_id: UUID,
+    session_id: UUID,
+    command: ChatSettingsWrite,
+    session: SessionDependency,
+) -> ChatSessionDetail:
+    chat_service.update_settings(session, project_id, session_id, command)
+    return chat_service.get_session_detail(session, project_id, session_id)
+
+
+@router.get(
+    "/projects/{project_id}/chat/sessions/{session_id}/context",
+    response_model=ChatContextPreviewRead,
+)
 def get_chat_context(
+    project_id: UUID, session_id: UUID, session: SessionDependency
+) -> ChatContextPreviewRead:
+    return chat_service.context_preview(session, project_id, session_id)
+
+
+@router.get(
+    "/projects/{project_id}/chat/capabilities", response_model=ChatCapabilitiesRead
+)
+def get_chat_capabilities(
     project_id: UUID, node_id: UUID, session: SessionDependency
-) -> ChatContextRead:
-    return chat_service.context_preview(session, project_id, node_id)
+) -> ChatCapabilitiesRead:
+    return chat_service.get_capabilities(session, project_id, node_id)
+
+
+@router.post(
+    "/projects/{project_id}/chat/sessions/{session_id}/tools/{tool_key}/runs",
+    response_model=ChatToolRunRead,
+)
+def post_tool_run(
+    project_id: UUID,
+    session_id: UUID,
+    tool_key: str,
+    command: ToolRunCreateWrite,
+    session: SessionDependency,
+) -> ChatToolRunRead:
+    run = run_tool(session, project_id, session_id, tool_key, command.input)
+    return ChatToolRunRead.model_validate(run)
 
 
 def _history_messages(tail: list[ChatMessage]) -> list[AiMessage]:
@@ -98,15 +144,28 @@ def _history_messages(tail: list[ChatMessage]) -> list[AiMessage]:
     return messages
 
 
+def _model_override(chat: ChatSession) -> AiModelSelection | None:
+    if not chat.model_override:
+        return None
+    return AiModelSelection(
+        provider_id=chat.model_override["provider_id"],
+        model_id=chat.model_override["model_id"],
+    )
+
+
 def _reply_request(chat: ChatSession, ctx: ChatContext, user_text: str) -> AiTextRequest:
     grounding = [f"Вопрос: {ctx.node.title}"]
+    if ctx.profile:
+        grounding.append(
+            f"<profile_data>\n{json.dumps(ctx.profile, ensure_ascii=False)}\n</profile_data>"
+        )
     if ctx.reference_text is not None:
         grounding.append(f"<reference_data>\n{ctx.reference_text}\n</reference_data>")
     for fragment in ctx.fragments:
         heading = f'material="{fragment.material_name}" page="{fragment.page_number}"'
         grounding.append(f"<fragment_data {heading}>\n{fragment.text}\n</fragment_data>")
     messages = [
-        AiMessage(role="system", content=CHAT_REPLY_SYSTEM_PROMPT),
+        AiMessage(role="system", content=build_chat_reply_prompt(chat.persona, chat.strictness)),
         AiMessage(role="user", content="\n\n".join(grounding)),
         *_history_messages(ctx.tail),
         AiMessage(role="user", content=user_text),
@@ -116,6 +175,7 @@ def _reply_request(chat: ChatSession, ctx: ChatContext, user_text: str) -> AiTex
         messages=messages,
         project_id=chat.project_id,
         context_manifest=ctx.manifest,
+        request_model_override=_model_override(chat),
         source_fingerprint={"chat_id": str(chat.id)},
     )
 
@@ -151,8 +211,23 @@ async def _events(project_id: UUID, chat_id: UUID, request: AiTextRequest) -> As
     message_id = uuid4()
     with SessionLocal() as db:
         chunks: list[str] = []
-        state = ChatStreamState.COMPLETE
         run_id: UUID | None = None
+        saved = False
+
+        def _save(stream_state: ChatStreamState) -> ChatMessage:
+            nonlocal saved
+            message = chat_service.finish_turn(
+                db,
+                project_id,
+                chat_id,
+                message_id=message_id,
+                text="".join(chunks),
+                stream_state=stream_state,
+                ai_run_id=run_id,
+            )
+            saved = True
+            return message
+
         try:
             async for event in ModelGateway(db).stream(request):
                 if event.kind == "started":
@@ -165,26 +240,32 @@ async def _events(project_id: UUID, chat_id: UUID, request: AiTextRequest) -> As
                     yield _frame("delta", {"text": event.delta})
                 elif event.kind == "completed":
                     usage = event.usage.model_dump(mode="json") if event.usage else {}
+                    # Сообщение сохраняется до кадра completed, чтобы фронтенд мог
+                    # заменить оптимистичную запись готовым ChatMessageRead без
+                    # повторного чтения всей сессии (AI-CHATS.md §21.4).
+                    message = _save(ChatStreamState.COMPLETE)
                     yield _frame(
                         "completed",
-                        {"message_id": str(message_id), "usage": usage, "cached": False},
+                        {
+                            "message_id": str(message_id),
+                            "message": ChatMessageRead.model_validate(message).model_dump(
+                                mode="json"
+                            ),
+                            "usage": usage,
+                            "cached": False,
+                        },
                     )
         except asyncio.CancelledError:
-            state = ChatStreamState.STOPPED
+            if not saved:
+                _save(ChatStreamState.STOPPED)
             raise
         except ProjectDomainError as error:
-            state = ChatStreamState.FAILED
             yield _frame("error", {"code": error.code, "detail": error.detail})
+            if not saved:
+                _save(ChatStreamState.FAILED)
         finally:
-            chat_service.finish_turn(
-                db,
-                project_id,
-                chat_id,
-                message_id=message_id,
-                text="".join(chunks),
-                stream_state=state,
-                ai_run_id=run_id,
-            )
+            if not saved:
+                _save(ChatStreamState.FAILED)
 
 
 @router.post(

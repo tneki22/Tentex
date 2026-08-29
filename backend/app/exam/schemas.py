@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -10,8 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from app.models import (
     AttemptOutcome,
     ChatMessageRole,
+    ChatMode,
     ChatPayloadKind,
     ChatStreamState,
+    ChatToolRunState,
     ExaminerPersona,
     ExaminerStrictness,
     GradeMethod,
@@ -50,11 +52,17 @@ class ChatMessageRead(ApiModel):
     payload_kind: ChatPayloadKind
     payload: dict[str, Any]
     context_snapshot: dict[str, Any]
+    skill: str | None
     ai_run_id: UUID | None
     attempt_id: UUID | None
     grade_attempt_id: UUID | None
     created_at: datetime
     updated_at: datetime
+
+
+class ChatModelOverrideRead(ApiModel):
+    provider_id: UUID
+    model_id: str
 
 
 class ChatSessionDetail(ApiModel):
@@ -63,24 +71,90 @@ class ChatSessionDetail(ApiModel):
     program_node_id: UUID
     section_scope_node_id: UUID | None
     title: str
+    mode: ChatMode
     persona: ExaminerPersona
     strictness: ExaminerStrictness
+    model_override: ChatModelOverrideRead | None
+    context_flags: dict[str, bool]
     draft_text: str
     created_at: datetime
     updated_at: datetime
     messages: list[ChatMessageRead]
 
 
+class ChatModelOverrideWrite(ApiModel):
+    provider_id: UUID
+    model_id: NonBlank
+
+
+class ChatSettingsWrite(ApiModel):
+    """Частичное обновление: неуказанные поля не трогаются (`exclude_unset`)."""
+
+    mode: ChatMode | None = None
+    persona: ExaminerPersona | None = None
+    strictness: ExaminerStrictness | None = None
+    model_override: ChatModelOverrideWrite | None = None
+    context_flags: dict[str, bool] | None = None
+
+
 class ChatDraftWrite(ApiModel):
     text: str = Field(max_length=200_000)
 
 
-class ChatContextRead(ApiModel):
+class ManifestEntryRead(BaseModel):
+    # Записи манифеста несут kind-специфичные поля (revision, sha256, count) —
+    # эта схема отдаёт только то, что нужно чипу, и не падает на лишних ключах.
+    model_config = ConfigDict(extra="ignore")
+
+    kind: str
+    id: str | None = None
+    included: bool
+    truncated: bool = False
+    bytes: int = 0
+    count: int | None = None
+    reason: str | None = None
+
+
+class ChatContextPreviewRead(ApiModel):
+    session_id: UUID
     node_id: UUID
     question: str
-    reference_included: bool
-    material_count: int
-    tail_limit: int
+    persona: ExaminerPersona
+    strictness: ExaminerStrictness
+    model_source: Literal["auto", "override"]
+    model_id: str | None
+    manifest: list[ManifestEntryRead]
+    fingerprint: str
+    total_bytes: int
+
+
+class CapabilityRead(ApiModel):
+    key: str
+    title: str
+    available: bool
+    unavailable_reason: str | None = None
+
+
+class ChatCapabilitiesRead(ApiModel):
+    modes: list[CapabilityRead]
+    skills: list[CapabilityRead]
+    tools: list[CapabilityRead]
+
+
+class ToolRunCreateWrite(ApiModel):
+    input: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatToolRunRead(ApiModel):
+    id: UUID
+    session_id: UUID
+    tool_key: str
+    state: ChatToolRunState
+    result: dict[str, Any] | None
+    error_code: str | None
+    message_id: UUID | None
+    created_at: datetime
+    completed_at: datetime | None
 
 
 class ChatDraftRead(ApiModel):

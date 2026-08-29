@@ -33,6 +33,17 @@ def utc_now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def default_context_flags() -> dict[str, bool]:
+    """Начальные context flags новой сессии — AI-CHATS.md §21.4."""
+    return {
+        "profile": True,
+        "reference": True,
+        "fragments": True,
+        "attempts": False,
+        "section_memory": False,
+    }
+
+
 def enum_type(enum: type[StrEnum], name: str) -> Enum:
     return Enum(
         enum,
@@ -262,6 +273,21 @@ class ChatPayloadKind(StrEnum):
     VERDICT = "verdict"
     TASK = "task"
     INTERACTIVE = "interactive"
+    TOOL_RESULT = "tool_result"
+
+
+class ChatMode(StrEnum):
+    EXAM = "exam"
+    # Зарегистрирован в capabilities, но сервис отвечает chat_mode_unavailable
+    # до итерации 2 (AI-CHATS.md §21.4).
+    STUDY = "study"
+
+
+class ChatToolRunState(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
 
 
 class ExaminerPersona(StrEnum):
@@ -1080,6 +1106,9 @@ class ChatSession(Base):
     # Показывается и используется памятью раздела только с итерации 2.
     section_scope_node_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     title: Mapped[str] = mapped_column(String)
+    mode: Mapped[ChatMode] = mapped_column(
+        enum_type(ChatMode, "chat_mode"), default=ChatMode.EXAM
+    )
     persona: Mapped[ExaminerPersona] = mapped_column(
         enum_type(ExaminerPersona, "examiner_persona"),
         default=ExaminerPersona.NEUTRAL_EXAMINER,
@@ -1088,6 +1117,10 @@ class ChatSession(Base):
         enum_type(ExaminerStrictness, "examiner_strictness"),
         default=ExaminerStrictness.NORMAL,
     )
+    # {"provider_id": "...", "model_id": "..."} | None — JSON-снимок, а не FK:
+    # запись остаётся читаемой, если подключение провайдера позже удалено.
+    model_override: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    context_flags: Mapped[dict[str, Any]] = mapped_column(JSON, default=default_context_flags)
     draft_text: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
@@ -1117,6 +1150,9 @@ class ChatMessage(Base):
     )
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     context_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Какая серверная операция создала сообщение: null — обычная реплика,
+    # иначе ключ навыка или Tool (AI-CHATS.md §13).
+    skill: Mapped[str | None] = mapped_column(String, nullable=True)
     ai_run_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True
     )
@@ -1128,6 +1164,43 @@ class ChatMessage(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class ChatToolRun(Base):
+    """Журнал выполнения Tool: вход, состояние и компактный результат.
+
+    Состояния queued/running уже предусмотрены для будущего фонового
+    исполнения (AI-CHATS.md §17.4); первая итерация выполняет Tool синхронно
+    и сразу сохраняет succeeded/failed.
+    """
+
+    __tablename__ = "chat_tool_runs"
+    __table_args__ = (Index("ix_chat_tool_runs_session_created", "session_id", "created_at"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    )
+    session_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="CASCADE")
+    )
+    tool_key: Mapped[str] = mapped_column(String)
+    state: Mapped[ChatToolRunState] = mapped_column(
+        enum_type(ChatToolRunState, "chat_tool_run_state"), default=ChatToolRunState.QUEUED
+    )
+    tool_input: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Типизированный блок, созданный этим запуском — null, пока не сохранён.
+    message_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("chat_messages.id", ondelete="SET NULL"),
+        unique=True,
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class OcrSettings(Base):
