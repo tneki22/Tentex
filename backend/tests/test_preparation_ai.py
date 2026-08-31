@@ -178,7 +178,9 @@ async def test_invalid_minutes_leave_gateway_with_structured_output_error(
 ) -> None:
     del ai_config
     project = make_exam_project(session)
-    fake = FakeTransport(completions=[_completion(minutes=15)])
+    # Два одинаково невалидных ответа: гейтвей даёт модели одну попытку
+    # самоисправиться, и она снова присылает те же неверные минуты.
+    fake = FakeTransport(completions=[_completion(minutes=15), _completion(minutes=15)])
     gateway = ModelGateway(session, fake)
     command = _command()
     monkeypatch.setattr(preparation_ai, "date", _FixedDate)

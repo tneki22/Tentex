@@ -86,33 +86,65 @@ async def test_cache_invalidation_uses_source_fingerprint(session: Session, ai_c
     assert fake.complete_calls == 2
 
 
+def _invalid_json_completion() -> ProviderCompletion:
+    return ProviderCompletion(
+        content="not-json",
+        actual_model_id="test/structured-model",
+        usage=ProviderUsage(),
+    )
+
+
 @pytest.mark.asyncio
 async def test_invalid_structured_output_is_not_cached(session: Session, ai_config: str) -> None:
     del ai_config
-    fake = FakeTransport(
-        completions=[
-            ProviderCompletion(
-                content="not-json",
-                actual_model_id="test/structured-model",
-                usage=ProviderUsage(),
-            )
-        ]
-    )
+    # Оба ответа невалидны: одна попытка самоисправления не спасает, вызов
+    # проваливается после ровно двух обращений к транспорту.
+    fake = FakeTransport(completions=[_invalid_json_completion(), _invalid_json_completion()])
     with pytest.raises(ProjectDomainError) as caught:
         await ModelGateway(session, fake).complete(_request())
     assert caught.value.code == "ai_invalid_structured_output"
     assert session.scalar(select(AiCacheEntry)) is None
     assert session.scalar(select(AiRun.status)) == "failed"
+    assert fake.complete_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_retries_once_on_invalid_json_then_succeeds(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    fake = FakeTransport(completions=[_invalid_json_completion(), _completion()])
+    result = await ModelGateway(session, fake).complete(_request())
+    assert result.value.answer == "ok"
+    assert fake.complete_calls == 2
+    retry_messages = fake.complete_requests[1]["messages"]
+    assert retry_messages[-2] == {"role": "assistant", "content": "not-json"}
+    assert "проверку по схеме" in retry_messages[-1]["content"]
+    assert session.scalar(select(AiRun.status)) == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_retries_once_on_retryable_provider_error_then_succeeds(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    fake = FakeTransport(
+        completions=[ProviderError("ai_provider_unavailable", "temporary routing hiccup"), _completion()]
+    )
+    result = await ModelGateway(session, fake).complete(_request())
+    assert result.value.answer == "ok"
+    assert fake.complete_calls == 2
+    assert session.scalar(select(AiRun.status)) == "succeeded"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("provider_code", "expected_status"),
+    ("provider_code", "expected_status", "retryable"),
     [
-        ("ai_invalid_credentials", 401),
-        ("ai_rate_limited", 429),
-        ("ai_timeout", 504),
-        ("ai_provider_unavailable", 503),
+        ("ai_invalid_credentials", 401, False),
+        ("ai_rate_limited", 429, False),
+        ("ai_timeout", 504, False),
+        ("ai_provider_unavailable", 503, True),
     ],
 )
 async def test_provider_errors_are_normalized(
@@ -120,14 +152,23 @@ async def test_provider_errors_are_normalized(
     ai_config: str,
     provider_code: str,
     expected_status: int,
+    retryable: bool,
 ) -> None:
     del ai_config
-    fake = FakeTransport(completions=[ProviderError(provider_code, "provider detail")])
+    # Второй элемент в очереди только нужен, если код ретраится — иначе он
+    # останется невостребованным, вызов проваливается на первой же попытке.
+    fake = FakeTransport(
+        completions=[
+            ProviderError(provider_code, "provider detail"),
+            ProviderError(provider_code, "provider detail"),
+        ]
+    )
     with pytest.raises(ProjectDomainError) as caught:
         await ModelGateway(session, fake).complete(_request())
     assert caught.value.code == provider_code
     assert caught.value.status == expected_status
     assert session.scalar(select(AiRun.error_code)) == provider_code
+    assert fake.complete_calls == (2 if retryable else 1)
 
 
 @pytest.mark.asyncio

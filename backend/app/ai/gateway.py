@@ -47,6 +47,10 @@ from app.models import (
 
 ZERO = Decimal("0")
 
+# Сбой одной из этих причин обычно временный (роутинг провайдера, пустой
+# ответ из-за неудачного размещения) — стоит попробовать тот же запрос ещё раз.
+_RETRYABLE_PROVIDER_CODES = {"ai_provider_unavailable", "ai_empty_response"}
+
 # Человекочитаемые названия возможностей модели: попадают в текст ошибки,
 # когда выбранная модель не умеет то, что нужно функции.
 _CAPABILITY_LABELS = {
@@ -103,6 +107,19 @@ def _error_status(code: str) -> int:
 
 def _gateway_error(code: str, detail: str) -> AiGatewayError:
     return AiGatewayError(detail, code=code, status=_error_status(code))
+
+
+def _sum_usage(first: ProviderUsage, second: ProviderUsage) -> ProviderUsage:
+    cost = None
+    if first.cost_usd is not None or second.cost_usd is not None:
+        cost = (first.cost_usd or ZERO) + (second.cost_usd or ZERO)
+    return ProviderUsage(
+        input_tokens=first.input_tokens + second.input_tokens,
+        output_tokens=first.output_tokens + second.output_tokens,
+        reasoning_tokens=first.reasoning_tokens + second.reasoning_tokens,
+        cached_tokens=first.cached_tokens + second.cached_tokens,
+        cost_usd=cost,
+    )
 
 
 class ModelGateway:
@@ -189,44 +206,70 @@ class ModelGateway:
         transport = self.transport or production_transport(self.session, resolved.provider.id)
         run = self._start_run(request, resolved, preflight)
         started = time.monotonic()
-        try:
-            result = await transport.complete(
-                model=resolved.model_id,
-                messages=[item.model_dump() for item in request.messages],
-                response_schema=request.response_model.model_json_schema(),
-                max_output_tokens=preflight.estimated_output_tokens,
-                parameters=self._parameters(resolved, {
-                    **request.parameters,
-                    "max_output_tokens": preflight.estimated_output_tokens,
-                }),
+        messages = [item.model_dump() for item in request.messages]
+        response_schema = request.response_model.model_json_schema()
+        parameters = self._parameters(resolved, {
+            **request.parameters,
+            "max_output_tokens": preflight.estimated_output_tokens,
+        })
+        combined_usage = ProviderUsage()
+        # Один сбой роутинга провайдера или один невалидный по схеме ответ не
+        # должен ронять весь вызов — модели даётся ровно одна попытка
+        # исправиться, прежде чем мы сдаёмся и записываем неудачу.
+        for attempt in range(2):
+            try:
+                result = await transport.complete(
+                    model=resolved.model_id,
+                    messages=messages,
+                    response_schema=response_schema,
+                    max_output_tokens=preflight.estimated_output_tokens,
+                    parameters=parameters,
+                )
+            except ProviderError as error:
+                if attempt == 0 and error.code in _RETRYABLE_PROVIDER_CODES:
+                    continue
+                self._fail_run(run.id, error.code, started)
+                raise _gateway_error(error.code, error.detail) from error
+            combined_usage = _sum_usage(combined_usage, result.usage)
+            try:
+                value = request.response_model.model_validate_json(result.content)
+            except (ValidationError, ValueError, json.JSONDecodeError) as error:
+                if attempt == 0:
+                    messages = [
+                        *messages,
+                        {"role": "assistant", "content": result.content},
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Ответ не прошёл проверку по схеме: {error}. Пришли только "
+                                "исправленный JSON строго по той же схеме."
+                            ),
+                        },
+                    ]
+                    continue
+                self._fail_run(run.id, "ai_invalid_structured_output", started)
+                raise AiGatewayError(
+                    "Ответ модели не прошёл структурную проверку",
+                    code="ai_invalid_structured_output",
+                ) from error
+            usage = self._finish_run(
+                run.id,
+                value.model_dump(mode="json"),
+                result.actual_model_id,
+                result.request_id,
+                combined_usage,
+                started,
+                resolved.role.cache_policy != "none",
             )
-            value = request.response_model.model_validate_json(result.content)
-        except (ValidationError, ValueError, json.JSONDecodeError) as error:
-            self._fail_run(run.id, "ai_invalid_structured_output", started)
-            raise AiGatewayError(
-                "Ответ модели не прошёл структурную проверку",
-                code="ai_invalid_structured_output",
-            ) from error
-        except ProviderError as error:
-            self._fail_run(run.id, error.code, started)
-            raise _gateway_error(error.code, error.detail) from error
-        usage = self._finish_run(
-            run.id,
-            value.model_dump(mode="json"),
-            result.actual_model_id,
-            result.request_id,
-            result.usage,
-            started,
-            resolved.role.cache_policy != "none",
-        )
-        return AiResult(
-            run_id=run.id,
-            value=value,
-            usage=usage,
-            requested_model_id=resolved.model_id,
-            actual_model_id=result.actual_model_id,
-            cached=False,
-        )
+            return AiResult(
+                run_id=run.id,
+                value=value,
+                usage=usage,
+                requested_model_id=resolved.model_id,
+                actual_model_id=result.actual_model_id,
+                cached=False,
+            )
+        raise AssertionError("unreachable: loop always returns or raises")
 
     async def stream(self, request: AiTextRequest[Any]) -> AsyncIterator[AiStreamEvent]:
         preflight = await self.preflight(request)

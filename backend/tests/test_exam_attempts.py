@@ -206,15 +206,15 @@ async def test_broken_judge_keeps_attempt_without_grade(
     project = make_exam_project(session)
     topic = make_topic_node(session, project, title="Вопрос с ошибкой судьи")
     chat = chat_service.create_session(session, project.id, topic.id)
-    fake = FakeTransport(
-        completions=[
-            ProviderCompletion(
-                content="not-json",
-                actual_model_id="test/structured-model",
-                usage=ProviderUsage(),
-            )
-        ]
+    broken_completion = ProviderCompletion(
+        content="not-json",
+        actual_model_id="test/structured-model",
+        usage=ProviderUsage(),
     )
+    # Гейтвей даёт одну попытку самоисправиться; судья ломается оба раза,
+    # так что ai_invalid_structured_output не входит в AI_FALLBACK_CODES
+    # и всё равно всплывает наверх, а не тихо подменяется запасной оценкой.
+    fake = FakeTransport(completions=[broken_completion, broken_completion])
 
     with pytest.raises(ProjectDomainError) as caught:
         await attempt_service.submit_answer(

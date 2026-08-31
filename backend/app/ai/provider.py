@@ -241,7 +241,6 @@ class OpenAITransport:
                     "schema": response_schema,
                 },
             }
-            kwargs["extra_body"]["provider"] = {"require_parameters": True}
         try:
             result = await self.client.chat.completions.create(**kwargs)
         except Exception as error:
