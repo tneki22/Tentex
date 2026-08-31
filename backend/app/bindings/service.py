@@ -1,4 +1,5 @@
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
@@ -627,22 +628,32 @@ def delete_project_material_bindings(session: Session, project_id: UUID, materia
     )
 
 
-def binding_count_for_material(session: Session, material_id: UUID) -> int:
+def binding_count_for_materials(session: Session, material_ids: Sequence[UUID]) -> int:
+    if not material_ids:
+        return 0
     return (
         session.scalar(
             select(func.count())
             .select_from(Binding)
-            .where(Binding.material_id == material_id, Binding.status.in_(ACTIVE_STATUSES))
+            .where(Binding.material_id.in_(material_ids), Binding.status.in_(ACTIVE_STATUSES))
         )
         or 0
     )
 
 
-def affected_projects_preview(session: Session, material_id: UUID) -> list[AffectedProjectPreview]:
-    """Р7: для каждого проекта — узлы, которые останутся без материала после удаления."""
+def affected_projects_preview(
+    session: Session, material_ids: Sequence[UUID]
+) -> list[AffectedProjectPreview]:
+    """Р7: для каждого проекта — узлы, которые останутся без материала после удаления.
+
+    Материалы считаются пачкой, а не по одному: если два удаляемых файла кормят
+    одну тему, поштучный предпросмотр не увидел бы, что она осиротеет.
+    """
+    if not material_ids:
+        return []
     pairs = session.execute(
         select(Binding.project_id, Binding.program_node_id)
-        .where(Binding.material_id == material_id, Binding.status.in_(ACTIVE_STATUSES))
+        .where(Binding.material_id.in_(material_ids), Binding.status.in_(ACTIVE_STATUSES))
         .distinct()
     ).all()
     if not pairs:
@@ -659,7 +670,7 @@ def affected_projects_preview(session: Session, material_id: UUID) -> list[Affec
                 select(Binding.program_node_id).where(
                     Binding.project_id == project_id,
                     Binding.program_node_id.in_(node_ids),
-                    Binding.material_id != material_id,
+                    Binding.material_id.not_in(material_ids),
                     Binding.status.in_(ACTIVE_STATUSES),
                 )
             )

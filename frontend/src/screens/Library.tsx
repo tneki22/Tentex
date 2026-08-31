@@ -5,23 +5,27 @@ import {
   FileText,
   FileType2,
   Globe,
+  Play,
   Plus,
   Trash2,
   Video,
+  X,
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import {
-  deleteLibraryMaterial,
-  getMaterialDeletePreview,
+  deleteLibraryMaterials,
   listLibraryMaterials,
+  previewMaterialsDelete,
+  startLibraryProcessing,
   type LibraryMaterialRead,
-  type MaterialDeletePreview,
   type MaterialPresentationKind,
   type MaterialPurpose,
+  type MaterialsDeletePreview,
 } from "../api/materials";
 import { QualityBadge } from "../components/domain";
 import {
   Button,
+  Checkbox,
   ConfirmDialog,
   EmptyState,
   ErrorState,
@@ -58,6 +62,8 @@ const STATUS_LABEL: Record<LibraryMaterialRead["status"], string> = {
 };
 
 const SCROLL_KEY = "tentex-library-scroll";
+/** Проектов в строке видно два: дальше строка растёт и уводит кнопку удаления. */
+const USAGE_SHOWN = 2;
 
 /** Тот же вывод, что у сервера, но по данным списка: отдельная ручка не нужна. */
 function kindOf(material: LibraryMaterialRead): MaterialPresentationKind {
@@ -89,14 +95,19 @@ function sizeLabel(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} ГБ`;
 }
 
-function pageLabel(count: number | null): string {
-  if (count === null) return "";
+/** Русское склонение по числу: одно правило на весь экран. */
+function plural(count: number, one: string, few: string, many: string): string {
   const mod100 = count % 100;
   const mod10 = count % 10;
-  if (mod100 >= 11 && mod100 <= 14) return `${count} страниц`;
-  if (mod10 === 1) return `${count} страница`;
-  if (mod10 >= 2 && mod10 <= 4) return `${count} страницы`;
-  return `${count} страниц`;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
+}
+
+function pageLabel(count: number | null): string {
+  if (count === null) return "";
+  return `${count} ${plural(count, "страница", "страницы", "страниц")}`;
 }
 
 function readFilters(params: URLSearchParams): LibraryFilterState {
@@ -117,16 +128,27 @@ export function Library() {
   const [materials, setMaterials] = useState<LibraryMaterialRead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
   const [addOpen, setAddOpen] = useState(false);
-  const [deletePreview, setDeletePreview] = useState<MaterialDeletePreview | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  /* Кого сейчас подтверждают к удалению. Пустой массив — диалог закрыт. */
+  const [deleteTargets, setDeleteTargets] = useState<LibraryMaterialRead[]>([]);
+  const [deletePreview, setDeletePreview] = useState<MaterialsDeletePreview | null>(null);
+  /* Занятость по строкам, а не по экрану: удаление одного файла не должно
+     гасить кнопки у остальных двадцати. */
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
   const restored = useRef(false);
+  /* Radix отдаёт только новое состояние флажка, без события. Модификатор
+     запоминаем на mousedown — он приходит раньше клика. */
+  const shiftHeld = useRef(false);
+  const anchor = useRef<number | null>(null);
 
   const filters = useMemo(() => readFilters(searchParams), [searchParams]);
   const scrollKey = `${SCROLL_KEY}:${searchParams.toString()}`;
 
-  const load = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
+  const load = useCallback(async (options: { signal?: AbortSignal; silent?: boolean } = {}) => {
+    const { signal, silent } = options;
+    if (!silent) setLoading(true);
     setError("");
     try {
       setMaterials(await listLibraryMaterials(signal));
@@ -135,13 +157,13 @@ export function Library() {
         setError(caught instanceof Error ? caught.message : "Не удалось загрузить Библиотеку");
       }
     } finally {
-      if (!signal?.aborted) setLoading(false);
+      if (!signal?.aborted && !silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     const controller = new AbortController();
-    void load(controller.signal);
+    void load({ signal: controller.signal });
     return () => controller.abort();
   }, [load]);
 
@@ -192,6 +214,23 @@ export function Library() {
     return list;
   }, [materials, filters]);
 
+  /* Выделение живёт внутри текущей выборки: иначе массовое действие задело бы
+     то, чего на экране не видно. */
+  useEffect(() => {
+    setSelectedIds(new Set());
+    anchor.current = null;
+  }, [searchParams]);
+
+  const selected = useMemo(
+    () => visible.filter((material) => selectedIds.has(material.id)),
+    [visible, selectedIds],
+  );
+  /* Перезапуск после ошибки — такое же обычное массовое действие, как первый
+     разбор: сервер отказывает только при уже активной задаче. */
+  const processable = selected.filter(
+    (material) => material.status === "ready_to_process" || material.status === "failed",
+  );
+
   const totals = useMemo(() => ({
     pages: materials.reduce((sum, material) => sum + (material.page_count ?? 0), 0),
     bytes: materials.reduce((sum, material) => sum + material.size_bytes, 0),
@@ -208,33 +247,97 @@ export function Library() {
     });
   }
 
-  async function chooseDelete(materialId: string) {
-    setBusy(true);
+  function toggleSelected(index: number, checked: boolean) {
+    const range = shiftHeld.current && anchor.current !== null
+      ? visible.slice(Math.min(anchor.current, index), Math.max(anchor.current, index) + 1)
+      : [visible[index]];
+    shiftHeld.current = false;
+    anchor.current = index;
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      for (const material of range) {
+        if (checked) next.add(material.id); else next.delete(material.id);
+      }
+      return next;
+    });
+  }
+
+  async function askDelete(targets: LibraryMaterialRead[]) {
+    if (targets.length === 0) return;
+    /* Диалог открывается сразу, последствия догружаются в него: ждать ответа
+       сервера с закрытым окном означало «нажал и ничего не происходит». */
+    setDeleteTargets(targets);
+    setDeletePreview(null);
     setError("");
     try {
-      setDeletePreview(await getMaterialDeletePreview(materialId));
+      setDeletePreview(await previewMaterialsDelete(targets.map((material) => material.id)));
     } catch (caught) {
+      setDeleteTargets([]);
       setError(caught instanceof Error ? caught.message : "Не удалось проверить последствия удаления");
-    } finally {
-      setBusy(false);
     }
   }
 
-  async function removeMaterial() {
-    if (!deletePreview) return;
-    setBusy(true);
+  async function removeMaterials() {
+    const targets = deleteTargets;
+    if (targets.length === 0) return;
+    const ids = targets.map((material) => material.id);
+    const snapshot = materials;
+
+    /* Удаляем из списка сразу: подтверждение уже получено, и ждать ответа
+       сервера пользователю незачем. При ошибке строки возвращаются. */
+    setMaterials((current) => current.filter((material) => !ids.includes(material.id)));
+    setSelectedIds(new Set());
+    setDeleteTargets([]);
+    setDeletePreview(null);
+    setPendingIds((current) => new Set([...current, ...ids]));
+    setNotice(`Удалено: ${ids.length} ${plural(ids.length, "файл", "файла", "файлов")}`);
+
     try {
-      await deleteLibraryMaterial(deletePreview.material.id);
-      setDeletePreview(null);
-      await load();
+      await deleteLibraryMaterials(ids);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Не удалось удалить материал");
+      setMaterials(snapshot);
+      setNotice("");
+      setError(caught instanceof Error ? caught.message : "Не удалось удалить материалы");
     } finally {
-      setBusy(false);
+      setPendingIds((current) => {
+        const next = new Set(current);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  async function processSelected() {
+    const targets = processable;
+    if (targets.length === 0) return;
+    const ids = targets.map((material) => material.id);
+    setPendingIds((current) => new Set([...current, ...ids]));
+    setError("");
+    let started = 0;
+    try {
+      /* По очереди, а не пачкой: у SQLite один писатель, и параллельные запуски
+         только выстраиваются в ту же очередь, но с риском таймаута. */
+      for (const id of ids) {
+        await startLibraryProcessing(id, { parser_mode: "fast", scope: "all" });
+        started += 1;
+      }
+      setNotice(`Поставлено в обработку: ${started}`);
+      setSelectedIds(new Set());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Не удалось поставить в обработку");
+    } finally {
+      setPendingIds((current) => {
+        const next = new Set(current);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+      await load({ silent: true });
     }
   }
 
   if (loading) return <LoadingState label="Загружаем Библиотеку" placement="page" />;
+
+  const allVisibleSelected = visible.length > 0 && selected.length === visible.length;
 
   return (
     <div className="screen lib-screen">
@@ -244,8 +347,7 @@ export function Library() {
         lead={
           materials.length === 0
             ? "Общие материалы установки. Файл хранится один раз, проекты на него ссылаются."
-            : `${materials.length} · ${totals.pages} стр. · ${sizeLabel(totals.bytes)}`
-            + (totals.review ? ` · нужно проверить: ${totals.review}` : "")
+            : undefined
         }
         actions={
           <Button onClick={() => setAddOpen(true)}>
@@ -256,6 +358,29 @@ export function Library() {
       {error && <ErrorState message={error} />}
 
       {materials.length > 0 && (
+        <section className="lib-summary" aria-label="Сводка Библиотеки">
+          <span>
+            <strong>{materials.length}</strong>
+            <small>{plural(materials.length, "файл", "файла", "файлов")}</small>
+          </span>
+          <span>
+            <strong>{totals.pages}</strong>
+            <small>{plural(totals.pages, "страница", "страницы", "страниц")}</small>
+          </span>
+          <span>
+            <strong>{sizeLabel(totals.bytes)}</strong>
+            <small>общий объём</small>
+          </span>
+          {totals.review > 0 && (
+            <span>
+              <strong>{totals.review}</strong>
+              <small>нужно проверить</small>
+            </span>
+          )}
+        </section>
+      )}
+
+      {materials.length > 0 && (
         <LibraryFilters
           value={filters}
           total={materials.length}
@@ -264,6 +389,34 @@ export function Library() {
           onReset={() => setSearchParams(new URLSearchParams(), { replace: true })}
         />
       )}
+
+      {selected.length > 0 && (
+        <div className="lib-bulk-bar" role="group" aria-label="Действия над выбранными файлами">
+          <strong>Выбрано: {selected.length}</strong>
+          {!allVisibleSelected && (
+            <Button
+              variant="ghost"
+              onClick={() => setSelectedIds(new Set(visible.map((material) => material.id)))}
+            >
+              Выбрать все {visible.length}
+            </Button>
+          )}
+          <Button variant="ghost" onClick={() => setSelectedIds(new Set())}>
+            <X size={14} aria-hidden="true" /> Снять
+          </Button>
+          <span className="lib-bulk-spacer" />
+          {processable.length > 0 && (
+            <Button variant="ghost" onClick={() => void processSelected()}>
+              <Play size={14} aria-hidden="true" /> Поставить в обработку ({processable.length})
+            </Button>
+          )}
+          <Button variant="ghost" onClick={() => void askDelete(selected)}>
+            <Trash2 size={14} aria-hidden="true" /> Удалить
+          </Button>
+        </div>
+      )}
+
+      {notice && <p className="lib-notice" role="status">{notice}</p>}
 
       {materials.length === 0 ? (
         <EmptyState title="Библиотека пока пуста">
@@ -283,16 +436,41 @@ export function Library() {
         </EmptyState>
       ) : (
         <div className="lib-list" role="list">
-          {visible.map((material) => {
+          {visible.map((material, index) => {
             const Icon = KIND_ICON[kindOf(material)];
+            const busy = pendingIds.has(material.id);
+            const shown = material.usage.slice(0, USAGE_SHOWN);
+            const hidden = material.usage.slice(USAGE_SHOWN);
             return (
-              <div className="lib-row" role="listitem" key={material.id}>
+              <div
+                className={`lib-row${selectedIds.has(material.id) ? " is-selected" : ""}`}
+                role="listitem"
+                key={material.id}
+              >
+                <span
+                  className="lib-row-select"
+                  onMouseDown={(event) => { shiftHeld.current = event.shiftKey; }}
+                >
+                  <Checkbox
+                    checked={selectedIds.has(material.id)}
+                    onCheckedChange={(checked) => toggleSelected(index, checked)}
+                    label={`Выбрать ${material.original_name}`}
+                  />
+                </span>
+
                 {/* Вся смысловая область строки — одна кнопка перехода;
                     вложенные действия останавливают её своим onClick. */}
                 <button
                   type="button"
                   className="lib-row-open"
-                  onClick={() => open(material.id)}
+                  onClick={(event) => {
+                    /* Ctrl/⌘ — привычный жест «добавить в выделение», а не переход. */
+                    if (event.ctrlKey || event.metaKey) {
+                      toggleSelected(index, !selectedIds.has(material.id));
+                      return;
+                    }
+                    open(material.id);
+                  }}
                 >
                   <span className="lib-row-icon"><Icon size={17} aria-hidden="true" /></span>
                   <span className="lib-row-body">
@@ -309,9 +487,6 @@ export function Library() {
                         {STATUS_LABEL[material.status]}
                       </StatusBadge>
                     )}
-                    {material.native_page_count > 0 && (
-                      <StatusBadge tone="neutral">{material.native_page_count} стр.</StatusBadge>
-                    )}
                     {material.ocr_page_count + (material.parser_mode === "fast" ? material.ocr_low_page_count : 0) > 0 && (
                       <QualityBadge quality="ocr" count={material.ocr_page_count + (material.parser_mode === "fast" ? material.ocr_low_page_count : 0)} />
                     )}
@@ -322,21 +497,33 @@ export function Library() {
                 </button>
 
                 <div className="lib-row-usage">
-                  {material.usage.length > 0 ? material.usage.map((usage) => (
-                    <Link
-                      key={`${usage.project_id}-${usage.display_name}`}
-                      to={`/projects/${usage.project_id}/materials/${material.id}`}
-                      title={`${usage.display_name} · ${usage.purposes.map((item) => PURPOSE[item]).join(", ")}`}
-                    >
-                      {usage.project_name}
-                    </Link>
-                  )) : <span className="lib-unused">не используется</span>}
+                  {material.usage.length > 0 ? (
+                    <>
+                      {shown.map((usage) => (
+                        <Link
+                          key={`${usage.project_id}-${usage.display_name}`}
+                          to={`/projects/${usage.project_id}/materials/${material.id}`}
+                          title={`${usage.display_name} · ${usage.purposes.map((item) => PURPOSE[item]).join(", ")}`}
+                        >
+                          {usage.project_name}
+                        </Link>
+                      ))}
+                      {hidden.length > 0 && (
+                        <span
+                          className="lib-usage-more"
+                          title={hidden.map((usage) => usage.project_name).join(", ")}
+                        >
+                          +{hidden.length}
+                        </span>
+                      )}
+                    </>
+                  ) : <span className="lib-unused">не используется</span>}
                 </div>
 
                 <IconButton
                   label={`Удалить ${material.original_name}`}
                   disabled={busy}
-                  onClick={() => void chooseDelete(material.id)}
+                  onClick={() => void askDelete([material])}
                 >
                   <Trash2 size={15} />
                 </IconButton>
@@ -357,61 +544,95 @@ export function Library() {
       />
 
       <ConfirmDialog
-        open={deletePreview !== null}
-        onOpenChange={(open) => !open && setDeletePreview(null)}
-        title={`Удалить ${deletePreview?.material.original_name ?? "материал"}?`}
-        confirmLabel="Удалить файл везде"
+        open={deleteTargets.length > 0}
+        onOpenChange={(open) => {
+          if (!open) { setDeleteTargets([]); setDeletePreview(null); }
+        }}
+        title={
+          deleteTargets.length === 1
+            ? `Удалить ${deleteTargets[0].original_name}?`
+            : `Удалить ${deleteTargets.length} ${plural(deleteTargets.length, "файл", "файла", "файлов")}?`
+        }
+        confirmLabel={deleteTargets.length === 1 ? "Удалить файл везде" : "Удалить все выбранные"}
         destructive
-        onConfirm={() => void removeMaterial()}
+        /* Кнопка ждёт последствий: по FR-M10 их надо увидеть ДО удаления. */
+        confirmDisabled={deletePreview === null}
+        onConfirm={removeMaterials}
       >
-        <p className="dialog-lead">Файл удалится из общей Библиотеки и отвяжется от всех проектов.</p>
+        <p className="dialog-lead">
+          {deleteTargets.length === 1
+            ? "Файл удалится из общей Библиотеки и отвяжется от всех проектов."
+            : "Файлы удалятся из общей Библиотеки и отвяжутся от всех проектов."}
+        </p>
 
-        {deletePreview?.material.usage.length
-          || deletePreview?.reference_answer_count
-          || deletePreview?.binding_count ? (
-          <dl className="consequences-facts">
-            {deletePreview?.material.usage.map((usage) => (
-              <div className="consequences-fact" key={usage.project_id}>
-                <dt>{usage.project_name}</dt>
-                <dd>{usage.purposes.map((item) => PURPOSE[item]).join(", ")}</dd>
+        {deletePreview === null ? (
+          <LoadingState label="Считаем последствия" />
+        ) : (
+          <>
+            {deleteTargets.length > 1 && (
+              <ul className="consequences-topics">
+                {deletePreview.materials.map((material) => (
+                  <li key={material.id}>{material.original_name}</li>
+                ))}
+              </ul>
+            )}
+
+            {deletePreview.materials.some((material) => material.usage.length > 0)
+              || deletePreview.reference_answer_count
+              || deletePreview.binding_count ? (
+              <dl className="consequences-facts">
+                {deleteTargets.length === 1 && deletePreview.materials[0].usage.map((usage) => (
+                  <div className="consequences-fact" key={usage.project_id}>
+                    <dt>{usage.project_name}</dt>
+                    <dd>{usage.purposes.map((item) => PURPOSE[item]).join(", ")}</dd>
+                  </div>
+                ))}
+                {deletePreview.reference_answer_count ? (
+                  <div className="consequences-fact">
+                    <dt>Эталонов из файлов</dt>
+                    <dd>{deletePreview.reference_answer_count} — текст сохранится, источник станет недоступен</dd>
+                  </div>
+                ) : null}
+                {deletePreview.binding_count ? (
+                  <div className="consequences-fact">
+                    <dt>Привязок к фрагментам</dt>
+                    <dd>{deletePreview.binding_count} — уйдут вместе с файлами</dd>
+                  </div>
+                ) : null}
+              </dl>
+            ) : null}
+
+            {deletePreview.affected_projects.map((affected) => (
+              <div className="consequences-topics-block" key={affected.project_id}>
+                <p className="consequences-topics-label">
+                  {affected.project_name}: без материала останутся
+                </p>
+                <ul className="consequences-topics">
+                  {affected.nodes_losing_material.map((node) => (
+                    <li key={node}>{node}</li>
+                  ))}
+                </ul>
               </div>
             ))}
-            {deletePreview?.reference_answer_count ? (
-              <div className="consequences-fact">
-                <dt>Эталонов из файла</dt>
-                <dd>{deletePreview.reference_answer_count} — текст сохранится, источник станет недоступен</dd>
-              </div>
-            ) : null}
-            {deletePreview?.binding_count ? (
-              <div className="consequences-fact">
-                <dt>Привязок к фрагментам</dt>
-                <dd>{deletePreview.binding_count} — уйдут вместе с файлом</dd>
-              </div>
-            ) : null}
-          </dl>
-        ) : null}
 
-        {deletePreview?.affected_projects.map((affected) => (
-          <div className="consequences-topics-block" key={affected.project_id}>
-            <p className="consequences-topics-label">
-              {affected.project_name}: без материала останутся
-            </p>
-            <ul className="consequences-topics">
-              {affected.nodes_losing_material.map((node) => (
-                <li key={node}>{node}</li>
-              ))}
-            </ul>
-          </div>
-        ))}
+            {deletePreview.active_task_count > 0 && (
+              <p className="consequences-note">
+                Текущая обработка будет остановлена вместе с файлами: {deletePreview.active_task_count}.
+              </p>
+            )}
 
-        {deletePreview?.active_task ? (
-          <p className="consequences-note">Текущая обработка будет остановлена вместе с файлом.</p>
-        ) : null}
-
-        {deletePreview?.material.usage.length === 0
-          && !deletePreview.reference_answer_count
-          && !deletePreview.binding_count
-          && <p className="consequences-note">Файл не используется ни одним проектом.</p>}
+            {deletePreview.materials.every((material) => material.usage.length === 0)
+              && !deletePreview.reference_answer_count
+              && !deletePreview.binding_count
+              && (
+                <p className="consequences-note">
+                  {deleteTargets.length === 1
+                    ? "Файл не используется ни одним проектом."
+                    : "Ни один из файлов не используется проектами."}
+                </p>
+              )}
+          </>
+        )}
       </ConfirmDialog>
     </div>
   );

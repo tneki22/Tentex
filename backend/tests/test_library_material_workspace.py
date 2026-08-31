@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 from conftest import add_page_with_fragments, link_material, make_exam_project, make_material
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.materials import library
@@ -21,6 +22,7 @@ from app.materials.schemas import (
 )
 from app.models import (
     Material,
+    MaterialFragment,
     MaterialPage,
     MaterialRevisionOrigin,
     MaterialSourceKind,
@@ -306,6 +308,26 @@ def test_delete_preview_lists_every_project(session: Session) -> None:
     preview = library.material_delete_preview(session, material.id)
 
     assert {usage.project_id for usage in preview.material.usage} == {first.id, second.id}
+
+
+def test_bulk_delete_removes_every_material_with_its_pages(session: Session) -> None:
+    project = make_exam_project(session)
+    first = make_material(session, "c0d")
+    second = make_material(session, "c0e")
+    link_material(session, project, first)
+    link_material(session, project, second)
+    add_page_with_fragments(session, first, page_number=1, revision=1, fragments=["Первый"])
+    add_page_with_fragments(session, second, page_number=1, revision=1, fragments=["Второй"])
+    session.commit()
+
+    preview = library.materials_delete_preview(session, [first.id, second.id])
+    assert {material.id for material in preview.materials} == {first.id, second.id}
+
+    library.delete_library_materials(session, [first.id, second.id])
+
+    assert library.list_library_materials(session) == []
+    assert session.scalars(select(MaterialPage)).all() == []
+    assert session.scalars(select(MaterialFragment)).all() == []
 
 
 @pytest.mark.parametrize("parser_mode", [ParserMode.FAST, ParserMode.TEXTBOOK])

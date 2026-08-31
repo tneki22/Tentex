@@ -495,6 +495,17 @@ class MaterialPage(Base):
             name="confidence_range",
         ),
         Index("ix_material_pages_material_revision_page", "material_id", "revision", "page_number"),
+        # Покрывающие индексы для сводки Библиотеки. Строка страницы тяжёлая
+        # (`elements`, `markdown`, `text` — 17 МБ на установку), и подсчёт качества
+        # без них читал всю таблицу целиком через bind-mount.
+        Index(
+            "ix_material_pages_material_revision_quality",
+            "material_id",
+            "revision",
+            "quality",
+            "reviewed_at",
+        ),
+        Index("ix_material_pages_revision_lookup", "id", "revision"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -557,6 +568,11 @@ class MaterialFragment(Base):
         ),
         Index("ix_material_fragments_page_order", "page_id", "sort_order"),
         Index("ix_material_fragments_block", "block_id"),
+        # Без него удаление материала и агрегаты Библиотеки сканируют всю таблицу.
+        Index("ix_material_fragments_material", "material_id"),
+        # Покрывающий для подсчёта фрагментов: `page_id` берётся из индекса,
+        # тяжёлая строка фрагмента не читается вовсе.
+        Index("ix_material_fragments_material_page", "material_id", "page_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -722,6 +738,8 @@ class ReferenceAnswer(Base):
         ),
         CheckConstraint("revision >= 0", name="revision_nonnegative"),
         Index("ix_reference_answers_project_active", "project_id", "is_active"),
+        # Под каскад ON DELETE SET NULL при удалении материала-источника.
+        Index("ix_reference_answers_source_material", "source_material_id"),
     )
 
     project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
@@ -788,6 +806,11 @@ class Binding(Base):
         Index("ix_bindings_project_node", "project_id", "program_node_id"),
         Index("ix_bindings_project_fragment", "project_id", "fragment_id"),
         Index("ix_bindings_material", "material_id"),
+        # Отдельные индексы под каскады ON DELETE: `ix_bindings_project_fragment`
+        # для них бесполезен, ведущая колонка не та. Без них SQLite сканирует всю
+        # таблицу привязок на КАЖДЫЙ удаляемый фрагмент и КАЖДЫЙ блок.
+        Index("ix_bindings_fragment", "fragment_id"),
+        Index("ix_bindings_block", "block_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)

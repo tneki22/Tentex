@@ -15,6 +15,43 @@
   gap: var(--space-4);
 }
 
+/* Сводка по всей Библиотеке. Форма — общая для сводок проекта (`.coverage-summary`,
+   `.program-metrics`): крупное число, подпись под ним, рамка вокруг ряда. */
+.lib-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  overflow: hidden;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.lib-summary > span {
+  display: grid;
+  align-content: center;
+  gap: var(--space-1);
+  min-height: 4.5rem;
+  padding: var(--space-3) var(--space-4);
+  color: var(--ink-soft);
+  border-inline-end: 1px solid var(--line);
+}
+
+.lib-summary > span:last-child { border-inline-end: 0; }
+
+.lib-summary strong {
+  color: var(--ink);
+  font-size: var(--text-lg);
+  font-variant-numeric: tabular-nums;
+}
+
+.lib-summary small { color: var(--muted); font-size: var(--text-xs); }
+
+/* Строка фильтров. Раньше и она, и группа внутри неё были `flex-wrap: wrap`:
+   группа сжималась раньше, чем переносилась строка, и её четыре пилюли уезжали
+   на второй ряд ВНУТРИ группы — рядом с однострочными поиском и хвостом. Отсюда
+   и перекос. Теперь группа не рвётся внутри себя (`nowrap`) и имеет настоящую
+   минимальную ширину, поэтому переносится целиком и ровным рядом. */
 .lib-filters {
   display: flex;
   flex-wrap: wrap;
@@ -28,11 +65,12 @@
 
 .lib-search {
   display: flex;
-  flex: 1 1 220px;
+  flex: 1 1 180px;
   align-items: center;
   gap: var(--space-2);
-  min-width: 180px;
-  max-width: 340px;
+  min-width: 160px;
+  max-width: 260px;
+  min-height: 34px;
   padding: 0 var(--space-3);
   color: var(--muted);
   background: var(--surface-sunken);
@@ -47,36 +85,58 @@
   box-shadow: var(--focus-ring);
 }
 
-.lib-search input {
+/* Кольцо фокуса рисует пилюля-обёртка. Глобальное `input:focus-visible` из
+   base.css рисовало второе такое же вокруг самого поля — отсюда двойная обводка. */
+.lib-search input,
+.lib-search input:hover,
+.lib-search input:focus,
+.lib-search input:focus-visible {
   flex: 1;
   min-width: 0;
-  padding: var(--space-2) 0;
+  padding: 0;
   color: var(--ink);
   font-size: var(--text-base);
-  background: none;
+  background: transparent;
   border: 0;
   outline: none;
+  box-shadow: none;
 }
 
+/* Не рвётся внутри себя: либо весь ряд помещается в строку, либо весь ряд
+   переезжает на следующую. `min-width` пилюль задаёт группе минимальный размер,
+   на который и опирается перенос внешней строки. */
 .lib-filter-group {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex: 1 1 auto;
   gap: var(--space-2);
 }
 
-/* Селектор кита по умолчанию тянется на всю ширину формы: в строке фильтров он
-   должен быть ровно по своей подписи, иначе четыре штуки съедают весь экран.
+/* Селектор кита по умолчанию тянется на всю ширину формы. Здесь четыре штуки
+   делят место поровну (`flex: 1 1 0`), поэтому ширина пилюли не зависит от того,
+   какая подпись выбрана — выбор длинного варианта больше не перекраивает строку.
+   Полная подпись всегда доступна в `aria-label`.
    Класс попадает на сам триггер, поэтому селектор одноуровневый. */
 .select-trigger.lib-filter-select {
-  flex: 0 0 auto;
+  flex: 1 1 0;
   width: auto;
+  min-width: 7rem;
   min-height: 34px;
   padding: 0 var(--space-2) 0 var(--space-3);
+  overflow: hidden;
   font-size: var(--text-sm);
   white-space: nowrap;
   background: var(--surface-sunken);
   border-color: transparent;
   border-radius: var(--radius-pill);
+}
+
+.select-trigger.lib-filter-select.is-sort { flex: 0 0 auto; min-width: 0; }
+
+.select-trigger.lib-filter-select > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .select-trigger.lib-filter-select:hover:not(:disabled),
@@ -87,16 +147,46 @@
 
 .lib-filter-tail {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-2);
   margin-inline-start: auto;
 }
+
+.lib-filters .text-button { min-height: 34px; }
 
 .lib-filter-count {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   font-size: var(--text-sm);
   white-space: nowrap;
+}
+
+/* Панель массового действия. Форма взята у `.bank-bulk-bar` банка карточек. */
+.lib-bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--space-12);
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-wash);
+  border: 1px solid var(--accent-edge);
+  border-radius: var(--radius-md);
+}
+
+.lib-bulk-bar strong {
+  color: var(--accent);
+  font-size: var(--text-sm);
+}
+
+.lib-bulk-spacer { margin-inline-start: auto; }
+
+.lib-notice {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
 }
 
 .lib-list {
@@ -107,7 +197,7 @@
 
 .lib-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 240px) auto;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 240px) auto;
   align-items: center;
   gap: var(--space-3);
   padding-inline-end: var(--space-3);
@@ -124,6 +214,25 @@
 
 .lib-row:focus-within {
   border-color: var(--accent-edge);
+}
+
+.lib-row.is-selected {
+  background: var(--accent-wash);
+  border-color: var(--accent-edge);
+}
+
+.lib-row-select { padding-inline-start: var(--space-3); }
+
+/* Подпись флажка нужна скринридеру, но не глазам: имя файла уже рядом. */
+.lib-row-select .checkbox-row label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  border: 0;
+  clip: rect(0 0 0 0);
 }
 
 /* Вся смысловая область строки — одна кнопка перехода. */
@@ -187,11 +296,15 @@
   justify-content: flex-end;
 }
 
+/* Один файл может лежать в пяти проектах. Список не переносится и не растит
+   строку: видно первые два проекта, остальные — счётчиком с полным перечнем
+   в подсказке. Иначе кнопка удаления уезжала бы вниз вместе с высотой строки. */
 .lib-row-usage {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-2);
+  flex-wrap: nowrap;
+  gap: var(--space-2);
   min-width: 0;
+  overflow: hidden;
   font-size: var(--text-sm);
 }
 
@@ -208,8 +321,16 @@
   text-decoration: underline;
 }
 
+.lib-usage-more {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .lib-unused {
   color: var(--faint);
+  white-space: nowrap;
 }
 
 /* ── Рабочая область: каркас ─────────────────────────────────────────────── */
@@ -514,15 +635,21 @@
   box-shadow: var(--focus-ring);
 }
 
-.viewer-search input {
+/* Тень гасится явно: кольцо фокуса рисует обёртка, глобальное
+   `input:focus-visible` иначе добавляет второе вокруг поля. */
+.viewer-search input,
+.viewer-search input:hover,
+.viewer-search input:focus,
+.viewer-search input:focus-visible {
   flex: 1;
   min-width: 0;
   padding: 6px 0;
   color: var(--ink);
   font-size: var(--text-sm);
-  background: none;
+  background: transparent;
   border: 0;
   outline: none;
+  box-shadow: none;
 }
 
 .viewer-search.is-busy {
@@ -1819,16 +1946,36 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* Раскладка задаётся явно: список проектов уходит во второй ряд, но кнопка
+     удаления остаётся на одной строке с названием, а не уезжает в третий ряд. */
   .lib-row {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
+  .lib-row-select { grid-area: 1 / 1; }
+  .lib-row-open { grid-area: 1 / 2; }
+  .lib-row .icon-button { grid-area: 1 / 3; }
+
   .lib-row-usage {
-    grid-column: 1 / -1;
+    grid-area: 2 / 1 / 2 / -1;
     padding: 0 var(--space-3) var(--space-3);
+  }
+}
+
+/* На узком экране четыре пилюли в один ряд уже не читаются: разрешаем группе
+   встать в две строки, но сеткой — то есть по-прежнему ровно. */
+@media (width < 720px) {
+  .lib-search { max-width: none; }
+
+  .lib-filter-group {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    flex-basis: 100%;
   }
 
   .lib-filter-tail {
+    flex-wrap: wrap;
+    justify-content: flex-start;
     margin-inline-start: 0;
   }
 }

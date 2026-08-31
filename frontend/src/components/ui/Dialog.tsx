@@ -78,6 +78,8 @@ interface ConfirmDialogProps {
   onConfirm: () => void | Promise<void>;
   /** Необратимое действие красит кнопку в danger. */
   destructive?: boolean;
+  /** Подтверждение ждёт: последствия ещё не посчитаны. */
+  confirmDisabled?: boolean;
 }
 
 /**
@@ -91,6 +93,7 @@ export function ConfirmDialog({
   confirmLabel,
   onConfirm,
   destructive = false,
+  confirmDisabled = false,
   children,
 }: PropsWithChildren<ConfirmDialogProps>) {
   const [pending, setPending] = useState(false);
@@ -120,7 +123,7 @@ export function ConfirmDialog({
           </Button>
           <Button
             className={destructive ? "is-destructive" : ""}
-            disabled={pending}
+            disabled={pending || confirmDisabled}
             onClick={() => void confirm()}
           >
             {pending ? "Удаляем…" : confirmLabel}

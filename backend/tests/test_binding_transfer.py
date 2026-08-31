@@ -132,8 +132,8 @@ def test_delete_preview_reports_binding_count_and_affected_nodes(session: Sessio
         BindingCreateWrite(program_node_id=node.id, fragment_ids=page.fragment_ids),
     )
 
-    assert service.binding_count_for_material(session, material.id) == 1
-    affected = service.affected_projects_preview(session, material.id)
+    assert service.binding_count_for_materials(session, [material.id]) == 1
+    affected = service.affected_projects_preview(session, [material.id])
     assert len(affected) == 1
     assert affected[0].project_id == project.id
     assert affected[0].nodes_losing_material == ["Единственный источник"]
@@ -145,5 +145,13 @@ def test_delete_preview_reports_binding_count_and_affected_nodes(session: Sessio
         BindingCreateWrite(program_node_id=node.id, fragment_ids=other_page.fragment_ids),
     )
 
-    affected_after_second_source = service.affected_projects_preview(session, material.id)
+    affected_after_second_source = service.affected_projects_preview(session, [material.id])
     assert affected_after_second_source == []
+
+    # А пачкой — тема всё-таки осиротеет. Поштучный предпросмотр этого не видит:
+    # каждый из двух материалов по отдельности выглядит заменимым другим.
+    both = [material.id, other_material.id]
+    affected_for_both = service.affected_projects_preview(session, both)
+    assert len(affected_for_both) == 1
+    assert affected_for_both[0].nodes_losing_material == ["Единственный источник"]
+    assert service.binding_count_for_materials(session, both) == 2

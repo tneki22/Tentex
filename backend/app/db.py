@@ -46,6 +46,9 @@ def configure_sqlite(dbapi_connection: object, _: object) -> None:
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA busy_timeout=30000")
+            # Штатный спутник WAL: fsync на контрольной точке, а не на каждом
+            # коммите. С FULL любая запись ждала fsync через bind-mount с хоста.
+            cursor.execute("PRAGMA synchronous=NORMAL")
             # data/ — bind-mount с Windows-хоста: mmap для wal-index там ненадёжен
             # и роняет параллельные запросы с "disk I/O error".
             # Обычный файловый ввод-вывод работает.

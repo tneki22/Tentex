@@ -259,6 +259,15 @@ export interface MaterialDeletePreview {
   affected_projects: AffectedProjectPreview[];
 }
 
+/** Последствия удаления пачки. Для одного файла — пачка из одного. */
+export interface MaterialsDeletePreview {
+  materials: LibraryMaterialRead[];
+  active_task_count: number;
+  reference_answer_count: number;
+  binding_count: number;
+  affected_projects: AffectedProjectPreview[];
+}
+
 export interface PageCorrectionRead {
   page: MaterialPageRead;
   transferred_bindings: number;
@@ -570,6 +579,20 @@ export const getMaterialDeletePreview = (
 export const deleteLibraryMaterial = (materialId: string): Promise<void> => request(
   `/api/materials/${encodeURIComponent(materialId)}`,
   { method: "DELETE" },
+);
+
+export const previewMaterialsDelete = (
+  materialIds: string[],
+  signal?: AbortSignal,
+): Promise<MaterialsDeletePreview> => request("/api/materials/delete-preview", {
+  method: "POST",
+  body: JSON.stringify({ material_ids: materialIds }),
+  signal,
+});
+
+export const deleteLibraryMaterials = (materialIds: string[]): Promise<void> => request(
+  "/api/materials/bulk-delete",
+  { method: "POST", body: JSON.stringify({ material_ids: materialIds }) },
 );
 
 /* ── Глобальные операции над общим материалом ── */

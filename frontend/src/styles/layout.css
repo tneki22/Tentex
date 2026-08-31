@@ -994,84 +994,8 @@
   font-size: var(--text-xs);
 }
 
-/* --- Библиотека --- */
-
-.lib-list {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.lib-row {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.lib-row-main {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.lib-row-icon {
-  flex: none;
-  color: var(--muted);
-}
-
-.lib-row-name {
-  min-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-}
-
-.lib-row-meta {
-  flex: none;
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
-
-.lib-row-quality {
-  flex: none;
-  display: flex;
-  gap: var(--space-1);
-}
-
-.lib-row-usage {
-  margin-left: auto;
-  color: var(--ink-soft);
-  font-size: var(--text-xs);
-  text-align: right;
-}
-
-.lib-row-usage > span {
-  display: grid;
-  gap: 2px;
-}
-
-.lib-row-usage a { color: var(--ink); font-weight: 650; text-decoration: none; }
-.lib-row-usage a:hover { text-decoration: underline; }
-.lib-row-usage small { color: var(--muted); }
-
-.lib-unused {
-  color: var(--faint);
-}
-
-.lib-row-detail {
-  display: grid;
-  gap: var(--space-2);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--line);
-}
-
-.lib-note {
-  margin-top: var(--space-6);
-  max-width: 68ch;
-  color: var(--muted);
-  font-size: var(--text-sm);
-}
+/* Библиотека живёт в library-viewer.css. Здесь был её мёртвый дубль: layout.css
+   подключается последним и перебивал актуальные правила при равной специфичности. */
 
 /* --- Установка --- */
 

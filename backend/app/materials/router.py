@@ -26,6 +26,8 @@ from app.materials.schemas import (
     MaterialPurpose,
     MaterialRead,
     MaterialRevisionRead,
+    MaterialsDeletePreview,
+    MaterialsDeleteWrite,
     MaterialUpdate,
     PageCorrectionRead,
     PageRead,
@@ -83,6 +85,19 @@ def create_library_external_material(
     command: ExternalMaterialCreate, session: SessionDependency
 ) -> LibraryMaterialDetailRead:
     return library.create_library_external(session, command)
+
+
+@router.post("/materials/delete-preview", response_model=MaterialsDeletePreview)
+def preview_library_materials_delete(
+    command: MaterialsDeleteWrite, session: SessionDependency
+) -> MaterialsDeletePreview:
+    return library.materials_delete_preview(session, command.material_ids)
+
+
+@router.post("/materials/bulk-delete", status_code=status.HTTP_204_NO_CONTENT)
+def delete_library_materials(command: MaterialsDeleteWrite, session: SessionDependency) -> Response:
+    library.delete_library_materials(session, command.material_ids)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/materials/{material_id}/delete-preview", response_model=MaterialDeletePreview)

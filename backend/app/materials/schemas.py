@@ -338,6 +338,20 @@ class MaterialDeletePreview(ApiModel):
     affected_projects: list[AffectedProjectPreview]
 
 
+class MaterialsDeleteWrite(ApiModel):
+    material_ids: list[UUID] = Field(min_length=1)
+
+
+class MaterialsDeletePreview(ApiModel):
+    """Последствия удаления пачки материалов. Для одного файла — пачка из одного."""
+
+    materials: list[LibraryMaterialRead]
+    active_task_count: int
+    reference_answer_count: int
+    binding_count: int
+    affected_projects: list[AffectedProjectPreview]
+
+
 class PageCorrectionRead(ApiModel):
     page: PageRead
     transferred_bindings: int

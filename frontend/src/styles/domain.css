@@ -629,17 +629,23 @@
 }
 
 .library-picker-search:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-wash);
+  border-color: var(--accent-edge);
+  box-shadow: var(--focus-ring);
 }
 
-.library-picker-search input {
+/* Тень гасится явно: кольцо рисует обёртка, глобальное `input:focus-visible`
+   иначе добавляет второе вокруг самого поля. */
+.library-picker-search input,
+.library-picker-search input:hover,
+.library-picker-search input:focus,
+.library-picker-search input:focus-visible {
   min-width: 0;
   flex: 1;
   border: 0;
   outline: 0;
   background: transparent;
   color: var(--ink);
+  box-shadow: none;
 }
 
 .library-picker-list {

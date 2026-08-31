@@ -52,7 +52,7 @@ const QUALITIES: Array<{ value: LibraryQualityFilter; label: string }> = [
 
 const USAGES: Array<{ value: LibraryUsageFilter; label: string }> = [
   { value: "all", label: "Все материалы" },
-  { value: "attached", label: "Используются в проектах" },
+  { value: "attached", label: "В проектах" },
   { value: "unattached", label: "Не подключены" },
 ];
 
@@ -127,7 +127,7 @@ export function LibraryFilters({ value, total, shown, onChange, onReset }: Libra
 
       <div className="lib-filter-tail">
         <Select
-          className="lib-filter-select"
+          className="lib-filter-select is-sort"
           ariaLabel="Порядок списка"
           value={value.sort}
           options={SORTS}

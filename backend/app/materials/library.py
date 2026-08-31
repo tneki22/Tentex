@@ -12,6 +12,7 @@
 import hashlib
 import shutil
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,7 @@ from sqlalchemy.orm import Session
 from app.bindings.search import delete_material_index, reindex_material, search_fragments
 from app.bindings.service import (
     affected_projects_preview,
-    binding_count_for_material,
+    binding_count_for_materials,
     transfer_bindings_on_revision,
 )
 from app.config import settings
@@ -50,6 +51,7 @@ from app.materials.schemas import (
     MaterialPresentationKind,
     MaterialPurpose,
     MaterialRevisionRead,
+    MaterialsDeletePreview,
     OutlineItem,
     OutlineSource,
     PageCorrectionRead,
@@ -1713,37 +1715,74 @@ def refresh_source(session: Session, material_id: UUID) -> SourceRefreshResult:
 # ── Удаление ────────────────────────────────────────────────────────────────
 
 
-def material_delete_preview(session: Session, material_id: UUID) -> MaterialDeletePreview:
-    material = material_or_404(session, material_id)
-    task = latest_task(session, material_id)
-    aggregate = library_aggregates(session, [material]).get(material.id, EMPTY_LIBRARY_AGGREGATE)
-    return MaterialDeletePreview(
-        material=library_read(material, aggregate),
-        active_task=bool(task and task.state in ACTIVE_TASK_STATES),
+def materials_delete_preview(
+    session: Session, material_ids: Sequence[UUID]
+) -> MaterialsDeletePreview:
+    materials = [material_or_404(session, material_id) for material_id in material_ids]
+    ids = [material.id for material in materials]
+    aggregates = library_aggregates(session, materials)
+    return MaterialsDeletePreview(
+        materials=[
+            library_read(material, aggregates.get(material.id, EMPTY_LIBRARY_AGGREGATE))
+            for material in materials
+        ],
+        active_task_count=sum(
+            1
+            for material in materials
+            if (task := latest_task(session, material.id)) and task.state in ACTIVE_TASK_STATES
+        ),
         reference_answer_count=session.scalar(
             select(func.count())
             .select_from(ReferenceAnswer)
-            .where(ReferenceAnswer.source_material_id == material_id)
+            .where(ReferenceAnswer.source_material_id.in_(ids))
         )
         or 0,
-        binding_count=binding_count_for_material(session, material_id),
-        affected_projects=affected_projects_preview(session, material_id),
+        binding_count=binding_count_for_materials(session, ids),
+        affected_projects=affected_projects_preview(session, ids),
     )
 
 
-def delete_library_material(session: Session, material_id: UUID) -> None:
-    material = material_or_404(session, material_id)
-    source = material_path(material.storage_path)
-    cache = (settings.storage_dir / "pages" / str(material_id)).resolve()
-    snapshots = (settings.storage_dir / "snapshots" / str(material_id)).resolve()
+def material_delete_preview(session: Session, material_id: UUID) -> MaterialDeletePreview:
+    """Одиночная форма для рабочей области: та же выкладка, но про один файл."""
+    preview = materials_delete_preview(session, [material_id])
+    return MaterialDeletePreview(
+        material=preview.materials[0],
+        active_task=preview.active_task_count > 0,
+        reference_answer_count=preview.reference_answer_count,
+        binding_count=preview.binding_count,
+        affected_projects=preview.affected_projects,
+    )
+
+
+def delete_library_materials(session: Session, material_ids: Sequence[UUID]) -> None:
+    """Удаление пачки одной транзакцией: у SQLite один писатель, и делить пачку на
+    отдельные коммиты значит столько же раз ждать блокировку."""
     root = settings.storage_dir.resolve()
+    directories = []
+    sources = []
+    for material_id in material_ids:
+        material = material_or_404(session, material_id)
+        sources.append(material_path(material.storage_path))
+        directories.append((settings.storage_dir / "pages" / str(material_id)).resolve())
+        directories.append((settings.storage_dir / "snapshots" / str(material_id)).resolve())
+
     session.rollback()
     with session.begin():
-        material = material_or_404(session, material_id)
-        session.execute(delete(ProjectMaterial).where(ProjectMaterial.material_id == material_id))
-        delete_material_index(session, material_id)
-        session.delete(material)
-    source.unlink(missing_ok=True)
-    for directory in (cache, snapshots):
+        for material_id in material_ids:
+            material = material_or_404(session, material_id)
+            session.execute(
+                delete(ProjectMaterial).where(ProjectMaterial.material_id == material_id)
+            )
+            delete_material_index(session, material_id)
+            session.delete(material)
+
+    # Файлы — после коммита: упавший unlink не должен откатывать удаление строк.
+    for source in sources:
+        source.unlink(missing_ok=True)
+    for directory in directories:
         if root in directory.parents and directory.exists():
             shutil.rmtree(directory)
+
+
+def delete_library_material(session: Session, material_id: UUID) -> None:
+    delete_library_materials(session, [material_id])
