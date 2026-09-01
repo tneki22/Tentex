@@ -142,7 +142,7 @@ def run() -> None:
             assert status == 200
             ocr_engines = {engine["mode"]: engine for engine in ocr_settings["engines"]}
             assert ocr_engines["fast"]["available"] is True
-            assert ocr_engines["textbook"]["available"] is False
+            assert ocr_engines["cloud"]["available"] is False
 
             status, material = request(
                 server,
