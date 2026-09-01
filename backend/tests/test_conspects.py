@@ -1,5 +1,5 @@
 import io
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from conftest import make_exam_project, make_topic_node
@@ -142,7 +142,7 @@ def make_node(
     *,
     title: str,
     node_type: NodeType = NodeType.TOPIC,
-    parent_id: uuid4 | None = None,
+    parent_id: UUID | None = None,
     sort_order: int = 0,
     is_in_current_program: bool = True,
     is_archived: bool = False,
