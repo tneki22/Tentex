@@ -486,7 +486,12 @@ class ProjectMaterial(Base):
 class MaterialPage(Base):
     __tablename__ = "material_pages"
     __table_args__ = (
-        UniqueConstraint("material_id", "revision", "page_number"),
+        UniqueConstraint(
+            "material_id",
+            "revision",
+            "page_number",
+            name="uq_material_pages_revision_page",
+        ),
         CheckConstraint("revision > 0", name="revision_positive"),
         CheckConstraint("page_number > 0", name="page_number_positive"),
         CheckConstraint("width > 0 AND height > 0", name="dimensions_positive"),
@@ -530,7 +535,12 @@ class MaterialPage(Base):
 class MaterialBlock(Base):
     __tablename__ = "material_blocks"
     __table_args__ = (
-        UniqueConstraint("material_id", "revision", "sort_order"),
+        UniqueConstraint(
+            "material_id",
+            "revision",
+            "sort_order",
+            name="uq_material_blocks_revision_order",
+        ),
         CheckConstraint("revision > 0", name="revision_positive"),
         CheckConstraint("sort_order >= 0", name="sort_order_nonnegative"),
         CheckConstraint("page_from > 0 AND page_to >= page_from", name="page_range_valid"),
@@ -555,7 +565,9 @@ class MaterialBlock(Base):
 class MaterialFragment(Base):
     __tablename__ = "material_fragments"
     __table_args__ = (
-        UniqueConstraint("page_id", "sort_order"),
+        UniqueConstraint(
+            "page_id", "sort_order", name="uq_material_fragments_page_order"
+        ),
         CheckConstraint("sort_order >= 0", name="sort_order_nonnegative"),
         CheckConstraint(
             "structure_level IS NULL OR structure_level >= 0", name="level_nonnegative"
@@ -696,6 +708,7 @@ class ProgramNode(Base):
             "parent_id",
             "sort_order",
         ),
+        Index("ix_program_nodes_origin_material_id", "origin_material_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -802,7 +815,12 @@ class Binding(Base):
             ["program_nodes.project_id", "program_nodes.id"],
             ondelete="CASCADE",
         ),
-        UniqueConstraint("project_id", "program_node_id", "fragment_id"),
+        UniqueConstraint(
+            "project_id",
+            "program_node_id",
+            "fragment_id",
+            name="uq_bindings_node_fragment",
+        ),
         Index("ix_bindings_project_node", "project_id", "program_node_id"),
         Index("ix_bindings_project_fragment", "project_id", "fragment_id"),
         Index("ix_bindings_material", "material_id"),
@@ -880,7 +898,7 @@ class AiProviderConnection(Base):
             "catalog_profile IN ('openrouter', 'openai_compatible')",
             name="catalog_profile",
         ),
-        UniqueConstraint("label", name="label"),
+        UniqueConstraint("label", name="uq_ai_provider_connections_label"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -1157,7 +1175,9 @@ class ChatMessage(Base):
 
     __tablename__ = "chat_messages"
     __table_args__ = (
-        UniqueConstraint("session_id", "sequence"),
+        UniqueConstraint(
+            "session_id", "sequence", name="uq_chat_messages_session_id_sequence"
+        ),
         CheckConstraint("sequence >= 1", name="sequence_positive"),
     )
 

@@ -17,6 +17,20 @@ if config.config_file_name:
 target_metadata = Base.metadata
 
 
+def include_object(
+    _object: object,
+    name: str | None,
+    type_: str,
+    _reflected: bool,
+    _compare_to: object | None,
+) -> bool:
+    # FTS5 и её служебные таблицы создаются SQL вручную: SQLAlchemy не умеет
+    # описать их в metadata и иначе считает их кандидатами на удаление.
+    return not (
+        type_ == "table" and name is not None and name.startswith("fragment_search")
+    )
+
+
 def run_migrations_offline() -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     context.configure(
@@ -26,6 +40,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         render_as_batch=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -39,6 +54,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=True,
             render_as_batch=True,
+            include_object=include_object,
         )
         with context.begin_transaction():
             context.run_migrations()
