@@ -19,7 +19,13 @@
 | Экзаменационный мастер | `exam-wizard-material-onboarding.md` | `check_stage5.py` |
 | Глобальная Библиотека | `global-library-material-workspace.md` | `check_library_workspace.py` |
 | Конспекты | `conspects.md` | pytest |
+| Фоновые операции | `background-jobs.md` | pytest |
 
 `ai-provider-model-settings.md` заменяет старую модель двух жёстких подключений из
 `ai-model-gateway.md`. Если историческая граница говорит «не входит в этап», проверяй
 этот индекс: функция могла появиться позже.
+
+Режим распознавания «Учебник» (GPU-контур) снят при стабилизации экзамена — история
+и путь возврата в `docs/archive/gpu-ocr-textbook.md`, тег `gpu-ocr-last`. Из режимов
+разбора остались `fast` (работает) и `cloud` (заглушка, этап 7); документы выше уже
+отражают только их.
