@@ -3,10 +3,11 @@ from collections.abc import Iterator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.background.schemas import BackgroundJobStartRead
 from app.bindings import answers_link, service
 from app.bindings.schemas import (
     AnswersHeadingResolveWrite,
@@ -49,13 +50,15 @@ def reindex_material(
     return service.reindex_material(session, project_id, material_id)
 
 
-@router.post("/materials/{material_id}/link-answers", response_model=AnswersLinkRead)
+@router.post(
+    "/materials/{material_id}/link-answers",
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def link_answers(
     project_id: UUID, material_id: UUID, session: SessionDependency
-) -> AnswersLinkRead:
-    with session.begin():
-        result = answers_link.link_answers_material(session, project_id, material_id)
-    return AnswersLinkRead.model_validate(result, from_attributes=True)
+) -> BackgroundJobStartRead:
+    return answers_link.start_link_answers(session, project_id, material_id)
 
 
 def _answer_link_frame(event: str, payload: dict[str, object]) -> str:

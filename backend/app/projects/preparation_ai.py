@@ -13,7 +13,10 @@ from sqlalchemy.orm import Session
 
 from app.ai.gateway import AiTextRequest, ModelGateway
 from app.ai.schemas import AiMessage, AiPreflight, AiUsage
+from app.background.schemas import BackgroundJobStartRead
 from app.models import (
+    BackgroundJob,
+    BackgroundJobKind,
     ExamFormat,
     Project,
     ProjectStatus,
@@ -174,7 +177,9 @@ def _payload(
     }
 
 
-def _request(snapshot: PreparationSnapshot, confirmed: bool) -> AiTextRequest:
+def _request(
+    snapshot: PreparationSnapshot, confirmed: bool, job_id: UUID | None = None
+) -> AiTextRequest:
     payload = _payload(snapshot.command, snapshot.schedule)
     return AiTextRequest(
         role="exam_preparation_estimate",
@@ -201,6 +206,7 @@ def _request(snapshot: PreparationSnapshot, confirmed: bool) -> AiTextRequest:
         ],
         source_fingerprint={"input_hash": snapshot.input_hash},
         confirmed=confirmed,
+        job_id=job_id,
     )
 
 
@@ -221,23 +227,35 @@ async def preflight(
     )
 
 
-async def run(
-    session: Session,
-    gateway: ModelGateway,
-    project_id: UUID,
-    command: PreparationEstimateRunWrite,
-) -> PreparationEstimateRunRead:
-    write = PreparationEstimateWrite.model_validate(
+def _validated_write(command: PreparationEstimateRunWrite) -> PreparationEstimateWrite:
+    return PreparationEstimateWrite.model_validate(
         command.model_dump(exclude={"expected_input_hash", "confirmed"})
     )
-    snapshot = _snapshot(session, project_id, write)
+
+
+def _checked_snapshot(
+    session: Session, project_id: UUID, command: PreparationEstimateRunWrite
+) -> PreparationSnapshot:
+    snapshot = _snapshot(session, project_id, _validated_write(command))
     if snapshot.input_hash != command.expected_input_hash:
         raise ProjectConflictError(
             "Данные паспорта изменились после оценки стоимости",
             code="stale_preparation_estimate",
             context={"current_input_hash": snapshot.input_hash},
         )
-    result = await gateway.complete(_request(snapshot, command.confirmed))
+    return snapshot
+
+
+async def run(
+    session: Session,
+    gateway: ModelGateway,
+    project_id: UUID,
+    command: PreparationEstimateRunWrite,
+    *,
+    job_id: UUID | None = None,
+) -> PreparationEstimateRunRead:
+    snapshot = _checked_snapshot(session, project_id, command)
+    result = await gateway.complete(_request(snapshot, command.confirmed, job_id))
     return PreparationEstimateRunRead(
         run_id=result.run_id,
         input_hash=snapshot.input_hash,
@@ -251,3 +269,25 @@ async def run(
         actual_model_id=result.actual_model_id,
         cached=result.cached,
     )
+
+
+async def start(
+    session: Session,
+    gateway: ModelGateway,
+    project_id: UUID,
+    command: PreparationEstimateRunWrite,
+) -> BackgroundJobStartRead:
+    """Поставить оценку нагрузки в очередь вместо ожидания ответа в запросе."""
+    snapshot = _checked_snapshot(session, project_id, command)
+    await gateway.preflight_confirmed(_request(snapshot, command.confirmed))
+    session.rollback()
+    with session.begin():
+        job = BackgroundJob(
+            kind=BackgroundJobKind.AI_PREPARATION,
+            project_id=project_id,
+            checkpoint={"command": command.model_dump(mode="json")},
+        )
+        session.add(job)
+        session.flush()
+        job_id = job.id
+    return BackgroundJobStartRead(job_id=job_id)

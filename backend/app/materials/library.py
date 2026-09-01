@@ -66,6 +66,9 @@ from app.materials.schemas import (
 from app.materials.segmentation import build_blocks
 from app.materials.storage import material_path, store_revision_text, store_text, store_upload
 from app.models import (
+    BackgroundJob,
+    BackgroundJobKind,
+    BackgroundJobState,
     BlockClass,
     Material,
     MaterialBlock,
@@ -76,9 +79,6 @@ from app.models import (
     MaterialState,
     PageQuality,
     ProcessingStage,
-    ProcessingTask,
-    ProcessingTaskKind,
-    ProcessingTaskState,
     Project,
     ProjectMaterial,
     ProjectStatus,
@@ -90,9 +90,9 @@ from app.ocr import settings as ocr_settings
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
 
 ACTIVE_TASK_STATES = {
-    ProcessingTaskState.QUEUED,
-    ProcessingTaskState.RUNNING,
-    ProcessingTaskState.PAUSED,
+    BackgroundJobState.QUEUED,
+    BackgroundJobState.RUNNING,
+    BackgroundJobState.PAUSED,
 }
 PURPOSE_VALUES = {purpose.value for purpose in MaterialPurpose}
 AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
@@ -195,30 +195,42 @@ def _outline(session: Session, material: Material) -> tuple[list[OutlineItem], O
 # ── Задачи ──────────────────────────────────────────────────────────────────
 
 
-def latest_task(session: Session, material_id: UUID) -> ProcessingTask | None:
+def latest_task(session: Session, material_id: UUID) -> BackgroundJob | None:
+    """Последняя задача РАЗБОРА этого материала — не любая фоновая задача.
+
+    `background_jobs.material_id` теперь общий и для уборки текста ИИ: без
+    фильтра по `kind` сюда попала бы и она, а `ProcessingTaskRead` ждёт от
+    задачи разбора обязательные `stage`/`parser_mode`, которых у уборки нет.
+    """
     return session.scalar(
-        select(ProcessingTask)
-        .where(ProcessingTask.material_id == material_id)
-        .order_by(desc(ProcessingTask.created_at))
+        select(BackgroundJob)
+        .where(
+            BackgroundJob.material_id == material_id,
+            BackgroundJob.kind == BackgroundJobKind.PARSE,
+        )
+        .order_by(desc(BackgroundJob.created_at))
         .limit(1)
     )
 
 
-def task_read(task: ProcessingTask | None) -> ProcessingTaskRead | None:
+def task_read(task: BackgroundJob | None) -> ProcessingTaskRead | None:
     return ProcessingTaskRead.model_validate(task) if task else None
 
 
 def latest_tasks_by_material(
     session: Session, material_ids: list[UUID]
-) -> dict[UUID, ProcessingTask]:
+) -> dict[UUID, BackgroundJob]:
     """Одним запросом вместо `latest_task` на каждый материал (Р7, аудит N+1)."""
     if not material_ids:
         return {}
-    latest: dict[UUID, ProcessingTask] = {}
+    latest: dict[UUID, BackgroundJob] = {}
     for task in session.scalars(
-        select(ProcessingTask)
-        .where(ProcessingTask.material_id.in_(material_ids))
-        .order_by(ProcessingTask.material_id, desc(ProcessingTask.created_at))
+        select(BackgroundJob)
+        .where(
+            BackgroundJob.material_id.in_(material_ids),
+            BackgroundJob.kind == BackgroundJobKind.PARSE,
+        )
+        .order_by(BackgroundJob.material_id, desc(BackgroundJob.created_at))
     ):
         latest.setdefault(task.material_id, task)
     return latest
@@ -414,7 +426,7 @@ def _resolve_revision(
     увидел бы половину разбора и решил, что материал испорчен.
     """
     if task_id is not None:
-        task = session.get(ProcessingTask, task_id)
+        task = session.get(BackgroundJob, task_id)
         current = latest_task(session, material.id)
         if (
             task is None
@@ -1038,7 +1050,7 @@ def _selected_pages(session: Session, material: Material, command: ProcessingSta
 
 def start_processing_core(
     session: Session, material_id: UUID, command: ProcessingStart
-) -> ProcessingTask:
+) -> BackgroundJob:
     """Поставить задачу разбора. Транзакцией управляет вызывающий."""
     material = material_or_404(session, material_id)
     task = latest_task(session, material_id)
@@ -1061,10 +1073,10 @@ def start_processing_core(
         scope |= {"page_from": command.page_from, "page_to": command.page_to}
     if command.scope == "needs_review":
         scope |= {"pages": pages}
-    task = ProcessingTask(
+    task = BackgroundJob(
         material_id=material_id,
-        kind=ProcessingTaskKind.PARSE,
-        state=ProcessingTaskState.QUEUED,
+        kind=BackgroundJobKind.PARSE,
+        state=BackgroundJobState.QUEUED,
         stage=ProcessingStage.QUEUED,
         parser_mode=command.parser_mode,
         done=0,
@@ -1089,15 +1101,15 @@ def start_processing_core(
     return task
 
 
-def control_task_core(session: Session, material_id: UUID, action: str) -> ProcessingTask:
+def control_task_core(session: Session, material_id: UUID, action: str) -> BackgroundJob:
     material = material_or_404(session, material_id)
     task = latest_task(session, material_id)
     if task is None:
         raise ProjectNotFoundError("Задача разбора не найдена", code="material_task_not_found")
-    if action == "pause" and task.state == ProcessingTaskState.RUNNING:
+    if action == "pause" and task.state == BackgroundJobState.RUNNING:
         task.pause_requested = True
-    elif action == "resume" and task.state == ProcessingTaskState.PAUSED:
-        task.state = ProcessingTaskState.QUEUED
+    elif action == "resume" and task.state == BackgroundJobState.PAUSED:
+        task.state = BackgroundJobState.QUEUED
         task.pause_requested = False
         task.lease_owner = None
         task.lease_expires_at = None
@@ -1119,8 +1131,8 @@ def control_task_core(session: Session, material_id: UUID, action: str) -> Proce
         material.error = None
         session.flush()
         return task
-    elif action == "retry" and task.state == ProcessingTaskState.FAILED:
-        task.state = ProcessingTaskState.QUEUED
+    elif action == "retry" and task.state == BackgroundJobState.FAILED:
+        task.state = BackgroundJobState.QUEUED
         task.error = None
         task.lease_owner = None
         task.lease_expires_at = None

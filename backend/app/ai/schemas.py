@@ -226,6 +226,9 @@ class AiUsage(ApiModel):
 class AiRunRead(ApiModel):
     id: UUID
     project_id: UUID | None
+    # Заполнено, только если вызов запущен из очереди фоновых операций —
+    # прямые вызовы (например, экзаменационный чат) его не проставляют.
+    job_id: UUID | None
     provider_id: UUID | None
     provider_label_snapshot: str
     role: str

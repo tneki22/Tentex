@@ -116,8 +116,6 @@ def test_restore_creates_next_revision_instead_of_rewinding(session: Session) ->
     )
     session.commit()
     library.update_library_page_text(session, material.id, 1, PageTextUpdate(text="Правка"))
-    material.parser_mode = ParserMode.TEXTBOOK
-    session.commit()
 
     detail = library.restore_revision(session, material.id, 1)
 

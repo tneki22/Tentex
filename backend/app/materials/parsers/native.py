@@ -12,7 +12,7 @@ from docx import Document
 from docx.text.paragraph import Paragraph
 from PIL import Image
 
-from app.materials.parsers import paddle_fast, textbook
+from app.materials.parsers import paddle_fast
 from app.materials.parsers.audio import parse_audio
 from app.materials.parsers.base import ElementKind, ParsedElement, ParsedPage, RecognitionSource
 from app.materials.parsers.pdf_layout import parse_layout_page
@@ -613,23 +613,6 @@ def iter_pages(
         )
         for page_index in page_indices:
             page = document[page_index]
-            if mode == ParserMode.TEXTBOOK:
-                pixmap = page.get_pixmap(matrix=scale_matrix, alpha=False)
-                with NamedTemporaryFile(suffix=".png", delete=False) as temporary:
-                    temporary_path = Path(temporary.name)
-                try:
-                    pixmap.save(temporary_path)
-                    yield textbook.parse_image(
-                        temporary_path,
-                        page_index + 1,
-                        owner,
-                        base_url=params.textbook_base_url,
-                        timeout=params.textbook_timeout_seconds,
-                        quality_threshold=params.quality_threshold,
-                    )
-                finally:
-                    temporary_path.unlink(missing_ok=True)
-                continue
             if page.get_text("text").strip():
                 try:
                     parsed = parse_layout_page(document, page_index)
@@ -699,16 +682,6 @@ def iter_pages(
     if start_page > 1:
         return
     if suffix in {".jpg", ".jpeg", ".png"}:
-        if mode == ParserMode.TEXTBOOK:
-            yield textbook.parse_image(
-                path,
-                1,
-                owner,
-                base_url=params.textbook_base_url,
-                timeout=params.textbook_timeout_seconds,
-                quality_threshold=params.quality_threshold,
-            )
-            return
         yield paddle_fast.parse_image(
             path,
             1,

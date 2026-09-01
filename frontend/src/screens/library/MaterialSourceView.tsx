@@ -231,13 +231,10 @@ export function MaterialTextView({
   // Фотографии фрагментов есть только там, где страница — растр (PDF, скан).
   const canShowPhotos = allowSourcePhotos
     && (material.presentation_kind === "pdf" || material.presentation_kind === "image");
-  // По умолчанию «Учебник» показывает фото с расшифровкой под ними; выбор запоминается.
-  const [showPhotos, setShowPhotos] = useState<boolean>(() => {
-    const stored = localStorage.getItem(SOURCE_PHOTO_KEY);
-    if (stored === "on") return true;
-    if (stored === "off") return false;
-    return parserMode === "textbook";
-  });
+  // Фото под расшифровкой по умолчанию скрыты; выбор запоминается.
+  const [showPhotos, setShowPhotos] = useState<boolean>(
+    () => localStorage.getItem(SOURCE_PHOTO_KEY) === "on",
+  );
 
   function togglePhotos(next: boolean) {
     setShowPhotos(next);

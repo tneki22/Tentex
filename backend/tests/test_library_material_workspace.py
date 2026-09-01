@@ -451,10 +451,8 @@ def test_bulk_delete_removes_every_material_with_its_pages(session: Session) -> 
     assert session.scalars(select(MaterialFragment)).all() == []
 
 
-@pytest.mark.parametrize("parser_mode", [ParserMode.FAST, ParserMode.TEXTBOOK])
-def test_detail_reports_quality_counters_for_active_revision(
-    session: Session, parser_mode: ParserMode
-) -> None:
+def test_detail_reports_quality_counters_for_active_revision(session: Session) -> None:
+    parser_mode = ParserMode.FAST
     material = make_material(session, "c10")
     material.parser_mode = parser_mode
     add_page_with_fragments(session, material, page_number=1, revision=1, fragments=["Текст"])

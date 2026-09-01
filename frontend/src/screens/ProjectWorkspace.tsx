@@ -76,7 +76,6 @@ import {
   flattenProgramTree,
   type ProgramTreeNode,
 } from "./programTree";
-import { StudioPanel } from "./StudioPanel";
 import { usePersonalMarks } from "../hooks/usePersonalMarks";
 import { useAnswerViewMode } from "../hooks/useAnswerViewMode";
 import { ExamChatPanel } from "./workspace/chat/ExamChatPanel";
@@ -250,7 +249,6 @@ export function ProjectWorkspace() {
   const [attemptsReloadKey, setAttemptsReloadKey] = useState(0);
   const [coverage, setCoverage] = useState<CoverageMapRead | null>(null);
   const [query, setQuery] = useState("");
-  const [studioExpanded, setStudioExpanded] = useState(false);
   const [activeGroupId, setActiveGroupId] = useState(DEFAULT_LAYOUT.groups[0].id);
   const { marks, setMark } = usePersonalMarks(projectId);
   const { mode: answerViewMode, setMode: setAnswerViewMode } = useAnswerViewMode(projectId);
@@ -929,7 +927,7 @@ export function ProjectWorkspace() {
     .join(" ");
 
   return (
-    <div className={`project-workspace ${textbook ? "is-textbook" : "is-exam"} ${studioExpanded ? "is-studio-expanded" : "is-studio-collapsed"}`} style={{ "--workspace-tree-width": `${layout.tree_width}px` } as CSSProperties}>
+    <div className={`project-workspace ${textbook ? "is-textbook" : "is-exam"}`} style={{ "--workspace-tree-width": `${layout.tree_width}px` } as CSSProperties}>
       <aside className="workspace-tree-panel">
         <header className="workspace-tree-head"><div className={`workspace-tree-title ${textbook ? "is-textbook" : ""}`}><Link className="workspace-back-button" to="/projects" aria-label="К проектам"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong>{deadline !== null && <span className={`workspace-project-deadline is-${deadlineTone(deadline)}`} aria-label={deadline >= 0 ? `${deadline} дней до дедлайна` : `Дедлайн прошёл ${Math.abs(deadline)} дней назад`}><b>{deadline >= 0 ? deadline : Math.abs(deadline)}</b><small>{deadline >= 0 ? "дней" : "прошло"}</small></span>}</div></header>
         <div className="workspace-tree-tools"><label className="workspace-tree-search"><Search size={15} /><span className="sr-only">{textbook ? "Поиск по темам" : "Поиск по вопросам"}</span><input type="search" placeholder={textbook ? "Найти тему" : "Найти вопрос"} value={query} onChange={(event) => setQuery(event.target.value)} />{query && <button type="button" onClick={() => setQuery("")} aria-label="Очистить поиск"><X size={14} /></button>}</label><Tooltip label="Фильтры появятся вместе с разбором материалов"><span><IconButton label="Фильтры" disabled><Filter size={15} /></IconButton></span></Tooltip></div>
@@ -956,7 +954,6 @@ export function ProjectWorkspace() {
           })}
         </div>
       </main>
-      <StudioPanel expanded={studioExpanded} onExpandedChange={setStudioExpanded} modelsEnabled={false} sourceCount={null} topicTitle={selected.title} />
     </div>
   );
 }

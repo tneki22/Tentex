@@ -142,7 +142,7 @@ def run() -> None:
             assert status == 200
             ocr_engines = {engine["mode"]: engine for engine in ocr_settings["engines"]}
             assert ocr_engines["fast"]["available"] is True
-            assert ocr_engines["textbook"]["available"] is False
+            assert ocr_engines["cloud"]["available"] is False
 
             status, material = request(
                 server,
@@ -310,7 +310,7 @@ def run() -> None:
             with closing(sqlite3.connect(data_dir / "tentex.sqlite")) as connection:
                 connection.execute(
                     """
-                    UPDATE processing_tasks
+                    UPDATE background_jobs
                     SET state = 'running', lease_owner = 'dead-worker', lease_expires_at = ?
                     WHERE material_id = ?
                     """,

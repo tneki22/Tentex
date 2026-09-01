@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.ai.router import router as ai_router
+from app.background.router import router as background_router
 from app.bindings.router import router as bindings_router
 from app.config import settings
 from app.conspects.router import router as conspects_router
@@ -118,6 +119,7 @@ def create_app() -> FastAPI:
     app.include_router(ai_router)
     app.include_router(ocr_router)
     app.include_router(exam_router)
+    app.include_router(background_router)
     return app
 
 

@@ -14,7 +14,7 @@ export type MaterialState =
   | "paused"
   | "ready"
   | "failed";
-export type ParserMode = "fast" | "textbook";
+export type ParserMode = "fast";
 export type PageQuality = "native" | "ocr" | "ocr_low";
 export type RecognitionSource = "native" | "ocr" | "vl" | "manual";
 export type SourceRole = "main" | "additional" | "reference";

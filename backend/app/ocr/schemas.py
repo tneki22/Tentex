@@ -23,7 +23,6 @@ Readiness = Literal[
     "unavailable",
 ]
 JobState = Literal["running", "done", "failed", "cancelled"]
-ServiceState = Literal["running", "starting", "stopped", "failed", "absent", "unavailable"]
 
 
 class ApiModel(BaseModel):
@@ -77,30 +76,6 @@ class OcrModelRead(ApiModel):
     job_error: str
 
 
-class OcrGpuRead(ApiModel):
-    name: str
-    vram_mb: int | None
-    driver: str | None
-    source: str
-
-
-class OcrHardwareRead(ApiModel):
-    cpu_cores: int | None
-    ram_mb: int | None
-    free_disk_mb: int | None
-    gpu: OcrGpuRead | None
-    gpu_reason: str
-    notes: list[str]
-
-
-class OcrServiceRead(ApiModel):
-    state: ServiceState
-    summary: str
-    detail: str
-    can_start: bool
-    can_stop: bool
-
-
 class OcrEngineRead(ApiModel):
     mode: str
     title: str
@@ -114,8 +89,6 @@ class OcrEngineRead(ApiModel):
     status_detail: str
     # Что именно сейчас считает — модель или исполнитель, если это известно.
     active_label: str
-    # Настройки, применяемые только при следующем запуске GPU-сервиса.
-    restart_required: bool
     model_id: str | None
     device: str | None
     language: str | None
@@ -123,12 +96,10 @@ class OcrEngineRead(ApiModel):
     extra: dict[str, object]
     updated_at: datetime | None
     models: list[OcrModelRead]
-    service: OcrServiceRead | None
 
 
 class OcrSettingsRead(ApiModel):
     default_mode: ParserMode
     quality_threshold: float
     raster_scale: float
-    hardware: OcrHardwareRead
     engines: list[OcrEngineRead]

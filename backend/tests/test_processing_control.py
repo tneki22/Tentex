@@ -15,15 +15,15 @@ from app.materials import library
 from app.materials.parsers.base import ParsedElement
 from app.materials.worker import _prepare_revision
 from app.models import (
+    BackgroundJob,
+    BackgroundJobKind,
+    BackgroundJobState,
     Material,
     MaterialPage,
     MaterialState,
     PageQuality,
     ParserMode,
     ProcessingStage,
-    ProcessingTask,
-    ProcessingTaskKind,
-    ProcessingTaskState,
     utc_now,
 )
 from app.projects.errors import ProjectConflictError
@@ -57,12 +57,12 @@ def _add_page(
     )
 
 
-def _task(material: Material, *, state: ProcessingTaskState, selected: list[int]) -> ProcessingTask:
+def _task(material: Material, *, state: BackgroundJobState, selected: list[int]) -> BackgroundJob:
     now = utc_now()
-    return ProcessingTask(
+    return BackgroundJob(
         id=uuid4(),
         material_id=material.id,
-        kind=ProcessingTaskKind.PARSE,
+        kind=BackgroundJobKind.PARSE,
         state=state,
         stage=ProcessingStage.EXTRACT,
         parser_mode=ParserMode.FAST,
@@ -76,7 +76,7 @@ def _task(material: Material, *, state: ProcessingTaskState, selected: list[int]
             "scope": {"kind": "all"},
         },
         diagnostics=[],
-        pause_requested=state == ProcessingTaskState.PAUSED,
+        pause_requested=state == BackgroundJobState.PAUSED,
         created_at=now,
         updated_at=now,
     )
@@ -97,14 +97,14 @@ def test_cancel_discards_building_revision_and_frees_material(session: Session) 
         )
     )
     library.rebuild_checkpoint_page(session, building)
-    task = _task(material, state=ProcessingTaskState.PAUSED, selected=[1])
+    task = _task(material, state=BackgroundJobState.PAUSED, selected=[1])
     session.add(task)
     session.commit()
 
     detail = library.control_library_task(session, material.id, "cancel")
 
     session.expire_all()
-    assert session.get(ProcessingTask, task.id) is None
+    assert session.get(BackgroundJob, task.id) is None
     assert (
         session.scalar(
             select(MaterialPage).where(
@@ -134,7 +134,7 @@ def test_cancel_of_first_parse_returns_material_to_ready_to_process(session: Ses
     material.status = MaterialState.PAUSED
     material.page_count = 1
     _add_page(session, material, revision=1, page_number=1, text="Первый разбор")
-    task = _task(material, state=ProcessingTaskState.PAUSED, selected=[1])
+    task = _task(material, state=BackgroundJobState.PAUSED, selected=[1])
     task.checkpoint = {**task.checkpoint, "revision": 1, "source_revision": 0}
     session.add(task)
     session.commit()
@@ -142,13 +142,13 @@ def test_cancel_of_first_parse_returns_material_to_ready_to_process(session: Ses
     library.control_library_task(session, material.id, "cancel")
 
     session.expire_all()
-    assert session.get(ProcessingTask, task.id) is None
+    assert session.get(BackgroundJob, task.id) is None
     assert session.get(Material, material.id).status == MaterialState.READY_TO_PROCESS
 
 
 def test_cancel_is_rejected_for_completed_task(session: Session) -> None:
     material = make_material(session, "ca13")
-    task = _task(material, state=ProcessingTaskState.COMPLETED, selected=[1])
+    task = _task(material, state=BackgroundJobState.COMPLETED, selected=[1])
     session.add(task)
     session.commit()
 
@@ -168,7 +168,7 @@ def test_copied_page_is_readable_in_building_revision(session: Session) -> None:
     _add_page(session, material, revision=1, page_number=1, text="Страница один")
     _add_page(session, material, revision=1, page_number=2, text="Страница два, её не трогаем")
     # Переразбираем только страницу 1; страница 2 копируется в ревизию 2.
-    task = _task(material, state=ProcessingTaskState.RUNNING, selected=[1])
+    task = _task(material, state=BackgroundJobState.RUNNING, selected=[1])
     session.add(task)
     session.commit()
 

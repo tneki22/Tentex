@@ -162,10 +162,13 @@ def _filtered_runs(
     from_: datetime | None,
     to: datetime | None,
     limit: int | None = None,
+    job_id: UUID | None = None,
 ) -> list[AiRun]:
     query = select(AiRun).order_by(AiRun.created_at.desc())
     if project_id is not None:
         query = query.where(AiRun.project_id == project_id)
+    if job_id is not None:
+        query = query.where(AiRun.job_id == job_id)
     if provider_id is not None:
         query = query.where(AiRun.provider_id == provider_id)
     if model_id is not None:
@@ -193,9 +196,19 @@ def list_ai_runs(
     run_status: Annotated[str | None, Query(alias="status")] = None,
     from_: Annotated[datetime | None, Query(alias="from")] = None,
     to: datetime | None = None,
+    job_id: UUID | None = None,
 ) -> list[AiRunRead]:
     rows = _filtered_runs(
-        session, project_id, provider_id, model_id, role, run_status, from_, to, limit=1000
+        session,
+        project_id,
+        provider_id,
+        model_id,
+        role,
+        run_status,
+        from_,
+        to,
+        limit=1000,
+        job_id=job_id,
     )
     return [AiRunRead.model_validate(row) for row in rows]
 

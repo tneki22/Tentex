@@ -114,11 +114,9 @@ export function LibraryMaterialFilePanel({
               const openRevision = selectedRevision ?? material.active_parse_revision;
               const isOpen = revision.revision === openRevision;
               const isCompared = revision.revision === compareRevision;
-              const mode = revision.parser_mode === "textbook"
-                ? "Учебник"
-                : revision.parser_mode === "fast"
-                  ? "Быстро · гибридный OCR"
-                  : "Ручная или восстановленная версия";
+              const mode = revision.parser_mode === "fast"
+                ? "Быстро · гибридный OCR"
+                : "Ручная или восстановленная версия";
               return (
                 <div
                   key={revision.revision}

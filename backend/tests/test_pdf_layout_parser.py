@@ -3,7 +3,7 @@ from pathlib import Path
 import pymupdf as fitz
 from PIL import Image
 
-from app.materials.parsers import paddle_fast, textbook
+from app.materials.parsers import paddle_fast
 from app.materials.parsers.base import ParsedElement
 from app.materials.parsers.native import _merge_native_and_images, _page_quality, iter_pages
 from app.models import ParserMode
@@ -128,42 +128,6 @@ def test_fast_ocr_groups_wrapped_numbered_question_without_making_heading(
     assert page.elements[0].text == (
         "10. Дать определение плотности распределения вероятности"
     )
-
-
-def test_textbook_formula_preserves_latex_and_original_crop(
-    tmp_path: Path, monkeypatch
-) -> None:
-    image_path = tmp_path / "page.png"
-    Image.new("RGB", (1000, 500), "white").save(image_path)
-    monkeypatch.setattr(
-        textbook,
-        "_json_request",
-        lambda *_args, **_kwargs: {
-            "width": 1000,
-            "height": 500,
-            "markdown": "$$P(A)=1$$",
-            "elements": [
-                {
-                    "label": "formula",
-                    "content": r"P(A)=1",
-                    "bbox": [100, 100, 900, 300],
-                    "confidence": 0.91,
-                }
-            ],
-        },
-    )
-    monkeypatch.setattr(
-        textbook,
-        "store_material_asset",
-        lambda owner, name, _data: f"assets/{owner}/{name}",
-    )
-
-    page = textbook.parse_image(image_path, 1, "document")
-
-    assert page.elements[0].kind == "formula"
-    assert page.elements[0].text == r"P(A)=1"
-    assert page.elements[0].recognition_source == "vl"
-    assert page.elements[0].asset_path == "assets/document/vl-p1-0.png"
 
 
 def test_page_quality_threshold_is_configurable() -> None:

@@ -12,8 +12,11 @@ from sqlalchemy.orm import Session
 
 from app.ai.gateway import AiTextRequest, ModelGateway
 from app.ai.schemas import AiMessage, AiPreflight, AiUsage
+from app.background.schemas import BackgroundJobStartRead
 from app.models import (
     AiRun,
+    BackgroundJob,
+    BackgroundJobKind,
     ExamKind,
     NodeType,
     OriginKind,
@@ -169,7 +172,9 @@ def _node_payload(nodes: list[ProgramNode]) -> list[dict[str, str]]:
     ]
 
 
-def _request(snapshot: ProgramSnapshot, confirmed: bool) -> AiTextRequest:
+def _request(
+    snapshot: ProgramSnapshot, confirmed: bool, job_id: UUID | None = None
+) -> AiTextRequest:
     payload = _node_payload(snapshot.nodes)
     return AiTextRequest(
         role="exam_program_grouping",
@@ -203,6 +208,7 @@ def _request(snapshot: ProgramSnapshot, confirmed: bool) -> AiTextRequest:
         },
         confirmed=confirmed,
         minimum_output_tokens=8000,
+        job_id=job_id,
     )
 
 
@@ -251,10 +257,12 @@ async def run(
     gateway: ModelGateway,
     project_id: UUID,
     command: ProgramGroupingRunWrite,
+    *,
+    job_id: UUID | None = None,
 ) -> ProgramGroupingRunRead:
     snapshot = _eligible_snapshot(session, project_id)
     _check_snapshot(snapshot, command.expected_program_revision, command.expected_source_hash)
-    result = await gateway.complete(_request(snapshot, command.confirmed))
+    result = await gateway.complete(_request(snapshot, command.confirmed, job_id))
     validate_suggestion(result.value, {node.id for node in snapshot.nodes})
     return ProgramGroupingRunRead(
         run_id=result.run_id,
@@ -266,6 +274,35 @@ async def run(
         actual_model_id=result.actual_model_id,
         cached=result.cached,
     )
+
+
+async def start(
+    session: Session,
+    gateway: ModelGateway,
+    project_id: UUID,
+    command: ProgramGroupingRunWrite,
+) -> BackgroundJobStartRead:
+    """Поставить группировку вопросов в очередь вместо ожидания ответа в запросе.
+
+    Предпросмотр остаётся мгновенным (без сетевого вызова, только оценка): он
+    проверяет то же подтверждение стоимости, что раньше проверял `complete()`
+    на лету — задача не должна попасть в очередь неподтверждённой, чтобы потом
+    просто упасть в воркере с той же самой ошибкой.
+    """
+    snapshot = _eligible_snapshot(session, project_id)
+    _check_snapshot(snapshot, command.expected_program_revision, command.expected_source_hash)
+    await gateway.preflight_confirmed(_request(snapshot, command.confirmed))
+    session.rollback()
+    with session.begin():
+        job = BackgroundJob(
+            kind=BackgroundJobKind.AI_GROUPING,
+            project_id=project_id,
+            checkpoint={"command": command.model_dump(mode="json")},
+        )
+        session.add(job)
+        session.flush()
+        job_id = job.id
+    return BackgroundJobStartRead(job_id=job_id)
 
 
 def apply(

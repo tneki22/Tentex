@@ -129,7 +129,7 @@ export function LibraryProcessingPanel({
         <h3>{presentation.processingTitle}</h3>
         {material.parser_mode && prepared && (
           <StatusBadge tone="neutral">
-            {material.parser_mode === "textbook" ? "Режим «Учебник»" : "Режим «Быстро»"}
+            Режим «Быстро»
           </StatusBadge>
         )}
       </header>

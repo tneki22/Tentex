@@ -3,9 +3,7 @@ import {
   CircleAlert,
   Download,
   ExternalLink,
-  Play,
   RefreshCw,
-  Square,
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -15,13 +13,10 @@ import {
   getOcrSettings,
   installOcrModel,
   removeOcrModel,
-  startOcrService,
-  stopOcrService,
   updateOcrEngine,
   updateOcrSettings,
   type OcrEngineRead,
   type OcrEngineWrite,
-  type OcrHardwareRead,
   type OcrModelRead,
   type OcrReadiness,
   type OcrSettingsRead,
@@ -35,7 +30,6 @@ import {
   SegmentedTabs,
   Select,
   StatusBadge,
-  Switch,
 } from "../components/ui";
 import type { StatusTone } from "../components/ui";
 import type { OcrSettingsSubsection } from "./Setup";
@@ -121,56 +115,6 @@ function EngineStatus({ engine }: { engine: OcrEngineRead }) {
 
 // ── Обзор ───────────────────────────────────────────────────────────────────
 
-function HardwarePanel({ hardware }: { hardware: OcrHardwareRead }) {
-  return (
-    <section className="ai-settings-group">
-      <header className="ai-group-head">
-        <div>
-          <h3>Ваш компьютер</h3>
-          <p>
-            От этого зависит, какие наборы моделей вам подойдут. Ниже, на вкладке
-            «Модели», рядом с каждым набором написано, влезает он сюда или нет.
-          </p>
-        </div>
-      </header>
-      <dl className="ocr-facts">
-        <div>
-          <dt>Ядер процессора</dt>
-          <dd>{hardware.cpu_cores ?? "неизвестно"}</dd>
-        </div>
-        <div>
-          <dt>Оперативная память</dt>
-          <dd>{formatMb(hardware.ram_mb)}</dd>
-        </div>
-        <div>
-          <dt>Свободно на диске</dt>
-          <dd>{formatMb(hardware.free_disk_mb)}</dd>
-        </div>
-        <div>
-          <dt>Видеокарта</dt>
-          <dd>{hardware.gpu ? hardware.gpu.name : "не найдена"}</dd>
-        </div>
-        <div>
-          <dt>Видеопамять</dt>
-          <dd>{hardware.gpu ? formatMb(hardware.gpu.vram_mb) : "—"}</dd>
-        </div>
-        <div>
-          <dt>Откуда узнали</dt>
-          <dd>{hardware.gpu ? hardware.gpu.source : "—"}</dd>
-        </div>
-      </dl>
-      {hardware.gpu === null && hardware.gpu_reason ? (
-        <StatusLine tone="warning" label="Видеокарту определить не удалось" detail={hardware.gpu_reason} />
-      ) : null}
-      {hardware.notes.map((note) => (
-        <p key={note} className="ai-muted">
-          {note}
-        </p>
-      ))}
-    </section>
-  );
-}
-
 function OverviewPanel({
   settings,
   onSettings,
@@ -219,10 +163,7 @@ function OverviewPanel({
           <SegmentedTabs
             label="Режим по умолчанию"
             value={settings.default_mode}
-            tabs={[
-              { value: "fast", label: "Быстро" },
-              { value: "textbook", label: "Учебник" },
-            ]}
+            tabs={[{ value: "fast", label: "Быстро" }]}
             onChange={(value) => void setDefaultMode(value as ParserMode)}
           />
         </div>
@@ -251,8 +192,6 @@ function OverviewPanel({
           })}
         </div>
       </section>
-
-      <HardwarePanel hardware={settings.hardware} />
     </div>
   );
 }
@@ -393,163 +332,6 @@ function FastEngineCard({
   );
 }
 
-function ServiceControls({
-  engine,
-  onSettings,
-}: {
-  engine: OcrEngineRead;
-  onSettings: (settings: OcrSettingsRead) => void;
-}) {
-  const service = engine.service;
-  const [note, setNote] = useState<Note | null>(null);
-  const [busy, setBusy] = useState(false);
-  if (!service) return null;
-
-  async function run(action: "start" | "stop") {
-    setBusy(true);
-    setNote({ text: action === "start" ? "Запускаем…" : "Останавливаем…", tone: "muted" });
-    try {
-      onSettings(await (action === "start" ? startOcrService() : stopOcrService()));
-      setNote(null);
-    } catch (caught) {
-      setNote({ text: errorText(caught, "Не получилось"), tone: "danger" });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="ocr-service">
-      <div className="ocr-service-head">
-        <div>
-          <strong>Сервис распознавания</strong>
-          <small>
-            Модель «Учебника» живёт в отдельном процессе с доступом к видеокарте.
-            Он занимает видеопамять, пока запущен, поэтому включается по кнопке.
-          </small>
-        </div>
-        <div className="ai-group-actions">
-          {service.can_start && (
-            <Button disabled={busy} onClick={() => void run("start")}>
-              <Play size={14} aria-hidden="true" /> Запустить сервис
-            </Button>
-          )}
-          {service.can_stop && (
-            <Button variant="secondary" disabled={busy} onClick={() => void run("stop")}>
-              <Square size={14} aria-hidden="true" /> Остановить
-            </Button>
-          )}
-        </div>
-      </div>
-      {service.detail ? <pre className="ocr-service-detail">{service.detail}</pre> : null}
-      {engine.restart_required ? (
-        <StatusLine
-          tone="warning"
-          label="Настройки ждут перезапуска"
-          detail="Сервис читает настройки подключения при старте. Остановите и запустите его снова, чтобы применить изменения."
-        />
-      ) : null}
-      <StatusNote note={note} />
-    </div>
-  );
-}
-
-function TextbookEngineCard({
-  engine,
-  isFirst,
-  onSettings,
-}: {
-  engine: OcrEngineRead;
-  isFirst: boolean;
-  onSettings: (settings: OcrSettingsRead) => void;
-}) {
-  const [advanced, setAdvanced] = useState(false);
-  const [serviceUrl, setServiceUrl] = useState(String(engine.extra.service_url ?? ""));
-  const [timeoutSeconds, setTimeoutSeconds] = useState(String(engine.extra.timeout_seconds ?? ""));
-  const [connectionNote, setConnectionNote] = useState<Note | null>(null);
-
-  async function saveConnection() {
-    setConnectionNote({ text: "Сохраняем…", tone: "muted" });
-    try {
-      const next = await updateOcrEngine(
-        "textbook",
-        engineWrite(engine, {
-          extra: {
-            ...engine.extra,
-            service_url: serviceUrl.trim() || undefined,
-            timeout_seconds: timeoutSeconds.trim() ? Number(timeoutSeconds) : undefined,
-          },
-        })
-      );
-      onSettings(next);
-      setConnectionNote({ text: "Сохранено", tone: "success" });
-    } catch (caught) {
-      setConnectionNote({ text: errorText(caught, "Не сохранено"), tone: "danger" });
-    }
-  }
-
-  return (
-    <section className={`ai-settings-group${isFirst ? " is-first" : ""}`} id="ocr-engine-textbook">
-      <header className="ai-group-head">
-        <div>
-          <h3>{engine.title}</h3>
-          <p>{engine.description}</p>
-        </div>
-      </header>
-      <p className="ai-muted">{engine.trade_off}</p>
-      <EngineStatus engine={engine} />
-      <StatusLine
-        tone="info"
-        label="Один профиль для 8 ГБ"
-        detail="PP-DocLayout_plus-L размечает страницу и находит формулы отдельным классом, PP-FormulaNet переводит их в LaTeX, PP-OCRv5 читает текст. Распознавание сетки таблиц выключено, чтобы не занять видеопамять."
-      />
-      <ServiceControls engine={engine} onSettings={onSettings} />
-
-      <div className="ocr-advanced">
-        <Switch
-          label="Показать настройки подключения"
-          checked={advanced}
-          onCheckedChange={setAdvanced}
-        />
-        {advanced && (
-          <>
-            <p className="ai-muted">
-              Нужны только если сервис запущен не на этом компьютере или занимает
-              другой порт. Обычно менять их не требуется.
-            </p>
-            <div className="ai-form-grid compact">
-              <Field label="Адрес сервиса" hint="Действует сразу после сохранения">
-                <input
-                  type="text"
-                  value={serviceUrl}
-                  placeholder="http://127.0.0.1:8090"
-                  onChange={(event) => setServiceUrl(event.target.value)}
-                />
-              </Field>
-              <Field label="Ждать ответа, секунд" hint="Действует сразу после сохранения">
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={timeoutSeconds}
-                  placeholder="180"
-                  onChange={(event) => setTimeoutSeconds(event.target.value)}
-                />
-              </Field>
-            </div>
-            <div className="ai-group-actions">
-              <Button variant="secondary" onClick={() => void saveConnection()}>
-                Сохранить подключение
-              </Button>
-              <StatusNote note={connectionNote} />
-            </div>
-          </>
-        )}
-      </div>
-    </section>
-  );
-}
-
 function StaticEngineCard({ engine, isFirst }: { engine: OcrEngineRead; isFirst: boolean }) {
   return (
     <section className={`ai-settings-group${isFirst ? " is-first" : ""}`}>
@@ -579,11 +361,6 @@ function EnginesPanel({
         if (engine.mode === "fast") {
           return (
             <FastEngineCard key={engine.mode} engine={engine} isFirst={isFirst} onSettings={onSettings} />
-          );
-        }
-        if (engine.mode === "textbook") {
-          return (
-            <TextbookEngineCard key={engine.mode} engine={engine} isFirst={isFirst} onSettings={onSettings} />
           );
         }
         return <StaticEngineCard key={engine.mode} engine={engine} isFirst={isFirst} />;
