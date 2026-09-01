@@ -19,10 +19,13 @@ from uuid import UUID, uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.background.schemas import BackgroundJobStartRead
 from app.bindings import answer_sections
 from app.marker_labels import material_image_label
 from app.materials.schemas import ExamMaterialSlot, MaterialPurpose
 from app.models import (
+    BackgroundJob,
+    BackgroundJobKind,
     Binding,
     BindingMechanism,
     BindingStatus,
@@ -642,6 +645,30 @@ def link_answers_material(
     if result is None:  # pragma: no cover - генератор всегда заканчивается результатом
         raise RuntimeError("Сопоставление ответов завершилось без отчёта")
     return result
+
+
+def start_link_answers(
+    session: Session, project_id: UUID, material_id: UUID
+) -> BackgroundJobStartRead:
+    """Поставить привязку ответов в очередь вместо синхронного ожидания (Ш4 плана).
+
+    В отличие от ролей ИИ здесь нет предпросмотра стоимости: `link_answers_material`
+    не обращается к шлюзу моделей вовсе, это локальный расчёт по заголовкам —
+    достаточно синхронной проверки применимости перед постановкой в очередь.
+    """
+    _require_answers_material(session, project_id, material_id)
+    session.rollback()
+    with session.begin():
+        job = BackgroundJob(
+            kind=BackgroundJobKind.LINK_ANSWERS,
+            project_id=project_id,
+            material_id=material_id,
+            checkpoint={},
+        )
+        session.add(job)
+        session.flush()
+        job_id = job.id
+    return BackgroundJobStartRead(job_id=job_id)
 
 
 def resolve_answers_heading(

@@ -12,8 +12,11 @@ from sqlalchemy.orm import Session
 
 from app.ai.gateway import AiTextRequest, ModelGateway
 from app.ai.schemas import AiMessage, AiPreflight, AiUsage
+from app.background.schemas import BackgroundJobStartRead
 from app.models import (
     AiRun,
+    BackgroundJob,
+    BackgroundJobKind,
     ExamKind,
     GoalPassport,
     GoalRole,
@@ -262,6 +265,7 @@ def _repair_request(
     instruction: str,
     has_tickets: bool,
     confirmed: bool,
+    job_id: UUID | None = None,
 ) -> AiTextRequest:
     instruction = instruction.strip()
     instruction_hash = hashlib.sha256(instruction.encode()).hexdigest()
@@ -315,6 +319,7 @@ def _repair_request(
         },
         confirmed=confirmed,
         minimum_output_tokens=12000,
+        job_id=job_id,
     )
 
 
@@ -520,6 +525,8 @@ async def run_program_repair(
     gateway: ModelGateway,
     project_id: UUID,
     command: ProgramRepairRunWrite,
+    *,
+    job_id: UUID | None = None,
 ) -> ProgramRepairRunRead:
     snapshot = _program_repair_snapshot(session, project_id)
     _check_program_snapshot(
@@ -532,6 +539,7 @@ async def run_program_repair(
         command.instruction,
         snapshot.has_tickets,
         command.confirmed,
+        job_id,
     )
     result = await gateway.complete(request)
     suggestion = _wire_to_suggestion(result.value, snapshot.has_tickets)
@@ -555,6 +563,39 @@ async def run_program_repair(
         actual_model_id=result.actual_model_id,
         cached=result.cached,
     )
+
+
+async def start_program_repair(
+    session: Session,
+    gateway: ModelGateway,
+    project_id: UUID,
+    command: ProgramRepairRunWrite,
+) -> BackgroundJobStartRead:
+    """Поставить починку списка вопросов в очередь вместо ожидания в запросе."""
+    snapshot = _program_repair_snapshot(session, project_id)
+    _check_program_snapshot(
+        snapshot, command.expected_program_revision, command.expected_source_hash
+    )
+    request = _repair_request(
+        project_id,
+        snapshot.positions,
+        snapshot.source_hash,
+        command.instruction,
+        snapshot.has_tickets,
+        command.confirmed,
+    )
+    await gateway.preflight_confirmed(request)
+    session.rollback()
+    with session.begin():
+        job = BackgroundJob(
+            kind=BackgroundJobKind.AI_IMPORT_REPAIR,
+            project_id=project_id,
+            checkpoint={"command": command.model_dump(mode="json")},
+        )
+        session.add(job)
+        session.flush()
+        job_id = job.id
+    return BackgroundJobStartRead(job_id=job_id)
 
 
 def apply_program_repair(
