@@ -74,6 +74,10 @@ class AiTextRequest[T: BaseModel]:
     # Лимит completion у рассуждающих моделей расходуется и на скрытые
     # рассуждения. Операция задаёт нижнюю границу для полезного JSON-ответа.
     minimum_output_tokens: int = 0
+    # Заполняется, только когда вызов идёт из очереди фоновых операций
+    # (`app.ai.jobs.process_ai_job`) — прямые вызовы (например, экзаменационный
+    # чат) его не передают, и `AiRun.job_id` остаётся пустым.
+    job_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -186,12 +190,12 @@ class ModelGateway:
             context_manifest=request.context_manifest,
         )
 
-    async def complete[T: BaseModel](self, request: AiTextRequest[T]) -> AiResult[T]:
-        if request.response_model is None:
-            raise AiGatewayError(
-                "Для complete нужна схема структурного ответа",
-                code="ai_response_schema_missing",
-            )
+    async def preflight_confirmed(self, request: AiTextRequest[Any]) -> AiPreflight:
+        """Предпросмотр с проверкой подтверждения — общий для `complete()`,
+        `stream()` и постановки в очередь (`start()` у ролей ИИ, Ш4 плана):
+        задача не должна попасть в очередь, если стоимость или контекст ещё не
+        подтверждены, а не проваливаться на этом уже во время исполнения.
+        """
         preflight = await self.preflight(request)
         if preflight.confirmation_required and not request.confirmed:
             raise AiGatewayError(
@@ -199,6 +203,15 @@ class ModelGateway:
                 code="ai_confirmation_required",
                 context={"reasons": preflight.confirmation_reasons},
             )
+        return preflight
+
+    async def complete[T: BaseModel](self, request: AiTextRequest[T]) -> AiResult[T]:
+        if request.response_model is None:
+            raise AiGatewayError(
+                "Для complete нужна схема структурного ответа",
+                code="ai_response_schema_missing",
+            )
+        preflight = await self.preflight_confirmed(request)
         resolved = resolve_model(self.session, request.role, request.request_model_override)
         cache = self.session.get(AiCacheEntry, preflight.request_hash)
         if cache is not None and resolved.role.cache_policy != "none":
@@ -272,13 +285,7 @@ class ModelGateway:
         raise AssertionError("unreachable: loop always returns or raises")
 
     async def stream(self, request: AiTextRequest[Any]) -> AsyncIterator[AiStreamEvent]:
-        preflight = await self.preflight(request)
-        if preflight.confirmation_required and not request.confirmed:
-            raise AiGatewayError(
-                "Перед вызовом нужно подтвердить стоимость или большой контекст",
-                code="ai_confirmation_required",
-                context={"reasons": preflight.confirmation_reasons},
-            )
+        preflight = await self.preflight_confirmed(request)
         resolved = resolve_model(self.session, request.role, request.request_model_override)
         transport = self.transport or production_transport(self.session, resolved.provider.id)
         run = self._start_run(request, resolved, preflight)
@@ -484,6 +491,7 @@ class ModelGateway:
         with self.session.begin():
             run = AiRun(
                 project_id=request.project_id,
+                job_id=request.job_id,
                 provider_id=resolved.provider.id,
                 provider_label_snapshot=resolved.provider.label,
                 role=request.role,
@@ -519,6 +527,7 @@ class ModelGateway:
             cache.last_used_at = utc_now()
             run = AiRun(
                 project_id=request.project_id,
+                job_id=request.job_id,
                 provider_id=resolved.provider.id,
                 provider_label_snapshot=resolved.provider.label,
                 role=request.role,
