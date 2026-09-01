@@ -180,7 +180,6 @@ class MaterialSourceKind(StrEnum):
 
 class ParserMode(StrEnum):
     FAST = "fast"
-    TEXTBOOK = "textbook"
 
 
 class PageQuality(StrEnum):

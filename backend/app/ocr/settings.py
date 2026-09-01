@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.materials.parsers import textbook
 from app.models import OcrEngineConfig, OcrSettings, utc_now
-from app.ocr import downloads, hardware, service_control
+from app.ocr import downloads
 from app.ocr.catalog import (
     LICENSE_TITLE,
     LICENSE_URL,
@@ -19,10 +18,7 @@ from app.ocr.schemas import (
     OcrEngineRead,
     OcrEngineWrite,
     OcrGlobalSettingsWrite,
-    OcrGpuRead,
-    OcrHardwareRead,
     OcrModelRead,
-    OcrServiceRead,
     OcrSettingsRead,
 )
 from app.projects.errors import ProjectDomainError
@@ -51,30 +47,11 @@ def runtime_params(session: Session) -> OcrRuntimeParams:
     defaults = OcrRuntimeParams()
     row = session.get(OcrSettings, 1)
     fast = session.get(OcrEngineConfig, "fast")
-    textbook_row = session.get(OcrEngineConfig, "textbook")
-    extra = textbook_row.extra if textbook_row else {}
     return OcrRuntimeParams(
         quality_threshold=row.quality_threshold if row else defaults.quality_threshold,
         raster_scale=row.raster_scale if row else defaults.raster_scale,
         fast_language=defaults.fast_language,
         fast_model_id=(fast.model_id if fast and fast.model_id else defaults.fast_model_id),
-        textbook_base_url=extra.get("service_url") or None,
-        textbook_timeout_seconds=extra.get("timeout_seconds") or None,
-    )
-
-
-def textbook_base_url(session: Session) -> str | None:
-    """Настроенный адрес GPU-сервиса, если пользователь его менял. `None` — дефолт конфига."""
-    row = session.get(OcrEngineConfig, "textbook")
-    return (row.extra.get("service_url") if row else None) or None
-
-
-def textbook_environment(session: Session) -> dict[str, str]:
-    row = session.get(OcrEngineConfig, "textbook")
-    return service_control.environment_for(
-        None,
-        row.device if row else None,
-        None,
     )
 
 
@@ -164,29 +141,21 @@ def remove_model(session: Session, model_key: str) -> OcrSettingsRead:
     return read_settings(session)
 
 
-def start_service(session: Session) -> OcrSettingsRead:
-    service_control.start(textbook_environment(session))
-    hardware.reset_cache()
-    textbook.reset_health_cache()
-    return read_settings(session)
+def _model_fit(spec: OcrModelSpec) -> tuple[bool | None, str]:
+    """Подойдёт ли набор этой машине.
+
+    Оставшиеся движки считают на процессоре, поэтому вопрос закрыт заранее —
+    отдельного замера железа (видеопамять, диск) в проекте больше нет.
+    """
+    if spec.device == "cpu":
+        return True, "Считает на процессоре — подойдёт любой компьютер."
+    return None, "Не удалось проверить."
 
 
-def stop_service(session: Session) -> OcrSettingsRead:
-    service_control.stop()
-    textbook.reset_health_cache()
-    return read_settings(session)
-
-
-def _model_read(spec: OcrModelSpec, machine: hardware.Hardware) -> OcrModelRead:
+def _model_read(spec: OcrModelSpec) -> OcrModelRead:
     job = downloads.job_for(spec.key)
     is_installed = downloads.installed(spec)
-    fits, fits_note = hardware.fits(
-        machine,
-        device=spec.device,
-        min_vram_mb=spec.min_vram_mb,
-        min_ram_mb=spec.min_ram_mb,
-        size_bytes=spec.size_bytes,
-    )
+    fits, fits_note = _model_fit(spec)
     return OcrModelRead(
         key=spec.key,
         engine=spec.engine,
@@ -245,58 +214,20 @@ def _fast_readiness(models: list[OcrModelRead]) -> tuple[str, str, str]:
     return "ready", "", ", ".join(model.title for model in ready)
 
 
-def _textbook_readiness(
-    models: list[OcrModelRead], service: OcrServiceRead, base_url: str | None
-) -> tuple[str, str, str]:
-    if _downloading(models):
-        return "downloading", "Модели загружаются.", ""
-    if not downloads.engine_ready("textbook"):
-        return "needs_models", "Ни один набор моделей не установлен.", ""
-    current = textbook.status(base_url=base_url)
-    if current.available:
-        return "ready", "", current.label
-    if service.state == "running":
-        return "starting", current.reason, ""
-    if service.state == "starting":
-        return "starting", "Сервис поднимается.", ""
-    if service.state == "failed":
-        return "error", service.detail or service.summary, ""
-    return "needs_service", service.detail or service.summary, ""
-
-
 def _engine_row(session: Session, mode: str) -> OcrEngineConfig | None:
     return session.get(OcrEngineConfig, mode)
 
 
 def read_settings(session: Session) -> OcrSettingsRead:
     row = _ensure_settings_row(session)
-    base_url = textbook_base_url(session)
-    machine = hardware.probe(textbook_base_url=base_url)
-    service: OcrServiceRead | None = None
 
     engines: list[OcrEngineRead] = []
     for spec in OCR_ENGINES.values():
         config_row = _engine_row(session, spec.key) if spec.configurable else None
-        models = [_model_read(model, machine) for model in models_for(spec.key)]
-        engine_service: OcrServiceRead | None = None
-        restart_required = False
+        models = [_model_read(model) for model in models_for(spec.key)]
 
         if spec.key == "fast":
             readiness, detail, active = _fast_readiness(models)
-        elif spec.key == "textbook":
-            raw = service_control.describe()
-            service = OcrServiceRead(
-                state=raw.state,
-                summary=raw.summary,
-                detail=raw.detail,
-                can_start=raw.can_start,
-                can_stop=raw.can_stop,
-            )
-            engine_service = service
-            readiness, detail, active = _textbook_readiness(models, service, base_url)
-            restart_required = raw.state == "running" and not service_control.environment_applied(
-                textbook_environment(session)
-            )
         else:
             readiness, detail, active = "unavailable", spec.unavailable_reason or "", ""
 
@@ -313,7 +244,6 @@ def read_settings(session: Session) -> OcrSettingsRead:
                 readiness=readiness,  # type: ignore[arg-type]
                 status_detail=detail,
                 active_label=active,
-                restart_required=restart_required,
                 model_id=config_row.model_id if config_row else None,
                 device=config_row.device if config_row else None,
                 language=config_row.language if config_row else None,
@@ -321,7 +251,6 @@ def read_settings(session: Session) -> OcrSettingsRead:
                 extra=config_row.extra if config_row else {},
                 updated_at=config_row.updated_at if config_row else None,
                 models=models,
-                service=engine_service,
             )
         )
 
@@ -329,23 +258,6 @@ def read_settings(session: Session) -> OcrSettingsRead:
         default_mode=row.default_mode,
         quality_threshold=row.quality_threshold,
         raster_scale=row.raster_scale,
-        hardware=OcrHardwareRead(
-            cpu_cores=machine.cpu_cores,
-            ram_mb=machine.ram_mb,
-            free_disk_mb=machine.free_disk_mb,
-            gpu=(
-                OcrGpuRead(
-                    name=machine.gpu.name,
-                    vram_mb=machine.gpu.vram_mb,
-                    driver=machine.gpu.driver,
-                    source=machine.gpu.source,
-                )
-                if machine.gpu
-                else None
-            ),
-            gpu_reason=machine.gpu_reason,
-            notes=list(machine.notes),
-        ),
         engines=engines,
     )
 
