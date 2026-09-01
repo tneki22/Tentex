@@ -27,13 +27,14 @@ import {
   type ProgramNodeRead,
   type ProjectDetail,
   type PreparationEstimateInput,
+  type PreparationEstimateRunRead,
   type PreparationEstimatePreflightRead,
   type StartingLevel,
   type StudyFormat,
   type TargetOutcome,
 } from "../../api/projects";
-import { getAiSettings, isAiApiError, listAiRuns, type AiRunRead, type AiSettingsRead } from "../../api/ai";
-import { findActiveBackgroundJob } from "../../api/backgroundJobs";
+import { getAiSettings, isAiApiError, type AiSettingsRead } from "../../api/ai";
+import { findActiveBackgroundJob, getBackgroundJobResult } from "../../api/backgroundJobs";
 import type { WizardDraftController } from "../../hooks/useWizardDraft";
 import { useBackgroundJob } from "../../hooks/useBackgroundJob";
 import { useProjectMaterials } from "../../hooks/useProjectMaterials";
@@ -642,10 +643,9 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
       return;
     }
     const controller = new AbortController();
-    void listAiRuns({ jobId: preparationJob.id }, controller.signal)
-      .then((runs) => {
-        if (controller.signal.aborted) return;
-        applyPreparationJobResult(runs.find((run) => run.job_id === preparationJob.id) ?? runs[0] ?? null);
+    void getBackgroundJobResult<PreparationEstimateRunRead>(preparationJob.id, controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted) applyPreparationJobResult(result);
       })
       .catch((caught) => {
         if (!controller.signal.aborted) setEstimateError(caught);
@@ -660,28 +660,18 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preparationJob?.id, preparationJob?.state]);
 
-  function applyPreparationJobResult(run: AiRunRead | null) {
-    const payload = run?.response_payload;
-    const minutesPerDay = payload && typeof payload.minutes_per_day === "number" ? payload.minutes_per_day : null;
-    const rationale = payload && typeof payload.rationale === "string" ? payload.rationale : null;
-    if (!run || !preparationContext || minutesPerDay === null || rationale === null) {
-      // Модель отработала, но бэкенд не отдаёт содержимое вызова через API —
-      // см. комментарий у AiRunRead.response_payload в api/ai.ts.
-      setEstimateError(new Error(
-        "Модель оценила нагрузку, но результат недоступен через API — минуты в день можно указать вручную.",
-      ));
-      return;
-    }
+  function applyPreparationJobResult(result: PreparationEstimateRunRead) {
+    if (!preparationContext) return;
     const { preview, input } = preparationContext;
-    setForm((current) => ({ ...current, minutesPerDay: String(minutesPerDay) }));
+    setForm((current) => ({ ...current, minutesPerDay: String(result.minutes_per_day) }));
     setPreparationSuggestion({
       inputKey: preparationInputKey(form, input.item_count),
-      minutesPerDay,
+      minutesPerDay: result.minutes_per_day,
       studyDays: preview.study_days,
       itemsPerDay: preview.items_per_day,
       reviewDayReserved: preview.review_day_reserved,
-      rationale,
-      cached: run.status === "cached",
+      rationale: result.rationale,
+      cached: result.cached,
     });
     setEstimateConfirmation(null);
   }

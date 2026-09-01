@@ -1,7 +1,7 @@
 import { AlertTriangle, RotateCcw, Sparkles, Square, WandSparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { describeAiFailure, listAiRuns, type AiPreflight, type AiRunRead, type DecimalValue } from "../api/ai";
+import { describeAiFailure, type AiPreflight, type DecimalValue } from "../api/ai";
 import {
   applyLibraryPageCleanup,
   applyMaterialPageCleanup,
@@ -15,7 +15,7 @@ import {
   type PageCorrectionRead,
 } from "../api/materials";
 import { ProjectApiError } from "../api/projects";
-import { ACTIVE_JOB_STATES, cancelBackgroundJob, findActiveBackgroundJob } from "../api/backgroundJobs";
+import { ACTIVE_JOB_STATES, cancelBackgroundJob, findActiveBackgroundJob, getBackgroundJobResult } from "../api/backgroundJobs";
 import { useBackgroundJob } from "../hooks/useBackgroundJob";
 import { AiFailureNotice } from "../components/domain";
 import {
@@ -115,9 +115,6 @@ export function AiCleanupPanel({
   const [compareTab, setCompareTab] = useState<"result" | "source">("result");
   const [discardOpen, setDiscardOpen] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
-  // true — задача завершилась, но бэкенд не отдаёт содержимое вызова через API
-  // (см. комментарий у AiRunRead.response_payload в api/ai.ts).
-  const [contentUnavailable, setContentUnavailable] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const dirty = Boolean(runResult && preview !== originalSuggestion);
   const { job, error: jobError } = useBackgroundJob(jobId);
@@ -141,7 +138,6 @@ export function AiCleanupPanel({
     setConflict(false);
     setCompareTab("result");
     setJobId(null);
-    setContentUnavailable(false);
     // При открытии сверяемся с реестром: уборка этой страницы могла остаться
     // идти в фоне с прошлого раза, когда диалог был закрыт.
     const controller = new AbortController();
@@ -184,55 +180,24 @@ export function AiCleanupPanel({
     };
   }, [open, projectId, material.id, page.id, page.page_number, instruction, jobActive]);
 
+  // Закрытие панели задачу не отменяет — она живёт в очереди, и вернувшийся
+  // экран забирает её готовую уборку из реестра, а не зовёт модель заново.
   useEffect(() => {
-    // Закрытие панели задачу не отменяет — она продолжает жить в очереди.
-    if (!job || job.state !== "completed") return;
+    if (!job || job.state !== "completed" || runResult) return;
     const controller = new AbortController();
-    void listAiRuns({ jobId: job.id }, controller.signal)
-      .then((runs) => {
+    void getBackgroundJobResult<CleanupRunRead>(job.id, controller.signal)
+      .then((result) => {
         if (controller.signal.aborted) return;
-        applyCompletedRun(runs.find((run) => run.job_id === job.id) ?? runs[0] ?? null);
+        setRunResult(result);
+        setPreview(result.suggestion.markdown);
+        setOriginalSuggestion(result.suggestion.markdown);
       })
       .catch((caught) => {
         if (!controller.signal.aborted) setError(caught);
       });
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job?.id, job?.state]);
-
-  function applyCompletedRun(run: AiRunRead | null) {
-    const payload = run?.response_payload;
-    const markdown = payload && typeof payload.markdown === "string" ? payload.markdown : null;
-    const changes = payload && Array.isArray(payload.changes) ? payload.changes as string[] : null;
-    const warnings = payload && Array.isArray(payload.warnings) ? payload.warnings as string[] : null;
-    if (!run || !preflight || markdown === null || !changes || !warnings) {
-      setContentUnavailable(true);
-      return;
-    }
-    const result: CleanupRunRead = {
-      run_id: run.id,
-      material_id: preflight.material_id,
-      page_id: preflight.page_id,
-      page_number: preflight.page_number,
-      revision: preflight.revision,
-      source_hash: preflight.source_hash,
-      suggestion: { markdown, changes, warnings },
-      usage: {
-        input_tokens: run.input_tokens ?? 0,
-        output_tokens: run.output_tokens ?? 0,
-        reasoning_tokens: run.reasoning_tokens ?? 0,
-        provider_cached_tokens: run.provider_cached_tokens ?? 0,
-        actual_cost_usd: run.actual_cost_usd,
-        actual_cost_rub: run.actual_cost_rub,
-      },
-      requested_model_id: run.requested_model_id,
-      actual_model_id: run.actual_model_id ?? run.requested_model_id,
-      cached: run.status === "cached",
-    };
-    setRunResult(result);
-    setPreview(result.suggestion.markdown);
-    setOriginalSuggestion(result.suggestion.markdown);
-  }
+  }, [job?.id, job?.state, runResult]);
 
   function requestClose() {
     if (dirty) {
@@ -252,7 +217,6 @@ export function AiCleanupPanel({
     setError(null);
     setConflict(false);
     setRunResult(null);
-    setContentUnavailable(false);
     try {
       const send = projectId === null
         ? (command: Parameters<typeof runLibraryPageCleanup>[2], signal: AbortSignal) =>
@@ -337,8 +301,6 @@ export function AiCleanupPanel({
               <Button variant="secondary" disabled={busy !== null} onClick={() => void runCleanup()}><RotateCcw size={14} />Запустить ещё раз</Button>
               <Button disabled={busy !== null || !preview.trim() || conflict} onClick={() => void applyCleanup()}>{busy === "apply" ? "Применяем…" : "Применить"}</Button>
             </>
-          ) : contentUnavailable ? (
-            <Button variant="secondary" disabled={busy !== null} onClick={() => void runCleanup()}><RotateCcw size={14} />Запустить ещё раз</Button>
           ) : (
             <Button disabled={busy !== null || !preflight || (preflightValue?.confirmation_required && !confirmed)} onClick={() => void runCleanup()}><Sparkles size={14} />Прибрать текст</Button>
           )}
@@ -389,16 +351,6 @@ export function AiCleanupPanel({
           {jobActive && <LoadingState label="Модель готовит предложение; страницу пока не меняем" />}
           {job?.state === "failed" && <p className="inline-error" role="alert">{job.error ?? "Вызов не выполнен"}</p>}
           {job?.state === "cancelled" && <p className="ai-muted" role="status">Остановлено. Страница не изменена.</p>}
-          {job?.state === "completed" && contentUnavailable && (
-            <section className="ai-conflict" role="status">
-              <AlertTriangle size={16} />
-              <div>
-                <strong>Предложение готово, но не показывается</strong>
-                <p>Модель отработала успешно, но бэкенд пока не отдаёт содержимое фоновой задачи через API — сравнить и применить результат из интерфейса нельзя. Страницу можно исправить вручную.</p>
-              </div>
-            </section>
-          )}
-
           {runResult && (
             <section className="ai-cleanup-result">
               <header>
