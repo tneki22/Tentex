@@ -12,6 +12,12 @@ Create Date: 2026-09-01
 засеянные строки `ocr_engine_configs` для удалённых движков (`textbook` — из
 0022, `maximum`/`expert` никогда не сеялись, но на случай ручных правок в базе
 чистим и их).
+
+На реальной установке уже могли быть материалы, разобранные движком
+`textbook`: SQLite-пересборка таблицы (`batch_alter_table`) копирует все
+строки под новый, более узкий CHECK, и упадёт на первой же из них. Поэтому
+сперва такие строки переводятся на `fast` — движок всё равно уже снят,
+хранить в них старое значение больше не для чего.
 """
 
 from collections.abc import Sequence
@@ -31,6 +37,12 @@ def enum(*values: str, name: str) -> sa.Enum:
 
 def upgrade() -> None:
     op.execute("DELETE FROM ocr_engine_configs WHERE mode IN ('textbook', 'maximum', 'expert')")
+    op.execute("UPDATE materials SET parser_mode = 'fast' WHERE parser_mode = 'textbook'")
+    op.execute("UPDATE processing_tasks SET parser_mode = 'fast' WHERE parser_mode = 'textbook'")
+    op.execute(
+        "UPDATE material_revisions SET parser_mode = 'fast' WHERE parser_mode = 'textbook'"
+    )
+    op.execute("UPDATE ocr_settings SET default_mode = 'fast' WHERE default_mode = 'textbook'")
 
     with op.batch_alter_table("materials") as batch:
         batch.alter_column(
@@ -63,6 +75,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Какие строки были 'textbook' до апгрейда — не восстановить: апгрейд
+    # переписал их в 'fast' необратимо. Downgrade возвращает только форму
+    # ограничений, не старые значения.
     with op.batch_alter_table("ocr_settings") as batch:
         batch.alter_column(
             "default_mode",

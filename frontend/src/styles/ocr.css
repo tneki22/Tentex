@@ -121,61 +121,6 @@
   line-height: var(--leading-snug);
 }
 
-/* Управление GPU-сервисом. */
-.ocr-service {
-  display: grid;
-  gap: var(--space-4);
-  padding: var(--space-5);
-  border-radius: var(--radius-lg);
-  background: var(--surface-sunken);
-}
-
-.ocr-service-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-}
-
-.ocr-service-head > div {
-  min-width: 0;
-}
-
-.ocr-service-head strong,
-.ocr-service-head small {
-  display: block;
-}
-
-.ocr-service-head small {
-  max-width: 62ch;
-  margin-top: var(--space-1);
-  color: var(--muted);
-  font-size: var(--text-sm);
-  line-height: var(--leading-relaxed);
-}
-
-/* Хвост журнала контейнера: сохраняем переносы, но не даём растянуть страницу. */
-.ocr-service-detail {
-  max-height: 12em;
-  margin: 0;
-  overflow: auto;
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: var(--leading-snug);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.ocr-advanced {
-  display: grid;
-  gap: var(--space-3);
-}
-
 .ocr-inline-field {
   display: flex;
   gap: var(--space-2);
@@ -295,8 +240,7 @@
 }
 
 @media (max-width: 900px) {
-  .ocr-model-head,
-  .ocr-service-head {
+  .ocr-model-head {
     flex-direction: column;
   }
 }

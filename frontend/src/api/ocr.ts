@@ -15,14 +15,6 @@ export type OcrReadiness =
 
 export type OcrJobState = "running" | "done" | "failed" | "cancelled";
 
-export type OcrServiceState =
-  | "running"
-  | "starting"
-  | "stopped"
-  | "failed"
-  | "absent"
-  | "unavailable";
-
 export interface OcrModelRead {
   key: string;
   engine: string;
@@ -55,30 +47,6 @@ export interface OcrModelRead {
   job_error: string;
 }
 
-export interface OcrGpuRead {
-  name: string;
-  vram_mb: number | null;
-  driver: string | null;
-  source: string;
-}
-
-export interface OcrHardwareRead {
-  cpu_cores: number | null;
-  ram_mb: number | null;
-  free_disk_mb: number | null;
-  gpu: OcrGpuRead | null;
-  gpu_reason: string;
-  notes: string[];
-}
-
-export interface OcrServiceRead {
-  state: OcrServiceState;
-  summary: string;
-  detail: string;
-  can_start: boolean;
-  can_stop: boolean;
-}
-
 export interface OcrEngineRead {
   mode: string;
   title: string;
@@ -91,7 +59,6 @@ export interface OcrEngineRead {
   readiness: OcrReadiness;
   status_detail: string;
   active_label: string;
-  restart_required: boolean;
   model_id: string | null;
   device: string | null;
   language: string | null;
@@ -99,14 +66,12 @@ export interface OcrEngineRead {
   extra: Record<string, unknown>;
   updated_at: string | null;
   models: OcrModelRead[];
-  service: OcrServiceRead | null;
 }
 
 export interface OcrSettingsRead {
   default_mode: ParserMode;
   quality_threshold: number;
   raster_scale: number;
-  hardware: OcrHardwareRead;
   engines: OcrEngineRead[];
 }
 
@@ -155,9 +120,3 @@ export const cancelOcrModel = (key: string): Promise<OcrSettingsRead> =>
 
 export const removeOcrModel = (key: string): Promise<OcrSettingsRead> =>
   request(`${BASE_PATH}/models/${encodeURIComponent(key)}`, { method: "DELETE" });
-
-export const startOcrService = (): Promise<OcrSettingsRead> =>
-  request(`${BASE_PATH}/service/start`, { method: "POST" });
-
-export const stopOcrService = (): Promise<OcrSettingsRead> =>
-  request(`${BASE_PATH}/service/stop`, { method: "POST" });
