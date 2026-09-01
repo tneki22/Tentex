@@ -14,13 +14,13 @@ from pydantic import (
 
 from app.bindings.schemas import AffectedProjectPreview
 from app.models import (
+    BackgroundJobState,
     BlockClass,
     MaterialSourceKind,
     MaterialState,
     PageQuality,
     ParserMode,
     ProcessingStage,
-    ProcessingTaskState,
     RecognitionSource,
     SourceRole,
 )
@@ -121,7 +121,7 @@ class ProcessingStart(ApiModel):
 
 class ProcessingTaskRead(ApiModel):
     id: UUID
-    state: ProcessingTaskState
+    state: BackgroundJobState
     stage: ProcessingStage
     parser_mode: ParserMode
     done: int

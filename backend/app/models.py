@@ -206,14 +206,23 @@ class MaterialRevisionOrigin(StrEnum):
     RESTORE = "restore"
 
 
-class ProcessingTaskKind(StrEnum):
+class BackgroundJobKind(StrEnum):
+    """Вид фоновой операции. Одна очередь и один воркер на все — модель разбора
+    материала (Р3/Р4) поднята до общего реестра, а не заведена рядом с ним."""
+
     PARSE = "parse"
+    AI_GROUPING = "ai_grouping"
+    AI_IMPORT_REPAIR = "ai_import_repair"
+    AI_PREPARATION = "ai_preparation"
+    AI_CLEANUP = "ai_cleanup"
+    LINK_ANSWERS = "link_answers"
 
 
-class ProcessingTaskState(StrEnum):
+class BackgroundJobState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     PAUSED = "paused"
+    CANCELLED = "cancelled"
     FAILED = "failed"
     COMPLETED = "completed"
 
@@ -683,32 +692,49 @@ class MaterialRevision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
-class ProcessingTask(Base):
-    __tablename__ = "processing_tasks"
+class BackgroundJob(Base):
+    """Единая очередь фоновых операций: разбор материала и вызовы ИИ вместе.
+
+    Одна ось состояний живёт здесь (`state`) — независимо от исхода конкретного
+    вызова модели, который остаётся в `AiRun.status` (там же `succeeded` и
+    `cached`, это бухгалтерский факт вызова, а не стадия жизненного цикла
+    задачи). `material_id`, `parser_mode` и `stage` осмысленны только у
+    `PARSE`: у ролей ИИ и у `LINK_ANSWERS` они пустые.
+    """
+
+    __tablename__ = "background_jobs"
     __table_args__ = (
         CheckConstraint(
             "done >= 0 AND total >= 0 AND done <= total",
-            name=conv("ck_processing_tasks_ck_processing_tasks_progress_valid"),
+            name=conv("ck_background_jobs_ck_background_jobs_progress_valid"),
         ),
-        Index("ix_processing_tasks_state_created", "state", "created_at"),
-        Index("ix_processing_tasks_material_created", "material_id", "created_at"),
+        Index("ix_background_jobs_state_created", "state", "created_at"),
+        Index("ix_background_jobs_material_created", "material_id", "created_at"),
+        Index("ix_background_jobs_project_created", "project_id", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    material_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE")
+    # Материал — только у разбора (PARSE). У ролей ИИ и у LINK_ANSWERS задача
+    # привязана к проекту (или ни к чему — глобальные операции Библиотеки).
+    material_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE"), nullable=True
     )
-    kind: Mapped[ProcessingTaskKind] = mapped_column(
-        enum_type(ProcessingTaskKind, "processing_task_kind"), default=ProcessingTaskKind.PARSE
+    project_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
     )
-    state: Mapped[ProcessingTaskState] = mapped_column(
-        enum_type(ProcessingTaskState, "processing_task_state"),
-        default=ProcessingTaskState.QUEUED,
+    kind: Mapped[BackgroundJobKind] = mapped_column(
+        enum_type(BackgroundJobKind, "background_job_kind"), default=BackgroundJobKind.PARSE
     )
-    stage: Mapped[ProcessingStage] = mapped_column(
-        enum_type(ProcessingStage, "processing_stage"), default=ProcessingStage.QUEUED
+    state: Mapped[BackgroundJobState] = mapped_column(
+        enum_type(BackgroundJobState, "background_job_state"),
+        default=BackgroundJobState.QUEUED,
     )
-    parser_mode: Mapped[ParserMode] = mapped_column(enum_type(ParserMode, "task_parser_mode"))
+    stage: Mapped[ProcessingStage | None] = mapped_column(
+        enum_type(ProcessingStage, "processing_stage"), nullable=True
+    )
+    parser_mode: Mapped[ParserMode | None] = mapped_column(
+        enum_type(ParserMode, "task_parser_mode"), nullable=True
+    )
     done: Mapped[int] = mapped_column(Integer, default=0)
     total: Mapped[int] = mapped_column(Integer, default=0)
     checkpoint: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
@@ -1053,6 +1079,11 @@ class AiRun(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     project_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
+    )
+    # Заполняется только у вызовов, запущенных из очереди фоновых операций —
+    # прямой вызов гейтвея (например, экзаменационный чат) его не проставляет.
+    job_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("background_jobs.id", ondelete="SET NULL"), nullable=True
     )
     provider_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),

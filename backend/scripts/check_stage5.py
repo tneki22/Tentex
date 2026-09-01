@@ -310,7 +310,7 @@ def run() -> None:
             with closing(sqlite3.connect(data_dir / "tentex.sqlite")) as connection:
                 connection.execute(
                     """
-                    UPDATE processing_tasks
+                    UPDATE background_jobs
                     SET state = 'running', lease_owner = 'dead-worker', lease_expires_at = ?
                     WHERE material_id = ?
                     """,
