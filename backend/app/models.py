@@ -25,6 +25,7 @@ from sqlalchemy import (
     Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.schema import conv
 
 from app.db import Base
 
@@ -321,9 +322,15 @@ class GradeMethod(StrEnum):
 class Project(Base):
     __tablename__ = "projects"
     __table_args__ = (
-        CheckConstraint("color IS NULL OR color BETWEEN 1 AND 8", name="color_range"),
+        CheckConstraint(
+            "color IS NULL OR color BETWEEN 1 AND 8",
+            name=conv("ck_projects_ck_projects_color_range"),
+        ),
         CheckConstraint("sort_order >= 0", name="sort_order_nonnegative"),
-        CheckConstraint("program_revision >= 0", name="program_revision_nonnegative"),
+        CheckConstraint(
+            "program_revision >= 0",
+            name=conv("ck_projects_ck_projects_program_revision_nonnegative"),
+        ),
         Index("ix_projects_status_sort_order", "status", "sort_order"),
     )
 
@@ -486,13 +493,27 @@ class ProjectMaterial(Base):
 class MaterialPage(Base):
     __tablename__ = "material_pages"
     __table_args__ = (
-        UniqueConstraint("material_id", "revision", "page_number"),
-        CheckConstraint("revision > 0", name="revision_positive"),
-        CheckConstraint("page_number > 0", name="page_number_positive"),
-        CheckConstraint("width > 0 AND height > 0", name="dimensions_positive"),
+        UniqueConstraint(
+            "material_id",
+            "revision",
+            "page_number",
+            name="uq_material_pages_revision_page",
+        ),
+        CheckConstraint(
+            "revision > 0",
+            name=conv("ck_material_pages_ck_material_pages_revision_positive"),
+        ),
+        CheckConstraint(
+            "page_number > 0",
+            name=conv("ck_material_pages_ck_material_pages_page_number_positive"),
+        ),
+        CheckConstraint(
+            "width > 0 AND height > 0",
+            name=conv("ck_material_pages_ck_material_pages_dimensions_positive"),
+        ),
         CheckConstraint(
             "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
-            name="confidence_range",
+            name=conv("ck_material_pages_ck_material_pages_confidence_range"),
         ),
         Index("ix_material_pages_material_revision_page", "material_id", "revision", "page_number"),
         # Покрывающие индексы для сводки Библиотеки. Строка страницы тяжёлая
@@ -530,10 +551,24 @@ class MaterialPage(Base):
 class MaterialBlock(Base):
     __tablename__ = "material_blocks"
     __table_args__ = (
-        UniqueConstraint("material_id", "revision", "sort_order"),
-        CheckConstraint("revision > 0", name="revision_positive"),
-        CheckConstraint("sort_order >= 0", name="sort_order_nonnegative"),
-        CheckConstraint("page_from > 0 AND page_to >= page_from", name="page_range_valid"),
+        UniqueConstraint(
+            "material_id",
+            "revision",
+            "sort_order",
+            name="uq_material_blocks_revision_order",
+        ),
+        CheckConstraint(
+            "revision > 0",
+            name=conv("ck_material_blocks_ck_material_blocks_revision_positive"),
+        ),
+        CheckConstraint(
+            "sort_order >= 0",
+            name=conv("ck_material_blocks_ck_material_blocks_sort_order_nonnegative"),
+        ),
+        CheckConstraint(
+            "page_from > 0 AND page_to >= page_from",
+            name=conv("ck_material_blocks_ck_material_blocks_page_range_valid"),
+        ),
         Index(
             "ix_material_blocks_material_revision_order", "material_id", "revision", "sort_order"
         ),
@@ -555,10 +590,16 @@ class MaterialBlock(Base):
 class MaterialFragment(Base):
     __tablename__ = "material_fragments"
     __table_args__ = (
-        UniqueConstraint("page_id", "sort_order"),
-        CheckConstraint("sort_order >= 0", name="sort_order_nonnegative"),
+        UniqueConstraint(
+            "page_id", "sort_order", name="uq_material_fragments_page_order"
+        ),
         CheckConstraint(
-            "structure_level IS NULL OR structure_level >= 0", name="level_nonnegative"
+            "sort_order >= 0",
+            name=conv("ck_material_fragments_ck_material_fragments_sort_order_nonnegative"),
+        ),
+        CheckConstraint(
+            "structure_level IS NULL OR structure_level >= 0",
+            name=conv("ck_material_fragments_ck_material_fragments_level_nonnegative"),
         ),
         CheckConstraint("time_from IS NULL OR time_from >= 0", name="time_from_nonnegative"),
         CheckConstraint("time_to IS NULL OR time_to >= 0", name="time_to_nonnegative"),
@@ -646,7 +687,10 @@ class MaterialRevision(Base):
 class ProcessingTask(Base):
     __tablename__ = "processing_tasks"
     __table_args__ = (
-        CheckConstraint("done >= 0 AND total >= 0 AND done <= total", name="progress_valid"),
+        CheckConstraint(
+            "done >= 0 AND total >= 0 AND done <= total",
+            name=conv("ck_processing_tasks_ck_processing_tasks_progress_valid"),
+        ),
         Index("ix_processing_tasks_state_created", "state", "created_at"),
         Index("ix_processing_tasks_material_created", "material_id", "created_at"),
     )
@@ -696,6 +740,7 @@ class ProgramNode(Base):
             "parent_id",
             "sort_order",
         ),
+        Index("ix_program_nodes_origin_material_id", "origin_material_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -736,7 +781,10 @@ class ReferenceAnswer(Base):
             ["program_nodes.project_id", "program_nodes.id"],
             ondelete="CASCADE",
         ),
-        CheckConstraint("revision >= 0", name="revision_nonnegative"),
+        CheckConstraint(
+            "revision >= 0",
+            name=conv("ck_reference_answers_ck_reference_answers_revision_nonnegative"),
+        ),
         Index("ix_reference_answers_project_active", "project_id", "is_active"),
         # Под каскад ON DELETE SET NULL при удалении материала-источника.
         Index("ix_reference_answers_source_material", "source_material_id"),
@@ -780,7 +828,12 @@ class ReferenceAnswerAttachment(Base):
             ["program_nodes.project_id", "program_nodes.id"],
             ondelete="CASCADE",
         ),
-        CheckConstraint("size_bytes >= 0", name="size_nonnegative"),
+        CheckConstraint(
+            "size_bytes >= 0",
+            name=conv(
+                "ck_reference_answer_attachments_ck_reference_answer_attachments_size_nonnegative"
+            ),
+        ),
         Index("ix_answer_attachments_node", "project_id", "program_node_id"),
     )
 
@@ -802,7 +855,12 @@ class Binding(Base):
             ["program_nodes.project_id", "program_nodes.id"],
             ondelete="CASCADE",
         ),
-        UniqueConstraint("project_id", "program_node_id", "fragment_id"),
+        UniqueConstraint(
+            "project_id",
+            "program_node_id",
+            "fragment_id",
+            name="uq_bindings_node_fragment",
+        ),
         Index("ix_bindings_project_node", "project_id", "program_node_id"),
         Index("ix_bindings_project_fragment", "project_id", "fragment_id"),
         Index("ix_bindings_material", "material_id"),
@@ -848,8 +906,16 @@ class WorkspaceState(Base):
 class ProjectActionLog(Base):
     __tablename__ = "project_action_log"
     __table_args__ = (
-        CheckConstraint("phase IN ('draft', 'active')", name="phase_value"),
-        CheckConstraint("payload_version >= 1", name="payload_version_positive"),
+        CheckConstraint(
+            "phase IN ('draft', 'active')",
+            name=conv("ck_project_action_log_ck_project_action_log_phase_value"),
+        ),
+        CheckConstraint(
+            "payload_version >= 1",
+            name=conv(
+                "ck_project_action_log_ck_project_action_log_payload_version_positive"
+            ),
+        ),
         Index(
             "ix_project_action_log_project_phase_undone_sequence",
             "project_id",
@@ -880,7 +946,7 @@ class AiProviderConnection(Base):
             "catalog_profile IN ('openrouter', 'openai_compatible')",
             name="catalog_profile",
         ),
-        UniqueConstraint("label", name="label"),
+        UniqueConstraint("label", name="uq_ai_provider_connections_label"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -1157,7 +1223,9 @@ class ChatMessage(Base):
 
     __tablename__ = "chat_messages"
     __table_args__ = (
-        UniqueConstraint("session_id", "sequence"),
+        UniqueConstraint(
+            "session_id", "sequence", name="uq_chat_messages_session_id_sequence"
+        ),
         CheckConstraint("sequence >= 1", name="sequence_positive"),
     )
 
@@ -1282,7 +1350,9 @@ class Conspect(Base):
             ["program_nodes.project_id", "program_nodes.id"],
             ondelete="CASCADE",
         ),
-        CheckConstraint("revision >= 1", name="conspect_revision_positive"),
+        CheckConstraint(
+            "revision >= 1", name=conv("ck_conspects_ck_conspects_revision_positive")
+        ),
         Index("ix_conspects_project", "project_id"),
     )
 
@@ -1304,7 +1374,10 @@ class ConspectImage(Base):
             ["program_nodes.project_id", "program_nodes.id"],
             ondelete="CASCADE",
         ),
-        CheckConstraint("size_bytes >= 0", name="conspect_image_size_nonnegative"),
+        CheckConstraint(
+            "size_bytes >= 0",
+            name=conv("ck_conspect_images_ck_conspect_images_size_nonnegative"),
+        ),
         Index("ix_conspect_images_project_node", "project_id", "program_node_id"),
     )
 

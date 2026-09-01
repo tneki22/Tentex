@@ -38,14 +38,15 @@ from app.materials.parsers.native import inspect, parse_text_page
 from app.materials.schemas import (
     BlockRead,
     ExamMaterialSlot,
-    ExternalMaterialCreate,
     FragmentRead,
+    LibraryExternalMaterialCreate,
     LibraryMaterialAttachWrite,
     LibraryMaterialCapabilities,
     LibraryMaterialDetailRead,
     LibraryMaterialRead,
     LibrarySearchHit,
     LibrarySearchResult,
+    LibraryTextMaterialCreate,
     LibraryUsageRead,
     MaterialDeletePreview,
     MaterialPresentationKind,
@@ -61,7 +62,6 @@ from app.materials.schemas import (
     ProcessingStart,
     ProcessingTaskRead,
     SourceRefreshResult,
-    TextMaterialCreate,
 )
 from app.materials.segmentation import build_blocks
 from app.materials.storage import material_path, store_revision_text, store_text, store_upload
@@ -815,7 +815,9 @@ async def create_library_upload(session: Session, upload: UploadFile) -> Library
     return read_library_material(session, material_id)
 
 
-def create_library_text(session: Session, command: TextMaterialCreate) -> LibraryMaterialDetailRead:
+def create_library_text(
+    session: Session, command: LibraryTextMaterialCreate
+) -> LibraryMaterialDetailRead:
     session.rollback()
     with session.begin():
         material_id = create_text_material_row(session, command).id
@@ -823,7 +825,7 @@ def create_library_text(session: Session, command: TextMaterialCreate) -> Librar
 
 
 def create_library_external(
-    session: Session, command: ExternalMaterialCreate
+    session: Session, command: LibraryExternalMaterialCreate
 ) -> LibraryMaterialDetailRead:
     fetched = fetch_external(command)
     session.rollback()
@@ -832,7 +834,7 @@ def create_library_external(
     return read_library_material(session, material_id)
 
 
-def create_text_material_row(session: Session, command: TextMaterialCreate) -> Material:
+def create_text_material_row(session: Session, command: LibraryTextMaterialCreate) -> Material:
     sha256, storage_path, size, original_name, media_type = store_text(command.name, command.text)
     return _existing_or_new(
         session,
@@ -848,7 +850,7 @@ def create_text_material_row(session: Session, command: TextMaterialCreate) -> M
 
 
 def fetch_external(
-    command: ExternalMaterialCreate,
+    command: LibraryExternalMaterialCreate,
 ) -> tuple[str, str, str, Any, MaterialSourceKind]:
     """Сеть трогается до открытия транзакции: держать её на время запроса нельзя."""
     if command.kind == "youtube":
@@ -1632,7 +1634,7 @@ def refresh_source(session: Session, material_id: UUID) -> SourceRefreshResult:
             code="material_refresh_unsupported",
         )
     session.rollback()
-    command = ExternalMaterialCreate(
+    command = LibraryExternalMaterialCreate(
         kind="youtube" if kind == "youtube" else "url", url=material.source_url
     )
     name, text, source_url, retrieved_at, _ = fetch_external(command)

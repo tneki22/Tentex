@@ -17,10 +17,12 @@ from app.materials.schemas import (
     ExamProgramImportWrite,
     ExamProgramPreview,
     ExternalMaterialCreate,
+    LibraryExternalMaterialCreate,
     LibraryMaterialAttachWrite,
     LibraryMaterialDetailRead,
     LibraryMaterialRead,
     LibrarySearchResult,
+    LibraryTextMaterialCreate,
     MaterialAnswerImportResult,
     MaterialDeletePreview,
     MaterialPurpose,
@@ -71,7 +73,7 @@ async def upload_library_material(
     status_code=status.HTTP_201_CREATED,
 )
 def create_library_text_material(
-    command: TextMaterialCreate, session: SessionDependency
+    command: LibraryTextMaterialCreate, session: SessionDependency
 ) -> LibraryMaterialDetailRead:
     return library.create_library_text(session, command)
 
@@ -82,7 +84,7 @@ def create_library_text_material(
     status_code=status.HTTP_201_CREATED,
 )
 def create_library_external_material(
-    command: ExternalMaterialCreate, session: SessionDependency
+    command: LibraryExternalMaterialCreate, session: SessionDependency
 ) -> LibraryMaterialDetailRead:
     return library.create_library_external(session, command)
 

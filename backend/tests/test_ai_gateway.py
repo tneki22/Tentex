@@ -129,7 +129,10 @@ async def test_retries_once_on_retryable_provider_error_then_succeeds(
 ) -> None:
     del ai_config
     fake = FakeTransport(
-        completions=[ProviderError("ai_provider_unavailable", "temporary routing hiccup"), _completion()]
+        completions=[
+            ProviderError("ai_provider_unavailable", "temporary routing hiccup"),
+            _completion(),
+        ]
     )
     result = await ModelGateway(session, fake).complete(_request())
     assert result.value.answer == "ok"
