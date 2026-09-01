@@ -69,6 +69,13 @@ export const listBackgroundJobs = (
 export const getBackgroundJob = (jobId: string, signal?: AbortSignal): Promise<BackgroundJobRead> =>
   request(`${BACKGROUND_JOBS_PATH}/${encodeURIComponent(jobId)}`, { signal });
 
+/** Разобранный ответ завершившейся задачи — ровно то, что вернул бы синхронный
+ *  вызов. Отдельным запросом, а не полем в `BackgroundJobRead`: реестр
+ *  опрашивается раз в секунду, и таскать в каждом ответе целое предложение
+ *  модели незачем. Доступен только у задачи в состоянии `completed`. */
+export const getBackgroundJobResult = <T>(jobId: string, signal?: AbortSignal): Promise<T> =>
+  request(`${BACKGROUND_JOBS_PATH}/${encodeURIComponent(jobId)}/result`, { signal });
+
 export const cancelBackgroundJob = (jobId: string): Promise<BackgroundJobRead> =>
   request(`${BACKGROUND_JOBS_PATH}/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
 
