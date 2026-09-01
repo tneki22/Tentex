@@ -355,11 +355,7 @@ export function LibraryMaterialWorkspace() {
     : false;
   const revisionLabel = (revision: number) => {
     const row = store.revisions.find((item) => item.revision === revision);
-    const modeLabel = row?.parser_mode === "textbook"
-      ? "Учебник"
-      : row?.parser_mode === "fast"
-        ? "Быстро"
-        : "правка";
+    const modeLabel = row?.parser_mode === "fast" ? "Быстро" : "правка";
     return `Версия ${revision} · ${modeLabel}`;
   };
   const comparisonLabels = isVersionComparison && compareRevision !== null

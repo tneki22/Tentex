@@ -266,7 +266,7 @@ export function MaterialFileTab({
           <div><dt>Страницы</dt><dd>{material.page_count ?? "—"}</dd></div>
           <div><dt>Сканы</dt><dd>{material.scan_page_count}</dd></div>
           {material.parser_mode !== "fast" && <div><dt>Низкое качество</dt><dd>{material.ocr_low_page_count || "нет"}</dd></div>}
-          <div><dt>Режим разбора</dt><dd>{material.parser_mode === "fast" ? "Быстро" : material.parser_mode === "textbook" ? "Учебник" : "Не запускался"}</dd></div>
+          <div><dt>Режим разбора</dt><dd>{material.parser_mode === "fast" ? "Быстро" : "Не запускался"}</dd></div>
           <div><dt>Добавлен в проект</dt><dd>{dateLabel(material.attached_at)}</dd></div>
           <div><dt>Загружен</dt><dd>{dateLabel(material.created_at)}</dd></div>
           <div><dt>Изменён</dt><dd>{dateLabel(material.updated_at)}</dd></div>
