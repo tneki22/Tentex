@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -85,3 +86,25 @@ def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:
         )
     session.expire_all()
     return get_job(session, job_id)
+
+
+def get_job_result(session: Session, job_id: UUID) -> dict[str, Any]:
+    """Отдать разобранный ответ роли, сохранённый завершившейся задачей.
+
+    Именно это делает уход с экрана безопасным: задача досчитывается в фоне, а
+    вернувшийся диалог забирает готовое предложение отсюда, вместо того чтобы
+    звать модель заново и платить за неё второй раз.
+    """
+    job = _job_or_404(session, job_id)
+    if job.state != BackgroundJobState.COMPLETED:
+        raise ProjectConflictError(
+            "Задача ещё не завершена — результата пока нет",
+            code="background_job_not_completed",
+        )
+    result = job.checkpoint.get("result")
+    if result is None:
+        raise ProjectNotFoundError(
+            "Задача завершилась без сохранённого результата",
+            code="background_job_result_missing",
+        )
+    return result

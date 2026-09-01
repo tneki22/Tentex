@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -27,6 +27,16 @@ def list_background_jobs(
 @router.get("/{job_id}", response_model=BackgroundJobRead)
 def get_background_job(job_id: UUID, session: SessionDependency) -> BackgroundJobRead:
     return registry.get_job(session, job_id)
+
+
+@router.get("/{job_id}/result")
+def get_background_job_result(job_id: UUID, session: SessionDependency) -> dict[str, Any]:
+    """Разобранный ответ завершившейся задачи — то же, что вернул бы синхронный
+    вызов. Отдельным маршрутом, а не полем в `BackgroundJobRead`: список задач
+    опрашивается раз в несколько секунд, и таскать в каждом ответе целое
+    предложение модели незачем.
+    """
+    return registry.get_job_result(session, job_id)
 
 
 @router.post("/{job_id}/cancel", response_model=BackgroundJobRead)

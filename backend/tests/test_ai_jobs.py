@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 from decimal import Decimal
 
+import pytest
 from conftest import add_page_with_fragments, make_material
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,8 +19,10 @@ from app.ai import jobs as ai_jobs
 from app.ai.gateway import ModelGateway
 from app.ai.jobs import process_ai_job
 from app.ai.provider import FakeTransport, ProviderCompletion, ProviderUsage
+from app.background import registry
 from app.materials import ai_cleanup
 from app.models import AiRun, BackgroundJob, BackgroundJobKind, BackgroundJobState
+from app.projects.errors import ProjectConflictError
 
 
 def _completion() -> ProviderCompletion:
@@ -150,3 +153,39 @@ def test_process_ai_job_stale_snapshot_fails_with_domain_error_detail(
     assert finished is not None
     assert finished.state == BackgroundJobState.FAILED
     assert finished.error == "Страница не найдена"
+
+
+def test_completed_job_keeps_result_for_a_returning_screen(
+    session: Session, ai_config: str
+) -> None:
+    """Главный смысл захода: экран можно закрыть, а результат не теряется.
+
+    Задача досчитывается в фоне и кладёт разобранный ответ в `checkpoint`,
+    откуда вернувшийся диалог забирает его через `GET /background-jobs/{id}/result`
+    — не платя за повторный вызов модели.
+    """
+    del ai_config
+    material, source_hash = _material_with_page(session, "a105")
+    job = _cleanup_job(session, material, source_hash)
+    gateway = ModelGateway(session, FakeTransport(completions=[_completion()]))
+
+    process_ai_job(session, job, gateway)
+    session.expire_all()
+
+    result = registry.get_job_result(session, job.id)
+    # Сохранён весь ответ синхронного вызова, а не сырой payload модели:
+    # вернувшийся диалог получает ровно то, что получил бы, дождавшись ответа.
+    assert result["suggestion"]["markdown"] == "# Чисто"
+    assert result["page_number"] == 1
+    assert str(job.id) not in result  # результат, а не эхо задачи
+
+
+def test_result_of_unfinished_job_is_refused_not_invented(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    material, source_hash = _material_with_page(session, "a106")
+    job = _cleanup_job(session, material, source_hash)
+
+    with pytest.raises(ProjectConflictError):
+        registry.get_job_result(session, job.id)

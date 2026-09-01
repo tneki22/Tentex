@@ -20,6 +20,7 @@ import asyncio
 import logging
 from uuid import UUID
 
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.ai.gateway import ModelGateway
@@ -41,13 +42,17 @@ DEADLINE_SECONDS: dict[BackgroundJobKind, int] = {
 }
 
 
-async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway) -> None:
+async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway) -> BaseModel:
     """Восстановить команду из `checkpoint` и позвать тот же `run()`, которым
-    пользуется синхронный HTTP-путь (прямой вызов, не через очередь)."""
+    пользуется синхронный HTTP-путь (прямой вызов, не через очередь).
+
+    Возвращает ту же модель ответа, что получал бы синхронный вызов: именно её
+    заберёт экран, вернувшийся к задаче после ухода (см. `_mark_finished`).
+    """
     command = job.checkpoint.get("command") or {}
     if job.kind == BackgroundJobKind.AI_GROUPING:
         assert job.project_id is not None
-        await program_ai.run(
+        return await program_ai.run(
             session,
             gateway,
             job.project_id,
@@ -56,7 +61,7 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
         )
     elif job.kind == BackgroundJobKind.AI_IMPORT_REPAIR:
         assert job.project_id is not None
-        await import_repair.run_program_repair(
+        return await import_repair.run_program_repair(
             session,
             gateway,
             job.project_id,
@@ -65,7 +70,7 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
         )
     elif job.kind == BackgroundJobKind.AI_PREPARATION:
         assert job.project_id is not None
-        await preparation_ai.run(
+        return await preparation_ai.run(
             session,
             gateway,
             job.project_id,
@@ -75,7 +80,7 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
     elif job.kind == BackgroundJobKind.AI_CLEANUP:
         assert job.material_id is not None
         page_number = int(job.checkpoint["page_number"])
-        await ai_cleanup.run(
+        return await ai_cleanup.run(
             session,
             gateway,
             job.project_id,
@@ -90,21 +95,31 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
 
 async def _run_with_deadline(
     session: Session, job: BackgroundJob, gateway: ModelGateway, deadline: int
-) -> None:
+) -> BaseModel:
     async with asyncio.timeout(deadline):
-        await _dispatch(session, job, gateway)
+        return await _dispatch(session, job, gateway)
 
 
-def _mark_finished(session: Session, job_id: UUID) -> None:
+def _mark_finished(session: Session, job_id: UUID, result: BaseModel) -> None:
     """Успех — но если пока шёл вызов, задачу успели отменить (`pause_requested`,
     см. `app.background.registry.cancel_job`), это не `completed`, а `cancelled`:
     досрочно оборвать уже идущий вызов модели нечем, но сообщать о нём как об
     успешном выполнении, которого пользователь не просил дожидаться, нечестно.
+
+    Ответ роли кладётся в `checkpoint["result"]` уже разобранным — в той же
+    форме, что вернул бы синхронный вызов. Сырой `ai_runs.response_payload` для
+    этого не годится: у починки списка вопросов модель отвечает в плоском
+    проволочном формате, и разворачивает его в дерево билетов серверный
+    `_wire_to_suggestion`. Хранить здесь результат уже после этой сборки — то,
+    что позволяет экрану вернуться к готовому предложению, не повторяя разбор.
     """
     with session.begin():
         job = session.get(BackgroundJob, job_id)
         if job is None:
             return
+        checkpoint = dict(job.checkpoint)
+        checkpoint["result"] = result.model_dump(mode="json")
+        job.checkpoint = checkpoint
         job.state = (
             BackgroundJobState.CANCELLED if job.pause_requested else BackgroundJobState.COMPLETED
         )
@@ -143,8 +158,8 @@ def process_ai_job(
     deadline = DEADLINE_SECONDS.get(job.kind, 600)
     gateway = gateway or ModelGateway(session)
     try:
-        asyncio.run(_run_with_deadline(session, job, gateway, deadline))
-        _mark_finished(session, job_id)
+        result = asyncio.run(_run_with_deadline(session, job, gateway, deadline))
+        _mark_finished(session, job_id, result)
     except TimeoutError:
         _mark_failed(
             session, job_id, f"Задача не уложилась в отведённые {deadline} с и была прервана"
