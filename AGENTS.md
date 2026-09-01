@@ -72,11 +72,11 @@ npm run lint
 Только фронт: `cd frontend && npm run dev | typecheck | build`.
 Только бэк: `cd backend && python -m ruff check .`.
 
-Команды `npm test` нет, тестов на фронтенде тоже. На бэкенде есть pytest: `cd backend && python -m pytest` — 25 файлов в `backend/tests/`, 174 теста. Плюс сквозные проверки по подсистемам в `backend/scripts/`: `check_stage2` … `check_stage5`, `check_manual_binding`, `check_ai_gateway`, `check_exam_chat`, `check_library_workspace`.
+Команды `npm test` нет, тестов на фронтенде тоже. На бэкенде есть pytest: `cd backend && python -m pytest` — 36 файлов в `backend/tests/`, 325 тестов на текущий момент (после вливания резки функций часть уйдёт — новое число не прогнозируем заранее). Плюс сквозные проверки по подсистемам в `backend/scripts/`: `check_stage2` … `check_stage5`, `check_manual_binding`, `check_ai_gateway`, `check_exam_chat`, `check_library_workspace`.
 
 ## Стек
 
-React + TypeScript + Vite · Radix Primitives для поведения компонентов · Python + FastAPI · SQLite с WAL везде, включая учебные базы · `sqlite-vec` для векторов · FTS5 для BM25 · PyMuPDF · PP-OCRv5 (CPU) / PP-StructureV3 + PP-FormulaNet (GPU, этап 5) · pymorphy3 · SM-2 · aiogram · pytest + Vitest + Playwright.
+React + TypeScript + Vite · Radix Primitives для поведения компонентов · Python + FastAPI · SQLite с WAL везде, включая учебные базы · `sqlite-vec` для векторов · FTS5 для BM25 · PyMuPDF · PP-OCRv5 (CPU) · pymorphy3 · SM-2 · aiogram · pytest + Vitest + Playwright.
 
 Radix (пакет `radix-ui`) добавлен на этапе 1: всплывашки, диалоги, тумблеры и радиогруппы требуют фокус-ловушки, позиционирования с обходом краёв экрана и ARIA — это ровно тот случай, когда берётся готовое. Он отдаёт разметку без стилей, поэтому обычный CSS на токенах остаётся. Обоснование и что осталось своим — `DESIGN.md`.
 
