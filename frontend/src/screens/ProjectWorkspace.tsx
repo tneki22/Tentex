@@ -129,7 +129,7 @@ function allowedTabs(project: Pick<ProjectRead, "workspace_variant" | "enabled_m
 }
 
 function tabLabel(tab: WorkspaceTab, textbook: boolean): string {
-  if (tab === "source") return textbook ? "Источник" : "Материал";
+  if (tab === "source") return textbook ? "Источник" : "Источники";
   return {
     answer: "Ответ",
     lesson: "Урок",
@@ -748,12 +748,15 @@ export function ProjectWorkspace() {
     if (!selected) {
       return <div className="workspace-empty-copy"><FileText size={26} /><h2>Выберите тему</h2><p>Материал появится после выбора темы слева.</p></div>;
     }
+    // Привязки файла эталонных ответов (mechanism "answers_file") уже показаны
+    // во вкладке «Ответ» как страницы/медиа эталона — здесь это другая сущность.
+    const topicSourceBindings = sourceBindings.filter((binding) => binding.mechanism !== "answers_file");
     return (
       <div className="workspace-source-tab">
         {sourceNotice && <p className="workspace-source-tab-notice" role="status">{sourceNotice}</p>}
-        {sourceBindingsLoading ? <LoadingState label="Загружаем привязки" /> : sourceBindings.length > 0 ? (
+        {sourceBindingsLoading ? <LoadingState label="Загружаем привязки" /> : topicSourceBindings.length > 0 ? (
           <ul className="workspace-source-tab-list">
-            {sourceBindings.map((binding) => (
+            {topicSourceBindings.map((binding) => (
               <li key={binding.id}>
                 <Link to={`/projects/${projectId}/materials/${binding.material_id}?page=${binding.page_number}&focus=${binding.fragment_id}`}>
                   <p>{binding.text.length > 160 ? `${binding.text.slice(0, 160)}…` : binding.text}</p>
