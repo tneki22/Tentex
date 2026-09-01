@@ -129,15 +129,19 @@ def _mark_failed(session: Session, job_id: UUID, message: str) -> None:
         job.updated_at = utc_now()
 
 
-def process_ai_job(session: Session, job: BackgroundJob) -> None:
+def process_ai_job(
+    session: Session, job: BackgroundJob, gateway: ModelGateway | None = None
+) -> None:
     """Выполнить задачу вызова модели, взятую из очереди воркером.
 
-    Гейтвей здесь боевой (`transport=None` → `production_transport`), в
-    отличие от тестов, где в него подставляется `FakeTransport`.
+    Гейтвей по умолчанию боевой (`transport=None` → `production_transport`
+    внутри `ModelGateway`) — воркер его не передаёт. Параметр существует
+    ради тестов: они подставляют `ModelGateway(session, FakeTransport(...))`,
+    не поднимая настоящего провайдера (см. `tests/test_ai_jobs.py`).
     """
     job_id = job.id
     deadline = DEADLINE_SECONDS.get(job.kind, 600)
-    gateway = ModelGateway(session)
+    gateway = gateway or ModelGateway(session)
     try:
         asyncio.run(_run_with_deadline(session, job, gateway, deadline))
         _mark_finished(session, job_id)
