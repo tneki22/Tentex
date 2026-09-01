@@ -578,6 +578,36 @@
   font-size: var(--text-xs);
 }
 
+/* Список фоновых задач в попапе «Фоновые задачи» (Ш6 плана): каждая строка —
+   TaskRow в своей обёртке, потому что обёртка ловит клик по строке и не
+   мешает кнопке «Отменить» внутри. .task-row сам убирает верхнюю границу у
+   первого дочернего элемента — здесь таким «первым» становится каждая
+   обёртка, поэтому граница между строками возвращается явно, через соседний
+   селектор. */
+.popover-task-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.popover-task-row + .popover-task-row .task-row {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-3);
+}
+
+.popover-task-row.is-linked {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.popover-task-row.is-linked:hover {
+  background: var(--surface-hover);
+}
+
+.popover-task-row.is-linked:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 /* --- Диалог --- */
 
 .dialog-overlay {

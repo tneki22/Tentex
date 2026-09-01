@@ -1,8 +1,18 @@
 import { Pause, Play, RotateCcw, X } from "lucide-react";
 import { IconButton, Progress } from "../ui";
 
-/** Что именно считается. Названия — из словаря проекта, без синонимов. */
-export type TaskKind = "parse" | "ocr" | "pass1" | "pass2";
+/** Что именно считается. Названия — из словаря проекта, без синонимов.
+ *  Виды ИИ (ai_*, link_answers) — из `BackgroundJobKind` бэкенда (Ш1 плана). */
+export type TaskKind =
+  | "parse"
+  | "ocr"
+  | "pass1"
+  | "pass2"
+  | "ai_grouping"
+  | "ai_import_repair"
+  | "ai_preparation"
+  | "ai_cleanup"
+  | "link_answers";
 
 export interface BackgroundTask {
   id: string;
@@ -25,6 +35,11 @@ const KIND_LABEL: Record<TaskKind, string> = {
   ocr: "Распознавание",
   pass1: "Проход 1",
   pass2: "Проход 2",
+  ai_grouping: "Разложить по разделам",
+  ai_import_repair: "Исправить список вопросов",
+  ai_preparation: "Прогноз подготовки",
+  ai_cleanup: "Очистка текста",
+  link_answers: "Автопривязка ответов",
 };
 
 interface TaskRowProps {

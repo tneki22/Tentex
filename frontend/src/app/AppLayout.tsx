@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, NavLink, Outlet, useLocation } from "react-router";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import {
   Activity,
   CircleCheck,
@@ -22,6 +22,57 @@ import { screenById } from "./screens";
 import { SCREEN_VIEWS } from "./views";
 import { ThemeToggle } from "./ThemeToggle";
 import { getAiSettings, type AiSettingsRead } from "../api/ai";
+import { cancelBackgroundJob, listBackgroundJobs, type BackgroundJobRead } from "../api/backgroundJobs";
+import { TaskRow, type BackgroundTask, type TaskKind } from "../components/domain";
+
+const BACKGROUND_POLL_MS = 4000;
+
+/** Куда ведёт клик по строке — экран, где задача была вызвана. Опознаём по
+ *  тому, что у задачи заполнено (project_id/material_id), а не по факту её
+ *  вида: `parse` и `ai_cleanup` бывают и в проекте, и в общей Библиотеке. */
+function backgroundJobPath(job: BackgroundJobRead): string | null {
+  switch (job.kind) {
+    case "parse":
+    case "ai_cleanup":
+      if (!job.material_id) return null;
+      return job.project_id
+        ? `/projects/${job.project_id}/materials/${job.material_id}`
+        : `/library/${job.material_id}`;
+    case "ai_grouping":
+    case "ai_import_repair":
+      return job.project_id ? `/projects/${job.project_id}/program` : null;
+    case "ai_preparation":
+      return job.project_id ? `/projects/new?draft=${job.project_id}` : null;
+    case "link_answers":
+      return job.project_id && job.material_id
+        ? `/projects/${job.project_id}/materials/${job.material_id}`
+        : null;
+    default:
+      return null;
+  }
+}
+
+/** Подпись без выдуманных названий: имени материала/проекта в самой записи
+ *  задачи нет, а тянуть его отдельным запросом сюда — за рамками Ш6. */
+function backgroundJobSubject(job: BackgroundJobRead): string {
+  if (job.material_id) return `материал ${job.material_id.slice(0, 8)}`;
+  if (job.project_id) return `проект ${job.project_id.slice(0, 8)}`;
+  return "фоновая операция";
+}
+
+function toBackgroundTask(job: BackgroundJobRead): BackgroundTask {
+  return {
+    id: job.id,
+    kind: job.kind as TaskKind,
+    subject: backgroundJobSubject(job),
+    unit: job.kind === "parse" ? "страниц" : "",
+    done: job.done,
+    total: job.total,
+    etaMinutes: null,
+    state: job.state as BackgroundTask["state"],
+    error: job.error ?? undefined,
+  };
+}
 
 /**
  * Оболочка: панель установки слева, полоса действий сверху, контент справа.
@@ -44,12 +95,36 @@ const HOME_PATH = screenById("projects").navPath;
 
 export function AppLayout() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === "1");
   const [scrolled, setScrolled] = useState(false);
   const [aiSnapshot, setAiSnapshot] = useState<AiSettingsRead | null>(null);
   const [aiSnapshotFailed, setAiSnapshotFailed] = useState(false);
+  const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJobRead[]>([]);
   const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const loadBackgroundJobs = () => {
+      void listBackgroundJobs({ activeOnly: true }).then((jobs) => {
+        if (active) setBackgroundJobs(jobs);
+      }).catch(() => undefined);
+    };
+    loadBackgroundJobs();
+    const timer = window.setInterval(loadBackgroundJobs, BACKGROUND_POLL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  function cancelJob(jobId: string) {
+    void cancelBackgroundJob(jobId)
+      .then((updated) => setBackgroundJobs((current) => current.map((job) => job.id === updated.id ? updated : job)
+        .filter((job) => job.state === "queued" || job.state === "running" || job.state === "paused")))
+      .catch(() => undefined);
+  }
 
   useEffect(() => {
     let active = true;
@@ -188,10 +263,42 @@ export function AppLayout() {
                 <button type="button" className="app-widget">
                   <Activity size={15} aria-hidden="true" />
                   <b className="nav-label">Фоновая задача</b>
+                  {backgroundJobs.length > 0 && <span className="app-widget-value">{backgroundJobs.length}</span>}
                 </button>
               }
             >
-              <p className="popover-note">Фон свободен.</p>
+              {backgroundJobs.length === 0 ? (
+                <p className="popover-note">Фон свободен.</p>
+              ) : (
+                <div className="popover-task-list">
+                  {backgroundJobs.map((job) => {
+                    const path = backgroundJobPath(job);
+                    // Строка целиком ведёт на экран задачи, но клик по кнопке
+                    // «Отменить» внутри TaskRow не должен ещё и переключать
+                    // экран — отсекаем клики, начавшиеся на вложенной кнопке.
+                    return (
+                      <div
+                        key={job.id}
+                        className={path ? "popover-task-row is-linked" : "popover-task-row"}
+                        role={path ? "button" : undefined}
+                        tabIndex={path ? 0 : undefined}
+                        onClick={path ? (event) => {
+                          if ((event.target as HTMLElement).closest("button")) return;
+                          navigate(path);
+                        } : undefined}
+                        onKeyDown={path ? (event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          if ((event.target as HTMLElement).closest("button")) return;
+                          event.preventDefault();
+                          navigate(path);
+                        } : undefined}
+                      >
+                        <TaskRow task={toBackgroundTask(job)} onCancel={cancelJob} />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </Popover>
 
             <Popover
