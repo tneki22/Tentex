@@ -704,9 +704,13 @@ class BackgroundJob(Base):
 
     __tablename__ = "background_jobs"
     __table_args__ = (
+        # Имя намеренно оставлено старым (таблица была processing_tasks):
+        # SQLite ненадёжно отражает имена CHECK-ограничений при пересборке
+        # таблицы в batch-режиме Alembic — попытка переименовать её при
+        # переносе на background_jobs ломает миграцию (см. 20260901_0031).
         CheckConstraint(
             "done >= 0 AND total >= 0 AND done <= total",
-            name=conv("ck_background_jobs_ck_background_jobs_progress_valid"),
+            name=conv("ck_processing_tasks_ck_processing_tasks_progress_valid"),
         ),
         Index("ix_background_jobs_state_created", "state", "created_at"),
         Index("ix_background_jobs_material_created", "material_id", "created_at"),

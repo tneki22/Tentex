@@ -54,13 +54,11 @@ def upgrade() -> None:
     op.drop_index("ix_processing_tasks_material_created", table_name="background_jobs")
 
     with op.batch_alter_table("background_jobs", recreate="always") as batch:
-        batch.drop_constraint(
-            "ck_processing_tasks_ck_processing_tasks_progress_valid", type_="check"
-        )
-        batch.create_check_constraint(
-            "ck_background_jobs_ck_background_jobs_progress_valid",
-            "done >= 0 AND total >= 0 AND done <= total",
-        )
+        # Ограничение "progress_valid" не переименовывается: SQLite ненадёжно
+        # отражает имена CHECK при пересборке таблицы в batch-режиме — попытка
+        # снять его по новому имени валит миграцию (KeyError у Alembic). Оно
+        # остаётся под старым именем и переносится как есть; модель (models.py)
+        # объявляет то же самое старое имя, поэтому расхождения с ORM нет.
         batch.drop_constraint("fk_processing_tasks_material_id_materials", type_="foreignkey")
         batch.alter_column("material_id", existing_type=sa.Uuid(), nullable=True)
         batch.create_foreign_key(
@@ -181,13 +179,6 @@ def downgrade() -> None:
             existing_type=enum("fast", name="task_parser_mode"),
             type_=enum("fast", name="task_parser_mode"),
             nullable=False,
-        )
-        batch.drop_constraint(
-            "ck_background_jobs_ck_background_jobs_progress_valid", type_="check"
-        )
-        batch.create_check_constraint(
-            "ck_processing_tasks_ck_processing_tasks_progress_valid",
-            "done >= 0 AND total >= 0 AND done <= total",
         )
 
     op.rename_table("background_jobs", "processing_tasks")
