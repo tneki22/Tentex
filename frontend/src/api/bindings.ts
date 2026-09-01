@@ -1,5 +1,6 @@
 import type { PageQuality } from "./materials";
 import { ProjectApiError, request, type LatestUndoableAction } from "./projects";
+import type { BackgroundJobStartRead } from "./backgroundJobs";
 
 export type BindingStatus = "manual" | "confirmed" | "machine" | "removed" | "orphaned";
 export type BindingMechanism = "manual" | "search" | "answers_file" | "pass_two";
@@ -143,10 +144,13 @@ export const removeBindingsBulk = (
   body: JSON.stringify({ material_id: command.materialId, page_number: command.pageNumber ?? null }),
 });
 
+/** Не используется ни одним экраном: ручной автоподбор идёт через
+ *  `streamAnswersLink` (SSE-эндпоинт `/link-answers/stream`, синхронный и не
+ *  изменившийся). Тип обновлён вслед за бэкендом ради согласованности API. */
 export const linkAnswersMaterial = (
   projectId: string,
   materialId: string,
-): Promise<AnswersLinkRead> => request(
+): Promise<BackgroundJobStartRead> => request(
   `/api/projects/${encodeURIComponent(projectId)}/materials/${encodeURIComponent(materialId)}/link-answers`,
   { method: "POST" },
 );

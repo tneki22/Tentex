@@ -1,5 +1,6 @@
 import { ProjectApiError, request, type ProgramChangeResult } from "./projects";
 import type { AiPreflight, AiUsage } from "./ai";
+import type { BackgroundJobStartRead } from "./backgroundJobs";
 
 export type MaterialPurpose = "exam_structure" | "reference_answers" | "study_source";
 export type ExamMaterialSlot =
@@ -523,7 +524,7 @@ export const runMaterialPageCleanup = (
     confirmed: boolean;
   },
   signal?: AbortSignal,
-): Promise<CleanupRunRead> => request(
+): Promise<BackgroundJobStartRead> => request(
   `${materialPath(projectId, materialId)}/pages/${page}/ai-cleanup`,
   { method: "POST", body: JSON.stringify(command), signal },
 );
@@ -757,7 +758,7 @@ export const runLibraryPageCleanup = (
     confirmed: boolean;
   },
   signal?: AbortSignal,
-): Promise<CleanupRunRead> => request(
+): Promise<BackgroundJobStartRead> => request(
   `${libraryPath(materialId)}/pages/${page}/ai-cleanup`,
   { method: "POST", body: JSON.stringify(command), signal },
 );

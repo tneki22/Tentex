@@ -1,3 +1,5 @@
+import type { BackgroundJobStartRead } from "./backgroundJobs";
+
 export type ProjectStatus = "draft" | "active" | "archived" | "completed";
 export type WorkspaceVariant = "exam" | "textbook";
 export type TemplateKey = "exam" | "textbook" | "free";
@@ -718,7 +720,7 @@ export const runProgramGrouping = (
     confirmed: boolean;
   },
   signal?: AbortSignal,
-): Promise<ProgramGroupingRunRead> => request(`${projectPath(projectId)}/program/ai-grouping`, {
+): Promise<BackgroundJobStartRead> => request(`${projectPath(projectId)}/program/ai-grouping`, {
   method: "POST",
   body: JSON.stringify(command),
   signal,
@@ -753,7 +755,7 @@ export const runPreparationEstimate = (
   projectId: string,
   command: PreparationEstimateInput & { expected_input_hash: string; confirmed: boolean },
   signal?: AbortSignal,
-): Promise<PreparationEstimateRunRead> => request(`${projectPath(projectId)}/preparation-estimate`, {
+): Promise<BackgroundJobStartRead> => request(`${projectPath(projectId)}/preparation-estimate`, {
   method: "POST",
   body: JSON.stringify(command),
   signal,
@@ -778,7 +780,7 @@ export const runProgramImportRepair = (
     confirmed: boolean;
   },
   signal?: AbortSignal,
-): Promise<ProgramImportRepairRunRead> => request(`${projectPath(projectId)}/program/ai-import-repair`, {
+): Promise<BackgroundJobStartRead> => request(`${projectPath(projectId)}/program/ai-import-repair`, {
   method: "POST",
   body: JSON.stringify(command),
   signal,
