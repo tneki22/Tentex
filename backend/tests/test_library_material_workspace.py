@@ -5,20 +5,25 @@
 """
 
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from conftest import add_page_with_fragments, link_material, make_exam_project, make_material
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
+from app.db import get_session
+from app.main import create_app
 from app.materials import library
 from app.materials import revisions as revision_registry
 from app.materials.schemas import (
     LibraryMaterialAttachWrite,
+    LibraryTextMaterialCreate,
     MaterialPurpose,
     ProcessingStart,
-    TextMaterialCreate,
 )
 from app.models import (
     Material,
@@ -172,12 +177,128 @@ def test_page_is_readable_without_any_project(session: Session) -> None:
 
 def test_global_text_material_is_created_without_project(session: Session) -> None:
     detail = library.create_library_text(
-        session, TextMaterialCreate(name="Конспект.txt", text="Первый абзац")
+        session, LibraryTextMaterialCreate(name="Конспект.txt", text="Первый абзац")
     )
 
     assert detail.usage == []
     assert detail.presentation_kind == "plain_text"
     assert detail.status == "ready_to_process"
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("/api/materials/text", {"name": "Конспект.txt", "text": "Первый абзац"}),
+        ("/api/materials/external", {"kind": "url", "url": "https://example.test"}),
+    ],
+)
+def test_library_create_http_accepts_only_library_fields(
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    payload: dict[str, str],
+) -> None:
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(
+        library,
+        "fetch_external",
+        lambda _command: (
+            "Страница.md",
+            "Сохранённый текст",
+            "https://example.test",
+            datetime(2026, 1, 1),
+            MaterialSourceKind.URL,
+        ),
+    )
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: session
+
+    response = TestClient(app, raise_server_exceptions=False).post(path, json=payload)
+
+    assert response.status_code == 201
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_role", "main"),
+        ("purposes", ["study_source"]),
+        ("exam_slot", "question_list"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("/api/materials/text", {"name": "Конспект.txt", "text": "Первый абзац"}),
+        ("/api/materials/external", {"kind": "url", "url": "https://example.test"}),
+    ],
+)
+def test_library_create_http_rejects_project_fields(
+    session: Session,
+    path: str,
+    payload: dict[str, str],
+    field: str,
+    value: object,
+) -> None:
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: session
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        path, json={**payload, field: value}
+    )
+
+    assert response.status_code == 422
+    assert any(
+        error["loc"] == ["body", field] and error["type"] == "extra_forbidden"
+        for error in response.json()["detail"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("path_suffix", "payload"),
+    [
+        ("text", {"name": "Вопросы.txt", "text": "1. Первый вопрос"}),
+        ("external", {"kind": "url", "url": "https://example.test"}),
+    ],
+)
+def test_project_create_http_keeps_project_fields(
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path_suffix: str,
+    payload: dict[str, str],
+) -> None:
+    project = make_exam_project(session)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(
+        library,
+        "fetch_external",
+        lambda _command: (
+            "Вопросы.md",
+            "1. Первый вопрос",
+            "https://example.test",
+            datetime(2026, 1, 1),
+            MaterialSourceKind.URL,
+        ),
+    )
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: session
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        f"/api/projects/{project.id}/materials/{path_suffix}",
+        json={
+            **payload,
+            "source_role": "main",
+            "purposes": ["exam_structure"],
+            "exam_slot": "question_list",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["source_role"] == "main"
+    assert response.json()["purposes"] == ["exam_structure"]
+    assert response.json()["exam_slot"] == "question_list"
 
 
 def test_attach_links_existing_material_and_rejects_duplicate(session: Session) -> None:

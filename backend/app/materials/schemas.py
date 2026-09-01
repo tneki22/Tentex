@@ -76,17 +76,23 @@ class MaterialUpdate(ApiModel):
         return self
 
 
-class TextMaterialCreate(ApiModel):
+class LibraryTextMaterialCreate(ApiModel):
     name: NonBlank = "Вставленный текст.txt"
     text: NonBlank
+
+
+class TextMaterialCreate(LibraryTextMaterialCreate):
     source_role: SourceRole = SourceRole.ADDITIONAL
     purposes: list[MaterialPurpose] = Field(default_factory=lambda: [MaterialPurpose.STUDY_SOURCE])
     exam_slot: ExamMaterialSlot | None = None
 
 
-class ExternalMaterialCreate(ApiModel):
+class LibraryExternalMaterialCreate(ApiModel):
     kind: Literal["url", "youtube"]
     url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8, max_length=2048)]
+
+
+class ExternalMaterialCreate(LibraryExternalMaterialCreate):
     source_role: SourceRole = SourceRole.ADDITIONAL
     purposes: list[MaterialPurpose] = Field(default_factory=lambda: [MaterialPurpose.STUDY_SOURCE])
     exam_slot: ExamMaterialSlot | None = None
