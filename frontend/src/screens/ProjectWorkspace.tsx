@@ -817,7 +817,7 @@ export function ProjectWorkspace() {
             <ul className="workspace-source-tab-results">
               {sourceResults.map((result) => {
                 const alreadyBound = result.already_bound
-                  || sourceBindings.some((binding) => result.fragment_ids.includes(binding.fragment_id));
+                  || topicSourceBindings.some((binding) => result.fragment_ids.includes(binding.fragment_id));
                 return (
                   <li key={result.fragment_ids.join(",")}>
                     <div className="workspace-source-tab-result-copy">

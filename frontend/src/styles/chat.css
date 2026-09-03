@@ -196,6 +196,10 @@
   box-shadow: var(--shadow-md);
 }
 
+.chat-jump-button:hover:not(:disabled) {
+  transform: none;
+}
+
 .chat-status-line {
   margin: 0;
   color: var(--muted);
