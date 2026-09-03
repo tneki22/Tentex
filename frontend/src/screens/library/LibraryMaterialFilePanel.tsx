@@ -11,7 +11,7 @@ import { Button, ConfirmDialog, Disclosure, StatusBadge } from "../../components
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "список вопросов",
-  reference_answers: "эталонные ответы",
+  reference_answers: "ответы",
   study_source: "учебный источник",
 };
 

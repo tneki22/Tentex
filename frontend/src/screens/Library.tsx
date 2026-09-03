@@ -48,7 +48,7 @@ import {
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "список вопросов",
-  reference_answers: "эталонные ответы",
+  reference_answers: "ответы",
   study_source: "учебный источник",
 };
 
@@ -589,7 +589,7 @@ export function Library() {
                 ))}
                 {deletePreview.reference_answer_count ? (
                   <div className="consequences-fact">
-                    <dt>Эталонов из файлов</dt>
+                    <dt>Ответов из файлов</dt>
                     <dd>{deletePreview.reference_answer_count} — текст сохранится, источник станет недоступен</dd>
                   </div>
                 ) : null}

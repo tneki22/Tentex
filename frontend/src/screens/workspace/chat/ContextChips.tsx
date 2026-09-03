@@ -21,7 +21,7 @@ interface ChipDef {
 const REASON_LABELS: Record<string, string> = {
   excluded_by_user: "Исключено вручную",
   profile_empty: "В профиле проекта эти поля не заполнены",
-  reference_missing: "У темы ещё нет эталонного ответа",
+  reference_missing: "У темы ещё нет ответа",
   not_implemented: "Пока не реализовано",
 };
 
@@ -54,7 +54,7 @@ export function ContextChips({ preview, contextFlags, onToggleFlag }: ContextChi
       reason: profile?.reason ?? null,
     },
     {
-      key: "reference", icon: ScrollText, title: "Эталон", flagKey: "reference",
+      key: "reference", icon: ScrollText, title: "Ответ", flagKey: "reference",
       included: Boolean(reference?.included), bytes: reference?.bytes ?? 0, count: null,
       reason: reference?.reason ?? null,
     },

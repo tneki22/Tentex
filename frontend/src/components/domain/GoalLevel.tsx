@@ -13,7 +13,7 @@ export const GOAL_LEVELS: Array<{ value: GoalLevelValue; label: string; effect: 
   {
     value: "application",
     label: "уметь применять",
-    effect: "темы войдут в повторения и потребуют эталонного ответа",
+    effect: "темы войдут в повторения и потребуют ответа",
   },
   {
     value: "mastery",

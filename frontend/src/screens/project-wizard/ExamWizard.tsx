@@ -1834,7 +1834,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
             : libraryPurpose === "exam_structure"
               ? "Выбрать список вопросов из Библиотеки"
               : libraryPurpose === "reference_answers"
-                ? "Выбрать эталонные ответы из Библиотеки"
+                ? "Выбрать ответы из Библиотеки"
                 : "Выбрать учебные материалы из Библиотеки"}
           purpose={libraryPurpose}
           examSlot={librarySlot ? SLOT_VALUE[librarySlot] : undefined}

@@ -281,7 +281,7 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
           <Disclosure summary="Что отправим">
             <div className="ai-manifest">
               <p>Название экзамена и активные узлы: id, тип и формулировка.</p>
-              <p><strong>Не отправляются:</strong> эталоны, ответы пользователя, материалы, привязки, конспекты и попытки.</p>
+              <p><strong>Не отправляются:</strong> ответы, ответы пользователя, материалы, привязки, конспекты и попытки.</p>
               <ol className="ai-question-manifest">
                 {nodes.map((node) => <li key={node.id}><code>{node.id}</code><span>{node.exam_kind === "task" ? "Задача" : "Вопрос"}</span><strong>{node.title}</strong></li>)}
               </ol>

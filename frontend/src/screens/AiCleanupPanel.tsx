@@ -325,7 +325,7 @@ export function AiCleanupPanel({
               <Disclosure summary="Что отправим">
                 <div className="ai-manifest">
                   <p>Материал «{material.display_name}», страница {page.page_number}, {originalText.length.toLocaleString("ru-RU")} символов, пользовательская инструкция{instruction.trim() ? "" : " отсутствует"}.</p>
-                  <p><strong>Не отправляются:</strong> эталоны, привязки, другие страницы, материалы и история проекта.</p>
+                  <p><strong>Не отправляются:</strong> ответы, привязки, другие страницы, материалы и история проекта.</p>
                   <pre>{JSON.stringify(preflightValue.context_manifest, null, 2)}</pre>
                 </div>
               </Disclosure>

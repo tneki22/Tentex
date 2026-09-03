@@ -403,7 +403,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
           <Disclosure summary="Что отправим">
             <div className="ai-manifest">
               <p>Текущие формулировки {nodes.length} пунктов программы, без id.</p>
-              <p><strong>Не отправляются:</strong> эталоны, ответы пользователя, материалы, привязки, конспекты и попытки.</p>
+              <p><strong>Не отправляются:</strong> ответы, ответы пользователя, материалы, привязки, конспекты и попытки.</p>
               <ol className="ai-question-manifest">
                 {nodes.map((node, index) => (
                   <li key={node.id}>

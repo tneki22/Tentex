@@ -43,7 +43,7 @@ import { editablePageText, PageTextEditor } from "./PageTextEditor";
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "список вопросов",
-  reference_answers: "эталонные ответы",
+  reference_answers: "ответы",
   study_source: "учебный источник",
 };
 
@@ -778,7 +778,7 @@ export function LibraryMaterialWorkspace() {
             </li>
           ))}
           {deletePreview?.reference_answer_count ? (
-            <li>Эталонов из файла: {deletePreview.reference_answer_count}. Текст сохранится, источник станет недоступен.</li>
+            <li>Ответов из файла: {deletePreview.reference_answer_count}. Текст сохранится, источник станет недоступен.</li>
           ) : null}
           {deletePreview?.binding_count ? (
             <li>Привязок к фрагментам: {deletePreview.binding_count}. Они уйдут вместе с файлом.</li>

@@ -112,7 +112,7 @@ function ManualCreator({ onBack, onOpenBank }: { onBack: () => void; onOpenBank:
           <Field label="Лицевая сторона" required error={error && !front.trim() ? error : undefined}><textarea rows={4} value={front} onChange={(event) => setFront(event.target.value)} placeholder="Одна проверяемая мысль" /></Field>
           <Field label="Обратная сторона" required error={error && !back.trim() ? error : undefined} hint={`${back.length} символов`}><textarea rows={7} value={back} onChange={(event) => setBack(event.target.value)} placeholder="Короткий однозначный ответ" /></Field>
           <Field label="Источник">
-            <select value={source} onChange={(event) => setSource(event.target.value)}><option value="reference">Эталонный ответ</option><option value="fragment">Учебник · выбрать фрагмент</option><option value="manual">Личная карточка без источника</option></select>
+            <select value={source} onChange={(event) => setSource(event.target.value)}><option value="reference">Ответ</option><option value="fragment">Учебник · выбрать фрагмент</option><option value="manual">Личная карточка без источника</option></select>
           </Field>
           <Field label="Подсказка" hint="Необязательно. Лучше опорный тезис, а не часть ответа."><input value={hint} onChange={(event) => setHint(event.target.value)} /></Field>
           {kind === "definition" && <Switch checked={reverse} onCheckedChange={setReverse} label="Создать обратную карточку" hint="Определение → термин. Для других типов не включается автоматически." />}
@@ -125,7 +125,7 @@ function ManualCreator({ onBack, onOpenBank }: { onBack: () => void; onOpenBank:
             <h2>{front || "Лицевая сторона"}</h2>
             <div><b>Ответ</b><p>{back || "Обратная сторона"}</p></div>
             {hint && <em>Подсказка: {hint}</em>}
-            <footer>{source === "reference" ? "Эталонный ответ" : source === "fragment" ? "Фрагмент материала" : "Личная карточка · источника нет"}</footer>
+            <footer>{source === "reference" ? "Ответ" : source === "fragment" ? "Фрагмент материала" : "Личная карточка · источника нет"}</footer>
           </article>
           {back.length > 500 && <p className="creation-warning">Ответ длиннее одного экрана. Разделите его на несколько мыслей или сделайте опорный план.</p>}
         </aside>
@@ -139,7 +139,7 @@ function FragmentCreator({ projectId, onBack }: { projectId: string; onBack: () 
     <div className="fragment-creator">
       <PageHead eyebrow="Создание из источника" title="Карточка из фрагмента" actions={<Button variant="ghost" onClick={onBack}><ArrowLeft size={15} /> К способам</Button>} />
       <section>
-        <div className="fragment-steps"><span>1</span><div><strong>Откройте материал</strong><p>Выберите учебник, лекцию или эталонный ответ.</p></div><span>2</span><div><strong>Выделите точный фрагмент</strong><p>Tentex сохранит материал, страницу и координаты.</p></div><span>3</span><div><strong>Нажмите «В карточку»</strong><p>Фрагмент станет ответом или подсказкой, а вопрос отредактируете перед сохранением.</p></div></div>
+        <div className="fragment-steps"><span>1</span><div><strong>Откройте материал</strong><p>Выберите учебник, лекцию или ответ.</p></div><span>2</span><div><strong>Выделите точный фрагмент</strong><p>Tentex сохранит материал, страницу и координаты.</p></div><span>3</span><div><strong>Нажмите «В карточку»</strong><p>Фрагмент станет ответом или подсказкой, а вопрос отредактируете перед сохранением.</p></div></div>
         <Link className="primary-button" to={`/projects/${projectId}/materials`}><FileText size={15} /> Перейти к материалам</Link>
       </section>
     </div>
@@ -168,7 +168,7 @@ function AiCreator({ onBack, onOpenBank, onStartStudy }: { onBack: () => void; o
   const [hints, setHints] = useState(true);
   const [reverse, setReverse] = useState(false);
   const [avoidExamples, setAvoidExamples] = useState(true);
-  const [wish, setWish] = useState("Делай упор на различия нормальных форм. Определения сохраняй близко к эталону.");
+  const [wish, setWish] = useState("Делай упор на различия нормальных форм. Определения сохраняй близко к ответу.");
   const [generated, setGenerated] = useState(0);
   const [drafts, setDrafts] = useState(AI_DRAFTS);
   const [draftStatus, setDraftStatus] = useState<Record<string, "pending" | "accepted" | "rejected">>({});
@@ -272,21 +272,21 @@ function AiCreator({ onBack, onOpenBank, onStartStudy }: { onBack: () => void; o
       <div className="ai-wizard-body">
         {stage === 1 && <section className="ai-question-step">
           <div className="ai-step-head"><div><h2>Выберите вопросы</h2><p>На один вопрос можно создать целый пакет карточек.</p></div><span>{selected.size} выбрано</span></div>
-          <div className="ai-question-toolbar"><label><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти вопрос" /></label><SegmentedTabs label="Фильтр вопросов" value={filter} onChange={setFilter} tabs={[{ value: "all", label: "Все" }, { value: "without", label: "Без карточек" }, { value: "reference", label: "С эталоном" }, { value: "materials", label: "С материалом" }]} /></div>
-          <div className="ai-question-list">{visibleQuestions.map((item) => <div key={item.id}><Checkbox checked={selected.has(item.id)} onCheckedChange={(checked) => toggleQuestion(item.id, checked)} label={item.title} /><span>{item.hasReference ? "Есть эталон" : "Нет эталона"} · {item.fragments ? `${item.fragments} ${countLabel(item.fragments, "фрагмент", "фрагмента", "фрагментов")}` : "нет материалов"} · {item.existing} {cardsLabel(item.existing)}</span></div>)}</div>
+          <div className="ai-question-toolbar"><label><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти вопрос" /></label><SegmentedTabs label="Фильтр вопросов" value={filter} onChange={setFilter} tabs={[{ value: "all", label: "Все" }, { value: "without", label: "Без карточек" }, { value: "reference", label: "С ответом" }, { value: "materials", label: "С материалом" }]} /></div>
+          <div className="ai-question-list">{visibleQuestions.map((item) => <div key={item.id}><Checkbox checked={selected.has(item.id)} onCheckedChange={(checked) => toggleQuestion(item.id, checked)} label={item.title} /><span>{item.hasReference ? "Есть ответ" : "Нет ответа"} · {item.fragments ? `${item.fragments} ${countLabel(item.fragments, "фрагмент", "фрагмента", "фрагментов")}` : "нет материалов"} · {item.existing} {cardsLabel(item.existing)}</span></div>)}</div>
         </section>}
 
         {stage === 2 && <section>
-          <div className="ai-step-head"><div><h2>Из чего создавать?</h2><p>По умолчанию используем только проверенный эталонный ответ.</p></div></div>
+          <div className="ai-step-head"><div><h2>Из чего создавать?</h2><p>По умолчанию используем только проверенный ответ.</p></div></div>
           <RadioCards label="Источники карточек" value={sourceMode} onChange={setSourceMode} layout="rows" options={[
-            { value: "reference", title: "Только эталонные ответы", description: "Самый предсказуемый вариант для экзамена." },
-            { value: "both", title: "Эталоны и связанные материалы", description: "Больше деталей, условий и исключений." },
-            { value: "materials", title: "Только связанные материалы", description: "Подходит, если эталонных ответов нет." },
+            { value: "reference", title: "Только ответы", description: "Самый предсказуемый вариант для экзамена." },
+            { value: "both", title: "Ответы и связанные материалы", description: "Больше деталей, условий и исключений." },
+            { value: "materials", title: "Только связанные материалы", description: "Подходит, если ответов нет." },
           ]} />
           <Switch checked={modelKnowledge} onCheckedChange={setModelKnowledge} label="Разрешить знания модели вне источников" hint="Выключено по умолчанию: иначе происхождение утверждения нельзя проверить." />
           <Switch checked={modelsEnabled} onCheckedChange={setModelsEnabled} label="Внешняя модель доступна" hint="Демонстрационное состояние мастера." />
           {!modelsEnabled && <OfflineNotice reason="disabled" alternative="Ручное создание остаётся доступно." />}
-          <div className="ai-data-preview"><strong>Перед запуском отправим</strong><span>{selected.size} {countLabel(selected.size, "вопрос", "вопроса", "вопросов")}</span><span>{CREATION_QUESTIONS.filter((item) => selected.has(item.id) && item.hasReference).length} {countLabel(CREATION_QUESTIONS.filter((item) => selected.has(item.id) && item.hasReference).length, "эталон", "эталона", "эталонов")}</span><span>{CREATION_QUESTIONS.filter((item) => selected.has(item.id)).reduce((sum, item) => sum + item.fragments, 0)} фрагментов</span><span>GPT-5 mini</span></div>
+          <div className="ai-data-preview"><strong>Перед запуском отправим</strong><span>{selected.size} {countLabel(selected.size, "вопрос", "вопроса", "вопросов")}</span><span>{CREATION_QUESTIONS.filter((item) => selected.has(item.id) && item.hasReference).length} {countLabel(CREATION_QUESTIONS.filter((item) => selected.has(item.id) && item.hasReference).length, "ответ", "ответа", "ответов")}</span><span>{CREATION_QUESTIONS.filter((item) => selected.has(item.id)).reduce((sum, item) => sum + item.fragments, 0)} фрагментов</span><span>GPT-5 mini</span></div>
         </section>}
 
         {stage === 3 && <section>
@@ -315,7 +315,7 @@ function AiCreator({ onBack, onOpenBank, onStartStudy }: { onBack: () => void; o
 
         {stage === 5 && <section className="ai-plan-step">
           <div className="ai-step-head"><div><h2>План генерации</h2><p>Проверьте состав до обращения к внешней модели.</p></div></div>
-          <dl><div><dt>Вопросы</dt><dd>{selected.size}</dd></div><div><dt>Предполагаемые карточки</dt><dd>{totalDrafts}</dd></div><div><dt>Источники</dt><dd>{sourceMode === "reference" ? "Только эталонные ответы" : sourceMode === "both" ? "Эталоны и материалы" : "Только материалы"}</dd></div><div><dt>Длинные ответы</dt><dd>{longMode === "split" ? "Разбивать" : longMode === "shorten" ? `Сокращать примерно до ${limit} символов` : "Оставлять целиком"}</dd></div><div><dt>Знания модели</dt><dd>{modelKnowledge ? "Разрешены и будут помечены" : "Запрещены"}</dd></div><div><dt>Пожелание</dt><dd>{wish || "Нет"}</dd></div></dl>
+          <dl><div><dt>Вопросы</dt><dd>{selected.size}</dd></div><div><dt>Предполагаемые карточки</dt><dd>{totalDrafts}</dd></div><div><dt>Источники</dt><dd>{sourceMode === "reference" ? "Только ответы" : sourceMode === "both" ? "Ответы и материалы" : "Только материалы"}</dd></div><div><dt>Длинные ответы</dt><dd>{longMode === "split" ? "Разбивать" : longMode === "shorten" ? `Сокращать примерно до ${limit} символов` : "Оставлять целиком"}</dd></div><div><dt>Знания модели</dt><dd>{modelKnowledge ? "Разрешены и будут помечены" : "Запрещены"}</dd></div><div><dt>Пожелание</dt><dd>{wish || "Нет"}</dd></div></dl>
           <CostEstimate calls={selected.size} cost={0.08} minutes={2} pricesFrom="01.08.2026" units={`${selected.size} ${countLabel(selected.size, "вопрос", "вопроса", "вопросов")}`} />
           {!modelsEnabled && <OfflineNotice reason="disabled" alternative="Вернитесь к ручному созданию или включите модель." />}
         </section>}

@@ -52,7 +52,7 @@ export interface QueueQuestion {
 type CardText = [front: string, back: string, keyIdea?: string];
 
 const referenceSources: CardSourceRef[] = [
-  { kind: "reference", label: "Эталонный ответ" },
+  { kind: "reference", label: "Ответ" },
   { kind: "fragment", label: "Учебник · стр. 47", href: "materials" },
 ];
 
@@ -193,7 +193,7 @@ const BANK_FROM_QUEUE: BankCard[] = QUEUE.flatMap((item) => item.cards.slice(0, 
 
 export const BANK: BankCard[] = [...BANK_FROM_QUEUE,
   { id: "lost-card", front: "Что такое детерминант?", back: "Набор атрибутов, определяющий другой атрибут.", question: "Нормальные формы", section: "Реляционная модель", kind: "definition", state: "lost-source", origin: "machine", source: "Источник удалён", lastResult: null, nextDue: null },
-  { id: "paused-card", front: "Что такое REDO?", back: "Повтор подтверждённых изменений.", question: "Журнализация", section: "Управление транзакциями", kind: "definition", state: "suspended", origin: "edited", source: "Эталонный ответ", lastResult: "fail", nextDue: null },
+  { id: "paused-card", front: "Что такое REDO?", back: "Повтор подтверждённых изменений.", question: "Журнализация", section: "Управление транзакциями", kind: "definition", state: "suspended", origin: "edited", source: "Ответ", lastResult: "fail", nextDue: null },
 ];
 
 export const CREATION_QUESTIONS = QUEUE.map((item, index) => ({
@@ -210,7 +210,7 @@ export const DRAFT_PLAN = [
   { id: "indexes", title: "Индексы в СУБД", proposed: 5, breakdown: "1 план · 3 положения · 1 сравнение" },
   { id: "transactions", title: "Транзакции и свойства ACID", proposed: 6, breakdown: "1 план · 4 положения · 1 условие" },
   { id: "logging", title: "Журнализация и восстановление", proposed: 4, breakdown: "1 план · 3 положения" },
-  { id: "sql-ddl", title: "Языки определения данных", proposed: 0, breakdown: "нет эталона и материалов" },
+  { id: "sql-ddl", title: "Языки определения данных", proposed: 0, breakdown: "нет ответа и материалов" },
 ];
 
 export interface AiDraft {
@@ -224,8 +224,8 @@ export interface AiDraft {
 }
 
 export const AI_DRAFTS: AiDraft[] = [
-  { id: "draft-1", question: "Нормальные формы", front: "Чем 3НФ отличается от НФБК?", back: "НФБК требует, чтобы каждый детерминант был потенциальным ключом; 3НФ допускает исключение для ключевого атрибута.", kind: "comparison", source: "Эталонный ответ · Учебник, стр. 47" },
-  { id: "draft-2", question: "Нормальные формы", front: "Назовите четыре ступени нормализации", back: "1НФ → 2НФ → 3НФ → НФБК.", kind: "plan", source: "Эталонный ответ", warning: "Ответ слишком общий — проверьте назначение каждой ступени." },
+  { id: "draft-1", question: "Нормальные формы", front: "Чем 3НФ отличается от НФБК?", back: "НФБК требует, чтобы каждый детерминант был потенциальным ключом; 3НФ допускает исключение для ключевого атрибута.", kind: "comparison", source: "Ответ · Учебник, стр. 47" },
+  { id: "draft-2", question: "Нормальные формы", front: "Назовите четыре ступени нормализации", back: "1НФ → 2НФ → 3НФ → НФБК.", kind: "plan", source: "Ответ", warning: "Ответ слишком общий — проверьте назначение каждой ступени." },
   { id: "draft-3", question: "Индексы в СУБД", front: "Когда индекс не ускоряет выборку?", back: "При низкой селективности или чтении значительной доли таблицы.", kind: "condition", source: "Учебник, стр. 81" },
-  { id: "draft-4", question: "Транзакции и свойства ACID", front: "Что обеспечивает свойство durability?", back: "Подтверждённые изменения переживают сбой системы.", kind: "definition", source: "Эталонный ответ", warning: "Возможный дубликат существующей карточки." },
+  { id: "draft-4", question: "Транзакции и свойства ACID", front: "Что обеспечивает свойство durability?", back: "Подтверждённые изменения переживают сбой системы.", kind: "definition", source: "Ответ", warning: "Возможный дубликат существующей карточки." },
 ];

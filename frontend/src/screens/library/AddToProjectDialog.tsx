@@ -21,7 +21,7 @@ const PURPOSES: Array<{ value: MaterialPurpose; label: string; description: stri
   },
   {
     value: "reference_answers",
-    label: "Эталонные ответы",
+    label: "Ответы",
     description: "Такой файл у проекта один",
   },
 ];

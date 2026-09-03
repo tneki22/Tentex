@@ -372,7 +372,7 @@ export function ProjectWorkspace() {
       .then(setAnswerSlot)
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setAnswerError(error instanceof Error ? error.message : "Не удалось загрузить эталон");
+          setAnswerError(error instanceof Error ? error.message : "Не удалось загрузить ответ");
         }
       })
       .finally(() => {
@@ -646,11 +646,11 @@ export function ProjectWorkspace() {
       return <div className="workspace-empty-panel"><FileText size={28} /><h2>Ответ пока не создан</h2><p>Учебные ответы появятся вместе со сценариями занятий.</p></div>;
     }
     if (!selected) {
-      return <div className="workspace-empty-copy"><BookOpen size={26} /><h2>Выберите вопрос</h2><p>Эталон и история попыток появятся после выбора вопроса слева.</p></div>;
+      return <div className="workspace-empty-copy"><BookOpen size={26} /><h2>Выберите вопрос</h2><p>Ответ и история попыток появятся после выбора вопроса слева.</p></div>;
     }
     let referenceContent: ReactNode;
-    if (answerLoading) referenceContent = <LoadingState label="Загружаем эталон" />;
-    else if (answerError) referenceContent = <ErrorState title="Эталон не загрузился" message={answerError} />;
+    if (answerLoading) referenceContent = <LoadingState label="Загружаем ответ" />;
+    else if (answerError) referenceContent = <ErrorState title="Ответ не загрузился" message={answerError} />;
     else if (answerSlot?.answer?.is_active) {
       const answer = answerSlot.answer;
       const source = answer.source_label ? `Источник: ${answer.source_label}` : answer.origin_kind === "manual" ? "Добавлен вручную" : "Импортирован";
@@ -681,8 +681,6 @@ export function ProjectWorkspace() {
       const linkedSourceGroups = answerScanGroups(answer, sourceBindings);
       referenceContent = (
         <article className="workspace-reference-answer">
-          <header><ReferenceAnswerBadge status={answerSlot.status} /><span>{source} · {match}</span></header>
-          <h2>{selected.title}</h2>
           <SegmentedTabs
             className="workspace-reference-mode"
             label="Как показывать ответ"
@@ -713,15 +711,21 @@ export function ProjectWorkspace() {
               sourceMaterialId={answer.source_material_id}
             />
           )}
-          <Link to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть и изменить эталон</Link>
+          <footer className="workspace-reference-footer">
+            <Link to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть и изменить ответ</Link>
+            <div className="workspace-reference-meta">
+              <ReferenceAnswerBadge status={answerSlot.status} />
+              <span>{source} · {match}</span>
+            </div>
+          </footer>
         </article>
       );
     } else if (sourceBindings.length > 0) {
       referenceContent = (
         <div className="workspace-empty-copy is-answer-reference">
           <BookOpen size={26} />
-          <h2>Для вопроса есть связанные материалы, но нет эталонного ответа</h2>
-          <p>Откройте «Ответы», чтобы создать или сопоставить эталон.</p>
+          <h2>Для вопроса есть связанные материалы, но нет ответа</h2>
+          <p>Откройте «Ответы», чтобы создать или сопоставить ответ.</p>
           <Link className="secondary-button" to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть ответы</Link>
         </div>
       );
@@ -730,8 +734,8 @@ export function ProjectWorkspace() {
         <div className="workspace-empty-copy is-answer-reference">
           <BookOpen size={26} />
           <h2>Ответ пока не найден</h2>
-          <p>Добавьте эталон вручную или импортируйте общий текст с ответами.</p>
-          <Link className="secondary-button" to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть эталоны</Link>
+          <p>Добавьте ответ вручную или импортируйте общий текст с ответами.</p>
+          <Link className="secondary-button" to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть ответы</Link>
         </div>
       );
     }

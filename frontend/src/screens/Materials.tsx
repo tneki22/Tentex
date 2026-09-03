@@ -104,7 +104,7 @@ const STATUS: Record<MaterialRead["status"], { label: string; tone: "neutral" | 
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "Структура экзамена",
-  reference_answers: "Эталонные ответы",
+  reference_answers: "Ответы",
   study_source: "Учебный источник",
 };
 
@@ -255,7 +255,7 @@ function MaterialOverview({
             <div>
               <p className="materials-kicker">Приоритет этапа 5</p>
               <h1>Материалы экзамена</h1>
-              <p>Загрузите список вопросов, эталонные ответы и учебные источники.</p>
+              <p>Загрузите список вопросов, ответы и учебные источники.</p>
             </div>
             <div className="material-entry-actions is-end">
               <Button onClick={onAdd}><Upload size={15} /> Добавить материал</Button>
@@ -329,7 +329,7 @@ function AddMaterialDialog({
   const [externalMode, setExternalMode] = useState<"url" | "youtube" | null>(null);
   const [externalUrl, setExternalUrl] = useState("");
   const [text, setText] = useState("");
-  const [name, setName] = useState("Эталонные ответы.txt");
+  const [name, setName] = useState("Ответы.txt");
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [pendingAnswers, setPendingAnswers] = useState<"file" | "text" | null>(null);
 
@@ -353,7 +353,7 @@ function AddMaterialDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={textMode ? "Вставить эталонные ответы" : externalMode ? externalMode === "url" ? "Добавить веб-страницу" : "Добавить YouTube-транскрипт" : "Добавить материал"}
+      title={textMode ? "Вставить ответы" : externalMode ? externalMode === "url" ? "Добавить веб-страницу" : "Добавить YouTube-транскрипт" : "Добавить материал"}
       description={textMode
         ? "Заголовок ответа должен точно совпадать с названием вопроса программы."
         : externalMode
@@ -399,7 +399,7 @@ function AddMaterialDialog({
           <button type="button" disabled={busy} onClick={() => chooseAnswers("file")}>
             <FileText size={18} />
             <span>
-              <strong>Эталонные ответы</strong>
+              <strong>Ответы</strong>
               <small>
                 {answersMaterial
                   ? `Сейчас: ${answersMaterial.display_name}. Файл ответов один — можно заменить`
@@ -425,7 +425,7 @@ function AddMaterialDialog({
       <ConfirmDialog
         open={replaceOpen}
         onOpenChange={setReplaceOpen}
-        title="Заменить файл эталонных ответов?"
+        title="Заменить файл с ответами?"
         confirmLabel="Заменить"
         onConfirm={() => {
           const target = pendingAnswers;
@@ -438,11 +438,11 @@ function AddMaterialDialog({
         }}
       >
         <p>
-          Сейчас эталонные ответы берутся из «{answersMaterial?.display_name}». Проект
+          Сейчас ответы берутся из «{answersMaterial?.display_name}». Проект
           держит один такой файл: с прежнего снимется назначение, и он останется в
           материалах как учебный источник.
         </p>
-        <p>Уже заполненные эталоны и привязки старого файла сохранятся.</p>
+        <p>Уже заполненные ответы и привязки старого файла сохранятся.</p>
       </ConfirmDialog>
     </Dialog>
   );
@@ -1741,8 +1741,8 @@ function MaterialSurface() {
       void bindings.refreshSummary();
       say(
         result.created_answers
-          ? "Раздел привязан, эталон заполнен. Решение запомнено — повторная привязка его не потеряет."
-          : "Раздел привязан; эталон у вопроса уже был и не тронут.",
+          ? "Раздел привязан, ответ заполнен. Решение запомнено — повторная привязка его не потеряет."
+          : "Раздел привязан; ответ у вопроса уже был и не тронут.",
         "success",
       );
     } catch (caught) {
@@ -1754,7 +1754,7 @@ function MaterialSurface() {
     if (!material) return;
     try {
       const result = await importMaterialReferenceAnswers(projectId, material.id);
-      say(`Создано эталонов: ${result.created}; пропущено существующих: ${result.skipped_existing}.`, "success");
+      say(`Создано ответов: ${result.created}; пропущено существующих: ${result.skipped_existing}.`, "success");
     } catch (caught) {
       say(caught instanceof Error ? caught.message : "Импорт не выполнен", "danger");
     }
@@ -2123,7 +2123,7 @@ function MaterialSurface() {
             if (removal) void removal.then(() => navigate(`/projects/${projectId}/materials`));
           }}
         >
-          <p>Файл отвяжется от этого проекта. Эталоны, уже импортированные из него, сохранятся.</p>
+          <p>Файл отвяжется от этого проекта. Ответы, уже импортированные из него, сохранятся.</p>
         </ConfirmDialog>
       )}
     </div>

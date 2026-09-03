@@ -58,7 +58,7 @@ export function AnswerSourceDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={pending ? "Файл ответов ещё разбирается" : "Файл эталонных ответов"}
+      title={pending ? "Файл ответов ещё разбирается" : "Файл с ответами"}
       description={pending
         ? "Сопоставление запустится само, как только текст будет готов."
         : "Один файл со всеми ответами: из него автоматика разложит их по вопросам."}

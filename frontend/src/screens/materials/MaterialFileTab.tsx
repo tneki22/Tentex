@@ -12,7 +12,7 @@ import { Button, Checkbox, ConfirmDialog, Field, Select, StatusBadge } from "../
 const PURPOSE_OPTIONS: Array<{ value: MaterialPurpose; label: string }> = [
   { value: "study_source", label: "Учебный источник" },
   { value: "exam_structure", label: "Список вопросов" },
-  { value: "reference_answers", label: "Эталонные ответы" },
+  { value: "reference_answers", label: "Ответы" },
 ];
 
 const ROLE_OPTIONS = [
@@ -314,7 +314,7 @@ export function MaterialFileTab({
       <ConfirmDialog
         open={replaceOpen}
         onOpenChange={setReplaceOpen}
-        title="Заменить файл эталонных ответов?"
+        title="Заменить файл с ответами?"
         confirmLabel="Заменить"
         onConfirm={() => {
           void save(true).then((result) => {
@@ -323,10 +323,10 @@ export function MaterialFileTab({
         }}
       >
         <p>
-          Сейчас эталонные ответы берутся из «{answersMaterial?.display_name}».
+          Сейчас ответы берутся из «{answersMaterial?.display_name}».
           С прежнего файла снимется это назначение, но сам файл останется в проекте.
         </p>
-        <p>Уже созданные эталоны и привязки сохранятся.</p>
+        <p>Уже созданные ответы и привязки сохранятся.</p>
       </ConfirmDialog>
     </div>
   );
