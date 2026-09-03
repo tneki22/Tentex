@@ -22,6 +22,7 @@ from app.marker_labels import material_image_label
 from app.materials.schemas import MaterialPurpose
 from app.models import (
     Binding,
+    BindingMechanism,
     BindingStatus,
     Material,
     MaterialBlock,
@@ -459,8 +460,8 @@ def _project_material_ids(
 ) -> list[UUID]:
     """Материалы, по которым имеет смысл искать формулировку вопроса.
 
-    Файл со списком вопросов (`exam_structure`) исключается: искать вопрос
-    по файлу вопросов бессмысленно — он вытесняет из выдачи ответы и учебники.
+    Служебные файлы вопросов и ответов исключаются: у них есть отдельные
+    поверхности, а в общей выдаче они вытесняют учебники и конспекты.
     Явный `material_id` — это поиск внутри открытого файла, там фильтр не нужен.
     """
     if material_id is not None:
@@ -469,10 +470,14 @@ def _project_material_ids(
             raise ProjectNotFoundError("Материал проекта не найден")
         return [material_id]
     links = session.scalars(select(ProjectMaterial).where(ProjectMaterial.project_id == project_id))
+    excluded_purposes = {
+        MaterialPurpose.EXAM_STRUCTURE.value,
+        MaterialPurpose.REFERENCE_ANSWERS.value,
+    }
     return [
         link.material_id
         for link in links
-        if MaterialPurpose.EXAM_STRUCTURE.value not in (link.purposes or [])
+        if excluded_purposes.isdisjoint(link.purposes or [])
     ]
 
 
@@ -499,6 +504,7 @@ def search_project_materials(
                     Binding.project_id == project_id,
                     Binding.program_node_id == node_id,
                     Binding.status.in_(ACTIVE_STATUSES),
+                    Binding.mechanism != BindingMechanism.ANSWERS_FILE,
                 )
             )
         )

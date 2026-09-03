@@ -5,12 +5,20 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from conftest import make_exam_project, make_topic_node
+from conftest import (
+    add_page_with_fragments,
+    link_material,
+    make_exam_project,
+    make_material,
+    make_topic_node,
+)
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.ai.gateway import ModelGateway
 from app.ai.provider import FakeTransport, ProviderStreamEvent, ProviderUsage
+from app.bindings import service as binding_service
+from app.bindings.schemas import BindingCreateWrite
 from app.exam import chat as chat_service
 from app.exam import router as chat_router
 from app.exam.context import build_context
@@ -23,6 +31,7 @@ from app.exam.schemas import (
 from app.models import (
     AiModelCatalogEntry,
     AiProviderConnection,
+    BindingMechanism,
     ChatMessageRole,
     ChatMode,
     ExaminerPersona,
@@ -254,6 +263,35 @@ def test_preview_and_actual_request_share_fingerprint(session: Session) -> None:
     preview = chat_service.context_preview(session, project.id, chat.id)
     ctx = build_context(session, chat, for_judge=False)
     assert preview.fingerprint == ctx.fingerprint
+
+
+def test_answers_file_binding_is_not_duplicated_in_chat_context(session: Session) -> None:
+    project = make_exam_project(session)
+    topic = make_topic_node(session, project, title="Реляционная модель")
+    material = make_material(session, "a9")
+    link_material(session, project, material)
+    page = add_page_with_fragments(
+        session,
+        material,
+        page_number=1,
+        revision=1,
+        fragments=["Реляционная модель хранит данные в таблицах."],
+    )
+    binding_service.create_bindings(
+        session,
+        project.id,
+        BindingCreateWrite(
+            program_node_id=topic.id,
+            fragment_ids=page.fragment_ids,
+            mechanism=BindingMechanism.ANSWERS_FILE,
+        ),
+    )
+    chat = chat_service.create_session(session, project.id, topic.id)
+
+    context = build_context(session, chat, for_judge=False)
+
+    assert context.fragments == []
+    assert not any(item["kind"] == "fragment" for item in context.manifest)
 
 
 @pytest.mark.asyncio

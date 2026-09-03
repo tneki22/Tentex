@@ -9,10 +9,13 @@ from conftest import (
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.bindings import search as search_module
 from app.bindings import service
 from app.bindings.schemas import BindingCreateWrite
+from app.materials.schemas import MaterialPurpose
 from app.models import (
     Binding,
+    BindingMechanism,
     BindingStatus,
     MaterialFragment,
     ProgramNode,
@@ -245,3 +248,55 @@ def test_binding_cascades_when_material_is_deleted(session: Session) -> None:
         session.delete(stored_material)
     remaining = list(session.scalars(select(Binding).where(Binding.project_id == project.id)))
     assert remaining == []
+
+
+def test_general_search_excludes_reference_answers_material(session: Session) -> None:
+    project = make_exam_project(session)
+    material = make_material(session, "78")
+    link = link_material(session, project, material)
+    link.purposes = [MaterialPurpose.REFERENCE_ANSWERS.value]
+    page = add_page_with_fragments(
+        session,
+        material,
+        page_number=1,
+        revision=1,
+        fragments=["Реляционная модель хранит данные в таблицах."],
+    )
+    search_module.reindex_material(session, material.id)
+    session.commit()
+
+    assert service.search_project_materials(session, project.id, "реляционная модель") == []
+    explicit = service.search_project_materials(
+        session, project.id, "реляционная модель", material_id=material.id
+    )
+    assert explicit[0].fragment_ids == page.fragment_ids
+
+
+def test_answers_file_binding_does_not_mark_study_result_as_bound(session: Session) -> None:
+    project = make_exam_project(session)
+    node = make_topic_node(session, project, title="Реляционная модель")
+    material = make_material(session, "79")
+    link_material(session, project, material)
+    page = add_page_with_fragments(
+        session,
+        material,
+        page_number=1,
+        revision=1,
+        fragments=["Реляционная модель хранит данные в таблицах."],
+    )
+    search_module.reindex_material(session, material.id)
+    session.commit()
+    service.create_bindings(
+        session,
+        project.id,
+        BindingCreateWrite(
+            program_node_id=node.id,
+            fragment_ids=page.fragment_ids,
+            mechanism=BindingMechanism.ANSWERS_FILE,
+        ),
+    )
+
+    results = service.search_project_materials(
+        session, project.id, "реляционная модель", node_id=node.id
+    )
+    assert results[0].already_bound is False
