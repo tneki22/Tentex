@@ -430,6 +430,14 @@ export function ProjectWorkspace() {
     }
   }
 
+  function runSourceSearchOrFocus() {
+    if (sourceQuery.trim()) {
+      void runSourceSearch();
+      return;
+    }
+    sourceSearchInput.current?.focus();
+  }
+
   async function bindSourceCandidate(result: SearchResultRead) {
     if (!selected) return;
     setSourceBusy(true);
@@ -777,7 +785,7 @@ export function ProjectWorkspace() {
             <h2>Для этого вопроса материал ещё не привязан</h2>
             <p>Найдите подходящий фрагмент в материалах проекта или откройте Материалы, чтобы привязать вручную.</p>
             <div className="workspace-source-tab-empty-actions">
-              <Button onClick={() => sourceSearchInput.current?.focus()}>Найти в материалах</Button>
+              <Button onClick={runSourceSearchOrFocus}>Найти в материалах</Button>
               <Link className="secondary-button" to={`/projects/${projectId}/materials`}>Открыть материалы</Link>
             </div>
           </div>
@@ -808,10 +816,12 @@ export function ProjectWorkspace() {
                   || sourceBindings.some((binding) => result.fragment_ids.includes(binding.fragment_id));
                 return (
                   <li key={result.fragment_ids.join(",")}>
-                    <p>{renderHighlighted(result.text, result.highlights)}</p>
-                    <small>
-                      {result.material_name} · стр. {result.page_from === result.page_to ? result.page_from : `${result.page_from}–${result.page_to}`}
-                    </small>
+                    <div className="workspace-source-tab-result-copy">
+                      <p>{renderHighlighted(result.text, result.highlights)}</p>
+                      <small>
+                        {result.material_name} · стр. {result.page_from === result.page_to ? result.page_from : `${result.page_from}–${result.page_to}`}
+                      </small>
+                    </div>
                     <QualityBadge quality={result.quality} />
                     <Button
                       variant="secondary"
