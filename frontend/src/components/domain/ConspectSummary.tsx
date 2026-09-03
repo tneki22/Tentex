@@ -6,6 +6,7 @@ import type { ConspectSummaryEntry } from "../../api/conspects";
 import { useConspectSummary } from "../../hooks/useConspect";
 import { CONSPECT_FEATURE_TEXT } from "./conspectEditorText";
 import { Button } from "../ui/Button";
+import { Disclosure } from "../ui/Disclosure";
 import { EmptyState } from "../ui/EmptyState";
 import { ErrorState } from "../ui/ErrorState";
 import { LoadingState } from "../ui/LoadingState";
@@ -88,17 +89,22 @@ export function ConspectSummary({ projectId, refreshKey = 0, showTopicIndex = fa
   return (
     <div className="conspect-summary">
       {showTopicIndex && (
-        <nav className="conspect-summary-index" aria-label="Темы со своим конспектом">
-          {entries.map((entry) => (
-            <Link
-              key={entry.node_id}
-              to={`/projects/${projectId}?topic=${entry.node_id}&tab=conspect`}
-              className="conspect-summary-index-item"
-            >
-              {entry.position}. {entry.title}
-            </Link>
-          ))}
-        </nav>
+        <Disclosure
+          summary={`Вопросы с конспектом · ${entries.length}`}
+          className="conspect-summary-disclosure"
+        >
+          <nav className="conspect-summary-index" aria-label="Темы со своим конспектом">
+            {entries.map((entry) => (
+              <Link
+                key={entry.node_id}
+                to={`/projects/${projectId}?topic=${entry.node_id}&tab=conspect`}
+                className="conspect-summary-index-item"
+              >
+                {entry.position}. {entry.title}
+              </Link>
+            ))}
+          </nav>
+        </Disclosure>
       )}
       <div className="conspect-summary-document">
         <MilkdownProvider>

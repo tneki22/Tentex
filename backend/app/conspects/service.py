@@ -200,14 +200,14 @@ def list_conspect_summary(session: Session, project_id: UUID) -> ConspectSummary
     )
 
     entries: list[ConspectSummaryEntry] = []
-    for node in study_nodes:
+    for position, node in enumerate(study_nodes, start=1):
         conspect = conspects_by_node.get(node.id)
         if conspect is None or conspect.content_markdown.strip() == "":
             continue
         entries.append(
             ConspectSummaryEntry(
                 node_id=node.id,
-                position=len(entries) + 1,
+                position=position,
                 title=node.title,
                 content_markdown=conspect.content_markdown,
                 revision=conspect.revision,

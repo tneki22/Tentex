@@ -349,7 +349,7 @@ def test_conspect_summary_dfs_order_and_filters(session: Session) -> None:
     summary = service.list_conspect_summary(session, project.id)
 
     assert [entry.node_id for entry in summary.entries] == [topic_a1.id, topic_a2.id, topic_b1.id]
-    assert [entry.position for entry in summary.entries] == [1, 2, 3]
+    assert [entry.position for entry in summary.entries] == [1, 2, 4]
     assert [entry.title for entry in summary.entries] == ["A.1", "A.2", "Б.1"]
 
 

@@ -41,6 +41,14 @@
   --crepe-shadow-2: var(--shadow-md);
 }
 
+.conspect-summary-disclosure {
+  flex: none;
+}
+
+.conspect-summary-disclosure > .disclosure-trigger {
+  padding-inline: var(--space-1);
+}
+
 /* --- Карточка редактора: рамка и радиус свои, Crepe красит только нутро --- */
 
 .conspect-editor {
