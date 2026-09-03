@@ -85,9 +85,13 @@ def test_zero_items_are_rejected_before_gateway_call() -> None:
 
 
 @pytest.mark.asyncio
-async def test_preflight_reports_disabled_external_models(session: Session) -> None:
+async def test_preflight_reports_disabled_external_models(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     project = make_exam_project(session)
     gateway = ModelGateway(session, FakeTransport())
+    monkeypatch.setattr(preparation_ai, "date", _FixedDate)
 
     with pytest.raises(ProjectDomainError) as caught:
         await preparation_ai.preflight(session, gateway, project.id, _command())
@@ -97,8 +101,10 @@ async def test_preflight_reports_disabled_external_models(session: Session) -> N
 
 def test_http_preflight_validates_input_and_reports_disabled_models(
     session: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = make_exam_project(session)
+    monkeypatch.setattr(preparation_ai, "date", _FixedDate)
     app = create_app()
     app.dependency_overrides[get_session] = lambda: session
     app.dependency_overrides[get_model_gateway] = lambda: ModelGateway(
