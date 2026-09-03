@@ -292,12 +292,22 @@
 
 /* Контекстные чипы */
 
+.chat-context-disclosure {
+  flex: none;
+  border-top: 1px solid var(--line);
+}
+
+.chat-context-disclosure > .disclosure-trigger {
+  margin-left: var(--space-5);
+  padding-block: var(--space-2);
+  font-size: var(--text-xs);
+}
+
 .chat-context-chips {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-5);
-  border-top: 1px solid var(--line);
 }
 
 .chat-context-chip {
@@ -1020,6 +1030,10 @@
     flex-wrap: nowrap;
     overflow-x: auto;
     padding-bottom: var(--space-3);
+  }
+
+  .chat-context-disclosure > .disclosure-trigger {
+    margin-left: var(--space-3);
   }
 
   .chat-context-chip {
