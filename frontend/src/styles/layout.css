@@ -5982,7 +5982,10 @@ button.wizard-back-projects {
 
 .workspace-reference-answer {
   width: min(48rem, 100%);
+  min-width: 0;
+  max-width: 100%;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: var(--space-5);
   margin: 0 auto;
@@ -6011,13 +6014,17 @@ button.wizard-back-projects {
 }
 
 .workspace-reference-text {
+  min-width: 0;
+  max-width: 100%;
   color: var(--ink);
   font-family: var(--font-serif);
   font-size: var(--text-md);
   line-height: 1.75;
+  overflow-wrap: anywhere;
 }
 
 .workspace-reference-paragraph {
+  min-width: 0;
   margin: 0;
   white-space: pre-wrap;
 }
@@ -6027,14 +6034,33 @@ button.wizard-back-projects {
 }
 
 .workspace-reference-list {
+  min-width: 0;
   display: grid;
   gap: var(--space-1);
   margin: 0;
 }
 
 .workspace-reference-list li {
+  min-width: 0;
   padding-inline-start: var(--space-1);
   white-space: pre-wrap;
+}
+
+.workspace-reference-text .structured-formula {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.workspace-reference-formula-fallback {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.workspace-reference-inline-fallback {
+  overflow-wrap: anywhere;
 }
 
 .workspace-reference-media {

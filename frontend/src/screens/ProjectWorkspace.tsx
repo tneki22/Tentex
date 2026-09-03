@@ -221,12 +221,15 @@ function sanitizeLayout(
       };
     }
   }
+  const groupWeights = finalGroups.length === 1
+    ? [1]
+    : finalGroups.map((_, index) => source?.group_weights[index] && source.group_weights[index] > 0 ? source.group_weights[index] : 1);
   return {
     selected_node_id: selected,
     expanded_node_ids: [...new Set(source?.expanded_node_ids ?? visibleNodes.filter((node) => node.node_type === "section").map((node) => node.id))].filter((id) => currentIds.has(id)),
     tree_width: Math.round(Math.min(460, Math.max(260, source?.tree_width ?? 320))),
     groups: finalGroups,
-    group_weights: finalGroups.map((_, index) => source?.group_weights[index] && source.group_weights[index] > 0 ? source.group_weights[index] : 1),
+    group_weights: groupWeights,
   };
 }
 
@@ -566,7 +569,9 @@ export function ProjectWorkspace() {
     persist((latest) => ({
       ...latest,
       groups: latest.groups.filter((group) => group.id !== groupId),
-      group_weights: latest.group_weights.filter((_, itemIndex) => itemIndex !== index),
+      group_weights: groups.length === 1
+        ? [1]
+        : latest.group_weights.filter((_, itemIndex) => itemIndex !== index),
     }));
     if (activeGroupId === groupId) setActiveGroupId(groups[Math.min(index, groups.length - 1)]?.id ?? DEFAULT_LAYOUT.groups[0].id);
   }
@@ -936,9 +941,11 @@ export function ProjectWorkspace() {
   const deadline = daysUntil(detail.project.deadline);
   const editorGroups = layout.groups;
   const editorWeights = layout.group_weights;
-  const editorColumns = editorGroups
-    .map((_, index) => `${editorWeights[index] ?? 1}fr${index < editorGroups.length - 1 ? " 10px" : ""}`)
-    .join(" ");
+  const editorColumns = editorGroups.length === 1
+    ? "minmax(0, 1fr)"
+    : editorGroups
+      .map((_, index) => `minmax(0, ${editorWeights[index] ?? 1}fr)${index < editorGroups.length - 1 ? " 10px" : ""}`)
+      .join(" ");
 
   return (
     <div className={`project-workspace ${textbook ? "is-textbook" : "is-exam"}`} style={{ "--workspace-tree-width": `${layout.tree_width}px` } as CSSProperties}>
