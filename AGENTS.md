@@ -28,7 +28,7 @@ Tentex — локальный тренажёр подготовки к экза�
 
 **Сейчас:** стабилизация экзамена на реальных предметах. Первый сценарий — новый проект `streams`: исправить OCR, фотографии, импорт вопросов/билетов и автопривязку ответов. Затем повторить на ТВиМС, физике, теории алгоритмов и ещё одном предмете, проверить дополнительные материалы и довести чат со всеми его функциями и навыками.
 
-**После:** повторения и План, проход 2 и двустороннее покрытие, затем программа из учебника, эмбеддинги, учебниковый и свободный режимы. Студия, бот и внешний поиск не отменены, но отложены в конец.
+**После:** повторения и План, проход 2 и двустороннее покрытие, затем программа из учебника, эмбеддинги, учебниковый и свободный режимы. Бот и внешний поиск не отменены, но отложены в конец. Панель «Студия» 01.09.2026 вырезана из кода целиком — замысел жив в `REQUIREMENTS.md` и в очереди `PLAN.md`, но её нет ни в одном экране; не описывай её как существующую.
 
 **Дизайн-система собрана и описана в `DESIGN.md`:** три слоя (токены → примитивы → доменные виджеты), поведение примитивов взято у Radix. Прежде чем писать компонент — смотри витрину `/ui-kit` и скилл `tentex-ui`.
 
@@ -37,17 +37,18 @@ Tentex — локальный тренажёр подготовки к экза�
 ```
 backend/          FastAPI. app/main.py — приложение, app/config.py — настройки
 frontend/         Vite + React + TypeScript
-  src/app/        screens.ts (реестр), views.ts (что сверстано), AppLayout, CommandPalette, ThemeToggle
+  src/app/        screens.ts (реестр), views.ts (что сверстано), AppLayout, CommandPalette, ThemeToggle, BrandMark
   src/screens/    По файлу или каталогу на свёрстанную поверхность
   src/components/ ui/ — примитивы; domain/ — доменные виджеты Tentex
-  src/hooks/      useTheme
-  src/styles/     tokens · base · ui-kit · domain · layout
+  src/api/        Тонкие клиенты по подсистемам: projects · materials · bindings · search · ai · ocr · chat · conspects · backgroundJobs
+  src/hooks/      Состояние экранов: useTheme, useBackgroundJob, useConspect, useBindings и другие
+  src/styles/     tokens · base · ui-kit · domain · layout · chat · conspects · cards · lessons · ocr · library-viewer
 .agents/skills/   Скиллы проекта
 data/             SQLite и файловое хранилище. В git не едет
 virtex/           Прошлый проект, только для чтения. В git не едет
 ```
 
-**`frontend/src/app/screens.ts` — единственный список экранов.** Пятнадцать проектных из §21, два глобальных (Библиотека, Параметры) и витрина: там видно и что сделано, и что предстоит.
+**`frontend/src/app/screens.ts` — единственный список экранов.** Сейчас шестнадцать строк: двенадцать проектных, три глобальных (Библиотека, Рабочая область материала, Параметры) и витрина кита. Маршруты «Покрытие», «Очередь предложений» и «Инбокс» удалены при резке функций 01.09.2026 — живой аналитический экран называется `coverage-map` и подписан «Ответы», не путай его с ними.
 
 **`frontend/src/app/views.ts` — что из этого списка уже сверстано.** Роутинг и навигация строятся отсюда, поэтому ссылок в никуда не бывает. Спроектировал экран — добавил строку в `views.ts` и файл в `src/screens/`.
 
@@ -72,11 +73,15 @@ npm run lint
 Только фронт: `cd frontend && npm run dev | typecheck | build`.
 Только бэк: `cd backend && python -m ruff check .`.
 
-Команды `npm test` нет, тестов на фронтенде тоже. На бэкенде есть pytest: `cd backend && python -m pytest` — 36 файлов в `backend/tests/`, 325 тестов на текущий момент (после вливания резки функций часть уйдёт — новое число не прогнозируем заранее). Плюс сквозные проверки по подсистемам в `backend/scripts/`: `check_stage2` … `check_stage5`, `check_manual_binding`, `check_ai_gateway`, `check_exam_chat`, `check_library_workspace`.
+Команды `npm test` и тестового набора на фронтенде нет; вместо них сборка. Единственное исключение — `frontend/src/screens/workspace/referenceAnswerMedia.test.ts` на встроенном `node:test`, он запускается вручную и в `npm run build` не входит.
+
+На бэкенде есть pytest: `cd backend && python -m pytest` — 36 файлов в `backend/tests/`, 313 тестов на 03.09.2026. Плюс сквозные проверки по подсистемам в `backend/scripts/`: `check_stage2` … `check_stage5`, `check_manual_binding`, `check_ai_gateway`, `check_exam_chat`, `check_library_workspace`.
 
 ## Стек
 
-React + TypeScript + Vite · Radix Primitives для поведения компонентов · Python + FastAPI · SQLite с WAL везде, включая учебные базы · `sqlite-vec` для векторов · FTS5 для BM25 · PyMuPDF · PP-OCRv5 (CPU) · pymorphy3 · SM-2 · aiogram · pytest + Vitest + Playwright.
+React + TypeScript + Vite · Radix Primitives для поведения компонентов · Milkdown Crepe для WYSIWYG-конспекта · KaTeX для формул · Python + FastAPI · SQLite с WAL везде, включая учебные базы · `sqlite-vec` для векторов · FTS5 для BM25 · PyMuPDF · PP-OCRv5 (CPU) · pymorphy3 · SM-2 · aiogram · pytest.
+
+Что из этой строки ещё не стоит в проекте: `sqlite-vec` приезжает с эмбеддингами (этап 6), `aiogram` — с ботом, SM-2 — с повторениями. Vitest и Playwright в `package.json` не добавлены: функциональные сценарии Playwright запланированы на этап 11, до тех пор фронтенд проверяется сборкой и глазами.
 
 Radix (пакет `radix-ui`) добавлен на этапе 1: всплывашки, диалоги, тумблеры и радиогруппы требуют фокус-ловушки, позиционирования с обходом краёв экрана и ARIA — это ровно тот случай, когда берётся готовое. Он отдаёт разметку без стилей, поэтому обычный CSS на токенах остаётся. Обоснование и что осталось своим — `DESIGN.md`.
 
@@ -154,4 +159,4 @@ git worktree add .worktrees/<краткая-задача> -b codex/<кратка
 ## Скиллы
 Лежат в `.agents/skills/`.
 
-Проектные: `skill-router` (выбор остальных) · `tentex-ui` (экраны, компоненты, стили) · `tentex-api` (бэкенд).
+Проектные: `skill-router` (выбор остальных) · `tentex-ui` (экраны, компоненты, стили) · `tentex-api` (бэкенд) · `tentex-code-quality` (планка качества кода из критериев ТРПС: докстринги, размер функций, мёртвый код).
