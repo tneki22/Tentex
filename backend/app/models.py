@@ -1165,6 +1165,8 @@ class Attempt(Base):
         Uuid(as_uuid=True), ForeignKey("attempts.id", ondelete="SET NULL"), nullable=True
     )
     ordinal: Mapped[int] = mapped_column(Integer)
+    answer_mode: Mapped[str | None] = mapped_column(String, nullable=True)
+    active_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     text: Mapped[str] = mapped_column(Text)
     persona: Mapped[ExaminerPersona] = mapped_column(
         enum_type(ExaminerPersona, "examiner_persona")
@@ -1423,3 +1425,7 @@ class ConspectImage(Base):
     media_type: Mapped[str] = mapped_column(String)
     size_bytes: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+# Регистрация таблиц подсистемы для create_all и Alembic.
+from app.preparation import models as preparation_models  # noqa: E402,F401

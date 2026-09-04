@@ -17,6 +17,7 @@ from app.exam.router import router as exam_router
 from app.logging_config import configure_logging
 from app.materials.router import router as materials_router
 from app.ocr.router import router as ocr_router
+from app.preparation.router import router as preparation_router
 from app.projects.demo import seed_demo_project
 from app.projects.errors import ProjectDomainError
 from app.projects.router import router as projects_router
@@ -120,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(ocr_router)
     app.include_router(exam_router)
     app.include_router(background_router)
+    app.include_router(preparation_router)
     return app
 
 

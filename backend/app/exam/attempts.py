@@ -28,6 +28,7 @@ from app.models import (
     ReferenceAnswer,
     utc_now,
 )
+from app.preparation.evidence import synchronize_review
 from app.projects.answer_lifecycle import is_reference_answer_available
 from app.projects.errors import ProjectDomainError
 
@@ -205,6 +206,7 @@ def _save_grade(
             )
         session.flush()
         session.refresh(grade)
+        synchronize_review(session, attempt)
     return grade
 
 
@@ -214,6 +216,9 @@ async def submit_answer(
     project_id: UUID,
     chat: ChatSession | UUID,
     text: str,
+    *,
+    answer_mode: str | None = None,
+    active_seconds: int | None = None,
 ) -> AnswerResult:
     chat_id = chat.id if isinstance(chat, ChatSession) else chat
     with session.begin():
@@ -255,6 +260,8 @@ async def submit_answer(
             program_node_id=chat_row.program_node_id,
             ordinal=ordinal,
             text=text,
+            answer_mode=answer_mode,
+            active_seconds=active_seconds,
             persona=chat_row.persona,
             strictness=chat_row.strictness,
             context_snapshot=snapshot,
@@ -399,6 +406,7 @@ def set_self_assessment(
         grade.updated_at = utc_now()
         session.flush()
         session.refresh(grade)
+        synchronize_review(session, attempt)
     return grade
 
 

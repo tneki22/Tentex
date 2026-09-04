@@ -475,6 +475,11 @@ def _flatten_new_tree(items: list[RepairedQuestion | RepairedTicket]) -> list[_F
 
 def _validate_parentage(entries: list[_FlatNewNode], positions: list[RepairPosition]) -> None:
     """Не позволить текстовому исправлению переместить вопрос в чужую ветвь."""
+    ticket_sources = [entry.source_indices for entry in entries if entry.kind == "ticket"]
+    if any(len(indices) != 1 for indices in ticket_sources):
+        raise ProjectInvariantError("Нельзя объединять билеты при исправлении текста")
+    if len({indices[0] for indices in ticket_sources}) != len(ticket_sources):
+        raise ProjectInvariantError("Нельзя разделять билет при исправлении текста")
     for entry in entries:
         sources = [positions[index - 1].node for index in entry.source_indices]
         if len({node.parent_id for node in sources}) != 1:

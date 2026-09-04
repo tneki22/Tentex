@@ -168,6 +168,8 @@ class ChatMessageWrite(ApiModel):
 
 class ChatAnswerWrite(ApiModel):
     text: NonBlank = Field(max_length=50_000)
+    answer_mode: Literal["memory", "supported"] | None = None
+    active_seconds: int | None = Field(default=None, ge=0, le=86400)
 
 
 class RubricPointRead(ApiModel):
@@ -188,6 +190,8 @@ class AttemptRead(ApiModel):
     strictness: ExaminerStrictness
     context_snapshot: dict[str, Any]
     created_at: datetime
+    answer_mode: Literal["memory", "supported"] | None = None
+    active_seconds: int | None = None
 
 
 class GradeUsageRead(ApiModel):
