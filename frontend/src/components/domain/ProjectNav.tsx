@@ -57,7 +57,7 @@ export function ProjectNav({ projectId, active, textbook = false, modules, count
       ? [{ key: "lessons" as const, to: `/projects/${projectId}/lessons`, icon: GraduationCap, label: "Уроки" }]
       : []),
     ...(!textbook && hasModule("plan")
-      ? [{ key: "plan" as const, to: `/projects/${projectId}/plan`, icon: CalendarDays, label: "План подготовки" }]
+      ? [{ key: "plan" as const, to: `/projects/${projectId}/plan`, icon: CalendarDays, label: "Моя подготовка" }]
       : []),
     ...(textbook
       ? [{
@@ -101,3 +101,4 @@ export function ProjectNav({ projectId, active, textbook = false, modules, count
     </nav>
   );
 }
+

@@ -152,7 +152,7 @@ export const SCREENS: ScreenMeta[] = [
     id: "plan",
     path: "/projects/:projectId/plan",
     navPath: "/projects/:projectId/plan",
-    title: "План подготовки",
+    title: "Моя подготовка",
     summary: "Календарь до дедлайна: первичный проход, повторения, резерв и прогноз готовности.",
     group: "Занятия",
     icon: CalendarDays,
@@ -217,3 +217,4 @@ export function screenById(id: string): ScreenMeta {
   if (!screen) throw new Error(`Экран «${id}» не описан в SCREENS`);
   return screen;
 }
+

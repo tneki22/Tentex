@@ -1,3 +1,4 @@
+import type { Schema } from "./preparation";
 import type { PageQuality } from "./materials";
 import { ProjectApiError, request } from "./projects";
 
@@ -332,9 +333,10 @@ export const submitChatAnswer = (
   projectId: string,
   sessionId: string,
   text: string,
+  tracking?: Pick<Schema["ChatAnswerWrite"], "answer_mode" | "active_seconds">,
 ): Promise<ChatAnswerResult> => request(
   `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/answer`,
-  { method: "POST", body: JSON.stringify({ text }) },
+  { method: "POST", body: JSON.stringify({ text, ...tracking }) },
 );
 
 export const listAttempts = (

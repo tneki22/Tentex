@@ -39,3 +39,4 @@ export const SCREEN_VIEWS: Record<string, ComponentType> = {
   setup: Setup,
   "ui-kit": UiKit,
 };
+

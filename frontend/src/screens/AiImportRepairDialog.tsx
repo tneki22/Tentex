@@ -72,7 +72,6 @@ function validateItems(items: RepairedItem[], hasTickets: boolean): string {
       if (item.items.length === 0) return "В билете должен остаться хотя бы один пункт.";
       if (item.items.some((child) => !child.title.trim())) return "Формулировка вопроса или задачи не может быть пустой.";
     } else {
-      if (hasTickets) return "В формате билетов верхний уровень должен состоять только из билетов.";
       if (!item.title.trim()) return "Формулировка вопроса или задачи не может быть пустой.";
     }
   }
@@ -338,19 +337,33 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
   function restoreDropped(dropIndex: number) {
     const entry = dropped[dropIndex];
     if (!entry) return;
+    const context = preflight?.source_context ?? [];
+    const positions = context.filter((node) => node.node_type === "topic" || node.exam_kind === "ticket");
     const sourceIndex = entry.source_indices[0];
-    const sourceText = (sourceIndex && runResult?.source_texts[sourceIndex - 1]) || "";
-    const restored: RepairedQuestion = { kind: "question", title: sourceText, subpoints: [], source_indices: entry.source_indices };
-    setDropped(dropped.filter((_, index) => index !== dropIndex));
-    if (hasTickets) {
-      const firstTicketIndex = items.findIndex((item) => item.kind === "ticket");
-      if (firstTicketIndex === -1) return;
-      setItems(items.map((item, index) => index === firstTicketIndex && item.kind === "ticket"
-        ? { ...item, items: [...item.items, restored] }
-        : item));
-    } else {
-      setItems([...items, restored]);
+    const source = positions[sourceIndex - 1];
+    if (!source) return;
+    const question = (index: number): RepairedQuestion => {
+      const node = positions[index - 1];
+      return { kind: node.exam_kind === "task" ? "task" : "question", title: node.title,
+        subpoints: node.subpoints, source_indices: [index] };
+    };
+    if (source.exam_kind === "ticket") {
+      const childIndices = positions.flatMap((node, index) => node.parent_id === source.id ? [index + 1] : []);
+      const restoredIndices = new Set([sourceIndex, ...childIndices]);
+      setItems([...items, { kind: "ticket", title: source.title, source_indices: [sourceIndex], items: childIndices.map(question) }]);
+      setDropped(dropped.filter((item) => !item.source_indices.some((index) => restoredIndices.has(index))));
+      return;
     }
+    const parent = context.find((node) => node.id === source.parent_id);
+    const ticketIndex = items.findIndex((item) => item.kind === "ticket" && item.source_indices.some((index) => positions[index - 1]?.id === source.parent_id));
+    if (parent?.exam_kind === "ticket" && ticketIndex === -1) {
+      setError(new Error("Сначала верните билет целиком — вопрос принадлежит ему."));
+      return;
+    }
+    const restored = question(sourceIndex);
+    setDropped(dropped.filter((_, index) => index !== dropIndex));
+    setItems(ticketIndex === -1 ? [...items, restored] : items.map((item, index) =>
+      index === ticketIndex && item.kind === "ticket" ? { ...item, items: [...item.items, restored] } : item));
   }
 
   function questionEditorProps(ticketIndex: number | null, itemIndex: number, item: RepairedQuestion, label: string): QuestionEditorProps {
@@ -381,7 +394,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
         onOpenChange={(next) => next ? onOpenChange(true) : requestClose()}
         className="ai-consumer-dialog ai-import-repair-dialog"
         title="Исправить список вопросов"
-        description="Правит формулировки, расставляет подпункты и убирает лишние заголовки; число пунктов может измениться. Дерево изменится после применения."
+        description="Правит формулировки, расставляет подпункты и убирает лишние заголовки; число пунктов может измениться. Разделы и состав билетов сохраняются. Изменения применяются после проверки и доступны для отмены."
         footer={<>
           <Button variant="ghost" onClick={requestClose}>Закрыть</Button>
           {busy === "run" || jobActive ? <Button variant="secondary" onClick={stop}><Square size={13} />Остановить</Button>
@@ -402,14 +415,16 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
 
           <Disclosure summary="Что отправим">
             <div className="ai-manifest">
-              <p>Текущие формулировки {nodes.length} пунктов программы, без id.</p>
+              <p>Полное дерево программы: разделы, вопросы, задачи, билеты и подпункты, их id и пути. Для ответов — только наличие и число символов.</p>
               <p><strong>Не отправляются:</strong> ответы, ответы пользователя, материалы, привязки, конспекты и попытки.</p>
+              {!preflight && <p>Полный состав появится после оценки запроса.</p>}
               <ol className="ai-question-manifest">
-                {nodes.map((node, index) => (
+                {(preflight?.source_context ?? []).map((node, index) => (
                   <li key={node.id}>
                     <code>#{index + 1}</code>
-                    <span>{node.exam_kind === "ticket" ? "Билет" : node.exam_kind === "task" ? "Задача" : node.exam_kind === "question" ? "Вопрос" : "Тема"}</span>
-                    <strong>{node.title}</strong>
+                    <span>{node.exam_kind === "ticket" ? "Билет" : node.exam_kind === "task" ? "Задача" : node.exam_kind === "question" ? "Вопрос" : node.node_type === "section" ? "Раздел" : node.node_type === "subpoint" ? "Подпункт" : "Тема"}</span>
+                    <strong>{[...node.path, node.title].join(" → ")}</strong>
+                    <small>{node.id}</small>
                   </li>
                 ))}
               </ol>
@@ -457,7 +472,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
               {hasTickets ? (
                 <ol className="ai-repair-ticket-list">
                   {items.map((ticket, ticketIndex) => {
-                    if (ticket.kind !== "ticket") return null;
+                    if (ticket.kind !== "ticket") return <QuestionEditor key={ticketIndex} {...questionEditorProps(null, ticketIndex, ticket, `${ticketIndex + 1}`)} />;
                     return (
                       <li key={ticketIndex} className="ai-repair-ticket">
                         <header>
@@ -490,7 +505,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
                     {dropped.map((entry, index) => (
                       <li key={index}>
                         <span>Позиция {entry.source_indices.join(", ")}: {entry.reason}</span>
-                        <Button variant="ghost" onClick={() => restoreDropped(index)}><RotateCcw size={13} />Вернуть как вопрос</Button>
+                        <Button variant="ghost" onClick={() => restoreDropped(index)}><RotateCcw size={13} />Вернуть пункт</Button>
                       </li>
                     ))}
                   </ul>

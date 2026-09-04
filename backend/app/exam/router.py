@@ -279,7 +279,8 @@ async def post_chat_answer(
     gateway: GatewayDependency,
 ) -> ChatAnswerResult:
     result = await attempt_service.submit_answer(
-        session, gateway, project_id, session_id, command.text
+        session, gateway, project_id, session_id, command.text,
+        answer_mode=command.answer_mode, active_seconds=command.active_seconds,
     )
     return ChatAnswerResult(
         messages=[ChatMessageRead.model_validate(item) for item in result.messages],

@@ -20,6 +20,7 @@
 | Глобальная Библиотека | `global-library-material-workspace.md` | `check_library_workspace.py` |
 | Конспекты | `conspects.md` | pytest |
 | Фоновые операции | `background-jobs.md` | pytest |
+| Моя подготовка, журнал, SM-2 и расписание | `my-preparation.md` | профильные pytest, миграции, typecheck/build |
 
 `ai-provider-model-settings.md` заменяет старую модель двух жёстких подключений из
 `ai-model-gateway.md`. Если историческая граница говорит «не входит в этап», проверяй

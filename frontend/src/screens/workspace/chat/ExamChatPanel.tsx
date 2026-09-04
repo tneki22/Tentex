@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BookOpenCheck, MessageSquare, Search } from "lucide-react";
 import type { ProgramNodeRead } from "../../../api/projects";
 import { Button, EmptyState, ErrorState, LoadingState } from "../../../components/ui";
@@ -15,6 +15,8 @@ interface ExamChatPanelProps {
   projectId: string;
   node: ProgramNodeRead | null;
   onAttemptsChanged?: () => void;
+  onAnsweringChange?: (value: boolean) => void;
+  takeAnswerSeconds?: () => number;
 }
 
 function nextOrdinal(messages: { payload_kind: string }[]): number {
@@ -53,9 +55,12 @@ function MaterialSearchPrompt({
   );
 }
 
-export function ExamChatPanel({ projectId, node, onAttemptsChanged }: ExamChatPanelProps) {
+export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringChange, takeAnswerSeconds }: ExamChatPanelProps) {
   const chat = useExamChat({ projectId, node, onAttemptsChanged });
   const [answering, setAnswering] = useState(false);
+  const [answerMode, setAnswerMode] = useState<"memory" | "supported">("memory");
+  useEffect(() => { onAnsweringChange?.(answering); return () => onAnsweringChange?.(false); }, [answering, onAnsweringChange]);
+  useEffect(() => { setAnswering(false); setAnswerDraft(""); takeAnswerSeconds?.(); }, [node?.id]);
   const [answerDraft, setAnswerDraft] = useState("");
   const [searching, setSearching] = useState(false);
   const [toolBusy, setToolBusy] = useState(false);
@@ -162,8 +167,10 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged }: ExamChatPa
               question={node.title}
               ordinal={nextOrdinal(chat.messages)}
               value={answerDraft}
+              answerMode={answerMode}
+              onAnswerModeChange={setAnswerMode}
               onChange={setAnswerDraft}
-              onSubmit={() => { void chat.submitAnswer(answerDraft); setAnswering(false); }}
+              onSubmit={() => { void chat.submitAnswer(answerDraft, { answer_mode: answerMode, active_seconds: takeAnswerSeconds?.() ?? null }); setAnswering(false); }}
               onCancel={() => setAnswering(false)}
               busy={chat.submittingAnswer}
             />

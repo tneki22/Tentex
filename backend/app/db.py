@@ -1,10 +1,12 @@
 import sqlite3
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
+from uuid import UUID
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import URL, MetaData, create_engine, event
+from sqlalchemy import URL, MetaData, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -62,6 +64,20 @@ def configure_sqlite(dbapi_connection: object, _: object) -> None:
 def get_session() -> Iterator[Session]:
     with SessionLocal() as session:
         yield session
+
+
+@contextmanager
+def project_write_transaction(session: Session, project_id: UUID):
+    """Reserve SQLite's writer before reads so timer/worker commits cannot stale the snapshot.
+
+    Python 3.13 autocommit=False already opens BEGIN on connect. A no-op write
+    obtains the same reservation as BEGIN IMMEDIATE without nesting BEGIN or
+    rolling back caller data. Values and project revisions remain unchanged.
+    Use only for short local transactions, never across a model request.
+    """
+    with session.begin():
+        session.execute(text("UPDATE projects SET id = id WHERE id = :id"), {"id": project_id.hex})
+        yield
 
 
 def _ensure_wal_mode(attempts: int = 5, delay: float = 0.5) -> None:

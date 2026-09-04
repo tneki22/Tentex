@@ -1,240 +1,512 @@
-import { useMemo, useState } from "react";
-import { Link, useParams } from "react-router";
+/** Рабочий экран подготовки: серверный снимок, защищённые черновики и независимые представления. */
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
-  ArrowLeft,
-  CalendarDays,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  CircleAlert,
-  Clock3,
-  GraduationCap,
-  Layers,
-  MoveRight,
-  Pin,
-  RotateCcw,
-  Sparkles,
-  WandSparkles,
-} from "lucide-react";
-import { Button, Dialog, Field, PageHead, SegmentedTabs, Tooltip } from "../components/ui";
-import { CostEstimate, MachineMark, ProjectNav } from "../components/domain";
-
-type DayKind = "past" | "today" | "future" | "review" | "exam";
-type PlanItemKind = "new" | "review" | "gap";
-
-interface PlanItem {
-  id: string;
-  title: string;
-  section: string;
-  minutes: number;
-  kind: PlanItemKind;
-  pinned?: boolean;
-  machine?: boolean;
-}
-
-interface PlanDay {
-  id: string;
-  weekday: string;
-  date: string;
-  phase: string;
-  kind: DayKind;
-  capacity: number;
-  items: PlanItem[];
-  expanded?: boolean;
-}
-
-const INITIAL_DAYS: PlanDay[] = [
-  {
-    id: "day-1", weekday: "Понедельник", date: "4 августа", phase: "Первичный проход", kind: "past", capacity: 120, expanded: false,
-    items: [
-      { id: "db-purpose", title: "Назначение и компоненты СУБД", section: "Основы баз данных", minutes: 20, kind: "new" },
-      { id: "data-models", title: "Модели данных", section: "Основы баз данных", minutes: 25, kind: "new" },
-      { id: "db-architecture", title: "Архитектура ANSI/SPARC", section: "Основы баз данных", minutes: 35, kind: "new" },
-    ],
-  },
-  {
-    id: "day-2", weekday: "Вторник", date: "5 августа", phase: "Первичный проход", kind: "today", capacity: 120, expanded: true,
-    items: [
-      { id: "data-languages", title: "Языки определения и манипулирования данными", section: "Основы баз данных", minutes: 20, kind: "new" },
-      { id: "relational-concepts", title: "Отношение, кортеж, домен", section: "Реляционная модель", minutes: 25, kind: "new" },
-      { id: "keys", title: "Первичные и внешние ключи", section: "Реляционная модель", minutes: 35, kind: "new", pinned: true },
-      { id: "repeat-models", title: "Повторить модели данных", section: "Основы баз данных", minutes: 15, kind: "review" },
-    ],
-  },
-  {
-    id: "day-3", weekday: "Среда", date: "6 августа", phase: "Первичный проход", kind: "future", capacity: 120, expanded: false,
-    items: [
-      { id: "relational-algebra", title: "Операции реляционной алгебры", section: "Реляционная модель", minutes: 45, kind: "new" },
-      { id: "normalization", title: "Нормальные формы", section: "Реляционная модель", minutes: 50, kind: "new" },
-    ],
-  },
-  {
-    id: "day-4", weekday: "Четверг", date: "7 августа", phase: "Первичный проход", kind: "future", capacity: 120, expanded: false,
-    items: [
-      { id: "transactions", title: "Транзакции и свойства ACID", section: "Управление транзакциями", minutes: 50, kind: "new", machine: true },
-      { id: "logging", title: "Журнализация и восстановление", section: "Управление транзакциями", minutes: 35, kind: "new", machine: true },
-    ],
-  },
-  {
-    id: "day-5", weekday: "Пятница", date: "8 августа", phase: "Повторение и пробелы", kind: "review", capacity: 100, expanded: false,
-    items: [
-      { id: "repeat-basics", title: "Повторить раздел «Основы баз данных»", section: "Повторение", minutes: 50, kind: "review" },
-      { id: "gap-architecture", title: "Закрыть пробел: независимость данных", section: "Пробелы", minutes: 25, kind: "gap" },
-    ],
-  },
-  {
-    id: "day-6", weekday: "Суббота", date: "9 августа", phase: "Повторение и пробелы", kind: "review", capacity: 100, expanded: false,
-    items: [
-      { id: "repeat-relational", title: "Повторить реляционную модель", section: "Повторение", minutes: 55, kind: "review" },
-      { id: "gap-normalization", title: "Разобрать нормальные формы", section: "Пробелы", minutes: 35, kind: "gap" },
-    ],
-  },
-  {
-    id: "day-7", weekday: "Воскресенье", date: "10 августа", phase: "Финальное повторение", kind: "exam", capacity: 80, expanded: false,
-    items: [
-      { id: "final", title: "Короткий прогон всех разделов", section: "Финальное повторение", minutes: 60, kind: "review" },
-    ],
-  },
-];
-
-const KIND_LABEL: Record<PlanItemKind, string> = { new: "Новый вопрос", review: "Повторение", gap: "Пробел" };
-
+  Button,
+  Dialog,
+  Field,
+  PageHead,
+  SegmentedTabs,
+  LoadingState,
+  ErrorState,
+} from "../components/ui";
+import { ProjectNav } from "../components/domain";
+import {
+  preparation,
+  revisions,
+  errorText,
+  type Overview,
+  type Draft,
+  type DraftWrite,
+  type Phase,
+  type PlanItem,
+} from "../api/preparation";
+import { MiniCalendar } from "./preparation/MiniCalendar";
+import { Timeline } from "./preparation/Timeline";
+import { Calendar } from "./preparation/Calendar";
+import { History } from "./preparation/History";
+import { Analytics } from "./preparation/Analytics";
+import { Settings } from "./preparation/Settings";
+import { DraftDialog } from "./preparation/DraftDialog";
+import { PhaseEditor } from "./preparation/PhaseEditor";
+import { AssignmentEditor } from "./preparation/AssignmentEditor";
+import { AiPreparation } from "./preparation/AiPreparation";
+import { addDays, dateLabel, duration } from "./preparation/dates";
 export function Plan() {
-  const { projectId = "demo" } = useParams();
-  const [days, setDays] = useState(INITIAL_DAYS);
-  const [selectedDayId, setSelectedDayId] = useState("day-2");
-  const [rightTab, setRightTab] = useState<"settings" | "why">("why");
-  const [aiOpen, setAiOpen] = useState(false);
-  const [aiDiffOpen, setAiDiffOpen] = useState(false);
-  const [recoveryOpen, setRecoveryOpen] = useState(false);
-  const [recalculated, setRecalculated] = useState(false);
-  const [dailyMinutes, setDailyMinutes] = useState("120");
-  const [aiRequest, setAiRequest] = useState("");
-  const selectedDay = days.find((day) => day.id === selectedDayId) ?? days[0];
-  const plannedMinutes = (day: PlanDay) => day.items.reduce((sum, item) => sum + item.minutes, 0);
-  const totalPlanned = useMemo(() => days.reduce((sum, day) => sum + plannedMinutes(day), 0), [days]);
-
-  function toggleDay(id: string) {
-    setDays((current) => current.map((day) => day.id === id ? { ...day, expanded: !day.expanded } : day));
-    setSelectedDayId(id);
+  const { projectId = "" } = useParams();
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams(localStorage.getItem(`tentex-preparation-view:${projectId}`) ?? "");
+  useEffect(() => {
+    localStorage.setItem(`tentex-preparation-view:${projectId}`, params.toString());
+  }, [projectId, params]);
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [editor, setEditor] = useState<Phase | PlanItem | "assignment" | null>(
+    null,
+  );
+  const [side, setSide] = useState<"why" | "settings">("why");
+  const [busy, setBusy] = useState(false);
+  const [schedule, setSchedule] = useState(false);
+  const [range, setRange] = useState({ start: "", end: "" });
+  const date = params.get("date") ?? overview?.today ?? "";
+  const view = params.get("view") ?? "calendar";
+  const refresh = () => setVersion((value) => value + 1);
+  const draftKey = `tentex-preparation-draft:${projectId}`;
+  const showDraft = (value: Draft) => {
+    localStorage.setItem(draftKey, value.id);
+    setDraft(value);
+  };
+  const closeDraft = () => {
+    localStorage.removeItem(draftKey);
+    setDraft(null);
+  };
+  useEffect(() => {
+    const id = localStorage.getItem(draftKey);
+    if (!id) return;
+    const controller = new AbortController();
+    preparation
+      .getDraft(projectId, id, controller.signal)
+      .then((value) => {
+        if (!controller.signal.aborted) setDraft(value);
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) {
+          setError(errorText(caught));
+          localStorage.removeItem(draftKey);
+        }
+      });
+    return () => controller.abort();
+  }, [projectId, draftKey]);
+  useEffect(() => {
+    const controller = new AbortController();
+    const selected = params.get("date");
+    preparation
+      .overview(
+        projectId,
+        selected ? addDays(selected, -7) : undefined,
+        selected ? addDays(selected, 30) : undefined,
+        controller.signal,
+      )
+      .then((value) => {
+        setOverview(value);
+        setError(null);
+        setRange((current) =>
+          current.start
+            ? current
+            : {
+                start: value.today,
+                end: value.deadline ?? addDays(value.today, 30),
+              },
+        );
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) setError(errorText(caught));
+      });
+    return () => controller.abort();
+  }, [projectId, params.get("date"), version]);
+  const ui = (key: string, value: string) =>
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.set(key, value);
+        return next;
+      },
+      { replace: true },
+    );
+  async function preview(change: Partial<DraftWrite>) {
+    if (!overview || overview.readonly) return;
+    setBusy(true);
+    try {
+      const value = await preparation.draft(projectId, {
+        mode: "manual",
+        phases: null,
+        items: null,
+        unit_ids: null,
+        start: null,
+        end: null,
+        ...revisions(overview),
+        ...change,
+      });
+      showDraft(value);
+      setEditor(null);
+      setSchedule(false);
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setBusy(false);
+    }
   }
-
-  function moveItem(itemId: string, fromDayId: string) {
-    const currentIndex = days.findIndex((day) => day.id === fromDayId);
-    const target = days[currentIndex + 1];
-    if (!target) return;
-    const item = days[currentIndex].items.find((candidate) => candidate.id === itemId);
-    if (!item || item.pinned) return;
-    setDays((current) => current.map((day) => {
-      if (day.id === fromDayId) return { ...day, items: day.items.filter((candidate) => candidate.id !== itemId) };
-      if (day.id === target.id) return { ...day, items: [...day.items, { ...item, machine: false }] };
-      return day;
-    }));
+  async function startDay(onDate: string) {
+    if (overview?.readonly) return;
+    setBusy(true);
+    try {
+      const queue = await preparation.queue(projectId, onDate, true);
+      const topic =
+        queue.items[queue.position]?.topic_ids[queue.topic_position];
+      if (topic)
+        navigate(
+          `/projects/${projectId}?queue=${onDate}&topic=${topic}&tab=chat`,
+        );
+      else
+        setError("В очереди дня нет вопросов. Добавьте задания в календарь.");
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setBusy(false);
+    }
   }
-
-  function togglePinned(itemId: string, dayId: string) {
-    setDays((current) => current.map((day) => day.id === dayId ? { ...day, items: day.items.map((item) => item.id === itemId ? { ...item, pinned: !item.pinned } : item) } : day));
+  async function undo() {
+    if (!overview || overview.readonly) return;
+    setBusy(true);
+    try {
+      await preparation.undo(projectId, overview.plan.revision);
+      refresh();
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setBusy(false);
+    }
   }
-
-  function applyAiDiff() {
-    setDays((current) => current.map((day) => {
-      const avoidWednesday = /сред/i.test(aiRequest);
-      if (day.id === "day-3") return { ...day, items: avoidWednesday ? day.items.filter((item) => item.id !== "normalization") : day.items.map((item) => item.id === "normalization" ? { ...item, minutes: 40, machine: true } : item) };
-      if (day.id === "day-4") return { ...day, items: [...day.items, ...(avoidWednesday ? [{ id: "normalization", title: "Нормальные формы", section: "Реляционная модель", minutes: 35, kind: "new" as const, machine: true }] : [{ id: "repeat-keys", title: "Коротко повторить ключи", section: "Реляционная модель", minutes: 15, kind: "review" as const, machine: true }])] };
-      return day;
-    }));
-    setAiDiffOpen(false);
-    setAiOpen(false);
-  }
-
+  const history = (filters: Record<string, string>) =>
+    setParams((current) => {
+      const next = new URLSearchParams();
+      next.set("view", "history");
+      if (current.get("date")) next.set("date", current.get("date")!);
+      Object.entries(filters).forEach(([key, value]) => next.set(key, value));
+      return next;
+    });
+  if (!overview)
+    return (
+      <main className="prep-loading">
+        {error ? (
+          <>
+            <ErrorState title="Подготовка не загрузилась" message={error} />
+            <Button onClick={refresh}>Повторить</Button>
+          </>
+        ) : (
+          <LoadingState label="Загружаем подготовку" />
+        )}
+      </main>
+    );
+  const selected = overview.days.find((day) => day.date === date);
   return (
-    <div className="plan-screen">
+    <div className="plan-screen prep-screen">
       <aside className="plan-project-panel">
         <header className="program-project-title">
-          <Tooltip label="Вернуться в рабочую область"><Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link></Tooltip>
-          <strong>Базы данных — экзамен</strong>
+          <Link to={`/projects/${projectId}`} aria-label="В рабочую область">
+            ←
+          </Link>
+          <strong>{overview.project_name}</strong>
         </header>
-        <section className="plan-mini-calendar" aria-label="Неделя подготовки">
-          <p className="eyebrow">До экзамена</p>
-          <strong>7 учебных дней</strong>
-          <div>{days.map((day) => <button type="button" className={`is-${day.kind} ${selectedDayId === day.id ? "is-selected" : ""}`.trim()} key={day.id} onClick={() => setSelectedDayId(day.id)} aria-label={`${day.weekday}, ${day.date}`}><span>{day.weekday.slice(0, 2)}</span><b>{day.date.split(" ")[0]}</b></button>)}</div>
-        </section>
+        <MiniCalendar
+          value={date}
+          today={overview.today}
+          onChange={(value) => ui("date", value)}
+        />
         <ProjectNav
           projectId={projectId}
           active="plan"
-          counts={{ materials: 3, program: 10, plan: "7 дней" }}
           className="program-project-nav"
         />
       </aside>
-
       <main className="plan-main">
         <PageHead
-          eyebrow="До экзамена осталось 7 дней"
-          title="План подготовки"
-          actions={<><Button variant="secondary" onClick={() => setAiOpen(true)}><WandSparkles size={15} /> Уточнить с ИИ</Button><Button onClick={() => setRecalculated(true)}><RotateCcw size={15} /> {recalculated ? "План обновлён" : "Пересчитать"}</Button></>}
+          title="Моя подготовка"
+          eyebrow={
+            overview.deadline
+              ? `Экзамен ${dateLabel(overview.deadline)}`
+              : "Дата экзамена не задана"
+          }
+          actions={
+            <>
+              <Button
+                variant="secondary"
+                disabled={busy || overview.readonly || !overview.plan.can_undo}
+                onClick={() => void undo()}
+              >
+                Отменить изменение
+              </Button>
+              <Button
+                disabled={busy || overview.readonly}
+                onClick={() => void startDay(overview.today)}
+              >
+                Начать день
+              </Button>
+            </>
+          }
         />
-        <section className="plan-summary" aria-label="Параметры подготовки">
-          <div><span>Экзамен</span><strong>11 августа, 10:00</strong></div>
-          <div><span>Доступно</span><strong>{dailyMinutes} минут в день</strong></div>
-          <div><span>Первичный проход</span><strong>До 7 августа</strong></div>
-          <div><span>Резерв</span><strong>2 дня и финальный прогон</strong></div>
-          <div><span>В плане</span><strong>10 из 10 вопросов</strong></div>
+        {error && <ErrorState title="Действие не завершено" message={error} />}
+        {overview.readonly && (
+          <p className="prep-card">
+            Проект доступен только для чтения. История и план сохранены.
+          </p>
+        )}
+        <section className="prep-coach">
+          <p className="eyebrow">Сегодня</p>
+          {overview.readonly && <strong>{overview.coach.text}</strong>}
+          {!overview.readonly && (
+            <AiPreparation
+              key={projectId}
+              overview={overview}
+              onDraft={showDraft}
+              onAction={(action) => {
+                if (action === "start") void startDay(overview.today);
+                else if (action === "redistribute") void preview({mode: "spread"});
+                else setSchedule(true);
+              }}
+            />
+          )}
         </section>
-        {!recalculated && <section className="plan-stale-notice"><span><Sparkles size={16} /> В списке вопросов есть изменения после последнего пересчёта.</span><button type="button" onClick={() => setRecalculated(true)}>Пересчитать план</button></section>}
-        <section className="plan-phase-strip" aria-label="Фазы подготовки">
-          <button type="button" className="is-pass" onClick={() => setSelectedDayId("day-2")}><span>4–7 августа</span><strong>Первичный проход</strong></button>
-          <button type="button" className="is-review" onClick={() => setSelectedDayId("day-5")}><span>8–9 августа</span><strong>Повторение и пробелы</strong></button>
-          <button type="button" className="is-final" onClick={() => setSelectedDayId("day-7")}><span>10 августа</span><strong>Финальный прогон</strong></button>
-          <span className="plan-phase-exam">Экзамен<br />11 августа</span>
+        <section className="plan-summary">
+          <div>
+            <span>Сегодня</span>
+            <strong>{duration(overview.summary.today_seconds)}</strong>
+          </div>
+          <div>
+            <span>Доступно до экзамена</span>
+            <strong>{duration(overview.summary.available_minutes * 60)}</strong>
+          </div>
+          <div>
+            <span>Осталось работы</span>
+            <strong>{duration(overview.summary.remaining_work_minutes * 60)}</strong>
+          </div>
+          <div><span>Пройдено</span><strong>{overview.summary.passed_topics} / {overview.summary.total_topics}</strong></div>
+          <div><span>Подтверждено</span><strong>{overview.summary.confirmed_topics}</strong></div>
+          {overview.plan.unassigned_ids.length > 0 && <div>
+            <span>Без даты</span>
+            <Button
+              variant="ghost"
+              disabled={overview.readonly}
+              onClick={() => setSchedule(true)}
+            >
+              {overview.plan.unassigned_ids.length} заданий · распределить
+            </Button>
+          </div>}
         </section>
-        <div className="plan-content-grid">
-          <section className="plan-agenda" aria-label="Календарный план">
-            <div className="plan-agenda-head"><div><h2>Календарь подготовки</h2><p>{totalPlanned} минут назначено, ручные переносы сохранятся.</p></div><Button variant="ghost" onClick={() => setRecoveryOpen(true)}><CircleAlert size={15} /> Пропустил день</Button></div>
-            {days.map((day) => {
-              const minutes = plannedMinutes(day);
-              const overloaded = minutes > day.capacity;
-              const open = day.expanded || selectedDayId === day.id;
-              return <article className={`plan-day is-${day.kind} ${selectedDayId === day.id ? "is-selected" : ""}`.trim()} key={day.id}>
-                <button type="button" className="plan-day-head" onClick={() => toggleDay(day.id)} aria-expanded={open}>
-                  <span className="plan-day-marker">{day.kind === "past" ? <CheckCircle2 size={16} /> : day.kind === "today" ? <Clock3 size={16} /> : day.kind === "review" ? <RotateCcw size={16} /> : day.kind === "exam" ? <GraduationCap size={16} /> : <CalendarDays size={16} />}</span>
-                  <span className="plan-day-date"><strong>{day.weekday}</strong><small>{day.date}</small></span>
-                  <span className="plan-day-phase">{day.phase}</span>
-                  <span className={`plan-day-load ${overloaded ? "is-overloaded" : ""}`}>{minutes} / {day.capacity} мин</span>
-                  {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                </button>
-                {open && <div className="plan-day-body">
-                  {day.items.map((item) => <div className={`plan-item is-${item.kind}`.trim()} key={item.id}>
-                    <span className="plan-item-kind">{KIND_LABEL[item.kind]}</span>
-                    <Link to={`/projects/${projectId}`}>{item.title}<small>{item.section}</small></Link>
-                    <span>{item.minutes} мин</span>
-                    {item.machine && <MachineMark origin="уточнено моделью" onUndo={() => setDays((current) => current.map((candidate) => candidate.id === day.id ? { ...candidate, items: candidate.items.map((entry) => entry.id === item.id ? { ...entry, machine: false } : entry) } : candidate))} />}
-                    <button type="button" className={`plan-pin ${item.pinned ? "is-active" : ""}`.trim()} onClick={() => togglePinned(item.id, day.id)} aria-label={item.pinned ? "Снять закрепление" : "Закрепить дату"}><Pin size={14} /></button>
-                    <button type="button" className="plan-move" disabled={item.pinned || day.kind === "exam"} onClick={() => moveItem(item.id, day.id)}><MoveRight size={14} /> На следующий день</button>
-                  </div>)}
-                  {day.kind === "today" && <div className="plan-day-actions"><Button><GraduationCap size={15} /> Начать день</Button><Button variant="ghost">Перенести остаток</Button></div>}
-                </div>}
-              </article>;
-            })}
+        {overview.settings.config.daily_minutes == null && (
+          <section className="prep-card">
+            <p>Укажите дневной бюджет, чтобы рассчитать нагрузку.</p>
+            <Button variant="secondary" onClick={() => setSide("settings")}>
+              Задать бюджет
+            </Button>
           </section>
-          <aside className="plan-side-panel" aria-label="Параметры и объяснения">
-            <SegmentedTabs label="Панель Плана" value={rightTab} onChange={setRightTab} tabs={[{ value: "why", label: "Почему так" }, { value: "settings", label: "Параметры" }]} />
-            {rightTab === "why" ? <div className="plan-why"><p className="eyebrow">{selectedDay.weekday}, {selectedDay.date}</p><h2>{selectedDay.phase}</h2><dl><div><dt>Порядок</dt><dd>Вопросы идут в порядке экзамена и по возможности остаются в одном разделе.</dd></div><div><dt>Нагрузка</dt><dd>{plannedMinutes(selectedDay)} минут из доступных {selectedDay.capacity}.</dd></div><div><dt>Повторение</dt><dd>Повторить модели данных: наступил срок SM-2.</dd></div><div><dt>Закрепления</dt><dd>Первичные и внешние ключи останутся сегодня при пересчёте.</dd></div></dl><button type="button" className="plan-repeat-load" onClick={() => setRecoveryOpen(true)}><Layers size={15} /> Нагрузка повторений на 30 дней</button></div> : <div className="plan-settings"><Field label="Минут в обычный день"><input value={dailyMinutes} inputMode="numeric" onChange={(event) => setDailyMinutes(event.target.value)} /></Field><Field label="Стратегия"><SegmentedTabs label="Стратегия Плана" value="exam" onChange={() => undefined} tabs={[{ value: "exam", label: "Экзаменационная" }, { value: "steady", label: "Равномерная" }]} /></Field><dl><div><dt>Максимум новых</dt><dd>5 вопросов в день</dd></div><div><dt>Дни отдыха</dt><dd>Нет до экзамена</dd></div><div><dt>Правило долга</dt><dd>Распределить по остатку</dd></div></dl><Link to={`/projects/${projectId}/program`}>Изменить уровень цели вопросов</Link></div>}
+        )}
+        {overview.plan.stale && (
+          <p className="prep-card">
+            Программа или параметры изменились. Пересчитайте будущие назначения
+            и проверьте предложение.
+          </p>
+        )}
+        <Timeline
+          overview={overview}
+          selected={date}
+          onEdit={(phase) => {
+            if (!overview.readonly) setEditor(phase);
+          }}
+        />
+        <div className="prep-actions">
+          <SegmentedTabs
+            label="Подготовка"
+            value={view}
+            onChange={(value) => ui("view", value)}
+            tabs={[
+              { value: "calendar", label: "Календарь" },
+              { value: "history", label: "История" },
+              { value: "analytics", label: "Аналитика" },
+            ]}
+          />
+          <Button
+            variant="secondary"
+            disabled={busy || overview.readonly}
+            onClick={() => setEditor("assignment")}
+          >
+            Добавить задания
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={busy || overview.readonly}
+            onClick={() => setSchedule(true)}
+          >
+            Пересчитать
+          </Button>
+        </div>
+        <div className="plan-content-grid">
+          <div>
+            {view === "history" ? (
+              <History overview={overview} onChanged={refresh} />
+            ) : view === "analytics" ? (
+              <Analytics overview={overview} onHistory={history} />
+            ) : (
+              <Calendar
+                overview={overview}
+                selected={date}
+                onSelect={(value) => ui("date", value)}
+                onEdit={(phase) => {
+                  if (!overview.readonly) setEditor(phase);
+                }}
+                onStart={(value) => void startDay(value)}
+                onUnderstood={(id) => {
+                  void preparation
+                    .understood(projectId, id)
+                    .then(refresh)
+                    .catch((caught) => setError(errorText(caught)));
+                }}
+              />
+            )}
+          </div>
+          <aside className="plan-side-panel">
+            <SegmentedTabs
+              label="Панель подготовки"
+              value={side}
+              onChange={setSide}
+              tabs={[
+                { value: "why", label: "Почему так" },
+                { value: "settings", label: "Параметры" },
+              ]}
+            />
+            {side === "settings" ? (
+              <Settings
+                key={overview.settings.revision}
+                overview={overview}
+                onSaved={refresh}
+              />
+            ) : (
+              <div className="plan-why">
+                <h2>{dateLabel(date)}</h2>
+                <p>
+                  {selected
+                    ? `План ${selected.planned_minutes} мин · факт ${duration(selected.active_seconds)} · доступно ${selected.capacity_minutes} мин`
+                    : "Выберите день в календаре."}
+                </p>
+                {[...new Set(overview.plan.items.filter((item) => item.on_date === date)
+                  .map((item) => item.reason + (item.pinned ? " Дата закреплена." : "")))]
+                  .map((reason) => <p key={reason}>{reason}</p>)}
+                <h3>Если пропустил</h3>
+                <p>
+                  Выберите, как обработать невыполненные назначения. Сначала
+                  покажем изменения.
+                </p>
+                <div className="prep-debt-actions">
+                  {(
+                    [
+                      ["catch_up", "Наверстать"],
+                      ["spread", "Распределить долг"],
+                      ["dismiss", "Снять долг"],
+                    ] as const
+                  ).map(([mode, label]) => (
+                    <Button
+                      variant="ghost"
+                      disabled={busy || overview.readonly}
+                      key={mode}
+                      onClick={() =>
+                        void preview({
+                          mode,
+                          start: overview.today,
+                          end: overview.deadline ?? addDays(overview.today, 30),
+                        })
+                      }
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+                <Link to={`/projects/${projectId}/program`}>
+                  Изменить вопросы и уровни цели
+                </Link>
+              </div>
+            )}
           </aside>
         </div>
       </main>
-
-      <Dialog open={aiOpen} onOpenChange={setAiOpen} title="Уточнить нагрузку с ИИ" description="Локальный План уже создан. Модель может только предложить более ровное распределение." footer={<><Button variant="ghost" onClick={() => setAiOpen(false)}>Отменить</Button><Button onClick={() => { setAiOpen(false); setAiDiffOpen(true); }}><Sparkles size={15} /> Получить предложения</Button></>}>
-        <Field label="Пожелания к плану">
-          <textarea value={aiRequest} onChange={(event) => setAiRequest(event.target.value)} placeholder="Например: в среду не смогу заниматься, перенеси нагрузку на другие дни" />
-        </Field>
-        <p className="plan-dialog-copy">Отправим формулировки, уровни цели, даты, дневной бюджет и локальную оценку времени. Полные материалы и личные конспекты не отправляются.</p>
-        <CostEstimate calls={1} cost={0.02} minutes={1} pricesFrom="01.08.2026" units="10 вопросов" />
-      </Dialog>
-      <Dialog open={aiDiffOpen} onOpenChange={setAiDiffOpen} title="Предложения к Плану" description="Посмотрите последствия до применения." footer={<><Button variant="ghost" onClick={() => setAiDiffOpen(false)}>Оставить текущий</Button><Button onClick={applyAiDiff}>Применить выбранное</Button></>}>
-        <div className="plan-ai-diff"><MachineMark origin="предложено моделью" />{aiRequest.trim() && <div><strong>Учтено пожелание</strong><span>{aiRequest.trim()}</span></div>}<div><strong>{/сред/i.test(aiRequest) ? "Среда освобождена" : "Нормальные формы"}</strong><span>{/сред/i.test(aiRequest) ? "«Нормальные формы» перенесены на четверг и займут свободные 35 минут." : "50 → 40 минут. Вопрос остаётся в среду, чтобы не перегружать день."}</span></div><div><strong>{/сред/i.test(aiRequest) ? "Четверг без перегрузки" : "Повторить ключи"}</strong><span>{/сред/i.test(aiRequest) ? "Нагрузка станет 120 из 120 минут. Дополнительное повторение не добавляется." : "Добавить в четверг перед транзакциями: короткое повторение укрепит связку разделов."}</span></div></div>
-      </Dialog>
-      <Dialog open={recoveryOpen} onOpenChange={setRecoveryOpen} title="Если пропустили день" description="Остаток не превращается в долг без понятного выхода." footer={<Button variant="secondary" onClick={() => setRecoveryOpen(false)}>Закрыть</Button>}>
-        <div className="plan-recovery-options"><button type="button" onClick={() => setRecoveryOpen(false)}><strong>Догнать сразу</strong><span>Добавит 35 минут к двум ближайшим дням.</span></button><button type="button" onClick={() => setRecoveryOpen(false)}><strong>Распределить по остатку</strong><span>Добавит по 15 минут к дням первичного прохода.</span></button><button type="button" onClick={() => setRecoveryOpen(false)}><strong>Простить часть долга</strong><span>Оставит только повторения и вопросы уровня «применять».</span></button></div>
+      {draft && (
+        <DraftDialog
+          key={draft.id}
+          draft={draft}
+          overview={overview}
+          onClose={closeDraft}
+          onApplied={refresh}
+        />
+      )}
+      {editor && editor !== "assignment" && "title" in editor && (
+        <PhaseEditor
+          key={editor.id}
+          phase={editor}
+          overview={overview}
+          onClose={() => setEditor(null)}
+          onPreview={(change) => void preview(change)}
+        />
+      )}{" "}
+      {editor && (editor === "assignment" || "unit_id" in editor) && (
+        <AssignmentEditor
+          key={editor === "assignment" ? "new" : editor.id}
+          overview={overview}
+          date={date}
+          item={editor === "assignment" ? undefined : editor}
+          onClose={() => setEditor(null)}
+          onPreview={(change) => void preview(change)}
+        />
+      )}
+      <Dialog
+        open={schedule}
+        onOpenChange={setSchedule}
+        title="Распределить подготовку"
+        description="Прошлое, выполненные задания и закрепления останутся под защитой сервера."
+      >
+        <div className="prep-form">
+          <Field label="С даты">
+            <input
+              type="date"
+              value={range.start}
+              onChange={(event) =>
+                setRange({ ...range, start: event.target.value })
+              }
+            />
+          </Field>
+          <Field label="По дату">
+            <input
+              type="date"
+              min={range.start}
+              value={range.end}
+              onChange={(event) =>
+                setRange({ ...range, end: event.target.value })
+              }
+            />
+          </Field>
+        </div>
+        <div className="prep-actions">
+          <Button
+            disabled={
+              busy ||
+              overview.readonly ||
+              !range.start ||
+              range.end < range.start
+            }
+            onClick={() => void preview({ mode: "count", ...range })}
+          >
+            По числу вопросов
+          </Button>
+          <Button
+            disabled={
+              busy ||
+              overview.readonly ||
+              overview.settings.config.daily_minutes == null ||
+              !range.start ||
+              range.end < range.start
+            }
+            onClick={() => void preview({ mode: "time", ...range })}
+          >
+            По времени
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={busy || overview.readonly}
+            onClick={() => void preview({ mode: "manual", items: [] })}
+          >
+            Пустой план — предпросмотр
+          </Button>
+        </div>
       </Dialog>
     </div>
   );

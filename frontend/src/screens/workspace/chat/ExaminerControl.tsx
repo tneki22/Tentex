@@ -19,11 +19,11 @@ const STRICTNESS_TABS: Array<{ value: ExaminerStrictness; label: string }> = [
   { value: "strict", label: "Строго" },
 ];
 
-function personaLabel(value: ExaminerPersona): string {
+export function personaLabel(value: ExaminerPersona): string {
   return PERSONA_OPTIONS.find((option) => option.value === value)?.title ?? value;
 }
 
-function strictnessLabel(value: ExaminerStrictness): string {
+export function strictnessLabel(value: ExaminerStrictness): string {
   return STRICTNESS_TABS.find((option) => option.value === value)?.label ?? value;
 }
 
