@@ -4,17 +4,26 @@ import {
   Download,
   ExternalLink,
   RefreshCw,
+  Search,
+  Settings2,
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import type { ParserMode } from "../api/materials";
 import {
   cancelOcrModel,
+  getOcrCloudModels,
   getOcrSettings,
   installOcrModel,
   removeOcrModel,
+  updateOcrCloudSettings,
   updateOcrEngine,
   updateOcrSettings,
+  type OcrCloudModelRead,
+  type OcrCloudRead,
+  type OcrCloudSettingsWrite,
+  type OcrCloudStrategy,
   type OcrEngineRead,
   type OcrEngineWrite,
   type OcrModelRead,
@@ -27,6 +36,7 @@ import {
   Field,
   LoadingState,
   Progress,
+  RadioCards,
   SegmentedTabs,
   Select,
   StatusBadge,
@@ -163,7 +173,10 @@ function OverviewPanel({
           <SegmentedTabs
             label="Режим по умолчанию"
             value={settings.default_mode}
-            tabs={[{ value: "fast", label: "Быстро" }]}
+            tabs={settings.engines.map((engine) => ({
+              value: engine.mode,
+              label: engine.title,
+            }))}
             onChange={(value) => void setDefaultMode(value as ParserMode)}
           />
         </div>
@@ -332,9 +345,157 @@ function FastEngineCard({
   );
 }
 
-function StaticEngineCard({ engine, isFirst }: { engine: OcrEngineRead; isFirst: boolean }) {
+/**
+ * Стоимость страницы у моделей отличается в десятки раз, а в прайсе она
+ * записана за миллион токенов — сравнивать так невозможно. Приводим к тысяче
+ * страниц: столько же примерно в трёх учебниках.
+ */
+function formatPagePrice(value: string | null): string {
+  if (value === null) return "цена неизвестна";
+  const perThousand = Number(value) * 1000;
+  if (!Number.isFinite(perThousand)) return "цена неизвестна";
+  if (perThousand === 0) return "бесплатно";
+  const digits = perThousand < 1 ? 2 : perThousand < 10 ? 1 : 0;
+  return `≈ $${perThousand.toFixed(digits).replace(".", ",")} за 1000 страниц`;
+}
+
+/**
+ * Список моделей, которыми можно распознавать страницы.
+ *
+ * Непригодные не прячутся: рядом с каждой написано, чем именно она не подошла,
+ * иначе отбор выглядит произволом. Поиск нужен потому, что в каталоге
+ * OpenRouter таких моделей больше двух сотен.
+ */
+function CloudModelPicker({
+  models,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  models: OcrCloudModelRead[];
+  selected: string | null;
+  disabled: boolean;
+  onSelect: (model: OcrCloudModelRead) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const shown = needle
+    ? models.filter(
+        (model) =>
+          model.model_id.toLowerCase().includes(needle) ||
+          model.display_name.toLowerCase().includes(needle) ||
+          model.provider_label.toLowerCase().includes(needle)
+      )
+    : models;
+
+  if (models.length === 0) {
+    return (
+      <p className="inspector-note">
+        Ни одна добавленная модель не принимает изображения. Добавьте такую в
+        разделе «Модели» — там же поиск по каталогу провайдера.
+      </p>
+    );
+  }
+
   return (
-    <section className={`ai-settings-group${isFirst ? " is-first" : ""}`}>
+    <div className="ocr-cloud-picker">
+      <Field label="Модель распознавания" hint="Годные — сверху, у остальных написана причина">
+        <div className="ocr-inline-field">
+          <Search size={15} aria-hidden="true" />
+          <input
+            type="search"
+            value={query}
+            placeholder="Название или идентификатор"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+      </Field>
+      <div className="ocr-cloud-models" role="listbox" aria-label="Модель распознавания">
+        {shown.map((model) => (
+          <button
+            key={`${model.provider_id}:${model.model_id}`}
+            type="button"
+            role="option"
+            aria-selected={model.model_id === selected}
+            className={`ocr-cloud-model${model.model_id === selected ? " is-selected" : ""}${
+              model.suitable ? "" : " is-refused"
+            }`}
+            disabled={disabled || !model.suitable}
+            onClick={() => onSelect(model)}
+          >
+            <span className="ocr-cloud-model-head">
+              <strong>{model.display_name}</strong>
+              {model.suitable ? (
+                <span className="ocr-cloud-price">{formatPagePrice(model.price_per_page_usd)}</span>
+              ) : (
+                <StatusBadge tone="neutral">{model.reason}</StatusBadge>
+              )}
+            </span>
+            <small>
+              {model.provider_label} · {model.model_id}
+            </small>
+            {model.recommended_note && <em>{model.recommended_note}</em>}
+          </button>
+        ))}
+        {shown.length === 0 && <p className="ai-muted">По запросу ничего не нашлось.</p>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Режим «Облако»: что уходит наружу, какой моделью читается и почём.
+ *
+ * Выбор модели сохраняется в настройках шлюза — там же ключи, лимиты и учёт
+ * стоимости, — поэтому экран не заводит второе место для того же факта.
+ */
+function CloudEngineCard({
+  engine,
+  cloud,
+  isFirst,
+  onSettings,
+}: {
+  engine: OcrEngineRead;
+  cloud: OcrCloudRead;
+  isFirst: boolean;
+  onSettings: (settings: OcrSettingsRead) => void;
+}) {
+  const [models, setModels] = useState<OcrCloudModelRead[] | null>(null);
+  const [note, setNote] = useState<Note | null>(null);
+  const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getOcrCloudModels(controller.signal)
+      .then(setModels)
+      .catch(() => {
+        if (!controller.signal.aborted) setModels([]);
+      });
+    return () => controller.abort();
+  }, [cloud.model_id]);
+
+  async function save(patch: Partial<OcrCloudSettingsWrite>) {
+    setPending(true);
+    setNote({ text: "Сохраняем…", tone: "muted" });
+    try {
+      onSettings(
+        await updateOcrCloudSettings({
+          provider_id: cloud.provider_id,
+          model_id: cloud.model_id,
+          strategy: cloud.strategy,
+          ...patch,
+        })
+      );
+      setNote({ text: "Сохранено", tone: "success" });
+    } catch (caught) {
+      setNote({ text: errorText(caught, "Не сохранено"), tone: "danger" });
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <section className={`ai-settings-group${isFirst ? " is-first" : ""}`} id="ocr-engine-cloud">
       <header className="ai-group-head">
         <div>
           <h3>{engine.title}</h3>
@@ -343,6 +504,54 @@ function StaticEngineCard({ engine, isFirst }: { engine: OcrEngineRead; isFirst:
       </header>
       <p className="ai-muted">{engine.trade_off}</p>
       <EngineStatus engine={engine} />
+
+      {!cloud.external_models_enabled ? (
+        <p className="inspector-note">
+          <Link to="/setup?section=ai">
+            <Settings2 size={14} aria-hidden="true" /> Открыть параметры моделей
+          </Link>
+        </p>
+      ) : (
+        <>
+          <RadioCards
+            className="ocr-cloud-strategies"
+            label="Что отправлять наружу"
+            layout="rows"
+            value={cloud.strategy}
+            options={cloud.strategies.map((item) => ({
+              value: item.value,
+              title: item.title,
+              description: item.hint,
+            }))}
+            onChange={(next) => void save({ strategy: next as OcrCloudStrategy })}
+          />
+          <CloudModelPicker
+            models={models ?? []}
+            selected={cloud.model_id}
+            disabled={pending}
+            onSelect={(model) =>
+              void save({ provider_id: model.provider_id, model_id: model.model_id })
+            }
+          />
+          {cloud.model_id && (
+            <dl className="ocr-facts">
+              <div>
+                <dt>Провайдер</dt>
+                <dd>{cloud.provider_label || "не указан"}</dd>
+              </div>
+              <div>
+                <dt>Стоимость разбора</dt>
+                <dd>{formatPagePrice(cloud.price_per_page_usd)}</dd>
+              </div>
+            </dl>
+          )}
+          <p className="inspector-warning" role="note">
+            Страницы и вырезы уходят на сервер провайдера. Учебник с чужими данными или
+            закрытую методичку туда отправлять не стоит.
+          </p>
+        </>
+      )}
+      <StatusNote note={note} />
     </section>
   );
 }
@@ -358,12 +567,20 @@ function EnginesPanel({
     <div className="ai-panel-stack">
       {settings.engines.map((engine, index) => {
         const isFirst = index === 0;
-        if (engine.mode === "fast") {
+        if (engine.mode === "cloud") {
           return (
-            <FastEngineCard key={engine.mode} engine={engine} isFirst={isFirst} onSettings={onSettings} />
+            <CloudEngineCard
+              key={engine.mode}
+              engine={engine}
+              cloud={settings.cloud}
+              isFirst={isFirst}
+              onSettings={onSettings}
+            />
           );
         }
-        return <StaticEngineCard key={engine.mode} engine={engine} isFirst={isFirst} />;
+        return (
+          <FastEngineCard key={engine.mode} engine={engine} isFirst={isFirst} onSettings={onSettings} />
+        );
       })}
     </div>
   );
@@ -595,10 +812,12 @@ function ModelsPanel({
 
 // ── Качество ────────────────────────────────────────────────────────────────
 
+// Значение — не зум, а требуемое разрешение картинки страницы: 150 точек на
+// дюйм за единицу. Ниже 300 мелкий шрифт и индексы в формулах теряются.
 const RASTER_SCALE_OPTIONS = [
-  { value: "1.5", label: "Пониже, быстрее" },
-  { value: "2", label: "Обычный" },
-  { value: "3", label: "Повыше, медленнее" },
+  { value: "1.5", label: "225 точек на дюйм — быстрее" },
+  { value: "2", label: "300 точек на дюйм — обычный" },
+  { value: "3", label: "450 точек на дюйм — мелкий шрифт" },
 ];
 
 function QualityPanel({

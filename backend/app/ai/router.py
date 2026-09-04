@@ -29,12 +29,12 @@ from app.ai.schemas import (
     AiSettingsRead,
     AiUsageGroup,
     AiUsageRead,
+    Modality,
 )
 from app.db import get_session
 from app.models import AiRun
 
 SessionDependency = Annotated[Session, Depends(get_session)]
-Modality = Literal["text", "speech"]
 router = APIRouter(prefix="/api/settings/ai", tags=["ai-settings"])
 
 

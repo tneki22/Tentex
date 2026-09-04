@@ -6,8 +6,15 @@ import {
   type LibraryMaterialDetailRead,
   type MaterialPurpose,
   type MaterialRevisionRead,
+  type ParserMode,
 } from "../../api/materials";
 import { Button, ConfirmDialog, Disclosure, StatusBadge } from "../../components/ui";
+
+/** Чем сделана версия: не только название режима, но и чем он читал страницу. */
+const REVISION_MODE_LABEL: Record<ParserMode, string> = {
+  fast: "Быстро · локальный OCR",
+  cloud: "Облако · внешняя модель",
+};
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "список вопросов",
@@ -114,8 +121,8 @@ export function LibraryMaterialFilePanel({
               const openRevision = selectedRevision ?? material.active_parse_revision;
               const isOpen = revision.revision === openRevision;
               const isCompared = revision.revision === compareRevision;
-              const mode = revision.parser_mode === "fast"
-                ? "Быстро · гибридный OCR"
+              const mode = revision.parser_mode
+                ? REVISION_MODE_LABEL[revision.parser_mode]
                 : "Ручная или восстановленная версия";
               return (
                 <div

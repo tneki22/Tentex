@@ -7,7 +7,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.projects.errors import ProjectDomainError
 
-AiModality = Literal["text", "speech"]
+# Единственное определение модальностей шлюза: по нему `resolve_model` ищет
+# модель по умолчанию (`AiSettings.default_<модальность>_model_id`), поэтому
+# новое значение здесь требует и столбца в настройках.
+AiModality = Literal["text", "speech", "vision"]
 CachePolicy = Literal["none", "exact", "content_hash"]
 
 
@@ -153,6 +156,19 @@ ROLE_SPECS = {
             "none",
             "chat-memory-v1",
             {"max_output_tokens": 1000},
+        ),
+        AiRoleSpec(
+            "material_page_recognition",
+            "Распознавание страницы",
+            "Читает страницу или вырез из неё картинкой и возвращает текст с формулами "
+            "в LaTeX. Работает в режиме распознавания «Облако».",
+            "vision",
+            frozenset({"image_input", "structured_output"}),
+            # Один и тот же вырез страницы не должен стоить дважды: повторный
+            # разбор материала и переразбор отдельных страниц попадают в кэш.
+            "content_hash",
+            "page-recognition-v1",
+            {"max_output_tokens": 8000, "temperature": 0},
         ),
         AiRoleSpec(
             "speech_transcription",

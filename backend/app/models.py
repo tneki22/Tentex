@@ -180,6 +180,7 @@ class MaterialSourceKind(StrEnum):
 
 class ParserMode(StrEnum):
     FAST = "fast"
+    CLOUD = "cloud"
 
 
 class PageQuality(StrEnum):
@@ -1017,6 +1018,15 @@ class AiSettings(Base):
         nullable=True,
     )
     default_speech_model_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Модель распознавания страниц режима «Облако». Отдельная от текстовой:
+    # принимать картинку умеет далеко не всякая модель, а выбирать её надо там
+    # же, где остальные — иначе один и тот же факт живёт в двух настройках.
+    default_vision_provider_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("ai_provider_connections.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    default_vision_model_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 

@@ -23,10 +23,11 @@ def test_read_settings_creates_default_row_and_lists_full_registry(session: Sess
     assert snapshot.raster_scale == 2.0
     modes = {engine.mode: engine for engine in snapshot.engines}
     assert set(modes) == {"fast", "cloud"}
-    assert modes["cloud"].configurable is False
+    # Облако без включённых внешних моделей недоступно, и экран должен
+    # объяснять почему, а не просто гасить кнопку.
     assert modes["cloud"].available is False
     assert modes["cloud"].readiness == "unavailable"
-    assert modes["cloud"].status_detail
+    assert "Внешние модели выключены" in modes["cloud"].status_detail
     assert modes["fast"].trade_off
 
 
@@ -69,7 +70,8 @@ def test_update_engine_rejects_unknown_mode(session: Session) -> None:
     assert caught.value.code == "ocr_engine_not_found"
 
 
-def test_update_engine_rejects_non_configurable_mode(session: Session) -> None:
+def test_update_engine_refuses_the_cloud_mode(session: Session) -> None:
+    """У облака свои настройки: провайдер, модель и стратегия, а не язык и версия."""
     with pytest.raises(ProjectDomainError) as caught:
         ocr_settings.update_engine(session, "cloud", OcrEngineWrite())
     assert caught.value.code == "ocr_engine_not_configurable"

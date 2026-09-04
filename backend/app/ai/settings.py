@@ -11,7 +11,13 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.ai.credentials import decrypt_secret, encrypt_secret
-from app.ai.roles import ROLE_SPECS, AiRoleSpec, get_role_spec, validate_role_parameters
+from app.ai.roles import (
+    ROLE_SPECS,
+    AiModality,
+    AiRoleSpec,
+    get_role_spec,
+    validate_role_parameters,
+)
 from app.ai.schemas import (
     AiDefaultWrite,
     AiGlobalSettingsWrite,
@@ -37,7 +43,8 @@ from app.models import (
 )
 from app.projects.errors import ProjectDomainError
 
-Modality = Literal["text", "speech"]
+# Определение одно на весь шлюз и лежит в реестре ролей.
+Modality = AiModality
 
 
 def model_capabilities(row: AiModelCatalogEntry) -> set[str]:
@@ -54,6 +61,8 @@ def model_capabilities(row: AiModelCatalogEntry) -> set[str]:
         capabilities.add("structured_output")
     if "audio" in row.input_modalities:
         capabilities.add("audio_transcription")
+    if "image" in row.input_modalities:
+        capabilities.add("image_input")
     return capabilities
 
 
@@ -96,7 +105,9 @@ class ResolvedModel:
     role: AiRoleSpec
     provider: AiProviderConnection
     model: AiModelCatalogEntry
-    source: Literal["request", "role_override", "text_default", "speech_default"]
+    source: Literal[
+        "request", "role_override", "text_default", "speech_default", "vision_default"
+    ]
     parameters: dict[str, object]
 
     @property
@@ -583,6 +594,12 @@ def _model_for_selection(
     if modality == "speech" and "audio" not in row.input_modalities:
         raise ProjectDomainError(
             "Модель не принимает аудио",
+            status=422,
+            code="ai_model_modality_unsupported",
+        )
+    if modality == "vision" and "image" not in row.input_modalities:
+        raise ProjectDomainError(
+            "Модель не принимает изображения",
             status=422,
             code="ai_model_modality_unsupported",
         )

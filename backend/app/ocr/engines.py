@@ -13,6 +13,25 @@ RASTER_SCALE_OPTIONS = (1.5, 2.0, 3.0)
 DEFAULT_FAST_LANGUAGE = "ru"
 DEFAULT_FAST_MODEL_ID = "PP-OCRv5"
 
+# Как режим «Облако» делит работу между текстовым слоем файла и внешней моделью.
+CloudStrategy = Literal["auto", "page"]
+DEFAULT_CLOUD_STRATEGY: CloudStrategy = "auto"
+CLOUD_STRATEGY_TITLES: dict[CloudStrategy, str] = {
+    "auto": "Только то, что не читается",
+    "page": "Каждую страницу целиком",
+}
+CLOUD_STRATEGY_HINTS: dict[CloudStrategy, str] = {
+    "auto": (
+        "Готовый текст берётся из файла бесплатно и точно, наружу уходят только "
+        "формулы, схемы и сканы. Дешевле в разы, и страница целиком не покидает "
+        "компьютер."
+    ),
+    "page": (
+        "Каждая страница уходит в модель картинкой. Дороже и медленнее, зато "
+        "вёрстку и порядок чтения выбирает модель, а не разметчик PDF."
+    ),
+}
+
 
 @dataclass(frozen=True)
 class OcrEngineSpec:
@@ -22,10 +41,10 @@ class OcrEngineSpec:
     description: str
     # Чем он берёт и чем расплачивается. Читается сразу после описания.
     trade_off: str
+    # По времени выполнения различаются и настройки: у локального движка это
+    # модель и язык, у облачного — провайдер, модель и стратегия, и они живут
+    # в разных разделах экрана.
     runtime: EngineRuntime
-    # Статические заглушки (cloud/maximum/expert) не имеют ни настроек, ни строки в БД.
-    configurable: bool = True
-    unavailable_reason: str | None = None
 
 
 OCR_ENGINES: dict[str, OcrEngineSpec] = {
@@ -35,19 +54,17 @@ OCR_ENGINES: dict[str, OcrEngineSpec] = {
             "fast",
             "Быстро",
             "Забирает готовый текст прямо из файла, а распознаёт только картинки и сканы.",
-            "Считает на процессоре, подойдёт любому компьютеру. Сложные формулы и "
-            "многоколоночную вёрстку разбирает приблизительно.",
+            "Считает на процессоре, подойдёт любому компьютеру. Формулы не читает — "
+            "сохраняет их вырезом, чтобы не потерять.",
             "worker",
         ),
         OcrEngineSpec(
             "cloud",
             "Облако",
-            "Отправляет страницы во внешний сервис и получает готовый разбор.",
-            "Не нужна ни видеокарта, ни ожидание — но файл уходит с вашего компьютера "
-            "и разбор стоит денег.",
+            "Отдаёт страницы внешней модели и получает разметку с формулами в LaTeX.",
+            "Читает то, с чем локальный распознаватель не справляется. Но файл уходит "
+            "с вашего компьютера, и разбор стоит денег.",
             "cloud",
-            configurable=False,
-            unavailable_reason="Ещё не подключено. Появится вместе с отправкой файлов наружу.",
         ),
     )
 }
@@ -65,3 +82,4 @@ class OcrRuntimeParams:
     raster_scale: float = DEFAULT_RASTER_SCALE
     fast_language: str = DEFAULT_FAST_LANGUAGE
     fast_model_id: str = DEFAULT_FAST_MODEL_ID
+    cloud_strategy: CloudStrategy = DEFAULT_CLOUD_STRATEGY

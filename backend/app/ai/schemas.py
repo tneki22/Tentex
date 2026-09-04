@@ -7,8 +7,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from app.ai.roles import AiModality as Modality
+
 NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-Modality = Literal["text", "speech"]
 CatalogProfile = Literal["openrouter", "openai_compatible"]
 
 
@@ -189,9 +190,34 @@ class AiModelTestRead(ApiModel):
     output_tokens: int
 
 
+class AiTextPart(ApiModel):
+    type: Literal["text"] = "text"
+    text: str
+
+
+class AiImageUrl(ApiModel):
+    """Картинка в сообщении. Всегда `data:`-URL: наружу уходит содержимое, не ссылка."""
+
+    url: NonBlank
+
+
+class AiImagePart(ApiModel):
+    type: Literal["image_url"] = "image_url"
+    image_url: AiImageUrl
+
+
+AiContentPart = Annotated[AiTextPart | AiImagePart, Field(discriminator="type")]
+
+
 class AiMessage(ApiModel):
+    """Сообщение запроса в формате, совместимом с OpenAI Chat Completions.
+
+    Строка — обычный текстовый запрос; список частей нужен модальности
+    `vision`, где рядом с инструкцией едет картинка страницы или её вырез.
+    """
+
     role: Literal["system", "user", "assistant"]
-    content: str
+    content: str | list[AiContentPart]
 
 
 class AiPreflight(ApiModel):

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import {
+  PARSER_MODE_TITLES,
   confirmLibraryPageReview,
   deleteLibraryMaterial,
   getLibraryPage,
@@ -355,7 +356,7 @@ export function LibraryMaterialWorkspace() {
     : false;
   const revisionLabel = (revision: number) => {
     const row = store.revisions.find((item) => item.revision === revision);
-    const modeLabel = row?.parser_mode === "fast" ? "Быстро" : "правка";
+    const modeLabel = row?.parser_mode ? PARSER_MODE_TITLES[row.parser_mode] : "правка";
     return `Версия ${revision} · ${modeLabel}`;
   };
   const comparisonLabels = isVersionComparison && compareRevision !== null

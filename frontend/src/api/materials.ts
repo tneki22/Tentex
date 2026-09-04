@@ -15,7 +15,12 @@ export type MaterialState =
   | "paused"
   | "ready"
   | "failed";
-export type ParserMode = "fast";
+export type ParserMode = "fast" | "cloud";
+/** Название режима распознавания в интерфейсе. Одно место на весь фронтенд. */
+export const PARSER_MODE_TITLES: Record<ParserMode, string> = {
+  fast: "Быстро",
+  cloud: "Облако",
+};
 export type PageQuality = "native" | "ocr" | "ocr_low";
 export type RecognitionSource = "native" | "ocr" | "vl" | "manual";
 export type SourceRole = "main" | "additional" | "reference";
