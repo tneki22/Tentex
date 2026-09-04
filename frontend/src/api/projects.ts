@@ -281,7 +281,22 @@ export interface PreparationEstimateRunRead {
   cached: boolean;
 }
 
+export interface ProgramRepairContextNode {
+  id: string;
+  parent_id: string | null;
+  node_type: string;
+  exam_kind: string | null;
+  title: string;
+  path: string[];
+  sort_order: number;
+  target_level: string | null;
+  subpoints: string[];
+  has_answer: boolean;
+  answer_chars: number;
+}
+
 export interface ProgramImportRepairPreflightRead {
+  source_context: ProgramRepairContextNode[];
   program_revision: number;
   source_hash: string;
   node_count: number;

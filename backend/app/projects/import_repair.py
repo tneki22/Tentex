@@ -489,6 +489,17 @@ def _validate_parentage(entries: list[_FlatNewNode], positions: list[RepairPosit
         if any((node.exam_kind == ExamKind.TICKET) != (entry.kind == "ticket") for node in sources):
             raise ProjectInvariantError("Билет нельзя превращать в отдельный вопрос")
 
+    retained_sources = {index for entry in entries for index in entry.source_indices}
+    retained_tickets = {
+        positions[index - 1].node.id
+        for entry in entries
+        if entry.kind == "ticket"
+        for index in entry.source_indices
+    }
+    for index, position in enumerate(positions, start=1):
+        if position.node.parent_id in retained_tickets and index not in retained_sources:
+            raise ProjectInvariantError("Нельзя удалять вопрос из сохранённого билета")
+
 
 class ProgramRepairPreflightRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -496,6 +507,7 @@ class ProgramRepairPreflightRead(BaseModel):
     program_revision: int
     source_hash: str
     node_count: int
+    source_context: list[dict]
     has_tickets: bool
     preflight: AiPreflight
 
@@ -548,6 +560,7 @@ async def preflight_program_repair(
         program_revision=snapshot.project.program_revision,
         source_hash=snapshot.source_hash,
         node_count=len(snapshot.positions),
+        source_context=snapshot.positions[0].context,
         has_tickets=snapshot.has_tickets,
         preflight=result,
     )

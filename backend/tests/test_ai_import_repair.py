@@ -669,6 +669,7 @@ async def test_mixed_nested_repair_preserves_tree_and_undo(session: Session, ai_
     )
     gateway = ModelGateway(session, fake)
     preview = await import_repair.preflight_program_repair(session, gateway, project.id)
+    assert preview.source_context == context
     run = await import_repair.run_program_repair(
         session,
         gateway,
@@ -741,3 +742,77 @@ def test_repair_rejects_moving_question_out_of_ticket(session: Session):
     entry = import_repair._FlatNewNode("question", "Вопрос", [], [2], None)
     with pytest.raises(ProjectDomainError, match="внутри своего билета"):
         import_repair._validate_parentage([entry], snapshot.positions)
+
+
+@pytest.mark.asyncio
+async def test_repair_rejects_dropped_child_of_retained_ticket(session: Session, ai_config: str):
+    del ai_config
+    project = make_exam_project(session)
+    _ticket_with_questions(session, project.id, "Билет", ["Первый", "Второй"])
+    fake = FakeTransport(
+        completions=[
+            _completion(
+                [
+                    {"kind": "ticket", "title": "Билет", "source_indices": [1]},
+                    _question_payload("Первый", source_indices=[2], ticket_index=1),
+                ],
+                dropped=[{"source_indices": [3], "reason": "Лишний"}],
+            )
+        ]
+    )
+    gateway = ModelGateway(session, fake)
+    preview = await import_repair.preflight_program_repair(session, gateway, project.id)
+    assert len(preview.source_context) == 3
+    with pytest.raises(ProjectDomainError, match="сохранённого билета"):
+        await import_repair.run_program_repair(
+            session,
+            gateway,
+            project.id,
+            import_repair.ProgramRepairRunWrite(
+                expected_program_revision=preview.program_revision,
+                expected_source_hash=preview.source_hash,
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_rejects_manual_removal_from_retained_ticket(session: Session, ai_config: str):
+    del ai_config
+    project = make_exam_project(session)
+    _ticket_with_questions(session, project.id, "Билет", ["Первый", "Второй"])
+    gateway = ModelGateway(
+        session,
+        FakeTransport(
+            completions=[
+                _completion(
+                    [
+                        {"kind": "ticket", "title": "Билет", "source_indices": [1]},
+                        _question_payload("Первый", source_indices=[2], ticket_index=1),
+                        _question_payload("Второй", source_indices=[3], ticket_index=1),
+                    ]
+                )
+            ]
+        ),
+    )
+    preview = await import_repair.preflight_program_repair(session, gateway, project.id)
+    run = await import_repair.run_program_repair(
+        session,
+        gateway,
+        project.id,
+        import_repair.ProgramRepairRunWrite(
+            expected_program_revision=preview.program_revision,
+            expected_source_hash=preview.source_hash,
+        ),
+    )
+    run.items[0].items.pop()
+    with pytest.raises(ProjectDomainError, match="сохранённого билета"):
+        import_repair.apply_program_repair(
+            session,
+            project.id,
+            import_repair.ProgramRepairApplyWrite(
+                run_id=run.run_id,
+                expected_program_revision=preview.program_revision,
+                expected_source_hash=preview.source_hash,
+                items=run.items,
+            ),
+        )
