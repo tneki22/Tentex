@@ -320,6 +320,9 @@ async def test_program_repair_orders_nodes_by_tree_not_flat_sort_order(
     assert titles_by_id[a1.id] == "Первый."
     assert titles_by_id[a2.id] == "Второй."
     assert titles_by_id[b1.id] == "Третий."
+    assert session.get(ProgramNode, a1.id).parent_id == section_a.id
+    assert session.get(ProgramNode, a2.id).parent_id == section_a.id
+    assert session.get(ProgramNode, b1.id).parent_id == section_b.id
 
 
 @pytest.mark.asyncio
@@ -361,9 +364,7 @@ async def test_program_repair_splits_one_position_into_two(
 ) -> None:
     del ai_config
     project = make_exam_project(session)
-    nodes = _nodes(
-        session, project.id, ["Вопрос один.Вопрос два слипшиеся.", "Отдельный вопрос."]
-    )
+    nodes = _nodes(session, project.id, ["Вопрос один.Вопрос два слипшиеся.", "Отдельный вопрос."])
     fake = FakeTransport(
         completions=[
             _completion(
@@ -629,3 +630,114 @@ async def test_program_repair_rejects_flat_response_when_project_has_tickets(
                 expected_source_hash=preview.source_hash,
             ),
         )
+
+
+@pytest.mark.asyncio
+async def test_mixed_nested_repair_preserves_tree_and_undo(session: Session, ai_config: str):
+    del ai_config
+    from app.projects.program_context import build_program_context
+
+    project = make_exam_project(session)
+    ticket, questions = _ticket_with_questions(session, project.id, "Билет 1", ["Вопрос"])
+    standalone = _nodes(session, project.id, ["Задача"])[0]
+    section = _nodes(session, project.id, ["Раздел"])[0]
+    section.node_type = NodeType.SECTION
+    section.exam_kind = None
+    subsection = _nodes(session, project.id, ["Подраздел"])[0]
+    subsection.node_type = NodeType.SECTION
+    subsection.exam_kind = None
+    subsection.parent_id = section.id
+    ticket.parent_id = subsection.id
+    standalone.parent_id = subsection.id
+    standalone.sort_order = 1
+    session.commit()
+    context = build_program_context(session, project.id)
+    assert [node["id"] for node in context] == [
+        str(node.id) for node in [section, subsection, ticket, questions[0], standalone]
+    ]
+    assert context[3]["path"] == ["Раздел", "Подраздел", "Билет 1"]
+    fake = FakeTransport(
+        completions=[
+            _completion(
+                [
+                    {"kind": "ticket", "title": "Билет 1", "source_indices": [1]},
+                    _question_payload("Вопрос исправлен", source_indices=[2], ticket_index=1),
+                    _question_payload("Задача исправлена", source_indices=[3], kind="task"),
+                ]
+            )
+        ]
+    )
+    gateway = ModelGateway(session, fake)
+    preview = await import_repair.preflight_program_repair(session, gateway, project.id)
+    run = await import_repair.run_program_repair(
+        session,
+        gateway,
+        project.id,
+        import_repair.ProgramRepairRunWrite(
+            expected_program_revision=preview.program_revision,
+            expected_source_hash=preview.source_hash,
+        ),
+    )
+    result = import_repair.apply_program_repair(
+        session,
+        project.id,
+        import_repair.ProgramRepairApplyWrite(
+            run_id=run.run_id,
+            expected_program_revision=preview.program_revision,
+            expected_source_hash=preview.source_hash,
+            items=run.items,
+        ),
+    )
+    assert session.get(ProgramNode, standalone.id).parent_id == subsection.id
+    assert session.get(ProgramNode, ticket.id).parent_id == subsection.id
+    assert session.get(ProgramNode, questions[0].id).parent_id == ticket.id
+    action = result.latest_undoable_action
+    program.undo_last_project_action(session, project.id, action.sequence)
+    assert session.get(ProgramNode, questions[0].id).title == "Вопрос"
+    assert session.get(ProgramNode, standalone.id).title == "Задача"
+
+
+def test_context_hash_detects_parent_changes(session: Session):
+    project = make_exam_project(session)
+    first, second = _nodes(session, project.id, ["А", "Б"])
+    before = import_repair._program_repair_snapshot(session, project.id)
+    second.parent_id = first.id
+    session.commit()
+    after = import_repair._program_repair_snapshot(session, project.id)
+    with pytest.raises(ProjectDomainError):
+        import_repair._check_program_snapshot(after, project.program_revision, before.source_hash)
+
+
+def test_context_includes_subpoints_and_only_answer_metrics(session: Session):
+    from app.models import ReferenceAnswer, ReferenceAnswerMatchMethod, ReferenceAnswerOrigin
+    from app.projects.program_context import build_program_context
+
+    project = make_exam_project(session)
+    topic, subpoint = _nodes(session, project.id, ["Вопрос", "Подпункт"])
+    subpoint.node_type = NodeType.SUBPOINT
+    subpoint.parent_id = topic.id
+    session.add(
+        ReferenceAnswer(
+            project_id=project.id,
+            program_node_id=topic.id,
+            text="Личный эталон",
+            origin_kind=next(iter(ReferenceAnswerOrigin)),
+            match_method=next(iter(ReferenceAnswerMatchMethod)),
+        )
+    )
+    session.commit()
+    context = build_program_context(session, project.id)
+    assert context[0]["has_answer"] is True
+    assert context[0]["answer_chars"] == len("Личный эталон")
+    assert context[0]["subpoints"] == ["Подпункт"]
+    assert context[1]["id"] == str(subpoint.id)
+    assert "Личный эталон" not in json.dumps(context, ensure_ascii=False)
+
+
+def test_repair_rejects_moving_question_out_of_ticket(session: Session):
+    project = make_exam_project(session)
+    _ticket_with_questions(session, project.id, "Билет", ["Вопрос"])
+    snapshot = import_repair._program_repair_snapshot(session, project.id)
+    entry = import_repair._FlatNewNode("question", "Вопрос", [], [2], None)
+    with pytest.raises(ProjectDomainError, match="внутри своего билета"):
+        import_repair._validate_parentage([entry], snapshot.positions)
