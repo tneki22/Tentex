@@ -302,6 +302,9 @@ def process_parse_job(session: Session, task: BackgroundJob) -> None:
     # сталкивается со следующим begin() — отсюда местные переменные, а не task.*.
     task_id = task.id
     material_id = task.material_id
+    # Объявлена до try: ранний return до создания распознавателя не должен
+    # мешать finally ниже проверить его на None.
+    recognizer: CloudRecognizer | None = None
     try:
         material = session.get(Material, material_id)
         if material is None:
@@ -353,6 +356,12 @@ def process_parse_job(session: Session, task: BackgroundJob) -> None:
                 # должна отбирать у пользователя то, что уже было готово.
                 material.status = MaterialState.FAILED
                 material.error = str(error)
+    finally:
+        # Пауза, отмена или сбой — recognizer закрывается всегда, а не только
+        # на счастливом пути: иначе общий event loop облачного разбора висит
+        # до сборки мусора и заваливает лог `RuntimeError: Event loop is closed`.
+        if recognizer is not None:
+            recognizer.close()
 
 
 def process_link_answers_job(session: Session, job: BackgroundJob) -> None:

@@ -62,6 +62,41 @@ class StubRecognizer:
         ]
 
 
+class BareLatexRecognizer(StubRecognizer):
+    """Отвечает так, как просит REGION_INSTRUCTION: LaTeX без $-обрамления.
+
+    Ровно этот формат ответа модель и возвращает в реальности — инструкция
+    вырезов прямо просит не оборачивать формулу. `_recognized_regions` обязан
+    сам добавить `$$...$$`, иначе KaTeX не отрисует то, что вернулось.
+    """
+
+    def recognize_regions(
+        self, regions: Sequence[RegionRequest], page_number: int
+    ) -> list[RecognizedRegion]:
+        del page_number
+        self.regions.extend(regions)
+        return [
+            RecognizedRegion(
+                index=region.index,
+                kind="formula",
+                text=r"\int_a^b f(x)\,dx = F(b) - F(a)",
+                confidence=0.94,
+            )
+            for region in regions
+        ]
+
+
+def test_a_formula_region_without_dollar_signs_is_wrapped_before_it_lands_on_the_page(
+    mixed_pdf: Path,
+) -> None:
+    pages = _parse(mixed_pdf, BareLatexRecognizer())
+
+    recognised = [item for item in pages[0].elements if item.recognition_source == "vl"]
+    assert len(recognised) == 1
+    assert recognised[0].text.startswith("$$")
+    assert recognised[0].text.endswith("$$")
+
+
 def _formula_png() -> bytes:
     """Формула, вставленная в PDF картинкой, — так устроены сканы и старые вёрстки."""
     image = Image.new("RGB", (420, 90), color="white")

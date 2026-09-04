@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.ai.provider import FakeTransport, ProviderCompletion, ProviderUsage
-from app.materials.parsers.cloud_vlm import CloudRecognizer, latex_issues
+from app.materials.parsers.cloud_vlm import CloudRecognizer, latex_issues, wrap_bare_latex
 from app.models import AiModelCatalogEntry, AiProviderConnection, AiSettings, utc_now
 from app.ocr import cloud_catalog
 from app.ocr import settings as ocr_settings
@@ -223,6 +223,68 @@ def test_latex_issues_finds_what_katex_will_refuse_to_render(
     assert latex_issues(text) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Прогон бенчмарка показал ровно это: модель пишет верный LaTeX для
+        # выносной формулы, но не оборачивает его в $$...$$ вовсе.
+        (r"\lim_{x\to a}f(x)=L", r"$$\lim_{x\to a}f(x)=L$$"),
+        (r"\int_a^b f(x)\,dx = F(b) - F(a).", r"$$\int_a^b f(x)\,dx = F(b) - F(a).$$"),
+        # Уже размеченное не трогаем — не удваиваем $.
+        (r"$x^2 + y^2 = z^2$", r"$x^2 + y^2 = z^2$"),
+        (r"$$\frac{1}{2}$$", r"$$\frac{1}{2}$$"),
+        # Обычный текст без команд LaTeX не оборачивается — иначе абзац
+        # с падежом "по формуле" стал бы формулой из-за одного слова.
+        ("Обычный текст без формул", "Обычный текст без формул"),
+        ("", ""),
+        # Регресс с прогона: таблица с формулой без $ в одной из ячеек не
+        # должна обернуться целиком — так ломались и таблица, и формула разом.
+        (
+            "№ | Функция | Первообразная\n1 | x^n | \\frac{x^{n+1}}{n+1} + C",
+            "№ | Функция | Первообразная\n1 | x^n | \\frac{x^{n+1}}{n+1} + C",
+        ),
+    ],
+)
+def test_wrap_bare_latex_adds_dollars_only_to_unmarked_formulas(
+    text: str, expected: str
+) -> None:
+    assert wrap_bare_latex(text) == expected
+
+
+def test_recognize_page_wraps_a_formula_the_model_forgot_to_delimit(
+    session: Session, vision_model: str
+) -> None:
+    """То же самое сквозь `recognize_page`, а не только через голую функцию."""
+    ocr_settings.update_cloud(
+        session,
+        OcrCloudSettingsWrite(
+            provider_id=_provider_id(session), model_id=vision_model, strategy="auto"
+        ),
+    )
+    session.rollback()
+    recognizer = _recognizer(
+        session,
+        {
+            "elements": [
+                {
+                    "kind": "formula",
+                    "text": r"\int_a^b f(x)\,dx = F(b) - F(a).",
+                    "bbox": [0.2, 0.2, 0.8, 0.3],
+                    "level": None,
+                    "confidence": 0.95,
+                }
+            ],
+            "page_confidence": 0.95,
+        },
+    )
+
+    page = recognizer.recognize_page(b"png-bytes", 1, 595.0, 842.0)
+
+    assert page.elements[0].text.startswith("$$")
+    assert page.elements[0].text.endswith("$$")
+    assert latex_issues(page.elements[0].text) == []
+
+
 def _answer(payload: dict[str, object]) -> ProviderCompletion:
     return ProviderCompletion(
         content=json.dumps(payload, ensure_ascii=False),
@@ -341,3 +403,67 @@ def test_a_broken_formula_lowers_confidence_of_the_whole_page(
     assert page.quality == "ocr_low"
     assert "unbalanced_display_math" in page.diagnostics
     assert page.elements[0].confidence == pytest.approx(0.4)
+
+
+# ── Общий event loop ─────────────────────────────────────────────────────────
+
+
+def test_repeated_calls_reuse_one_event_loop_instead_of_opening_one_each(
+    session: Session, vision_model: str
+) -> None:
+    """`asyncio.run()` на каждый вызов создавал и закрывал свой loop.
+
+    `AsyncOpenAI`-клиент внутри шлюза переживал закрытие своего loop'а, и
+    сборщик мусора пытался закрыть его соединения уже на чужом (следующем)
+    loop'е — воркер получал `RuntimeError: Event loop is closed` в логе на
+    каждом облачном разборе больше чем в одну страницу. Один разделяемый
+    loop на весь `CloudRecognizer` устраняет само основание для ошибки.
+    """
+    ocr_settings.update_cloud(
+        session,
+        OcrCloudSettingsWrite(
+            provider_id=_provider_id(session), model_id=vision_model, strategy="auto"
+        ),
+    )
+    session.rollback()
+    empty_page = {"elements": [], "page_confidence": 0.9}
+    recognizer = CloudRecognizer(
+        session,
+        transport=FakeTransport(completions=[_answer(empty_page), _answer(empty_page)]),
+    )
+
+    recognizer.recognize_page(b"png-bytes", 1, 595.0, 842.0)
+    first_loop = recognizer._loop
+    recognizer.recognize_page(b"png-bytes", 2, 595.0, 842.0)
+
+    assert first_loop is not None
+    assert recognizer._loop is first_loop
+
+
+def test_close_releases_the_loop_and_a_later_call_opens_a_fresh_one(
+    session: Session, vision_model: str
+) -> None:
+    ocr_settings.update_cloud(
+        session,
+        OcrCloudSettingsWrite(
+            provider_id=_provider_id(session), model_id=vision_model, strategy="auto"
+        ),
+    )
+    session.rollback()
+    empty_page = {"elements": [], "page_confidence": 0.9}
+    recognizer = CloudRecognizer(
+        session,
+        transport=FakeTransport(completions=[_answer(empty_page), _answer(empty_page)]),
+    )
+
+    recognizer.recognize_page(b"png-bytes", 1, 595.0, 842.0)
+    closed_loop = recognizer._loop
+    recognizer.close()
+
+    assert recognizer._loop is None
+    assert closed_loop.is_closed()
+
+    recognizer.recognize_page(b"png-bytes", 2, 595.0, 842.0)
+
+    assert recognizer._loop is not None
+    assert recognizer._loop is not closed_loop

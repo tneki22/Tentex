@@ -19,7 +19,7 @@ import base64
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -54,14 +54,20 @@ UNREADABLE_MARK = "⟨?⟩"
 SUSPECT_CONFIDENCE = 0.4
 
 TEX_ENVIRONMENT_RE = re.compile(r"\\(begin|end)\{([^}]+)\}")
+# Признак «это LaTeX, а не обычный текст»: команда вида \frac, \int, \lim.
+# Обычный русский или английский текст с распознанной страницы такой
+# последовательности не даёт — обратный слеш там не встречается.
+BARE_LATEX_RE = re.compile(r"\\[a-zA-Z]{2,}")
 
 PAGE_INSTRUCTION = """Ты распознаёшь страницу учебного документа.
 Верни JSON по схеме и ничего кроме него.
 
 1. Переписывай текст дословно. Не исправляй опечатки, не сокращай, не пересказывай
    и ничего не добавляй от себя.
-2. Формулы — в LaTeX: внутристрочные $...$, выносные $$...$$. Номер формулы,
-   напечатанный на странице, ставь в \\tag{...}.
+2. Формулы — в LaTeX: внутристрочные $...$, выносные $$...$$. Обрамляй знаками
+   $ каждую формулу без исключения, включая ту, что стоит отдельной строкой —
+   голый LaTeX без $ не отрисуется. Номер формулы, напечатанный на странице,
+   ставь в \\tag{...}.
 3. Таблицы — в Markdown, в ячейке допустим LaTeX.
 4. Порядок элементов — порядок чтения. Две колонки: сначала левая целиком, потом правая.
 5. Колонтитул, номер страницы и маргиналия — отдельные элементы своего вида,
@@ -176,6 +182,28 @@ def latex_issues(text: str) -> list[str]:
     return issues
 
 
+def wrap_bare_latex(text: str) -> str:
+    """Обернуть формулу, которую модель забыла обрамить `$`/`$$`.
+
+    Инструкция просит выносные формулы в `$$...$$`, но на практике модель
+    иногда пишет корректный LaTeX отдельным абзацем без единого `$` вовсе —
+    прогон бенчмарка показал это на нескольких страницах подряд. KaTeX такой
+    текст не тронет: снаружи это просто строка с обратными слешами. Оборачиваем,
+    только если `$` в тексте нет вообще — уже размеченный ответ не трогаем,
+    а частичная разметка (одна формула в $, другая без) встречается редко и
+    сигнализирует не то же самое, что чистый пропуск. Многострочный текст с
+    `|` не трогаем совсем — это ячейка таблицы Markdown, не формула: ячейка
+    законно несёт свою формулу без `$`, и обёртка всей таблицы в `$$...$$`
+    из-за одной такой ячейки сломала бы обе вещи разом — так уже случилось
+    на прогоне бенчмарка. Настоящий многострочный `\\begin{aligned}` пирог с
+    `|` внутри не пишет почти никто, а недооборот тут дешевле, чем разбитая
+    таблица.
+    """
+    if "$" in text or ("\n" in text and "|" in text) or not BARE_LATEX_RE.search(text):
+        return text
+    return f"$${text}$$"
+
+
 def _data_url(image: bytes, media_type: str = "image/png") -> str:
     return f"data:{media_type};base64,{base64.b64encode(image).decode()}"
 
@@ -199,18 +227,36 @@ def _fallback_bbox(index: int, total: int) -> tuple[float, float, float, float]:
     return (0.0, index / max(1, total), 1.0, (index + 1) / max(1, total))
 
 
-@dataclass(frozen=True)
+@dataclass
 class CloudRecognizer:
     """Распознавание внешней моделью для одного разбора материала.
 
     Держит сессию БД, потому что через неё работают и шлюз, и учёт стоимости.
-    Живёт ровно столько, сколько идёт разбор одного материала.
+    Живёт ровно столько, сколько идёт разбор одного материала — воркер
+    обязан вызвать :meth:`close` после последней страницы (`finally`, не в
+    конце счастливого пути), иначе общий event loop останется висеть до
+    сборки мусора.
     """
 
     session: Session
     quality_threshold: float = DEFAULT_QUALITY_THRESHOLD
     # Тот же шов, что и у самого шлюза: подменяется в тестах, в работе `None`.
     transport: OpenAICompatibleTransport | None = None
+    # Один event loop на весь разбор материала, а не на каждый вызов модели.
+    # `asyncio.run()` в `_ask` создавал и закрывал свой loop на каждой странице
+    # и на каждой пачке вырезов; `AsyncOpenAI`-клиент внутри шлюза переживал
+    # закрытие своего loop'а, и сборщик мусора пытался закрыть его соединения
+    # уже на чужом (следующем) loop'е — воркер получал россыпь
+    # `RuntimeError: Event loop is closed` в логе на каждом облачном разборе.
+    _loop: asyncio.AbstractEventLoop | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    def close(self) -> None:
+        """Закрыть общий event loop. Без вызова он держит ресурсы до GC."""
+        if self._loop is not None:
+            self._loop.close()
+            self._loop = None
 
     def recognize_page(
         self, image: bytes, page_number: int, width: float, height: float
@@ -280,7 +326,11 @@ class CloudRecognizer:
             source_fingerprint={"page": page_number},
             confirmed=True,
         )
-        result = asyncio.run(ModelGateway(self.session, self.transport).complete(request))
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+        result = self._loop.run_until_complete(
+            ModelGateway(self.session, self.transport).complete(request)
+        )
         return result.value
 
     def _page(
@@ -291,7 +341,7 @@ class CloudRecognizer:
         diagnostics: list[str] = []
         broken_boxes = 0
         for index, item in enumerate(answer.elements):
-            text = item.text.strip()
+            text = wrap_bare_latex(item.text.strip())
             if not text:
                 continue
             bbox = _clamped_bbox(item.bbox)

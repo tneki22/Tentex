@@ -24,6 +24,7 @@ from app.materials.parsers.base import (
     RecognitionSource,
     RegionRequest,
 )
+from app.materials.parsers.cloud_vlm import wrap_bare_latex
 from app.materials.parsers.pdf_layout import parse_layout_page
 from app.materials.storage import store_material_asset
 from app.models import ParserMode
@@ -750,10 +751,17 @@ def _recognized_regions(
         answer = recognized.get(index)
         if answer is None or not answer.text.strip():
             continue
+        text = answer.text.strip()
+        if answer.kind == "formula":
+            # Инструкция вырезов просит LaTeX без обрамления (крупная страница
+            # рядом уже даёт контекст, окружать $ там незачем) — обрамляем
+            # здесь сами, иначе формула вернётся в текст сырым LaTeX и KaTeX
+            # её не отрисует.
+            text = wrap_bare_latex(text)
         elements[index] = replace(
             element,
             kind=answer.kind,
-            text=answer.text.strip(),
+            text=text,
             confidence=answer.confidence,
             recognition_source="vl",
         )
