@@ -20,8 +20,10 @@ import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from io import BytesIO
 from typing import Literal
 
+from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -94,13 +96,19 @@ PAGE_INSTRUCTION = """Ты распознаёшь страницу учебно�
    $ каждую формулу без исключения, включая ту, что стоит отдельной строкой —
    голый LaTeX без $ не отрисуется. Номер формулы, напечатанный на странице,
    ставь в \\tag{...}.
-3. Таблицы — в Markdown, в ячейке допустим LaTeX.
+3. Таблица — только Markdown с вертикальными чертами и строкой-разделителем,
+   ровно в таком виде (в ячейке допустим LaTeX):
+   | № | Функция | Первообразная |
+   |---|---------|---------------|
+   | 1 | $x^n$ | $\\frac{x^{n+1}}{n+1} + C$ |
+   Перечисление ячеек через перевод строки таблицей не считается.
 4. Порядок элементов — порядок чтения. Две колонки: сначала левая целиком, потом правая.
 5. Колонтитул, номер страницы и маргиналия — отдельные элементы своего вида,
    не части соседнего абзаца.
 6. Нечитаемое место передавай как ⟨?⟩ и ставь этому элементу confidence ниже 0.5.
 7. bbox — доля от размера страницы: [x0, y0, x1, y1] в диапазоне 0..1,
-   считая от левого верхнего угла."""
+   считая от левого верхнего угла. Если удобнее в пикселях присланной
+   картинки — присылай в пикселях, но одинаково для всех элементов."""
 
 REGION_INSTRUCTION = """Тебе даны вырезы со страницы учебного документа.
 Текст страницы уже прочитан, нужно прочитать только эти куски.
@@ -108,7 +116,9 @@ REGION_INSTRUCTION = """Тебе даны вырезы со страницы у�
 
 1. Формулу передавай в LaTeX без окружения: `\\int_a^b f(x)\\,dx = F(b) - F(a)`.
    Номер формулы, напечатанный рядом, ставь в \\tag{...}.
-2. Таблицу передавай в Markdown, в ячейке допустим LaTeX.
+2. Таблицу передавай Markdown с вертикальными чертами и строкой-разделителем:
+   `| № | Функция |`, ниже `|---|---------|`, ниже строки данных. В ячейке
+   допустим LaTeX. Перечисление ячеек через перевод строки таблицей не считается.
 3. График, схему или фотографию описывай одной фразой по-русски: что изображено.
 4. Обычный текст переписывай дословно.
 5. index в ответе — тот же, что и в подписи к вырезу; порядок ответов неважен.
@@ -234,14 +244,58 @@ def _data_url(image: bytes, media_type: str = "image/png") -> str:
     return f"data:{media_type};base64,{base64.b64encode(image).decode()}"
 
 
-def _clamped_bbox(values: Sequence[float]) -> tuple[float, float, float, float] | None:
-    """Координаты модели в наших пределах или `None`, если они бессмысленны."""
+def _pixel_size(image: bytes) -> tuple[float, float]:
+    """Размер присланного растра в пикселях. Не прочитался — считаем неизвестным."""
+    try:
+        with Image.open(BytesIO(image)) as opened:
+            return float(opened.width), float(opened.height)
+    except (OSError, ValueError):
+        return 0.0, 0.0
+
+
+def _clamped_bbox(
+    values: Sequence[float], pixel_width: float = 0.0, pixel_height: float = 0.0
+) -> tuple[float, float, float, float] | None:
+    """Координаты модели в нашу долю страницы или `None`, если их нет вовсе.
+
+    Инструкция просит доли `0..1`, но модели сплошь и рядом отвечают в пикселях
+    присланного растра или в условной сетке `0..1000`: прогон бенчмарка на
+    `gemini-2.5-flash-lite` не дал ни одной нормализованной рамки из трёхсот.
+    Читать такой ответ как доли нельзя — после клампа все четыре числа
+    становятся `1.0`, рамка схлопывается, и элемент остаётся без координат: без
+    вырезки, без рамки на оригинале и с полосой во всю ширину вместо места на
+    странице. Поэтому масштаб определяется по самим числам, а не по вере в
+    инструкцию.
+    """
     if len(values) != 4:
         return None
-    x0, y0, x1, y1 = (max(0.0, min(1.0, float(value))) for value in values)
+    raw = [float(value) for value in values]
+    if any(value < 0 for value in raw):
+        return None
+    scale_x, scale_y = _bbox_scale(raw, pixel_width, pixel_height)
+    x0, y0, x1, y1 = (
+        max(0.0, min(1.0, raw[0] / scale_x)),
+        max(0.0, min(1.0, raw[1] / scale_y)),
+        max(0.0, min(1.0, raw[2] / scale_x)),
+        max(0.0, min(1.0, raw[3] / scale_y)),
+    )
     if x1 <= x0 or y1 <= y0:
         return None
     return x0, y0, x1, y1
+
+
+def _bbox_scale(
+    raw: Sequence[float], pixel_width: float, pixel_height: float
+) -> tuple[float, float]:
+    """Во что делить координаты модели: доли, пиксели растра или сетка 0..1000."""
+    if max(raw) <= 1.0:
+        return 1.0, 1.0
+    if pixel_width > 0 and pixel_height > 0 and raw[2] <= pixel_width and raw[3] <= pixel_height:
+        return pixel_width, pixel_height
+    # Сетка 0..1000 — вторая по распространённости договорённость у зрительных
+    # моделей. Берётся, когда числа не влезают в присланный растр либо его
+    # размер прочитать не удалось.
+    return 1000.0, 1000.0
 
 
 def _fallback_bbox(index: int, total: int) -> tuple[float, float, float, float]:
@@ -305,7 +359,7 @@ class CloudRecognizer:
             )
         except PageUnreadable as error:
             return _unreadable_page(page_number, width, height, str(error))
-        return self._page(answer, page_number, width, height)
+        return self._page(answer, page_number, width, height, _pixel_size(image))
 
     def recognize_regions(
         self, regions: Sequence[RegionRequest], page_number: int
@@ -390,9 +444,19 @@ class CloudRecognizer:
         return result.value
 
     def _page(
-        self, answer: CloudPage, page_number: int, width: float, height: float
+        self,
+        answer: CloudPage,
+        page_number: int,
+        width: float,
+        height: float,
+        pixels: tuple[float, float] = (0.0, 0.0),
     ) -> ParsedPage:
-        """Собрать нашу страницу из ответа модели, проверив всё, что можно проверить."""
+        """Собрать нашу страницу из ответа модели, проверив всё, что можно проверить.
+
+        :param width: ширина страницы в единицах документа (пункты PDF).
+        :param pixels: размер присланного растра — по нему приводятся к долям
+            координаты, которые модель вернула в пикселях.
+        """
         elements: list[ParsedElement] = []
         diagnostics: list[str] = []
         broken_boxes = 0
@@ -400,7 +464,7 @@ class CloudRecognizer:
             text = wrap_bare_latex(item.text.strip())
             if not text:
                 continue
-            bbox = _clamped_bbox(item.bbox)
+            bbox = _clamped_bbox(item.bbox, *pixels)
             reliable = bbox is not None
             if bbox is None:
                 broken_boxes += 1

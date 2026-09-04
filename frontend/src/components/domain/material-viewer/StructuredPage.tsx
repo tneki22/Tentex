@@ -514,9 +514,15 @@ function splitMarkdownRow(row: string): string[] {
 }
 
 export function MarkdownTable({ markdown }: { markdown: string }) {
-  const lines = markdown.split("\n").filter((line) => line.trim().startsWith("|"));
+  // Строка таблицы — любая с вертикальной чертой внутри, а не только та, что с
+  // неё начинается: внешняя модель часто пишет «№ | Функция | Первообразная»
+  // без крайних чёрточек, и требование ведущей `|` выбрасывало такую таблицу
+  // целиком в абзац.
+  const lines = markdown.split("\n").filter((line) => line.includes("|"));
   const rows = lines.map(splitMarkdownRow);
-  const divider = rows.findIndex((row) => row.every((cell) => /^:?-{3,}:?$/.test(cell)));
+  const divider = rows.findIndex(
+    (row) => row.length > 1 && row.every((cell) => /^:?-{2,}:?$/.test(cell)),
+  );
   if (divider !== 1 || rows.length < 2) return <p>{markdown}</p>;
   const [head] = rows;
   const body = rows.slice(2);

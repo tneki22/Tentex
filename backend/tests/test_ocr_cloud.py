@@ -10,7 +10,12 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.ai.provider import FakeTransport, ProviderCompletion, ProviderUsage
-from app.materials.parsers.cloud_vlm import CloudRecognizer, latex_issues, wrap_bare_latex
+from app.materials.parsers.cloud_vlm import (
+    CloudRecognizer,
+    _clamped_bbox,
+    latex_issues,
+    wrap_bare_latex,
+)
 from app.models import AiModelCatalogEntry, AiProviderConnection, AiSettings, utc_now
 from app.ocr import cloud_catalog
 from app.ocr import settings as ocr_settings
@@ -370,6 +375,34 @@ def test_a_page_without_coordinates_is_kept_but_flagged(
     assert page.quality == "ocr_low"
     assert any(item.startswith("bbox_missing") for item in page.diagnostics)
     assert page.elements[0].bbox == (0.0, 0.0, 1.0, 1.0)
+
+
+@pytest.mark.parametrize(
+    ("raw", "pixels", "expected"),
+    [
+        # Доли, как и просит инструкция.
+        ([0.1, 0.2, 0.9, 0.4], (950.0, 1350.0), (0.1, 0.2, 0.9, 0.4)),
+        # Пиксели присланного растра: так отвечает gemini-2.5-flash-lite.
+        ([95.0, 270.0, 855.0, 540.0], (950.0, 1350.0), (0.1, 0.2, 0.9, 0.4)),
+        # Условная сетка 0..1000, когда растр в неё не помещается.
+        ([100.0, 200.0, 900.0, 400.0], (500.0, 300.0), (0.1, 0.2, 0.9, 0.4)),
+        # Размер растра прочитать не удалось — остаётся та же сетка 0..1000.
+        ([100.0, 200.0, 900.0, 400.0], (0.0, 0.0), (0.1, 0.2, 0.9, 0.4)),
+    ],
+)
+def test_model_coordinates_are_normalized_whatever_scale_the_model_chose(
+    raw: list[float], pixels: tuple[float, float], expected: tuple[float, ...]
+) -> None:
+    """Модель отвечает долями, пикселями или сеткой 0..1000 — рамка одна и та же.
+
+    Прогон бенчмарка: `gemini-2.5-flash-lite` не вернул ни одной доли из трёхсот
+    рамок, всё в пикселях. Прежний расчёт клампил их в `1.0`, рамка схлопывалась,
+    и страница целиком уходила в «нужно проверить» без единой координаты.
+    """
+    result = _clamped_bbox(raw, *pixels)
+
+    assert result is not None
+    assert tuple(round(value, 4) for value in result) == expected
 
 
 def test_a_broken_formula_lowers_confidence_of_the_whole_page(
