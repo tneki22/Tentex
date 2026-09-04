@@ -467,3 +467,91 @@ def test_close_releases_the_loop_and_a_later_call_opens_a_fresh_one(
 
     assert recognizer._loop is not None
     assert recognizer._loop is not closed_loop
+
+
+def _configure_cloud(session: Session, vision_model: str) -> None:
+    ocr_settings.update_cloud(
+        session,
+        OcrCloudSettingsWrite(
+            provider_id=_provider_id(session), model_id=vision_model, strategy="auto"
+        ),
+    )
+    session.rollback()
+
+
+def test_one_unreadable_page_does_not_take_the_rest_of_the_material_with_it(
+    session: Session, vision_model: str
+) -> None:
+    """Ответ, который не разобрать, стоит одной страницы, а не всего материала.
+
+    Прогон бенчмарка на дешёвой модели ронял разбор на семнадцатой странице из
+    двадцати четырёх: модель прислала JSON не по схеме, и шестнадцать уже
+    оплаченных страниц пропадали вместе с ней.
+    """
+    _configure_cloud(session, vision_model)
+    good = {
+        "elements": [
+            {
+                "kind": "paragraph",
+                "text": "Обычный абзац.",
+                "bbox": [0.1, 0.1, 0.9, 0.2],
+                "level": None,
+                "confidence": 0.9,
+            }
+        ],
+        "page_confidence": 0.9,
+    }
+    broken = ProviderCompletion(
+        content="not-json", actual_model_id=VISION_MODEL, usage=ProviderUsage()
+    )
+    recognizer = CloudRecognizer(
+        session,
+        # Без пауз шлюз даёт ровно одну попытку: первый ответ достаётся первой
+        # странице, второй — второй.
+        transport=FakeTransport(completions=[broken, _answer(good)]),
+        retry_backoff=(),
+    )
+
+    failed = recognizer.recognize_page(b"png-bytes", 1, 595.0, 842.0)
+    survived = recognizer.recognize_page(b"png-bytes", 2, 595.0, 842.0)
+
+    assert failed.quality == "ocr_low"
+    assert failed.elements == ()
+    assert "cloud_page_unreadable" in failed.diagnostics
+    assert survived.elements[0].text == "Обычный абзац."
+
+
+def test_a_run_of_failures_stops_the_material_instead_of_filling_it_with_blanks(
+    session: Session, vision_model: str
+) -> None:
+    """Лежащий провайдер обязан оборвать разбор, а не выдать пустой материал."""
+    _configure_cloud(session, vision_model)
+    broken = ProviderCompletion(
+        content="not-json", actual_model_id=VISION_MODEL, usage=ProviderUsage()
+    )
+    recognizer = CloudRecognizer(
+        session,
+        transport=FakeTransport(completions=[broken] * 12),
+        retry_backoff=(),
+    )
+
+    recognizer.recognize_page(b"png-bytes", 1, 595.0, 842.0)
+    recognizer.recognize_page(b"png-bytes", 2, 595.0, 842.0)
+
+    with pytest.raises(ProjectDomainError):
+        recognizer.recognize_page(b"png-bytes", 3, 595.0, 842.0)
+
+
+def test_a_configuration_error_is_not_survivable_even_once(
+    session: Session, vision_model: str
+) -> None:
+    """Исчерпанный лимит стоимости не лечится следующей страницей."""
+    _configure_cloud(session, vision_model)
+    settings = session.get(AiSettings, 1)
+    assert settings is not None
+    settings.daily_limit_usd = Decimal("0")
+    session.commit()
+    recognizer = CloudRecognizer(session, transport=FakeTransport(), retry_backoff=())
+
+    with pytest.raises(ProjectDomainError):
+        recognizer.recognize_page(b"png-bytes", 1, 595.0, 842.0)

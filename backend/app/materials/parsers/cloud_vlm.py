@@ -25,9 +25,10 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.ai.gateway import AiTextRequest, ModelGateway
+from app.ai.gateway import RETRY_BACKOFF_SECONDS, AiTextRequest, ModelGateway
 from app.ai.provider import OpenAICompatibleTransport
 from app.ai.schemas import AiImagePart, AiImageUrl, AiMessage, AiTextPart
+from app.ai.settings import AiGatewayError
 from app.materials.parsers.base import (
     ElementKind,
     ParsedElement,
@@ -52,6 +53,31 @@ UNREADABLE_MARK = "⟨?⟩"
 # Потолок уверенности для элемента с оговоркой: дальше страница уходит в
 # «требует проверки», а не в готовый материал.
 SUSPECT_CONFIDENCE = 0.4
+
+# Коды, после которых разбор материала имеет смысл продолжать: они говорят про
+# один конкретный ответ, а не про настройку. Ключ, лимиты стоимости и
+# несовместимость модели сюда не входят — от продолжения они не чинятся, и
+# разбор обязан остановиться на первой же такой ошибке.
+SURVIVABLE_CODES = frozenset(
+    {
+        "ai_invalid_structured_output",
+        "ai_empty_response",
+        "ai_provider_unavailable",
+        "ai_rate_limited",
+        "ai_timeout",
+    }
+)
+# Сколько кусков подряд может не прочитаться, прежде чем разбор останавливается
+# целиком. Одна страница — это ответ, который не разобрать: терять из-за неё
+# остальные шестьдесят незачем, её достаточно перезапустить диапазоном. Три
+# подряд — это уже лежащий провайдер, и продолжать нельзя, иначе получится
+# материал из пустых страниц, помеченный как готовый.
+MAX_CONSECUTIVE_FAILURES = 3
+
+
+class PageUnreadable(Exception):
+    """Внешняя модель не прочитала этот кусок, но разбор продолжается."""
+
 
 TEX_ENVIRONMENT_RE = re.compile(r"\\(begin|end)\{([^}]+)\}")
 # Признак «это LaTeX, а не обычный текст»: команда вида \frac, \int, \lim.
@@ -242,6 +268,9 @@ class CloudRecognizer:
     quality_threshold: float = DEFAULT_QUALITY_THRESHOLD
     # Тот же шов, что и у самого шлюза: подменяется в тестах, в работе `None`.
     transport: OpenAICompatibleTransport | None = None
+    # Паузы между повторами вызова. В работе — боевые из шлюза; тесты передают
+    # пустую последовательность, чтобы не ждать по-настоящему.
+    retry_backoff: Sequence[float] = RETRY_BACKOFF_SECONDS
     # Один event loop на весь разбор материала, а не на каждый вызов модели.
     # `asyncio.run()` в `_ask` создавал и закрывал свой loop на каждой странице
     # и на каждой пачке вырезов; `AsyncOpenAI`-клиент внутри шлюза переживал
@@ -251,6 +280,9 @@ class CloudRecognizer:
     _loop: asyncio.AbstractEventLoop | None = field(
         default=None, init=False, repr=False, compare=False
     )
+    # Сколько кусков подряд не прочиталось. Считается подряд, а не всего:
+    # разрозненные осечки — это свойство модели, а сплошная полоса — авария.
+    _failures: int = field(default=0, init=False, repr=False, compare=False)
 
     def close(self) -> None:
         """Закрыть общий event loop. Без вызова он держит ресурсы до GC."""
@@ -262,24 +294,35 @@ class CloudRecognizer:
         self, image: bytes, page_number: int, width: float, height: float
     ) -> ParsedPage:
         """Прочитать страницу целиком: разметка, порядок чтения и формулы."""
-        answer = self._ask(
-            [
-                AiTextPart(text=PAGE_INSTRUCTION),
-                AiImagePart(image_url=AiImageUrl(url=_data_url(image))),
-            ],
-            CloudPage,
-            page_number,
-        )
+        try:
+            answer = self._ask(
+                [
+                    AiTextPart(text=PAGE_INSTRUCTION),
+                    AiImagePart(image_url=AiImageUrl(url=_data_url(image))),
+                ],
+                CloudPage,
+                page_number,
+            )
+        except PageUnreadable as error:
+            return _unreadable_page(page_number, width, height, str(error))
         return self._page(answer, page_number, width, height)
 
     def recognize_regions(
         self, regions: Sequence[RegionRequest], page_number: int
     ) -> list[RecognizedRegion]:
-        """Прочитать вырезы страницы, не трогая уже готовый текстовый слой."""
+        """Прочитать вырезы страницы, не трогая уже готовый текстовый слой.
+
+        Пачка, на которой модель сорвалась, просто пропускается: текст страницы
+        уже прочитан из файла и от этого не страдает, а формулы останутся
+        вырезами оригинала — ровно как в режиме «Быстро».
+        """
         result: list[RecognizedRegion] = []
         for start in range(0, len(regions), MAX_REGIONS_PER_REQUEST):
             batch = regions[start : start + MAX_REGIONS_PER_REQUEST]
-            answer = self._ask(self._region_parts(batch), CloudRegions, page_number)
+            try:
+                answer = self._ask(self._region_parts(batch), CloudRegions, page_number)
+            except PageUnreadable:
+                continue
             known = {region.index for region in batch}
             result.extend(
                 RecognizedRegion(
@@ -328,9 +371,22 @@ class CloudRecognizer:
         )
         if self._loop is None:
             self._loop = asyncio.new_event_loop()
-        result = self._loop.run_until_complete(
-            ModelGateway(self.session, self.transport).complete(request)
-        )
+        try:
+            result = self._loop.run_until_complete(
+                ModelGateway(self.session, self.transport, self.retry_backoff).complete(request)
+            )
+        except AiGatewayError as error:
+            self._failures += 1
+            if error.code not in SURVIVABLE_CODES or self._failures >= MAX_CONSECUTIVE_FAILURES:
+                raise
+            log.warning(
+                "страница %s не прочитана моделью (%s), разбор продолжается: %s",
+                page_number,
+                error.code,
+                error,
+            )
+            raise PageUnreadable(str(error)) from error
+        self._failures = 0
         return result.value
 
     def _page(
@@ -385,6 +441,29 @@ class CloudRecognizer:
             tuple(dict.fromkeys(diagnostics)),
             confidence,
         )
+
+
+def _unreadable_page(
+    page_number: int, width: float, height: float, reason: str
+) -> ParsedPage:
+    """Страница, которую модель не прочитала, — но материал всё равно собран.
+
+    Пустой текст и `ocr_low` вместо исключения: разбор шестидесяти страниц не
+    должен пропадать целиком из-за одного ответа, который не разобрать. Страница
+    попадает в «нужно проверить», причина уходит в диагностику, и перезапустить
+    её можно диапазоном, не трогая остальные.
+    """
+    return ParsedPage(
+        page_number,
+        width,
+        height,
+        "",
+        "",
+        "ocr_low",
+        (),
+        ("cloud_page_unreadable", f"cloud_error:{reason[:120]}"),
+        0.0,
+    )
 
 
 def _confidence(reported: float, text: str, issues: Sequence[str]) -> float:
