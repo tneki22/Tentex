@@ -18,6 +18,7 @@ from app.logging_config import configure_logging
 from app.materials import library
 from app.materials import revisions as revision_registry
 from app.materials.parsers.base import ParsedPage
+from app.materials.parsers.cloud_vlm import CloudRecognizer
 from app.materials.parsers.native import extract_outline, iter_pages
 from app.materials.schemas import MaterialPurpose
 from app.materials.storage import material_path
@@ -30,6 +31,7 @@ from app.models import (
     MaterialRevisionOrigin,
     MaterialState,
     PageQuality,
+    ParserMode,
     ProcessingStage,
     ProjectMaterial,
     utc_now,
@@ -313,6 +315,13 @@ def process_parse_job(session: Session, task: BackgroundJob) -> None:
         session.rollback()
         params = ocr_settings.runtime_params(session)
         session.rollback()
+        # Порт внешней модели заводится только для облачного разбора: локальные
+        # режимы не должны и не могут дотянуться до шлюза.
+        recognizer = (
+            CloudRecognizer(session, params.quality_threshold)
+            if parser_mode == ParserMode.CLOUD
+            else None
+        )
         _prepare_revision(session, task_id)
         if next_index < len(selected):
             remaining_pages = selected[next_index:]
@@ -322,6 +331,7 @@ def process_parse_job(session: Session, task: BackgroundJob) -> None:
                 remaining_pages[0],
                 params=params,
                 page_numbers=remaining_pages,
+                recognizer=recognizer,
             ):
                 if not _save_page(session, task_id, page):
                     return

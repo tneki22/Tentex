@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import ParserMode
-from app.ocr.engines import RASTER_SCALE_OPTIONS
+from app.ocr.engines import RASTER_SCALE_OPTIONS, CloudStrategy
 
 RasterScale = Literal[*RASTER_SCALE_OPTIONS]
 EngineRuntime = Literal["worker", "gpu_service", "cloud"]
@@ -82,7 +84,6 @@ class OcrEngineRead(ApiModel):
     description: str
     trade_off: str
     runtime: EngineRuntime
-    configurable: bool
     enabled: bool
     available: bool
     readiness: Readiness
@@ -98,8 +99,51 @@ class OcrEngineRead(ApiModel):
     models: list[OcrModelRead]
 
 
+class OcrCloudSettingsWrite(ApiModel):
+    """Что можно поменять в режиме «Облако» с экрана распознавания."""
+
+    provider_id: UUID | None = None
+    model_id: str | None = Field(default=None, max_length=200)
+    strategy: CloudStrategy
+
+
+class OcrCloudStrategyRead(ApiModel):
+    value: CloudStrategy
+    title: str
+    hint: str
+
+
+class OcrCloudModelRead(ApiModel):
+    """Кандидат в распознаватели страниц из локального каталога моделей."""
+
+    provider_id: UUID
+    provider_label: str
+    model_id: str
+    display_name: str
+    context_length: int | None
+    # Годится ли по правилу отбора и почему; причина показывается рядом.
+    suitable: bool
+    reason: str
+    # Чем модель хороша, если она в списке рекомендованных.
+    recommended_note: str
+    price_per_page_usd: Decimal | None
+
+
+class OcrCloudRead(ApiModel):
+    """Состояние режима «Облако»: выбранная модель, стратегия и цена страницы."""
+
+    external_models_enabled: bool
+    provider_id: UUID | None
+    provider_label: str
+    model_id: str | None
+    strategy: CloudStrategy
+    strategies: list[OcrCloudStrategyRead]
+    price_per_page_usd: Decimal | None
+
+
 class OcrSettingsRead(ApiModel):
     default_mode: ParserMode
     quality_threshold: float
     raster_scale: float
     engines: list[OcrEngineRead]
+    cloud: OcrCloudRead

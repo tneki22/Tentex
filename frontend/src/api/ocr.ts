@@ -53,7 +53,6 @@ export interface OcrEngineRead {
   description: string;
   trade_off: string;
   runtime: OcrEngineRuntime;
-  configurable: boolean;
   enabled: boolean;
   available: boolean;
   readiness: OcrReadiness;
@@ -68,11 +67,51 @@ export interface OcrEngineRead {
   models: OcrModelRead[];
 }
 
+/** Как режим «Облако» делит работу между текстовым слоем файла и внешней моделью. */
+export type OcrCloudStrategy = "auto" | "page";
+
+export interface OcrCloudStrategyRead {
+  value: OcrCloudStrategy;
+  title: string;
+  hint: string;
+}
+
+/** Кандидат в распознаватели страниц из уже добавленных моделей. */
+export interface OcrCloudModelRead {
+  provider_id: string;
+  provider_label: string;
+  model_id: string;
+  display_name: string;
+  context_length: number | null;
+  /** Годится ли по правилу отбора; если нет — `reason` объясняет, чем именно. */
+  suitable: boolean;
+  reason: string;
+  recommended_note: string;
+  price_per_page_usd: string | null;
+}
+
+export interface OcrCloudRead {
+  external_models_enabled: boolean;
+  provider_id: string | null;
+  provider_label: string;
+  model_id: string | null;
+  strategy: OcrCloudStrategy;
+  strategies: OcrCloudStrategyRead[];
+  price_per_page_usd: string | null;
+}
+
+export interface OcrCloudSettingsWrite {
+  provider_id: string | null;
+  model_id: string | null;
+  strategy: OcrCloudStrategy;
+}
+
 export interface OcrSettingsRead {
   default_mode: ParserMode;
   quality_threshold: number;
   raster_scale: number;
   engines: OcrEngineRead[];
+  cloud: OcrCloudRead;
 }
 
 export interface OcrGlobalSettingsWrite {
@@ -110,6 +149,15 @@ export const updateOcrEngine = (
     method: "PUT",
     body: JSON.stringify(command),
   });
+
+export const getOcrCloudModels = (
+  signal?: AbortSignal
+): Promise<OcrCloudModelRead[]> => request(`${BASE_PATH}/cloud/models`, { signal });
+
+export const updateOcrCloudSettings = (
+  command: OcrCloudSettingsWrite
+): Promise<OcrSettingsRead> =>
+  request(`${BASE_PATH}/cloud`, { method: "PUT", body: JSON.stringify(command) });
 
 /** Отвечает сразу: загрузка идёт в фоне, прогресс приезжает следующим GET. */
 export const installOcrModel = (key: string): Promise<OcrSettingsRead> =>

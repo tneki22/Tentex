@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import math
@@ -10,9 +12,11 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from datetime import time as day_time
 from decimal import Decimal
+from io import BytesIO
 from typing import Any
 from uuid import UUID
 
+from PIL import Image
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -24,6 +28,7 @@ from app.ai.provider import (
     ProviderUsage,
 )
 from app.ai.schemas import (
+    AiImagePart,
     AiMessage,
     AiModelSelection,
     AiModelTestRead,
@@ -57,7 +62,46 @@ _CAPABILITY_LABELS = {
     "structured_output": "структурированный ответ (response_format)",
     "streaming": "потоковый вывод",
     "audio_transcription": "приём аудио",
+    "image_input": "приём изображений",
 }
+
+# Оценка стоимости картинки в токенах. Модели считают её плитками: изображение
+# режется на квадраты 768×768, каждая плитка стоит фиксированно, а всё, что
+# мельче 384×384, идёт одной плиткой. Коэффициенты взяты у Gemini; у других
+# провайдеров они отличаются, но порядок тот же — числа нужны, чтобы
+# предупредить о стоимости заранее, а не чтобы вести бухгалтерию. Фактический
+# расход всё равно приходит в `usage` от провайдера.
+IMAGE_TILE_PX = 768
+IMAGE_SMALL_PX = 384
+IMAGE_TILE_TOKENS = 258
+
+
+def _data_url_bytes(url: str) -> bytes | None:
+    """Содержимое `data:`-URL. Ссылки наружу мы не отправляем, так что иначе — None."""
+    marker = "base64,"
+    index = url.find(marker)
+    if not url.startswith("data:") or index < 0:
+        return None
+    try:
+        return base64.b64decode(url[index + len(marker):], validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _image_tokens(url: str) -> int:
+    """Во сколько токенов обойдётся картинка. Неизвестный формат — одна плитка."""
+    payload = _data_url_bytes(url)
+    if payload is None:
+        return IMAGE_TILE_TOKENS
+    try:
+        with Image.open(BytesIO(payload)) as image:
+            width, height = image.size
+    except (OSError, ValueError):
+        return IMAGE_TILE_TOKENS
+    if width <= IMAGE_SMALL_PX and height <= IMAGE_SMALL_PX:
+        return IMAGE_TILE_TOKENS
+    tiles = math.ceil(width / IMAGE_TILE_PX) * math.ceil(height / IMAGE_TILE_PX)
+    return tiles * IMAGE_TILE_TOKENS
 
 
 @dataclass(frozen=True)
@@ -410,15 +454,52 @@ class ModelGateway:
 
     @staticmethod
     def _estimate_input(messages: list[AiMessage], response_schema: dict[str, Any] | None) -> int:
+        """Оценка входных токенов до вызова.
+
+        Картинку нельзя мерить длиной её base64: страница весит около мегабайта,
+        и по буквам получилось бы полмиллиона токенов вместо полутора тысяч —
+        подтверждение стоимости срабатывало бы на каждой странице и врало бы в
+        сотни раз. Поэтому текст считается по длине, картинки — по плиткам.
+        """
+        image_tokens = 0
+        text_parts: list[Any] = []
+        for message in messages:
+            if isinstance(message.content, str):
+                text_parts.append(message.content)
+                continue
+            for part in message.content:
+                if isinstance(part, AiImagePart):
+                    image_tokens += _image_tokens(part.image_url.url)
+                else:
+                    text_parts.append(part.text)
         payload = json.dumps(
-            {
-                "messages": [item.model_dump() for item in messages],
-                "schema": response_schema,
-            },
+            {"text": text_parts, "schema": response_schema},
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode()
-        return max(1, math.ceil(len(payload) / 3))
+        return max(1, image_tokens + math.ceil(len(payload) / 3))
+
+    @staticmethod
+    def _hashable_messages(messages: list[AiMessage]) -> list[dict[str, Any]]:
+        """Сообщения для ключа кэша: картинка сворачивается в свой отпечаток.
+
+        Ключ должен оставаться коротким и стабильным. Тот же вырез страницы,
+        полученный при повторном разборе, даёт тот же sha256 — и тот же ключ.
+        """
+        result: list[dict[str, Any]] = []
+        for message in messages:
+            dumped = message.model_dump()
+            content = dumped.get("content")
+            if not isinstance(content, list):
+                result.append(dumped)
+                continue
+            for part in content:
+                if part.get("type") != "image_url":
+                    continue
+                url = str(part["image_url"]["url"])
+                part["image_url"]["url"] = f"sha256:{hashlib.sha256(url.encode()).hexdigest()}"
+            result.append(dumped)
+        return result
 
     @staticmethod
     def _estimated_cost(
@@ -470,7 +551,7 @@ class ModelGateway:
                 "parameters": parameters,
                 "prompt_version": resolved.role.prompt_version,
                 "response_schema": response_schema,
-                "messages": [item.model_dump() for item in request.messages],
+                "messages": ModelGateway._hashable_messages(request.messages),
                 "project_id": str(request.project_id) if request.project_id else None,
                 "context_manifest": request.context_manifest,
                 "source_fingerprint": request.source_fingerprint,

@@ -1,11 +1,12 @@
 import { Pencil, Play, RotateCcw, Settings2, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
-import type {
-  LibraryMaterialDetailRead,
-  MaterialPageRead,
-  ParserMode,
-  ProcessingScope,
+import {
+  PARSER_MODE_TITLES,
+  type LibraryMaterialDetailRead,
+  type MaterialPageRead,
+  type ParserMode,
+  type ProcessingScope,
 } from "../../api/materials";
 import { getOcrSettings, type OcrSettingsRead } from "../../api/ocr";
 import { getMaterialPresentation } from "../../components/domain/material-viewer";
@@ -129,7 +130,7 @@ export function LibraryProcessingPanel({
         <h3>{presentation.processingTitle}</h3>
         {material.parser_mode && prepared && (
           <StatusBadge tone="neutral">
-            Режим «Быстро»
+            Режим «{PARSER_MODE_TITLES[material.parser_mode]}»
           </StatusBadge>
         )}
       </header>
@@ -144,7 +145,15 @@ export function LibraryProcessingPanel({
 
       {material.parser_mode === "fast" && prepared && (
         <p className="inspector-note">
-          «Быстро» распознаёт обычный текст. Формулы могут содержать ошибки — сверяйтесь с изображением.
+          «Быстро» распознаёт обычный текст. Формулы он не читает — сохраняет вырезом,
+          чтобы они не потерялись; сверяйтесь с изображением.
+        </p>
+      )}
+
+      {material.parser_mode === "cloud" && prepared && (
+        <p className="inspector-note">
+          «Облако» прочитало страницы внешней моделью. Формулы приходят в LaTeX, но
+          модель может пересказать вместо того, чтобы переписать, — сверяйтесь с оригиналом.
         </p>
       )}
 
