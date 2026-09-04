@@ -72,7 +72,6 @@ function validateItems(items: RepairedItem[], hasTickets: boolean): string {
       if (item.items.length === 0) return "В билете должен остаться хотя бы один пункт.";
       if (item.items.some((child) => !child.title.trim())) return "Формулировка вопроса или задачи не может быть пустой.";
     } else {
-      if (hasTickets) return "В формате билетов верхний уровень должен состоять только из билетов.";
       if (!item.title.trim()) return "Формулировка вопроса или задачи не может быть пустой.";
     }
   }
@@ -343,8 +342,9 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
     const restored: RepairedQuestion = { kind: "question", title: sourceText, subpoints: [], source_indices: entry.source_indices };
     setDropped(dropped.filter((_, index) => index !== dropIndex));
     if (hasTickets) {
-      const firstTicketIndex = items.findIndex((item) => item.kind === "ticket");
-      if (firstTicketIndex === -1) return;
+      const sourceNode = nodes[sourceIndex - 1];
+      const firstTicketIndex = items.findIndex((item) => item.kind === "ticket" && item.source_indices.some((index) => nodes[index - 1]?.id === sourceNode?.parent_id));
+      if (firstTicketIndex === -1) { setItems([...items, restored]); return; }
       setItems(items.map((item, index) => index === firstTicketIndex && item.kind === "ticket"
         ? { ...item, items: [...item.items, restored] }
         : item));
@@ -381,7 +381,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
         onOpenChange={(next) => next ? onOpenChange(true) : requestClose()}
         className="ai-consumer-dialog ai-import-repair-dialog"
         title="Исправить список вопросов"
-        description="Правит формулировки, расставляет подпункты и убирает лишние заголовки; число пунктов может измениться. Дерево изменится после применения."
+        description="Правит формулировки, расставляет подпункты и убирает лишние заголовки; число пунктов может измениться. Разделы и состав билетов сохраняются. Изменения применяются после проверки и доступны для отмены."
         footer={<>
           <Button variant="ghost" onClick={requestClose}>Закрыть</Button>
           {busy === "run" || jobActive ? <Button variant="secondary" onClick={stop}><Square size={13} />Остановить</Button>
@@ -402,7 +402,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
 
           <Disclosure summary="Что отправим">
             <div className="ai-manifest">
-              <p>Текущие формулировки {nodes.length} пунктов программы, без id.</p>
+              <p>Полное дерево программы: разделы, вопросы, задачи, билеты и подпункты, их id и пути. Для ответов — только наличие и число символов.</p>
               <p><strong>Не отправляются:</strong> ответы, ответы пользователя, материалы, привязки, конспекты и попытки.</p>
               <ol className="ai-question-manifest">
                 {nodes.map((node, index) => (
@@ -457,7 +457,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
               {hasTickets ? (
                 <ol className="ai-repair-ticket-list">
                   {items.map((ticket, ticketIndex) => {
-                    if (ticket.kind !== "ticket") return null;
+                    if (ticket.kind !== "ticket") return <QuestionEditor key={ticketIndex} {...questionEditorProps(null, ticketIndex, ticket, `${ticketIndex + 1}`)} />;
                     return (
                       <li key={ticketIndex} className="ai-repair-ticket">
                         <header>
