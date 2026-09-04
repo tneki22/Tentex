@@ -70,6 +70,17 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
         )
     elif job.kind == BackgroundJobKind.AI_PREPARATION:
         assert job.project_id is not None
+        if job.checkpoint.get("subtype") == "preparation_plan":
+            from app.preparation import ai
+            from app.preparation.schemas import PreparationAiWrite
+
+            return await ai.run(
+                session,
+                gateway,
+                job.project_id,
+                PreparationAiWrite.model_validate(command),
+                job_id=job.id,
+            )
         return await preparation_ai.run(
             session,
             gateway,
