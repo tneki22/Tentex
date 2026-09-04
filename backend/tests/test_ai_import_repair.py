@@ -816,3 +816,75 @@ async def test_apply_rejects_manual_removal_from_retained_ticket(session: Sessio
                 items=run.items,
             ),
         )
+
+
+@pytest.mark.asyncio
+async def test_repair_rejects_merging_ticket_headers_with_their_questions(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    project = make_exam_project(session)
+    _ticket_with_questions(session, project.id, "Билет 1", ["Первый вопрос"])
+    _ticket_with_questions(session, project.id, "Билет 2", ["Второй вопрос"])
+    gateway = ModelGateway(
+        session,
+        FakeTransport(
+            completions=[
+                _completion(
+                    [
+                        {"kind": "ticket", "title": "Общий билет", "source_indices": [1, 3]},
+                        _question_payload("Первый вопрос", source_indices=[2], ticket_index=1),
+                        _question_payload("Второй вопрос", source_indices=[4], ticket_index=1),
+                    ]
+                )
+            ]
+        ),
+    )
+    preview = await import_repair.preflight_program_repair(session, gateway, project.id)
+
+    with pytest.raises(ProjectDomainError, match="объединять билеты"):
+        await import_repair.run_program_repair(
+            session,
+            gateway,
+            project.id,
+            import_repair.ProgramRepairRunWrite(
+                expected_program_revision=preview.program_revision,
+                expected_source_hash=preview.source_hash,
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_repair_rejects_splitting_ticket_header_with_its_questions(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    project = make_exam_project(session)
+    _ticket_with_questions(session, project.id, "Билет", ["Первый вопрос", "Второй вопрос"])
+    gateway = ModelGateway(
+        session,
+        FakeTransport(
+            completions=[
+                _completion(
+                    [
+                        {"kind": "ticket", "title": "Часть 1", "source_indices": [1]},
+                        _question_payload("Первый вопрос", source_indices=[2], ticket_index=1),
+                        {"kind": "ticket", "title": "Часть 2", "source_indices": [1]},
+                        _question_payload("Второй вопрос", source_indices=[3], ticket_index=2),
+                    ]
+                )
+            ]
+        ),
+    )
+    preview = await import_repair.preflight_program_repair(session, gateway, project.id)
+
+    with pytest.raises(ProjectDomainError, match="разделять билет"):
+        await import_repair.run_program_repair(
+            session,
+            gateway,
+            project.id,
+            import_repair.ProgramRepairRunWrite(
+                expected_program_revision=preview.program_revision,
+                expected_source_hash=preview.source_hash,
+            ),
+        )
