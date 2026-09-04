@@ -9,8 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import GoalPassport, NodeType, ProjectStatus
-from app.preparation.activity import time_totals
-from app.preparation.calendar import budget_minutes, day_bounds, study_date, utc
+from app.preparation.activity import time_segments, time_totals
+from app.preparation.calendar import budget_minutes, day_bounds, study_date
 from app.preparation.data import (
     answer_presence,
     get_settings,
@@ -24,7 +24,13 @@ from app.preparation.evidence import TARGET_SUCCESSES, project_attempts, replay
 from app.preparation.forecast import memory_forecast
 from app.preparation.models import PreparationCoach, StudyActivity
 from app.preparation.planner import day_loads, read_plan
-from app.preparation.schemas import CoachRead, OverviewRead, PreparationSummary, TopicProgress
+from app.preparation.schemas import (
+    CoachRead,
+    DailyIntervalRead,
+    OverviewRead,
+    PreparationSummary,
+    TopicProgress,
+)
 
 
 def topic_progress(session, project_id, config, unit_rows, *, before=None, rows=None):
@@ -44,6 +50,17 @@ def topic_progress(session, project_id, config, unit_rows, *, before=None, rows=
     understood = {a.node_id for a in session.scalars(query)}
     topic_units = {t: u.id for u in unit_rows for t in u.topic_ids}
     latest_grade = {a.program_node_id: g for a, g, _ in rows if g is not None}
+    independent_outcomes = {
+        a.program_node_id: g.outcome.value
+        for a, g, _ in rows
+        if g and a.answer_mode == "memory" and a.parent_attempt_id is None
+    }
+    omissions = defaultdict(Counter)
+    for attempt, grade, _ in rows:
+        if grade:
+            # Одна попытка даёт одно наблюдение пункта, даже если судья повторил его в разборе.
+            points = {str(p.get("point", "")).strip() for p in grade.missed_points}
+            omissions[attempt.program_node_id].update(point for point in points if point)
     result = []
     for node in nodes.values():
         if node.node_type != NodeType.TOPIC:
@@ -56,7 +73,11 @@ def topic_progress(session, project_id, config, unit_rows, *, before=None, rows=
         status = "understood" if node.id in understood or count or latest == "passed" else "unseen"
         if count >= required:
             status = "practiced"
-        if status == "practiced" and latest == "passed" and ev.delayed_successes:
+        if (
+            status == "practiced"
+            and independent_outcomes.get(node.id) == "passed"
+            and ev.delayed_successes
+        ):
             status = "mastered"
         due = (
             study_date(ev.last_at, config) + timedelta(days=ev.state.interval)
@@ -88,6 +109,9 @@ def topic_progress(session, project_id, config, unit_rows, *, before=None, rows=
                 interval_days=ev.state.interval if ev else 0,
                 reason=reason,
                 missed_points=missing,
+                recurring_omissions={
+                    point: count for point, count in omissions[node.id].items() if count >= 2
+                },
                 active_seconds=0,
             )
         )
@@ -145,6 +169,11 @@ def _streak(days, today, config, deadline):
 
 def _summary(topics, rows, days, plan, unit_rows, today, config, deadline, by_kind):
     outcomes = Counter(g.outcome.value for _, g, _ in rows if g)
+    pairs = [g for _, g, _ in rows if g and g.self_assessment and g.outcome.value != "unscored"]
+    disagreement = sum(g.self_assessment != g.outcome for g in pairs)
+    by_mode = defaultdict(Counter)
+    for attempt, grade, _ in rows:
+        by_mode[attempt.answer_mode or "unknown"][grade.outcome.value if grade else "pending"] += 1
     future = [d for d in days if d.date >= today]
     done = set(plan.completed_ids)
     remaining = sum(i.minutes for i in plan.items if i.id not in done)
@@ -188,11 +217,10 @@ def _summary(topics, rows, days, plan, unit_rows, today, config, deadline, by_ki
         partial_attempts=outcomes["partial"],
         failed_attempts=outcomes["failed"],
         pending_attempts=sum(g is None for _, g, _ in rows),
-        disputed_attempts=sum(
-            g.self_assessment is not None and g.self_assessment != g.outcome
-            for _, g, _ in rows
-            if g
-        ),
+        disputed_attempts=disagreement,
+        assessment_pairs=len(pairs),
+        disagreement_percent=round(100 * disagreement / len(pairs), 1) if pairs else None,
+        results_by_mode={mode: dict(counts) for mode, counts in by_mode.items()},
         memory_attempts=sum(a.answer_mode == "memory" for a, _, _ in rows),
         supported_attempts=sum(a.answer_mode == "supported" for a, _, _ in rows),
         available_minutes=sum(d.remaining_minutes for d in future),
@@ -240,11 +268,7 @@ def overview(
             by_node[k] += seconds
         cutoff = min(now, day_bounds(day.date, config)[1] - timedelta(microseconds=1))
         if day.date <= today:
-            historical = [
-                (a, g if g is None or utc(g.updated_at) <= cutoff else None, q)
-                for a, g, q in rows
-                if utc(a.created_at) <= cutoff
-            ]
+            historical = project_attempts(session, project_id, cutoff)
             states, _ = topic_progress(
                 session, project_id, config, unit_rows, before=cutoff, rows=historical
             )
@@ -267,10 +291,32 @@ def overview(
             date=today,
             text=saved.text if saved.origin == "ai" and saved.text else coach.text,
             origin=saved.origin,
-            action=saved.action,
+            action=saved.action if saved.origin == "ai" else coach.action,
             job_id=saved.job_id,
             reason=saved.reason,
         )
+    intervals = []
+    topic_names = {t.node_id: t.title for t in topics}
+    for row, left, right in time_segments(session, project_id, *day_bounds(today, config)):
+        if (
+            intervals
+            and intervals[-1].node_id == row.node_id
+            and intervals[-1].kind == row.kind
+            and (left - intervals[-1].ended_at).total_seconds() <= 2
+        ):
+            intervals[-1].ended_at = right
+            intervals[-1].seconds += int((right - left).total_seconds())
+        else:
+            intervals.append(
+                DailyIntervalRead(
+                    node_id=row.node_id,
+                    title=topic_names.get(row.node_id, "Занятие"),
+                    kind=row.kind,
+                    started_at=left,
+                    ended_at=right,
+                    seconds=int((right - left).total_seconds()),
+                )
+            )
     return OverviewRead(
         project_id=project_id,
         project_name=project.name or "Экзамен",
@@ -290,4 +336,5 @@ def overview(
         summary=summary,
         memory=memory,
         coach=coach,
+        today_intervals=intervals,
     )

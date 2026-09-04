@@ -9,6 +9,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
+from app.db import project_write_transaction
 from app.models import GoalPassport
 from app.preparation.activity import completed_items, time_totals
 from app.preparation.calendar import budget_minutes, capacity_minutes, dates_between, study_date
@@ -81,7 +82,7 @@ def read_plan(session: Session, project_id: UUID) -> PlanRead:
 
 def save_settings(session: Session, project_id: UUID, command: SettingsWrite) -> SettingsRead:
     """Compare-and-swap защищает бюджет, влияющий на одновременно созданные черновики."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         require_project(session, project_id, writable=True)
         session.execute(
             insert(PreparationSettings)
@@ -225,16 +226,19 @@ def day_loads(
     return result
 
 
-def _validate_document(phases: list[Phase], items: list[PlanItem], unit_rows) -> None:
+def _validate_document(
+    phases: list[Phase], items: list[PlanItem], unit_rows, *, previous=()
+) -> None:
     phase_map, unit_map = {p.id: p for p in phases}, {u.id: u for u in unit_rows}
     if len(phase_map) != len(phases) or len({i.id for i in items}) != len(items):
         raise ProjectDomainError(
             "Повторяющиеся идентификаторы в плане", status=422, code="preparation_duplicate"
         )
     seen = set()
+    archived = {i.id: i for i in previous if i.unit_id not in unit_map}
     for item in items:
         key = (item.unit_id, item.on_date, item.kind)
-        if key in seen or item.unit_id not in unit_map:
+        if key in seen or (item.unit_id not in unit_map and archived.get(item.id) != item):
             raise ProjectDomainError(
                 "Дубль назначения или часть неделимого билета",
                 status=422,
@@ -257,7 +261,13 @@ def _protect_existing(plan: PlanRead, proposed: list[PlanItem], today: date, *, 
         protected = (
             old.on_date < today or old.id in plan.completed_ids or (old.pinned and not manual)
         )
-        if protected and by_id.get(old.id) != old:
+        proposed_item = by_id.get(old.id)
+        unchanged = proposed_item == old or (
+            manual
+            and proposed_item is not None
+            and proposed_item.model_copy(update={"phase_id": old.phase_id}) == old
+        )
+        if protected and not unchanged:
             raise ProjectDomainError(
                 "Прошлые, выполненные и закреплённые задания сохраняются",
                 status=409,
@@ -361,18 +371,35 @@ def _distribute(session, project_id, command, project, plan, settings, now):
 def _recovery(session, project_id, command, plan, phases, start, end, now):
     """Прошлый факт не переписывается; черновик переносит только выбранный остаток."""
     items = list(plan.items)
-    debt = [i for i in items if i.on_date < start and i.id not in plan.completed_ids]
+    debt = [
+        i for i in items if i.on_date < start and i.id not in plan.completed_ids and not i.pinned
+    ]
     if command.unit_ids is not None:
         debt = [i for i in debt if i.unit_id in command.unit_ids]
     if command.mode == "dismiss":
         # Явное снятие долга разрешено только этой командой, не обычным пересчётом.
         return phases, [i for i in items if i not in debt]
     loads = day_loads(session, project_id, items, start, end, now=now)
+    config = get_settings(session, project_id).config
+    deadline = require_project(session, project_id).deadline
+    new_counts = {d.date: d.new_count for d in loads}
+    review_counts = {d.date: d.review_count for d in loads}
     remaining = {d.date: max(0, d.remaining_minutes - d.planned_minutes) for d in loads}
     for old in debt:
         if old.pinned:
             continue
-        candidates = [d for d in remaining if remaining[d] >= old.minutes]
+        is_new = old.kind in {"learn", "answer"}
+        candidates = [
+            d
+            for d in remaining
+            if remaining[d] >= old.minutes
+            and (not is_new or not deadline or d < deadline - timedelta(days=1))
+            and (
+                new_counts[d] < config.max_new_per_day
+                if is_new
+                else review_counts[d] < config.max_reviews_per_day
+            )
+        ]
         if not candidates:
             continue
         chosen = (
@@ -393,6 +420,7 @@ def _recovery(session, project_id, command, plan, phases, start, end, now):
             )
         )
         remaining[chosen] -= old.minutes
+        (new_counts if is_new else review_counts)[chosen] += 1
     return phases, items
 
 
@@ -406,7 +434,7 @@ def create_draft(
 ) -> DraftRead:
     """Сначала серверный preview; никакой алгоритм не меняет календарь непосредственно."""
     now = now or datetime.now(UTC)
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project, plan, settings = validate_revisions(
             session,
             project_id,
@@ -426,7 +454,7 @@ def create_draft(
                 )
             phases, items = _distribute(session, project_id, command, project, plan, settings, now)
         unit_rows = units(session, project_id)
-        _validate_document(phases, items, unit_rows)
+        _validate_document(phases, items, unit_rows, previous=plan.items)
         if command.mode not in {"spread", "catch_up", "dismiss"}:
             _protect_existing(
                 plan, items, study_date(now, settings.config), manual=command.mode == "manual"
@@ -467,6 +495,7 @@ def persist_draft(
     now,
     *,
     recovery=False,
+    unassigned_reasons=None,
 ) -> DraftRead:
     """Общее сохранение для алгоритма и проверенного предложения модели, внутри транзакции."""
     before = {i.id: i for i in plan.items}
@@ -489,6 +518,7 @@ def persist_draft(
         items=items,
         removed_ids=removed,
         unassigned_ids=[u.id for u in unit_rows if u.id not in assigned],
+        unassigned_reasons=unassigned_reasons or {},
         changes=changes,
         days=day_loads(session, project_id, items, start, end, now=now),
         origin=origin,
@@ -558,7 +588,7 @@ def apply_draft(
     session: Session, project_id: UUID, draft_id: UUID, command: ApplyDraftWrite
 ) -> PlanRead:
     """Выборочное применение снова проверяет документ и ревизии в транзакции."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         draft = get_draft(session, project_id, draft_id)
         row = session.get(PreparationDraft, draft_id)
         if row.applied_revision is not None:
@@ -577,7 +607,7 @@ def apply_draft(
         else:
             items = [i for i in plan.items if i.id not in selected]
             items.extend(i for i in draft.items if i.id in selected)
-        _validate_document(phases, items, units(session, project_id))
+        _validate_document(phases, items, units(session, project_id), previous=plan.items)
         if not row.payload.get("recovery"):
             _protect_existing(
                 plan,
@@ -602,7 +632,7 @@ def apply_draft(
 
 def undo(session: Session, project_id: UUID, command: RevisionWrite) -> PlanRead:
     """Отменяем последнюю неотменённую редакцию, сохраняя монотонность ревизий."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         require_project(session, project_id, writable=True)
         plan = read_plan(session, project_id)
         if plan.revision != command.expected_revision:

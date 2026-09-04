@@ -89,6 +89,44 @@ def distribution(unit_id, day, phase_id=None, minutes=30):
 
 
 @pytest.mark.asyncio
+async def test_large_program_uses_whole_batches_then_merges_phases(
+    session, ai_config, preparation, monkeypatch
+):
+    from app.preparation import ai_context
+
+    project, first, command = preparation
+    second = make_topic_node(session, project, title="Второй вопрос")
+    monkeypatch.setattr(ai_context, "BATCH_UNITS", 1)
+    day = datetime.now(UTC).date() + timedelta(days=1)
+    phase_id = uuid4()
+    context = build_context(session, project.id, command)
+    batch_ids = [batch[0].id for batch in unit_batches(context)]
+    fake = FakeTransport(
+        completions=[
+            *[completion(phase_payload(day, phase_id)) for _ in range(3)],
+            completion(distribution(batch_ids[0], day, phase_id)),
+            completion(
+                {
+                    "items": [],
+                    "unassigned": [
+                        {"unit_id": str(batch_ids[1]), "reason": "Нужен отдельный день"}
+                    ],
+                }
+            ),
+        ]
+    )
+    gateway = ModelGateway(session, fake)
+    preview = await ai.preflight(session, gateway, project.id, command)
+    assert len(preview.calls) == 5
+    draft = await ai.run(session, gateway, project.id, command)
+    sent = [json.loads(request["messages"][1]["content"]) for request in fake.complete_requests]
+    analyzed = {unit["id"] for request in sent[:2] for unit in request["units"]}
+    assert analyzed == {str(first.id), str(second.id)}
+    assert len(sent[2]["phase_proposals"]) == 2
+    assert draft.unassigned_reasons[str(batch_ids[1])] == "Нужен отдельный день"
+
+
+@pytest.mark.asyncio
 async def test_full_runs_phases_then_distribution_and_only_creates_draft(
     session, ai_config, preparation
 ):

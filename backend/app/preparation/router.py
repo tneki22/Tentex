@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
-from app.db import get_session
+from app.db import get_session, project_write_transaction
 from app.models import Attempt
 from app.preparation import activity, ai, planner, queue, reporting
 from app.preparation.ai_schemas import PreparationAiPreflightRead
@@ -110,7 +110,7 @@ def understood(project_id: UUID, command: UnderstoodWrite, session: SessionDepen
 def quality(
     project_id: UUID, attempt_id: UUID, command: QualityWrite, session: SessionDependency
 ) -> Response:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         require_project(session, project_id, writable=True)
         attempt = session.get(Attempt, attempt_id)
         if attempt is None or attempt.project_id != project_id:

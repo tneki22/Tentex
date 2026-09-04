@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
+from app.db import project_write_transaction
 from app.models import GoalPassport
 from app.preparation.activity import time_totals
 from app.preparation.calendar import capacity_minutes, study_date
@@ -53,10 +54,18 @@ def _build(session, project_id, day, now):
         )
     )
     result, seen = [], set()
+    new_count, review_count = 0, 0
     for item in candidates:
         unit = unit_map.get(item.unit_id)
         if unit is None or unit.id in seen:
             continue
+        is_new = item.kind in {"learn", "answer"}
+        if (is_new and new_count >= config.max_new_per_day) or (
+            not is_new and review_count >= config.max_reviews_per_day
+        ):
+            continue
+        new_count += int(is_new)
+        review_count += int(not is_new)
         seen.add(unit.id)
         reason = (
             "Просроченное повторение"
@@ -86,7 +95,12 @@ def _build(session, project_id, day, now):
     if not final_day:
         unassigned = set(plan.unassigned_ids)
         for unit in unit_rows:
-            if unit.id in seen or unit.id not in unassigned or unit.minutes > budget:
+            if (
+                unit.id in seen
+                or unit.id not in unassigned
+                or unit.minutes > budget
+                or new_count >= config.max_new_per_day
+            ):
                 continue
             result.append(
                 QueueItem(
@@ -99,13 +113,14 @@ def _build(session, project_id, day, now):
                 )
             )
             budget -= unit.minutes
+            new_count += 1
     return result
 
 
 def start_queue(session: Session, project_id: UUID, day: date | None = None) -> QueueRead:
     """Повторный запуск возвращает тот же порядок; две вкладки не создают две очереди."""
     now = datetime.now(UTC)
-    with session.begin():
+    with project_write_transaction(session, project_id):
         require_project(session, project_id, writable=True)
         day = day or study_date(now, get_settings(session, project_id).config)
         row = session.get(PreparationQueue, (project_id, day))
@@ -131,7 +146,7 @@ def move_queue(
     session: Session, project_id: UUID, command: QueuePositionWrite, day: date | None = None
 ) -> QueueRead:
     """Навигация в очереди не объявляет задание выполненным — это делает журнал."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         require_project(session, project_id, writable=True)
         day = day or study_date(datetime.now(UTC), get_settings(session, project_id).config)
         row = session.get(PreparationQueue, (project_id, day))

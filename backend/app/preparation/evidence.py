@@ -88,7 +88,7 @@ class TopicEvidence:
 def project_attempts(session: Session, project_id: UUID, before: datetime | None = None):
     """Стабильный порядок нужен для воспроизводимой отмены качества и графиков."""
     query = (
-        select(Attempt, Grade, ReviewQuality.quality)
+        select(Attempt, Grade, ReviewQuality)
         .outerjoin(Grade, Grade.attempt_id == Attempt.id)
         .outerjoin(ReviewQuality, ReviewQuality.attempt_id == Attempt.id)
         .where(Attempt.project_id == project_id)
@@ -98,7 +98,13 @@ def project_attempts(session: Session, project_id: UUID, before: datetime | None
     rows = list(session.execute(query.order_by(Attempt.created_at, Attempt.id)))
     # Поздняя проверка не появляется на графике в момент ещё не проверенного ответа.
     return [
-        (attempt, grade if grade is None or grade.updated_at <= cutoff else None, quality)
+        (
+            attempt,
+            grade if grade is None or grade.updated_at <= cutoff else None,
+            quality.quality
+            if quality and (quality.updated_at is None or quality.updated_at <= cutoff)
+            else None,
+        )
         for attempt, grade, quality in rows
     ]
 
@@ -113,14 +119,21 @@ def replay(rows, config: PreparationConfig) -> dict[UUID, TopicEvidence]:
         if grade is not None:
             evidence.latest_outcome = grade.outcome.value
         quality = effective_quality(attempt, grade, override)
-        if quality is None:
+        if quality is None or getattr(attempt, "parent_attempt_id", None) is not None:
             continue
         at = utc(attempt.created_at)
-        if quality >= 3:
+        # Качество SM-2 управляет интервалом, но не превращает неуспешный ответ в успешный.
+        if (grade.self_assessment or grade.outcome).value == "passed":
             evidence.success_count += 1
         previous = evidence.last_at
         delayed = previous is not None and (at - utc(previous)).total_seconds() >= 86400
-        if delayed and evidence.state.repetitions > 0 and grade.self_assessment is None:
+        disputed = (
+            grade.self_assessment is not None
+            and grade.self_assessment != grade.outcome
+            or override is not None
+            and (override >= 3) != (grade.outcome.value == "passed")
+        )
+        if delayed and evidence.state.repetitions > 0 and not disputed:
             ratio = (at - utc(previous)).total_seconds() / (86400 * evidence.state.interval)
             evidence.observations.append(
                 Observation(

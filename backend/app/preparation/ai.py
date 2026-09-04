@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.gateway import AiTextRequest, ModelGateway
 from app.ai.schemas import AiMessage
+from app.db import project_write_transaction
 from app.models import AiSettings, BackgroundJob, BackgroundJobKind, BackgroundJobState
 from app.preparation import planner, reporting
 from app.preparation.ai_context import (
@@ -28,6 +29,7 @@ from app.preparation.ai_schemas import (
     PhaseSuggestion,
     PreparationAiPreflightRead,
 )
+from app.preparation.calendar import utc
 from app.preparation.models import PreparationCoach
 from app.preparation.schemas import (
     AiStartRead,
@@ -63,7 +65,17 @@ def _error(detail: str, code: str = "preparation_ai_invalid") -> ProjectDomainEr
     return ProjectDomainError(detail, status=422, code=code)
 
 
-def _request(context, command, action, *, phases=None, units=None, items=None, job_id=None):
+def _request(
+    context,
+    command,
+    action,
+    *,
+    phases=None,
+    units=None,
+    items=None,
+    job_id=None,
+    phase_proposals=None,
+):
     """Один manifest описывает все исходные узлы; запрос пакета не режет билет."""
     view = context.overview
     config = view.settings.config
@@ -88,6 +100,30 @@ def _request(context, command, action, *, phases=None, units=None, items=None, j
         ),
         "tone": config.coach_tone,
     }
+    if action == "coach":
+        payload["program_context"], payload["units"] = [], []
+        payload["existing_items"] = [
+            i
+            for i in payload["existing_items"]
+            if i["on_date"] >= str(view.today - timedelta(days=7))
+        ]
+    if phase_proposals is not None:
+        # Формулировки уже разобраны целыми пакетами: общий проход получает все предложения.
+        payload["program_context"] = [n for n in context.program if n["node_type"] == "section"]
+        payload["units"] = [
+            {
+                "id": str(u.id),
+                "path": u.path,
+                "kind": u.kind,
+                "minutes": u.minutes,
+                "target_level": u.target_level,
+            }
+            for u in view.units
+        ]
+        payload["phase_proposals"] = phase_proposals
+        payload["merge_instruction"] = (
+            "Согласуй предложения пакетов в единый план блоков с общим бюджетом."
+        )
     return AiTextRequest(
         role=ROLE[action],
         project_id=view.project_id,
@@ -130,9 +166,26 @@ async def preflight(
     """Оценить все стадии; full включает блоки и все пакеты распределения."""
     context = build_context(session, project_id, command)
     calls = []
-    if command.action in {"phases", "full", "coach"}:
-        action = "phases" if command.action == "full" else command.action
-        calls.append(await gateway.preflight(_request(context, command, action)))
+    if command.action in {"phases", "full"}:
+        batches = unit_batches(context, include_all=True)
+        for batch in batches if len(batches) > 1 else [None]:
+            calls.append(await gateway.preflight(_request(context, command, "phases", units=batch)))
+        if len(batches) > 1:
+            calls.append(
+                await gateway.preflight(
+                    _request(
+                        context,
+                        command,
+                        "phases",
+                        phase_proposals=[
+                            {"batch": i, "estimated_analysis": " " * 12000}
+                            for i in range(len(batches))
+                        ],
+                    )
+                )
+            )
+    elif command.action == "coach":
+        calls.append(await gateway.preflight(_request(context, command, "coach")))
     if command.action in {"distribute", "full"}:
         for batch in unit_batches(context):
             calls.append(
@@ -154,7 +207,7 @@ async def preflight(
     return PreparationAiPreflightRead(
         action=command.action,
         calls=calls,
-        context=context.program,
+        context=context.program if command.action != "coach" else [],
         confirmation_required=bool(reasons),
         confirmation_reasons=reasons,
     )
@@ -171,9 +224,9 @@ def _coach_read(row: PreparationCoach, context: PreparationContext) -> CoachRead
     local = _local(context)
     return CoachRead(
         date=row.study_date,
-        text=row.text or local.text,
+        text=row.text if row.origin == "ai" and row.text else local.text,
         origin=row.origin,
-        action=row.action,
+        action=row.action if row.origin == "ai" else local.action,
         job_id=row.job_id,
         reason=row.reason,
     )
@@ -200,6 +253,17 @@ def _claim_coach(session, context, command):
         row = session.get(PreparationCoach, (view.project_id, view.today))
         if row.job_id:
             job = session.get(BackgroundJob, row.job_id)
+            if (
+                job
+                and job.state == BackgroundJobState.PAUSED
+                and job.checkpoint.get("preflight_pending")
+                and datetime.now(UTC) - utc(job.created_at) > timedelta(minutes=5)
+            ):
+                job.state = BackgroundJobState.FAILED
+                row.reason = (
+                    "Подготовка вызова прервалась. Доступна локальная рекомендация; "
+                    "ИИ можно запустить вручную."
+                )
             if job and job.state in ACTIVE:
                 return False, _coach_read(row, context)
         if command.automatic:
@@ -235,7 +299,7 @@ def _claim_coach(session, context, command):
 
 def _coach_fallback(session, context, job_id, reason):
     session.rollback()
-    with session.begin():
+    with project_write_transaction(session, context.overview.project_id):
         row = session.get(PreparationCoach, (context.overview.project_id, context.overview.today))
         local = _local(context, reason)
         if row and row.job_id == job_id:
@@ -270,7 +334,7 @@ async def start(
         local = _coach_fallback(session, context, coach.job_id, exc.detail)
         return AiStartRead(job_id=None, coach=local, reason=exc.detail)
     session.rollback()
-    with session.begin():
+    with project_write_transaction(session, project_id):
         if coach:
             job = session.get(BackgroundJob, coach.job_id)
             job.checkpoint = {**job.checkpoint, "preflight_pending": False}
@@ -327,7 +391,7 @@ def _assignments(context, batch, suggestion):
 def _validate_plan(context, phases, items):
     """Бюджет общий для всех блоков; защищённые задания сохраняются буквально."""
     view = context.overview
-    planner._validate_document(phases, items, view.units)
+    planner._validate_document(phases, items, view.units, previous=view.plan.items)
     planner._protect_existing(view.plan, items, view.today, manual=False)
     _validate_phases(context, phases)
     old_ids = {i.id for i in protected_items(context)}
@@ -372,6 +436,7 @@ async def run(
     if command.action == "coach":
         return await _run_coach(session, gateway, context, command, job_id)
     phases = list(context.overview.plan.phases)
+    unassigned_reasons = {}
     items = (
         list(context.overview.plan.items)
         if command.action == "phases"
@@ -379,7 +444,24 @@ async def run(
     )
     if command.action in {"phases", "full"}:
         log.info("preparation stage=phases job_id=%s", job_id)
-        result = await gateway.complete(_request(context, command, "phases", job_id=job_id))
+        batches = unit_batches(context, include_all=True)
+        proposals = None
+        if len(batches) > 1:
+            proposals = []
+            for batch in batches:
+                part = await gateway.complete(
+                    _request(context, command, "phases", units=batch, job_id=job_id)
+                )
+                _validate_phases(context, part.value.phases)
+                proposals.append(
+                    {
+                        "unit_ids": [str(u.id) for u in batch],
+                        "suggestion": part.value.model_dump(mode="json"),
+                    }
+                )
+        result = await gateway.complete(
+            _request(context, command, "phases", job_id=job_id, phase_proposals=proposals)
+        )
         phases = result.value.phases
         _validate_phases(context, phases)
     if command.action in {"distribute", "full"}:
@@ -404,10 +486,11 @@ async def run(
                 )
             )
             items.extend(_assignments(context, batch, result.value))
+            unassigned_reasons.update({str(u.unit_id): u.reason for u in result.value.unassigned})
             _validate_plan(context, phases, items)
     _validate_plan(context, phases, items)
     session.rollback()
-    with session.begin():
+    with project_write_transaction(session, project_id):
         fresh = build_context(session, project_id, command)
         if fresh.fingerprint != context.fingerprint:
             raise planner.conflict("Программа изменилась во время запроса")
@@ -422,6 +505,7 @@ async def run(
             items,
             "ai",
             datetime.now(UTC),
+            unassigned_reasons=unassigned_reasons,
         )
 
 
@@ -441,7 +525,7 @@ async def _run_coach(session, gateway, context, command, job_id):
         job_id=job_id,
     )
     session.rollback()
-    with session.begin():
+    with project_write_transaction(session, context.overview.project_id):
         row = session.get(PreparationCoach, (context.overview.project_id, context.overview.today))
         if row is None:
             row = PreparationCoach(

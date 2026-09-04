@@ -52,7 +52,10 @@ def protected_items(context: PreparationContext):
     return [
         item
         for item in view.plan.items
-        if item.pinned or item.on_date < view.today or item.id in view.plan.completed_ids
+        if item.pinned
+        or item.on_date < view.today
+        or item.id in view.plan.completed_ids
+        or item.kind in {"review", "gaps", "final"}
     ]
 
 
@@ -64,10 +67,10 @@ def pending_units(context: PreparationContext) -> list[UnitRead]:
     return [unit for unit in context.overview.units if unit.id not in assigned]
 
 
-def unit_batches(context: PreparationContext) -> list[list[UnitRead]]:
+def unit_batches(context: PreparationContext, *, include_all=False) -> list[list[UnitRead]]:
     """Пакет содержит только целые единицы, каждый исходный unit встречается однажды."""
     batches, current, size = [], [], 0
-    for unit in pending_units(context):
+    for unit in context.overview.units if include_all else pending_units(context):
         unit_size = len(json.dumps(unit.model_dump(mode="json"), ensure_ascii=False).encode())
         if current and (len(current) >= BATCH_UNITS or size + unit_size > BATCH_BYTES):
             batches.append(current)

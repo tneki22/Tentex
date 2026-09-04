@@ -20,12 +20,11 @@ from app.models import (
     ReferenceAnswer,
     WorkspaceVariant,
 )
+from app.preparation.estimation import initial_minutes
 from app.preparation.models import PreparationPlan, PreparationSettings
 from app.preparation.schemas import PreparationConfig, SettingsRead, UnitRead
 from app.projects.errors import ProjectDomainError, ProjectNotFoundError
 
-TARGET_MULTIPLIERS = {"awareness": 0.6, "understanding": 0.8, "application": 1, "mastery": 1.25}
-START_MULTIPLIERS = {"beginner": 1.35, "familiar": 1, "refreshing": 0.75}
 MIN_TIME_OBSERVATIONS = 3
 
 
@@ -58,7 +57,8 @@ def get_settings(session: Session, project_id: UUID) -> SettingsRead:
         config=PreparationConfig(
             daily_minutes=passport.minutes_per_day if passport else None,
             weekday_minutes={day: 0 for day in range(passport.days_per_week, 7)}
-            if passport and passport.days_per_week else {},
+            if passport and passport.days_per_week
+            else {},
         ),
     )
 
@@ -109,19 +109,19 @@ def target_level(node: ProgramNode, nodes: dict, passport: GoalPassport | None) 
 
 
 def _initial_minutes(node: ProgramNode, nodes: dict, passport: GoalPassport | None) -> int:
-    base = (
-        50 if node.exam_kind == ExamKind.TICKET else 36 if node.exam_kind == ExamKind.TASK else 30
+    kind = (
+        "ticket"
+        if node.exam_kind == ExamKind.TICKET
+        else "task"
+        if node.exam_kind == ExamKind.TASK
+        else "question"
     )
     start = passport.starting_level.value if passport and passport.starting_level else "familiar"
-    practice = 1.1 if passport and str(passport.study_format) == "practice" else 1
-    return max(
-        1,
-        round(
-            base
-            * START_MULTIPLIERS[start]
-            * TARGET_MULTIPLIERS[target_level(node, nodes, passport)]
-            * practice
-        ),
+    return initial_minutes(
+        kind,
+        start,
+        target_level(node, nodes, passport),
+        practice=bool(passport and str(passport.study_format) == "practice"),
     )
 
 

@@ -196,6 +196,7 @@ class DraftRead(Contract):
     items: list[PlanItem]
     removed_ids: list[UUID]
     unassigned_ids: list[UUID]
+    unassigned_reasons: dict[str, str] = Field(default_factory=dict)
     changes: list[str]
     days: list[DayLoad]
     origin: Origin
@@ -287,6 +288,7 @@ class TopicProgress(Contract):
     interval_days: int
     reason: str
     missed_points: list[str]
+    recurring_omissions: dict[str, int] = Field(default_factory=dict)
     active_seconds: int
 
 
@@ -367,6 +369,9 @@ class PreparationSummary(Contract):
     pace_minutes_per_day: float | None
     pace_explanation: str
     seconds_by_kind: dict[str, int]
+    assessment_pairs: int = 0
+    disagreement_percent: float | None = None
+    results_by_mode: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
 class CoachRead(Contract):
@@ -378,6 +383,17 @@ class CoachRead(Contract):
     action: Literal["start", "redistribute", "create"]
     job_id: UUID | None = None
     reason: str | None = None
+
+
+class DailyIntervalRead(Contract):
+    """Отрезок фактического времени без наложений разных вкладок."""
+
+    node_id: UUID | None
+    title: str
+    kind: ActivityKind
+    started_at: datetime
+    ended_at: datetime
+    seconds: int
 
 
 class OverviewRead(Contract):
@@ -399,6 +415,7 @@ class OverviewRead(Contract):
     summary: PreparationSummary
     memory: MemoryForecast
     coach: CoachRead
+    today_intervals: list[DailyIntervalRead] = Field(default_factory=list)
 
 
 class QueueItem(Contract):

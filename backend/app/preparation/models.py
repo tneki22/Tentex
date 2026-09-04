@@ -143,6 +143,7 @@ class ReviewQuality(Base):
         Uuid, ForeignKey("attempts.id", ondelete="CASCADE"), primary_key=True
     )
     quality: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
 class PreparationCoach(Base):

@@ -8,6 +8,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
+from app.db import project_write_transaction
 from app.models import Attempt, ChatMessage, Grade
 from app.preparation.calendar import day_bounds, naive_utc, study_date, utc
 from app.preparation.data import get_settings, node_path, program_nodes, require_project, units
@@ -28,7 +29,7 @@ FUTURE_TOLERANCE_SECONDS = 60  # Допуск небольшого расхож�
 
 def add_intervals(session: Session, project_id: UUID, command: TimeBatchWrite) -> TimeBatchRead:
     """Конфликт UUID отклоняется, повторная доставка того же пакета безопасна."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         require_project(session, project_id, writable=True)
         nodes = {n.id: n for n in program_nodes(session, project_id)}
         accepted = []
@@ -140,7 +141,7 @@ def _activity_read(row: StudyActivity) -> ActivityRead:
 
 def save_manual(session: Session, project_id: UUID, command: ManualActivityWrite) -> ActivityRead:
     """Изменение вручную сохраняет происхождение и не создаёт Оценку."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         require_project(session, project_id, writable=True)
         nodes = {n.id: n for n in program_nodes(session, project_id)}
         node = nodes.get(command.node_id)
@@ -170,7 +171,7 @@ def save_manual(session: Session, project_id: UUID, command: ManualActivityWrite
 
 def delete_manual(session: Session, project_id: UUID, activity_id: UUID) -> None:
     """Удаляются только ручные записи, не реальные попытки из чата."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         require_project(session, project_id, writable=True)
         row = session.get(StudyActivity, activity_id)
         if row is None or row.project_id != project_id or row.kind != "manual":
@@ -181,18 +182,27 @@ def delete_manual(session: Session, project_id: UUID, activity_id: UUID) -> None
 
 
 def mark_understood(session: Session, project_id: UUID, command: UnderstoodWrite) -> None:
-    """Ручное освоение чтения применяется ко всем вопросам неделимого билета."""
-    with session.begin():
+    """Чтение можно отметить по вопросу; назначение билета завершается всеми его вопросами."""
+    with project_write_transaction(session, project_id):
         require_project(session, project_id, writable=True)
         unit = next((u for u in units(session, project_id) if u.id == command.unit_id), None)
-        if unit is None:
+        nodes = {n.id: n for n in program_nodes(session, project_id)}
+        topic_ids = (
+            unit.topic_ids
+            if unit
+            else (
+                [command.unit_id]
+                if any(command.unit_id in u.topic_ids for u in units(session, project_id))
+                else []
+            )
+        )
+        if not topic_ids:
             raise ProjectDomainError(
                 "Вопрос или билет не найден", status=404, code="study_unit_not_found"
             )
-        nodes = {n.id: n for n in program_nodes(session, project_id)}
         config = get_settings(session, project_id).config
         today = study_date(datetime.now(UTC), config)
-        for topic_id in unit.topic_ids:
+        for topic_id in topic_ids:
             if not command.understood:
                 session.execute(
                     update(StudyActivity)
@@ -341,7 +351,8 @@ def history(
             select(StudyActivity).where(StudyActivity.project_id == project_id)
         )
     ]
-    activities.extend(_attempt_history(session, project_id, nodes))
+    attempts = _attempt_history(session, project_id, nodes)
+    activities.extend(attempts)
     interval_rows = list(
         session.scalars(select(StudyInterval).where(StudyInterval.project_id == project_id))
     )
@@ -354,10 +365,16 @@ def history(
                 day = study_date(left, config)
                 boundary = min(right, day_bounds(day, config)[1])
                 key = (row.session_id, row.node_id, row.kind, day)
-                entry = grouped.setdefault(key, [row, left, 0])
+                entry = grouped.setdefault(key, [row, left, 0, boundary])
                 entry[2] += int((boundary - left).total_seconds())
+                entry[3] = boundary
                 left = boundary
-        for key, (row, at, seconds) in grouped.items():
+        for key, (row, at, seconds, until) in grouped.items():
+            if row.kind == "answer" and any(
+                a.node_id == row.node_id and at <= a.occurred_at <= until + timedelta(minutes=2)
+                for a in attempts
+            ):
+                continue
             node = nodes.get(row.node_id)
             activities.append(
                 ActivityRead(
@@ -378,7 +395,14 @@ def history(
             a, config, nodes, date_from, date_to, node_id, section_id, kind, outcome, method, q
         )
         and (answer_mode is None or a.answer_mode == answer_mode)
-        and (not disputed or (a.self_assessment is not None and a.self_assessment != a.outcome))
+        and (
+            not disputed
+            or (
+                a.outcome not in {None, "unscored"}
+                and a.self_assessment is not None
+                and a.self_assessment != a.outcome
+            )
+        )
     ]
     selected.sort(key=lambda a: (a.occurred_at, str(a.id)), reverse=True)
     return HistoryRead(
@@ -390,7 +414,11 @@ def _matches(a, config, nodes, start, end, node_id, section_id, kind, outcome, m
     day = study_date(a.occurred_at, config)
     if (start and day < start) or (end and day > end) or (node_id and a.node_id != node_id):
         return False
-    if (kind and a.kind != kind) or (outcome and a.outcome != outcome):
+    if kind and a.kind != kind:
+        return False
+    if outcome == "pending" and (a.attempt_id is None or a.outcome is not None):
+        return False
+    if outcome and outcome != "pending" and a.outcome != outcome:
         return False
     if (method and a.method != method) or q.casefold() not in (a.title + " " + a.note).casefold():
         return False
