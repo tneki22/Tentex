@@ -11,6 +11,7 @@ import { App } from "./App";
 import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/ui-kit.css";
+import "./styles/chart.css";
 import "./styles/domain.css";
 import "./styles/lessons.css";
 import "./styles/cards.css";

@@ -17,3 +17,12 @@ export const duration = (seconds: number) => {
 };
 export const dayNumber = (value: string) =>
   Date.parse(`${value}T12:00:00Z`) / 86_400_000;
+
+/**
+ * Подпись времени или `null`, если писать нечего.
+ *
+ * Меньше минуты — это не «0 мин»: надпись с нулём выглядит как отсутствие
+ * работы там, где работа была, и занимает место без пользы.
+ */
+export const durationLabel = (seconds: number) =>
+  seconds >= 60 ? duration(seconds) : null;

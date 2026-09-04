@@ -760,3 +760,74 @@
     display: none;
   }
 }
+
+/* --- PurposeDot: назначение работы. Цвет всегда идёт вместе со словом. --- */
+
+.purpose {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.purpose-dot {
+  display: block;
+  flex: none;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.purpose-dot.is-study {
+  background: var(--purpose-study);
+}
+
+.purpose-dot.is-review {
+  background: var(--purpose-review);
+}
+
+/* «И то и другое» — раздвоенная точка, а не третий оттенок: вопрос
+ * действительно назначен дважды, и лишний цвет тут ничего не добавляет. */
+.purpose-dot.is-both {
+  background: linear-gradient(
+    90deg,
+    var(--purpose-study) 0 50%,
+    var(--purpose-review) 50% 100%
+  );
+}
+
+.purpose-dot.is-none {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+/* --- AnswerResultBadge: четыре результата сдачи --- */
+
+.answer-result {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+}
+
+.answer-result i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.answer-result.is-good i {
+  background: var(--result-good);
+}
+
+.answer-result.is-partial i {
+  background: var(--result-partial);
+}
+
+.answer-result.is-weak i {
+  background: var(--result-weak);
+}
+
+.answer-result.is-unchecked i {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--result-unchecked);
+}

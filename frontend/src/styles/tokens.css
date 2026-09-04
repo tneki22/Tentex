@@ -130,6 +130,42 @@
   --project-color-7: light-dark(#148f9c, #6fd3dd);
   --project-color-8: light-dark(#6d7f2a, #b4c86a);
 
+  /* --- Данные «Моей подготовки». Здесь цвет несёт смысл: состояние учебного
+     дня, назначение работы и результат проверки. Запрет «метрика не красится»
+     остаётся у карты покрытия (FR-D17), где он и появился.
+     Подробности — docs/architecture/my-preparation-interface.md §7.2 --- */
+
+  /* Состояние учебного дня */
+  --day-planned: var(--accent);
+  --day-partial: light-dark(#b3600c, #f0a24a);
+  --day-done: light-dark(#25793a, #57ce79);
+  --day-missed: light-dark(#c02a38, #f87b87);
+
+  /* Назначение работы. «И то и другое» рисуется раздвоенной точкой из двух */
+  --purpose-study: light-dark(#8a7400, #e8d45c);
+  --purpose-review: light-dark(#6b3fc4, #b39af0);
+
+  /* Результат сдачи. «Слабо» намеренно не --tone-danger */
+  --result-good: light-dark(#25793a, #57ce79);
+  --result-partial: light-dark(#96650a, #e9b23c);
+  --result-weak: light-dark(#a8443c, #e08b84);
+  --result-unchecked: light-dark(#8a94a3, #5d6879);
+
+  /* Диаграммы */
+  --chart-grid: color-mix(in srgb, var(--line) 70%, transparent);
+  --chart-axis: var(--faint);
+  --chart-plan: var(--muted);
+  --chart-fact: var(--accent);
+  --chart-fact-wash: color-mix(in srgb, var(--accent) 14%, transparent);
+  --chart-over: color-mix(in srgb, var(--accent) 45%, transparent);
+
+  /* Пять ступеней тепловой карты регулярности */
+  --heat-0: var(--surface-sunken);
+  --heat-1: color-mix(in srgb, var(--accent) 12%, var(--surface-sunken));
+  --heat-2: color-mix(in srgb, var(--accent) 28%, var(--surface-sunken));
+  --heat-3: color-mix(in srgb, var(--accent) 48%, var(--surface-sunken));
+  --heat-4: color-mix(in srgb, var(--accent) 72%, var(--surface-sunken));
+
   /* --- Движение --- */
   --motion-fast: 120ms;
   --motion-base: 180ms;
