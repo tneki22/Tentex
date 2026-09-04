@@ -19,6 +19,8 @@ export interface BackgroundTask {
   kind: TaskKind;
   /** Файл или проект, к которому относится работа. */
   subject: string;
+  /** Чем считается: движок распознавания или внешняя модель. Пусто — не показываем. */
+  detail?: string;
   /** Единица обхода и счётчик: у разбора — страницы, у прохода 1 — главы. */
   unit: string;
   done: number;
@@ -97,6 +99,7 @@ export function TaskRow({ task, onPause, onResume, onRetry, onCancel }: TaskRowP
           <span className="task-row-error">{task.error ?? "задача остановилась"}</span>
         ) : (
           <>
+            {task.detail ? `${task.detail} · ` : ""}
             {task.unit} {task.done} из {task.total}
             {task.state === "paused" && " · на паузе"}
             {task.state === "queued" && " · в очереди"}

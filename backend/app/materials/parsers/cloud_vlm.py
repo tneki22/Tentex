@@ -345,6 +345,7 @@ class CloudRecognizer:
             if not text:
                 continue
             bbox = _clamped_bbox(item.bbox)
+            reliable = bbox is not None
             if bbox is None:
                 broken_boxes += 1
                 bbox = _fallback_bbox(index, len(answer.elements))
@@ -358,6 +359,7 @@ class CloudRecognizer:
                     item.level,
                     _confidence(item.confidence, text, issues),
                     recognition_source="vl",
+                    bbox_reliable=reliable,
                 )
             )
         if broken_boxes:

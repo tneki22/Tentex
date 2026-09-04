@@ -23,6 +23,12 @@ class BackgroundJobRead(ApiModel):
     state: BackgroundJobState
     material_id: UUID | None
     project_id: UUID | None
+    # Над чем идёт работа и чем: имя файла или проекта и название движка либо
+    # внешней модели. Без них список фоновых задач показывал огрызок UUID.
+    # Значения по умолчанию пустые: в самой строке задачи их нет, реестр
+    # подставляет их отдельным шагом (`registry._read`).
+    subject: str = ""
+    model_label: str = ""
     # Стадии extract/segment и режим разбора осмысленны только у kind=parse.
     stage: ProcessingStage | None
     parser_mode: ParserMode | None

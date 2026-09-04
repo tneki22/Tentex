@@ -7,7 +7,7 @@ import hashlib
 import json
 import math
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from datetime import time as day_time
@@ -53,8 +53,27 @@ from app.models import (
 ZERO = Decimal("0")
 
 # Сбой одной из этих причин обычно временный (роутинг провайдера, пустой
-# ответ из-за неудачного размещения) — стоит попробовать тот же запрос ещё раз.
-_RETRYABLE_PROVIDER_CODES = {"ai_provider_unavailable", "ai_empty_response"}
+# ответ из-за неудачного размещения, упёршийся в потолок общий пул) — стоит
+# попробовать тот же запрос ещё раз.
+#
+# `ai_rate_limited` здесь потому, что дешёвые модели живут в общем пуле
+# провайдера: 429 прилетает не из-за нашего расхода, а из-за чужой нагрузки, и
+# через несколько секунд тот же запрос проходит. Разбор материала — это сотни
+# вызовов подряд, и без повтора один чужой всплеск ронял всю обработку.
+# `ai_invalid_credentials` и лимиты стоимости не повторяются никогда: ключ и
+# кошелёк от ожидания не чинятся.
+_RETRYABLE_PROVIDER_CODES = {
+    "ai_provider_unavailable",
+    "ai_empty_response",
+    "ai_rate_limited",
+    "ai_timeout",
+}
+
+# Паузы между попытками, по одной на каждый повтор: длина задаёт и число
+# повторов. Пауза растёт, чтобы не долбить провайдера, который и так ограничил
+# запросы; суммарно ожидание не превышает полминуты — дальше отказ честнее,
+# чем бесконечная «обработка».
+RETRY_BACKOFF_SECONDS: tuple[float, ...] = (2.0, 6.0, 15.0)
 
 # Человекочитаемые названия возможностей модели: попадают в текст ошибки,
 # когда выбранная модель не умеет то, что нужно функции.
@@ -175,9 +194,13 @@ class ModelGateway:
         self,
         session: Session,
         transport: OpenAICompatibleTransport | None = None,
+        retry_backoff: Sequence[float] = RETRY_BACKOFF_SECONDS,
     ) -> None:
         self.session = session
         self.transport = transport
+        # Паузы между повторами. Тесты передают пустую последовательность,
+        # чтобы не ждать по-настоящему.
+        self.retry_backoff = tuple(retry_backoff)
 
     async def preflight(self, request: AiTextRequest[Any]) -> AiPreflight:
         resolved = resolve_model(self.session, request.role, request.request_model_override)
@@ -270,10 +293,13 @@ class ModelGateway:
             "max_output_tokens": preflight.estimated_output_tokens,
         })
         combined_usage = ProviderUsage()
-        # Один сбой роутинга провайдера или один невалидный по схеме ответ не
-        # должен ронять весь вызов — модели даётся ровно одна попытка
-        # исправиться, прежде чем мы сдаёмся и записываем неудачу.
-        for attempt in range(2):
+        # Временный сбой провайдера или один невалидный по схеме ответ не должен
+        # ронять весь вызов: попытки повторяются с растущей паузой, и только
+        # исчерпав их, мы сдаёмся и записываем неудачу. Схему модель
+        # переписывает по замечанию, поэтому её попытка — последняя.
+        attempts = len(self.retry_backoff) + 1
+        for attempt in range(attempts):
+            last_attempt = attempt == attempts - 1
             try:
                 result = await transport.complete(
                     model=resolved.model_id,
@@ -283,7 +309,8 @@ class ModelGateway:
                     parameters=parameters,
                 )
             except ProviderError as error:
-                if attempt == 0 and error.code in _RETRYABLE_PROVIDER_CODES:
+                if not last_attempt and error.code in _RETRYABLE_PROVIDER_CODES:
+                    await asyncio.sleep(self.retry_backoff[attempt])
                     continue
                 self._fail_run(run.id, error.code, started)
                 raise _gateway_error(error.code, error.detail) from error
@@ -291,7 +318,7 @@ class ModelGateway:
             try:
                 value = request.response_model.model_validate_json(result.content)
             except (ValidationError, ValueError, json.JSONDecodeError) as error:
-                if attempt == 0:
+                if not last_attempt:
                     messages = [
                         *messages,
                         {"role": "assistant", "content": result.content},

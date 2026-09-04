@@ -5,6 +5,7 @@ import {
   libraryFragmentAssetUrl,
   libraryPageImageUrl,
   librarySourceUrl,
+  PARSER_MODE_TITLES,
   type LibraryMaterialDetailRead,
   type MaterialPageRead,
   type ParserMode,
@@ -278,13 +279,22 @@ export function MaterialTextView({
   }
   return (
     <div className="viewer-pane-scroll" style={{ "--viewer-text-zoom": zoom } as CSSProperties}>
-      {canShowPhotos && (
+      {/* Режим написан один раз наверху, а не подписью под каждым блоком:
+          он один на всю страницу, и повторять его нечего. */}
+      {(parserMode || canShowPhotos) && (
         <div className="viewer-text-controls">
-          <Switch
-            label="Фото фрагментов с расшифровкой"
-            checked={showPhotos}
-            onCheckedChange={togglePhotos}
-          />
+          <span className="viewer-text-mode">
+            {parserMode
+              ? <>Распознано режимом <b>«{PARSER_MODE_TITLES[parserMode]}»</b></>
+              : "Текст без распознавания"}
+          </span>
+          {canShowPhotos && (
+            <Switch
+              label="Фото фрагментов с расшифровкой"
+              checked={showPhotos}
+              onCheckedChange={togglePhotos}
+            />
+          )}
         </div>
       )}
       <StructuredPage

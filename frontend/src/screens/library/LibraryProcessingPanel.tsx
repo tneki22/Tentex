@@ -8,7 +8,12 @@ import {
   type ParserMode,
   type ProcessingScope,
 } from "../../api/materials";
-import { getOcrSettings, type OcrSettingsRead } from "../../api/ocr";
+import {
+  getOcrSettings,
+  updateOcrCloudSettings,
+  type OcrCloudStrategy,
+  type OcrSettingsRead,
+} from "../../api/ocr";
 import { getMaterialPresentation } from "../../components/domain/material-viewer";
 import { TaskRow } from "../../components/domain";
 import type { BackgroundTask } from "../../components/domain";
@@ -27,6 +32,67 @@ const STAGE_LABEL: Record<string, string> = {
   segment: "Собираем блоки и фрагменты",
   complete: "Готово",
 };
+
+// Сколько секунд уходит на страницу. Измерено прогоном `tentex-ocr-bench` на
+// 24 страницах: «Быстро» — 334–414 с, «Облако» — около 440 с. Оценка нужна,
+// чтобы решить «ставить сейчас или на ночь», поэтому округлена вверх и не
+// претендует на точность.
+const SECONDS_PER_PAGE: Record<ParserMode, number> = { fast: 16, cloud: 19 };
+
+/** Человеческие названия для диагностики страницы. */
+const DIAGNOSTIC_LABEL: Record<string, string> = {
+  formula_possible: "Возможны формулы — сверяйте с оригиналом",
+  audio_transcription_required: "Нужна локальная расшифровка аудио",
+  manual_correction: "Есть страницы, исправленные вручную",
+  source_refreshed: "Снимок источника обновлялся",
+  layout_fallback: "Разметка восстановлена упрощённо: колонки могли перепутаться",
+  unbalanced_display_math: "У выносных формул не сошлись знаки $$ — часть могла не отрисоваться",
+  unbalanced_inline_math: "У формул в тексте не сошлись знаки $",
+  unbalanced_braces: "В формулах не сошлись фигурные скобки",
+  unbalanced_environment: "В формулах не закрыто окружение LaTeX",
+};
+
+/** Счётчики страницы (`tables:3`) — здесь они про весь материал, и число
+ *  теряет смысл: у материала это набор отметок со всех страниц сразу, где
+ *  «формул: 3», «формул: 6» и «формул: 7» — три разные страницы, а не сумма.
+ *  Поэтому остаётся сам факт. */
+const DIAGNOSTIC_PRESENCE: Record<string, string> = {
+  tables: "Есть распознанные таблицы",
+  formulas: "Есть распознанные формулы",
+  cloud_regions: "Часть страниц уходила во внешнюю модель вырезами",
+  cloud_crops: "Картинки и формулы сохранены вырезками со страницы",
+  bbox_missing: "Модель указала координаты не у всех элементов",
+};
+
+// Отметки для отладки конвейера, а не для человека: разрешение растра, число
+// элементов, факт применения разметчика. Их место в логе.
+const TECHNICAL_DIAGNOSTICS = new Set(["render_dpi", "structure_elements", "layout_markdown"]);
+
+/** Строка диагностики по-русски или `null`, если её показывать не нужно. */
+function diagnosticText(item: string): string | null {
+  const [key, value] = item.split(":", 2);
+  if (TECHNICAL_DIAGNOSTICS.has(key)) return null;
+  if (value !== undefined && key in DIAGNOSTIC_PRESENCE) {
+    // Ноль — это не факт, а его отсутствие: строку такое не заслуживает.
+    return value === "0" ? null : DIAGNOSTIC_PRESENCE[key];
+  }
+  return DIAGNOSTIC_LABEL[item] ?? item;
+}
+
+/** «12 страниц» → «≈ 4 мин». Меньше минуты писать бессмысленно. */
+function durationLabel(pages: number, mode: ParserMode): string {
+  const minutes = Math.ceil((pages * SECONDS_PER_PAGE[mode]) / 60);
+  if (minutes < 60) return `≈ ${minutes} мин`;
+  const hours = Math.floor(minutes / 60);
+  return `≈ ${hours} ч ${minutes % 60} мин`;
+}
+
+/** Доллары ценой в тысячные доли: `0.0042` бесполезно, `0,004` — читаемо. */
+function priceLabel(usd: number): string {
+  if (usd >= 1) return `${usd.toFixed(2)} $`;
+  if (usd >= 0.01) return `${usd.toFixed(3)} $`;
+  return "меньше цента";
+}
 
 function projectCountLabel(count: number): string {
   const mod100 = count % 100;
@@ -105,9 +171,35 @@ export function LibraryProcessingPanel({
   const ocrModes = ocr?.engines ?? [];
   const selectedMode = ocrModes.find((item) => item.mode === mode);
   const modeUnavailable = Boolean(mode) && ocrModes.length > 0 && !selectedMode?.available;
+  const cloud = ocr?.cloud ?? null;
+
+  /** Стратегия — общая настройка режима «Облако», а не поле этого запуска:
+   *  сохраняем сразу, чтобы выбор здесь и в Параметрах не разъезжался. */
+  function chooseStrategy(next: OcrCloudStrategy) {
+    if (!cloud || cloud.strategy === next) return;
+    setOcr({ ...ocr!, cloud: { ...cloud, strategy: next } });
+    void updateOcrCloudSettings({
+      provider_id: cloud.provider_id,
+      model_id: cloud.model_id,
+      strategy: next,
+    })
+      .then(setOcr)
+      .catch(() => undefined);
+  }
+
+  // Сколько страниц уйдёт в работу при выбранной области запуска — от этого
+  // считаются и время, и деньги.
+  const plannedPages = processingScope === "range"
+    ? Math.max(0, range.to - range.from + 1)
+    : processingScope === "needs_review"
+      ? reviewPages
+      : pageCount;
+  const pagePrice = cloud?.price_per_page_usd ? Number(cloud.price_per_page_usd) : null;
 
   const backgroundTask: BackgroundTask | null = useMemo(() => {
     if (!task || task.state === "completed") return null;
+    const left = Math.max(0, task.total - task.done);
+    const perPage = SECONDS_PER_PAGE[task.parser_mode];
     return {
       id: task.id,
       kind: "parse",
@@ -115,11 +207,22 @@ export function LibraryProcessingPanel({
       unit: "страниц",
       done: task.done,
       total: task.total,
-      etaMinutes: null,
+      etaMinutes: left > 0 ? Math.ceil((left * perPage) / 60) : null,
       state: task.state,
       error: task.error ?? undefined,
     };
   }, [task, material.original_name]);
+
+  // Технические отметки конвейера человеку не нужны: список чистится, а не
+  // печатается как есть. Пустой после чистки — раздела нет вовсе.
+  const diagnostics = useMemo(
+    () => [...new Set(
+      material.diagnostics
+        .map(diagnosticText)
+        .filter((item): item is string => item !== null),
+    )],
+    [material.diagnostics],
+  );
 
   const rangeInvalid = scope === "range"
     && (range.from < 1 || range.to > pageCount || range.from > range.to);
@@ -230,6 +333,29 @@ export function LibraryProcessingPanel({
                   </Link>
                 </p>
               )}
+
+              {mode === "cloud" && cloud && (
+                <div className="cloud-run-setup">
+                  <p className="inspector-note">
+                    Читать будет <b>{cloud.model_id ?? "модель не выбрана"}</b>
+                    {cloud.provider_label ? ` · ${cloud.provider_label}` : ""}
+                    {" — "}
+                    <Link to="/setup?section=ocr&subsection=cloud">сменить модель</Link>
+                  </p>
+                  <RadioCards
+                    className="cloud-strategies"
+                    label="Что отдавать модели"
+                    layout="rows"
+                    value={cloud.strategy}
+                    options={cloud.strategies.map((item) => ({
+                      value: item.value,
+                      title: item.title,
+                      description: item.hint,
+                    }))}
+                    onChange={(next) => chooseStrategy(next as OcrCloudStrategy)}
+                  />
+                </div>
+              )}
             </>
           ) : (
             <p className="inspector-note">
@@ -311,6 +437,19 @@ export function LibraryProcessingPanel({
             </div>
           )}
 
+          {mode && !rangeInvalid && plannedPages > 0 && (
+            <p className="inspector-estimate">
+              {plannedPages} стр. · {durationLabel(plannedPages, mode)}
+              {mode === "cloud" && (
+                pagePrice === null
+                  ? " · цена модели неизвестна"
+                  : cloud?.strategy === "page"
+                    ? ` · ${priceLabel(pagePrice * plannedPages)}`
+                    : ` · не дороже ${priceLabel(pagePrice * plannedPages)}: наружу уходят только вырезы`
+              )}
+            </p>
+          )}
+
           <Button
             disabled={busy || !mode || !selectedMode?.available || rangeInvalid}
             onClick={() => mode && onStart(
@@ -355,20 +494,11 @@ export function LibraryProcessingPanel({
         </section>
       )}
 
-      {material.diagnostics.length > 0 && (
+      {diagnostics.length > 0 && (
         <section className="inspector-section">
-          <h4>Диагностика</h4>
+          <h4>Что стоит знать о разборе</h4>
           <ul className="inspector-list">
-            {material.diagnostics.map((item) => (
-              <li key={item}>
-                {item === "formula_possible" ? "Возможны формулы — сверяйте с оригиналом"
-                  : item === "audio_transcription_required" ? "Нужна локальная расшифровка аудио"
-                  : item === "manual_correction" ? "Есть страницы, исправленные вручную"
-                  : item === "source_refreshed" ? "Снимок источника обновлялся"
-                  : item === "layout_fallback" ? "Разметка восстановлена упрощённо"
-                  : item}
-              </li>
-            ))}
+            {diagnostics.map((item) => <li key={item}>{item}</li>)}
           </ul>
         </section>
       )}

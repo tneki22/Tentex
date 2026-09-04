@@ -28,6 +28,10 @@ export interface BackgroundJobRead {
   state: BackgroundJobState;
   material_id: string | null;
   project_id: string | null;
+  /** Имя файла или проекта, над которым идёт работа. Пустая строка — ни того, ни другого. */
+  subject: string;
+  /** Чем читается материал: локальный движок или внешняя модель. У ролей ИИ пусто. */
+  model_label: string;
   stage: BackgroundJobStage | null;
   parser_mode: ParserMode | null;
   done: number;

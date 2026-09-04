@@ -110,20 +110,17 @@ export function LibraryMaterialInspector({
               material={material}
               revisions={revisions}
               selected={selectedRevision}
+              compared={compareRevision}
               busy={busy}
               onSelect={onSelectRevision}
+              onCompare={onCompareRevision}
               onRestore={onRestore}
             />
           </Tabs.Content>
           <Tabs.Content value="file">
             <LibraryMaterialFilePanel
               material={material}
-              revisions={revisions}
-              selectedRevision={selectedRevision}
-              compareRevision={compareRevision}
               busy={busy}
-              onSelectRevision={onSelectRevision}
-              onCompareRevision={onCompareRevision}
               onAddToProject={onAddToProject}
               onRefreshSource={onRefreshSource}
               onDelete={onDelete}

@@ -45,11 +45,10 @@ ENDS_SENTENCE_RE = re.compile(r"[.!?:;][\"»)\]]?$")
 HEADING_SIZE_RATIO = 1.15
 # Меньше — это логотипы, линейки и артефакты вёрстки, а не иллюстрации.
 MIN_IMAGE_SIDE = 40
-# Разрешение выреза, который уходит во внешнюю модель. Формулу надо читать
-# крупно, а платим мы за плитки 768×768 — 300 dpi ровно на этой границе.
-REGION_DPI = 300.0
-# Вырез берётся с полем: у формулы верхние индексы часто выходят за рамку блока.
-REGION_PADDING_PT = 4.0
+# Виды элементов, у которых оригинальная вырезка со страницы полезна сама по
+# себе: распознанному тексту формулы или схемы верить нельзя, и просмотрщик
+# показывает рядом исходник.
+CROPPED_KINDS = {"image", "formula", "table"}
 
 log = logging.getLogger("tentex.worker")
 
@@ -642,7 +641,7 @@ def _text_layer_page(
         page, page_index + 1, owner, ocr_images=mode == ParserMode.FAST, params=params
     )
     try:
-        parsed = parse_layout_page(document, page_index)
+        parsed = parse_layout_page(document, page_index, owner)
     except (ValueError, KeyError, RuntimeError) as error:
         log.warning(
             "разметка страницы %s не удалась, откат на текстовый слой: %s",
@@ -690,6 +689,7 @@ def _scanned_page(
         parsed = recognizer.recognize_page(
             image, page_index + 1, page.rect.width, page.rect.height
         )
+        parsed = _attach_region_assets(page, parsed, owner)
         return replace(parsed, diagnostics=(*parsed.diagnostics, f"render_dpi:{dpi:.0f}"))
     with NamedTemporaryFile(suffix=".png", delete=False) as temporary:
         temporary.write(image)
@@ -708,20 +708,36 @@ def _scanned_page(
         temporary_path.unlink(missing_ok=True)
 
 
-def _region_image(page: fitz.Page, bbox: tuple[float, float, float, float]) -> bytes:
-    """Вырез области страницы в PNG, крупнее исходной вёрстки и с полем."""
-    rect = (
-        fitz.Rect(
-            bbox[0] * page.rect.width - REGION_PADDING_PT,
-            bbox[1] * page.rect.height - REGION_PADDING_PT,
-            bbox[2] * page.rect.width + REGION_PADDING_PT,
-            bbox[3] * page.rect.height + REGION_PADDING_PT,
-        )
-        & page.rect
+def _attach_region_assets(page: fitz.Page, parsed: ParsedPage, owner: str) -> ParsedPage:
+    """Вырезать со страницы то, что модель прочитала, но показать не может.
+
+    Прочитав страницу целиком, внешняя модель возвращает схему или график
+    одной фразой: «блок-схема конечного автомата». Самой картинки в ответе нет
+    и быть не может, поэтому в материале на её месте оставалась подпись без
+    изображения. Координаты у модели при этом есть — по ним страница и режется
+    локально, тем же вырезом, что уходит в модель в стратегии «Только то, что
+    не читается». Формула и таблица режутся заодно: их LaTeX и Markdown
+    просмотрщик показывает только тогда, когда они собираются, а оригинал
+    нужен всегда.
+    """
+    if not owner:
+        return parsed
+    elements = list(parsed.elements)
+    cropped = 0
+    for index, element in enumerate(elements):
+        if element.kind not in CROPPED_KINDS or element.asset_path or not element.bbox_reliable:
+            continue
+        name = f"p{parsed.page_number}-{element.kind}{index}.png"
+        image = raster.region_image(page, element.bbox)
+        elements[index] = replace(element, asset_path=store_material_asset(owner, name, image))
+        cropped += 1
+    if not cropped:
+        return parsed
+    return replace(
+        parsed,
+        elements=tuple(elements),
+        diagnostics=(*parsed.diagnostics, f"cloud_crops:{cropped}"),
     )
-    scale = REGION_DPI / raster.PDF_POINT_DPI
-    pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=rect, alpha=False)
-    return pixmap.tobytes("png")
 
 
 def _recognized_regions(
@@ -741,7 +757,7 @@ def _recognized_regions(
     if not targets:
         return parsed
     requests = [
-        RegionRequest(index=index, kind=element.kind, image=_region_image(page, element.bbox))
+        RegionRequest(index=index, kind=element.kind, image=raster.region_image(page, element.bbox))
         for index, element in targets
     ]
     answers = recognizer.recognize_regions(requests, parsed.page_number)

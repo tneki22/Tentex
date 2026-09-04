@@ -965,11 +965,25 @@
 
 .structured-figure .structured-image { margin: 0; }
 
-/* Тумблер «фото фрагментов» и режим фото+расшифровка. */
+/* Шапка подготовленного текста: режим слева, тумблер «фото фрагментов» справа. */
 .viewer-text-controls {
   display: flex;
-  justify-content: flex-end;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
   margin-block-end: var(--space-3);
+  padding-block-end: var(--space-2);
+  border-block-end: 1px solid var(--line);
+}
+
+.viewer-text-mode {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.viewer-text-mode b {
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .structured-page.with-crops .structured-fragment {
@@ -979,8 +993,9 @@
   border-radius: var(--radius-sm);
 }
 
+/* Ширину задаёт сам компонент: она повторяет долю страницы, которую занимает
+   область, чтобы номер страницы не раздувался до размеров иллюстрации. */
 .structured-source-photo {
-  width: 100%;
   background-repeat: no-repeat;
   background-color: var(--surface-sunken);
   border: 1px solid var(--line);
@@ -1014,6 +1029,13 @@
 .structured-formula {
   overflow-x: auto;
   margin: var(--space-4) 0;
+}
+
+/* Выносная формула внутри абзаца: своя строка, но без отрыва от текста. */
+.structured-display-math {
+  display: block;
+  overflow-x: auto;
+  margin: var(--space-3) 0;
 }
 
 .structured-formula-fallback {

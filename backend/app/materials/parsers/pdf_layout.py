@@ -4,7 +4,9 @@ from collections.abc import Iterable, Sequence
 
 import pymupdf as fitz
 
+from app.materials.parsers import raster
 from app.materials.parsers.base import ElementKind, ParsedElement, ParsedPage
+from app.materials.storage import store_material_asset
 
 INDENT_STEP = 18
 MAX_LIST_LEVEL = 4
@@ -136,6 +138,33 @@ def _box_kind(box_class: str, text: str) -> ElementKind:
     return "paragraph"
 
 
+def _box_rect(box: dict[str, object], page: fitz.Page) -> fitz.Rect:
+    return fitz.Rect(
+        float(box.get("x0", 0)),
+        float(box.get("y0", 0)),
+        float(box.get("x1", page.rect.width)),
+        float(box.get("y1", page.rect.height)),
+    )
+
+
+def _formula_fallback(box: dict[str, object], page: fitz.Page) -> str:
+    """Текст выносной формулы, которую разметчик отдал без единой строки.
+
+    `pymupdf4llm` помечает выносную формулу классом `formula`, но `textlines` у
+    неё пустые: математику он в строки не собирает. Прежде такой бокс молча
+    выбрасывался вместе с содержанием — на странице учебника по теории
+    вероятностей так исчезали шесть формул из шести, и в просмотрщике на их
+    месте не было даже рамки.
+
+    Глифы из слоя всё-таки достаются, но приходят линейно: числитель, потом
+    знаменатель, потом остаток. Как LaTeX это не годится — годится как
+    указание, что здесь формула, и как строка для поиска. Настоящий вид
+    сохраняет вырезка рядом.
+    """
+    text = page.get_text("text", clip=_box_rect(box, page))
+    return " ".join(text.split())
+
+
 def _list_levels(boxes: Iterable[dict[str, object]]) -> dict[int, int]:
     list_boxes = [
         box
@@ -167,8 +196,13 @@ def _markdown(elements: Iterable[ParsedElement]) -> str:
     return "\n\n".join(lines)
 
 
-def parse_layout_page(document: fitz.Document, page_index: int) -> ParsedPage:
-    """Преобразует один текстовый PDF-лист в Markdown и элементы с координатами."""
+def parse_layout_page(
+    document: fitz.Document, page_index: int, owner: str = ""
+) -> ParsedPage:
+    """Преобразует один текстовый PDF-лист в Markdown и элементы с координатами.
+
+    :param owner: папка материала для вырезок формул; пустая строка — не резать.
+    """
     import pymupdf4llm
 
     payload = pymupdf4llm.to_json(
@@ -197,8 +231,10 @@ def parse_layout_page(document: fitz.Document, page_index: int) -> ParsedPage:
     elements: list[ParsedElement] = []
     plain_parts: list[str] = []
     table_count = 0
-    for box in boxes:
+    formula_count = 0
+    for index, box in enumerate(boxes):
         box_class = str(box.get("boxclass") or "text")
+        asset_path: str | None = None
         if box_class == "table":
             text = _table_markdown(box)
             if not text:
@@ -209,9 +245,22 @@ def parse_layout_page(document: fitz.Document, page_index: int) -> ParsedPage:
             level = None
         else:
             text = _join_box_lines(_text_lines(box)).strip()
+            kind = _box_kind(box_class, text)
+            if not text and kind == "formula":
+                text = _formula_fallback(box, page)
             if not text:
                 continue
-            kind = _box_kind(box_class, text)
+            if kind == "formula":
+                formula_count += 1
+                if owner:
+                    asset_path = store_material_asset(
+                        owner,
+                        f"p{page_index + 1}-formula{index}.png",
+                        raster.region_image(
+                            page,
+                            _normalized_bbox(box, page.rect.width, page.rect.height),
+                        ),
+                    )
             plain_parts.append(text)
             if kind == "heading":
                 level = max(1, min(6, int(box.get("header_level") or 1)))
@@ -225,6 +274,7 @@ def parse_layout_page(document: fitz.Document, page_index: int) -> ParsedPage:
                 text=text,
                 bbox=_normalized_bbox(box, page.rect.width, page.rect.height),
                 level=level,
+                asset_path=asset_path,
             )
         )
 
@@ -234,6 +284,7 @@ def parse_layout_page(document: fitz.Document, page_index: int) -> ParsedPage:
     diagnostics = [
         "layout_markdown",
         f"tables:{table_count}",
+        f"formulas:{formula_count}",
         f"structure_elements:{len(elements)}",
     ]
     if re.search(r"[∑∫√≈≤≥]", plain):

@@ -52,23 +52,30 @@ function backgroundJobPath(job: BackgroundJobRead): string | null {
   }
 }
 
-/** Подпись без выдуманных названий: имени материала/проекта в самой записи
- *  задачи нет, а тянуть его отдельным запросом сюда — за рамками Ш6. */
+/** Имя файла или проекта; огрызок UUID — только если сервер не дал ничего. */
 function backgroundJobSubject(job: BackgroundJobRead): string {
+  if (job.subject) return job.subject;
   if (job.material_id) return `материал ${job.material_id.slice(0, 8)}`;
   if (job.project_id) return `проект ${job.project_id.slice(0, 8)}`;
   return "фоновая операция";
 }
 
+// Столько секунд уходит на страницу; та же оценка, что и в панели обработки
+// материала (`LibraryProcessingPanel`), измерена прогоном `tentex-ocr-bench`.
+const PARSE_SECONDS_PER_PAGE: Record<string, number> = { fast: 16, cloud: 19 };
+
 function toBackgroundTask(job: BackgroundJobRead): BackgroundTask {
+  const left = Math.max(0, job.total - job.done);
+  const perPage = PARSE_SECONDS_PER_PAGE[job.parser_mode ?? ""] ?? 0;
   return {
     id: job.id,
     kind: job.kind as TaskKind,
     subject: backgroundJobSubject(job),
+    detail: job.model_label,
     unit: job.kind === "parse" ? "страниц" : "",
     done: job.done,
     total: job.total,
-    etaMinutes: null,
+    etaMinutes: perPage && left > 0 ? Math.ceil((left * perPage) / 60) : null,
     state: job.state as BackgroundTask["state"],
     error: job.error ?? undefined,
   };

@@ -14,7 +14,18 @@ from sqlalchemy.orm import Session
 
 from app.background.schemas import BackgroundJobRead
 from app.materials import library
-from app.models import BackgroundJob, BackgroundJobKind, BackgroundJobState, utc_now
+from app.models import (
+    AiSettings,
+    BackgroundJob,
+    BackgroundJobKind,
+    BackgroundJobState,
+    Material,
+    OcrEngineConfig,
+    ParserMode,
+    Project,
+    utc_now,
+)
+from app.ocr.engines import DEFAULT_FAST_MODEL_ID
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 
 ACTIVE_JOB_STATES = {
@@ -22,6 +33,40 @@ ACTIVE_JOB_STATES = {
     BackgroundJobState.RUNNING,
     BackgroundJobState.PAUSED,
 }
+
+
+def _subject(session: Session, job: BackgroundJob) -> str:
+    """Над чем идёт работа — именем файла или проекта, а не идентификатором."""
+    if job.material_id is not None:
+        material = session.get(Material, job.material_id)
+        if material is not None:
+            return material.original_name
+    if job.project_id is not None:
+        project = session.get(Project, job.project_id)
+        if project is not None:
+            return project.name or "Проект без названия"
+    return ""
+
+
+def _model_label(session: Session, job: BackgroundJob) -> str:
+    """Чем именно читается материал: локальный движок или внешняя модель.
+
+    Заполняется только у разбора: у ролей ИИ модель выбирается по роли уже
+    внутри шлюза, и в самой задаче её названия нет.
+    """
+    if job.kind != BackgroundJobKind.PARSE:
+        return ""
+    if job.parser_mode == ParserMode.CLOUD:
+        row = session.get(AiSettings, 1)
+        return (row.default_vision_model_id if row else None) or "внешняя модель"
+    engine = session.get(OcrEngineConfig, "fast")
+    return (engine.model_id if engine else None) or DEFAULT_FAST_MODEL_ID
+
+
+def _read(session: Session, job: BackgroundJob) -> BackgroundJobRead:
+    return BackgroundJobRead.model_validate(job).model_copy(
+        update={"subject": _subject(session, job), "model_label": _model_label(session, job)}
+    )
 
 
 def _job_or_404(session: Session, job_id: UUID) -> BackgroundJob:
@@ -45,11 +90,11 @@ def list_jobs(
         stmt = stmt.where(BackgroundJob.project_id == project_id)
     if material_id is not None:
         stmt = stmt.where(BackgroundJob.material_id == material_id)
-    return [BackgroundJobRead.model_validate(job) for job in session.scalars(stmt)]
+    return [_read(session, job) for job in session.scalars(stmt)]
 
 
 def get_job(session: Session, job_id: UUID) -> BackgroundJobRead:
-    return BackgroundJobRead.model_validate(_job_or_404(session, job_id))
+    return _read(session, _job_or_404(session, job_id))
 
 
 def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:

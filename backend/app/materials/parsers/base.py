@@ -30,6 +30,11 @@ class ParsedElement:
     # Исходный вырез доступен у изображений, формул и таблиц.
     asset_path: str | None = None
     recognition_source: RecognitionSource = "native"
+    # Координаты пришли от разметки страницы, а не подставлены заглушкой.
+    # Внешняя модель нередко возвращает элемент вовсе без bbox, и тогда он
+    # получает полосу во всю ширину (`cloud_vlm._fallback_bbox`). Вырезать
+    # картинку по такой полосе нельзя: получится кусок соседнего текста.
+    bbox_reliable: bool = True
 
 
 @dataclass(frozen=True, slots=True)

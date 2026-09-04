@@ -54,6 +54,33 @@ MIN_REGION_AREA = 0.0015
 # содержанием не является.
 EDGE_MARGIN = 0.015
 
+# Разрешение выреза одной области страницы. Формулу надо читать крупно, а во
+# внешней модели платят за плитки 768×768 — 300 dpi ровно на этой границе.
+REGION_DPI = 300.0
+# Вырез берётся с полем: у формулы верхние индексы часто выходят за рамку блока.
+REGION_PADDING_PT = 4.0
+
+
+def region_image(page: fitz.Page, box: Box) -> bytes:
+    """Вырез области страницы в PNG, крупнее исходной вёрстки и с полем.
+
+    Одна вырезка на два потребителя: её отправляют во внешнюю модель (режим
+    «Облако») и её же сохраняют рядом с формулой или схемой, чтобы просмотрщик
+    показал оригинал, когда распознанному тексту верить нельзя.
+    """
+    rect = (
+        fitz.Rect(
+            box[0] * page.rect.width - REGION_PADDING_PT,
+            box[1] * page.rect.height - REGION_PADDING_PT,
+            box[2] * page.rect.width + REGION_PADDING_PT,
+            box[3] * page.rect.height + REGION_PADDING_PT,
+        )
+        & page.rect
+    )
+    scale = REGION_DPI / PDF_POINT_DPI
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=rect, alpha=False)
+    return pixmap.tobytes("png")
+
 
 def source_dpi(page: fitz.Page) -> float | None:
     """Разрешение исходного скана, если страница нарисована растром.
