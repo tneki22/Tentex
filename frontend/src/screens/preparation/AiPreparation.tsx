@@ -19,9 +19,11 @@ import {
 export function AiPreparation({
   overview,
   onDraft,
+  onAction,
 }: {
   overview: Overview;
   onDraft: (draft: Draft) => void;
+  onAction: (action: Coach["action"]) => void;
 }) {
   const key = `tentex-preparation-ai:${overview.project_id}`;
   const [jobId, setJobId] = useState<string | null>(() =>
@@ -35,9 +37,12 @@ export function AiPreparation({
   >(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [coach, setCoach] = useState<Coach | null>(null);
+  const [coach, setCoach] = useState<Coach | null>(overview.coach);
   const once = useRef("");
   const delivered = useRef<string | null>(null);
+  useEffect(() => {
+    setCoach((current) => current?.origin === "ai" ? current : overview.coach);
+  }, [overview.coach]);
   const { job, error: jobError, refresh } = useBackgroundJob(jobId);
   const saveJob = (id: string | null) => {
     setJobId(id);
@@ -45,6 +50,7 @@ export function AiPreparation({
     else localStorage.removeItem(key);
   };
   useEffect(() => {
+    if (overview.readonly) return;
     const day = `${overview.project_id}:${overview.today}`;
     if (once.current === day) return;
     once.current = day;
@@ -59,7 +65,7 @@ export function AiPreparation({
       .then((result) => {
         if (result.coach) setCoach(result.coach);
         if (result.job_id && !jobId) saveJob(result.job_id);
-        if (result.reason) setError(result.reason);
+        // Локальная рекомендация — штатный режим при выключенных внешних моделях.
       })
       .catch((caught) => setError(errorText(caught)));
   }, [overview.project_id, overview.today]);
@@ -127,6 +133,7 @@ export function AiPreparation({
             ["phases", "Предложить блоки"],
             ["distribute", "Распределить с ИИ"],
             ["full", "Весь план с ИИ"],
+            ["coach", "Совет с ИИ"],
           ] as const
         ).map(([value, label]) => (
           <Button
@@ -147,7 +154,7 @@ export function AiPreparation({
         ))}
       </div>
       {coach && (
-        <p className="prep-coach-ai">
+        <div className="prep-coach-ai">
           {coach.text}
           <small>
             {coach.origin === "ai"
@@ -155,7 +162,11 @@ export function AiPreparation({
               : "Локальная рекомендация"}
             {coach.reason ? ` · ${coach.reason}` : ""}
           </small>
-        </p>
+          <Button variant="ghost" onClick={() => onAction(coach.action)}>
+            {coach.action === "start" ? "Открыть очередь дня" : coach.action === "redistribute"
+              ? "Перераспределить остаток" : "Составить план"}
+          </Button>
+        </div>
       )}
       {jobId && (
         <div className="prep-card" role="status">

@@ -71,6 +71,11 @@ export function DraftDialog({
       {draft.changes.map((change, i) => (
         <p key={i}>{change}</p>
       ))}
+      {draft.unassigned_ids.length > 0 && <details open>
+        <summary>Без даты: {draft.unassigned_ids.length}</summary>
+        <ul>{draft.unassigned_ids.map((id) => <li key={id}>{title(id)} — {draft.unassigned_reasons?.[id]
+          ?? "Не назначен в этом варианте. Выберите дату вручную или измените распределение."}</li>)}</ul>
+      </details>}
       <label className="prep-check">
         <input
           type="checkbox"

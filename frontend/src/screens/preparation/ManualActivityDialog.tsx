@@ -89,7 +89,7 @@ export function ManualActivityDialog({
             onValueChange={setNode}
           />
         </Field>
-        <Field label="Когда занимался">
+        <Field label={`Когда занимался (${Intl.DateTimeFormat().resolvedOptions().timeZone})`}>
           <input
             type="datetime-local"
             value={date}

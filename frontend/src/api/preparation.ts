@@ -104,6 +104,7 @@ export const workLabels: Record<WorkKind, string> = {
   final: "Финальный прогон",
 };
 export const activityLabels: Record<string, string> = {
+  view: "Просмотр вопроса",
   reading: "Чтение",
   material: "Материал",
   conspect: "Конспект",
@@ -117,6 +118,7 @@ export const outcomeLabels: Record<string, string> = {
   partial: "Частично",
   failed: "Не зачтено",
   unscored: "Без оценки",
+  pending: "Ожидает проверки",
 };
 /** Ревизии снимка проверяет сервер для каждого предложения. */
 export const revisions = (overview: Overview) => ({

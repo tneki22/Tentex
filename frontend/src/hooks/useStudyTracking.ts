@@ -29,10 +29,15 @@ export function useStudyTracking(
   const [seconds, setSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const answerSeconds = useRef(0);
+  const answerKey = `tentex-answer-time:${projectId}:${nodeId}`;
+  useEffect(() => {
+    answerSeconds.current = Number(sessionStorage.getItem(answerKey) ?? 0);
+  }, [answerKey]);
   const flushRef = useRef<() => Promise<void>>(async () => undefined);
   const answerReset = () => {
     const value = Math.floor(answerSeconds.current);
     answerSeconds.current = 0;
+    sessionStorage.removeItem(answerKey);
     return value;
   };
   useEffect(() => {
@@ -44,12 +49,34 @@ export function useStudyTracking(
     let lastActivity = Date.now();
     let lastTick = Date.now();
     let started: number | null = null;
+    let intervalId: string | null = null;
     let lastHeartbeat = Date.now();
     let sending = false;
     let chain = Promise.resolve();
     const report = (caught: unknown) => {
       setError(errorText(caught));
     };
+    const journalKey = `tentex-study-open:${sessionId()}:${projectId}`;
+    const makeInterval = (start: number, end: number): Interval => ({
+      id: intervalId ?? crypto.randomUUID(), session_id: sessionId(), node_id: nodeId, kind,
+      started_at: new Date(start).toISOString(),
+      ended_at: new Date(Math.min(end, start + IDLE_MS)).toISOString(),
+    });
+    const clearJournal = (id: string) => {
+      const raw = localStorage.getItem(journalKey);
+      if (raw && (JSON.parse(raw) as Interval).id === id) localStorage.removeItem(journalKey);
+    };
+    try {
+      const raw = localStorage.getItem(journalKey);
+      if (raw) {
+        const recovered = JSON.parse(raw) as Interval;
+        chain = chain.then(async () => {
+          const pending = await pendingIntervals(projectId);
+          if (!pending.some((item) => item.id === recovered.id)) await bufferInterval(projectId, recovered);
+          clearJournal(recovered.id);
+        });
+      }
+    } catch (caught) { report(caught); }
     const active = () =>
       !stopped &&
       !paused &&
@@ -61,16 +88,12 @@ export function useStudyTracking(
       const start = started;
       started = null;
       if (end <= start) return;
-      const interval: Interval = {
-        id: crypto.randomUUID(),
-        session_id: sessionId(),
-        node_id: nodeId,
-        kind,
-        started_at: new Date(start).toISOString(),
-        ended_at: new Date(Math.min(end, start + IDLE_MS)).toISOString(),
-      };
+      const interval = makeInterval(start, end);
+      intervalId = null;
+      try { localStorage.setItem(journalKey, JSON.stringify(interval)); } catch (caught) { report(caught); }
       chain = chain.catch(report).then(async () => {
         await bufferInterval(projectId, interval);
+        clearJournal(interval.id);
       });
       void chain.catch(report);
     };
@@ -119,10 +142,17 @@ export function useStudyTracking(
               : "Пауза: окно не активно",
         );
       } else if (ownsLock) {
-        if (started === null) started = now;
+        if (started === null) { started = now; intervalId = crypto.randomUUID(); }
+        if (now > started) {
+          try { localStorage.setItem(journalKey, JSON.stringify(makeInterval(started, now))); }
+          catch (caught) { report(caught); }
+        }
         setState("Время учитывается");
         setSeconds((value) => value + elapsed / 1000);
-        if (kind === "answer") answerSeconds.current += elapsed / 1000;
+        if (kind === "answer") {
+          answerSeconds.current += elapsed / 1000;
+          sessionStorage.setItem(answerKey, String(answerSeconds.current));
+        }
       } else if (!lockRequested) {
         if (!navigator.locks) {
           setError(
@@ -168,6 +198,7 @@ export function useStudyTracking(
       window.addEventListener(event, touch, { passive: true }),
     );
     window.addEventListener("blur", hide);
+    window.addEventListener("pagehide", flush);
     document.addEventListener("visibilitychange", hide);
     window.addEventListener("online", send);
     const timer = window.setInterval(tick, TICK_MS);
@@ -181,6 +212,7 @@ export function useStudyTracking(
       clearInterval(timer);
       events.forEach((event) => window.removeEventListener(event, touch));
       window.removeEventListener("blur", hide);
+      window.removeEventListener("pagehide", flush);
       document.removeEventListener("visibilitychange", hide);
       window.removeEventListener("online", send);
     };

@@ -237,7 +237,7 @@ export function History({
           />
           Спорные оценки
         </label>
-        <Field label="Поиск по ответу и заметке">
+        <Field label="Поиск по вопросу и заметке">
           <input
             value={params.get("q") ?? ""}
             onChange={(event) => update("q", event.target.value)}
@@ -268,8 +268,8 @@ export function History({
                 type="checkbox"
                 checked={selected.some((item) => item.id === activity.id)}
                 disabled={
-                  selected.length === 2 &&
-                  !selected.some((item) => item.id === activity.id)
+                  !selected.some((item) => item.id === activity.id) &&
+                  (selected.length === 2 || (selected.length > 0 && selected[0].node_id !== activity.node_id))
                 }
                 onChange={(event) =>
                   setSelected((current) =>
@@ -283,7 +283,7 @@ export function History({
             <strong>{activity.title}</strong>
             <span>
               {activityLabels[activity.kind] ?? activity.kind} ·{" "}
-              {new Date(activity.occurred_at).toLocaleString("ru-RU")}
+              {new Date(activity.occurred_at).toLocaleString("ru-RU", {timeZone: overview.settings.config.timezone})}
             </span>
             <span>
               {activity.seconds === null
@@ -331,6 +331,9 @@ export function History({
             <AttemptDetails
               projectId={overview.project_id}
               activity={activity}
+              readonly={overview.readonly}
+              onSaved={refresh}
+              timezone={overview.settings.config.timezone}
             />
           )}
         </article>
@@ -416,6 +419,9 @@ export function History({
                 key={activity.id}
                 projectId={overview.project_id}
                 activity={activity}
+                readonly={overview.readonly}
+                onSaved={refresh}
+                timezone={overview.settings.config.timezone}
               />
             ))}
           </div>

@@ -10,6 +10,10 @@ export const dateLabel = (value: string) =>
     month: "short",
     timeZone: "UTC",
   });
-export const duration = (seconds: number) => `${Math.round(seconds / 60)} мин`;
+export const duration = (seconds: number) => {
+  const minutes = Math.max(0, Math.round(seconds / 60));
+  return minutes < 60 ? `${minutes} мин`
+    : `${Math.floor(minutes / 60)} ч${minutes % 60 ? ` ${minutes % 60} мин` : ""}`;
+};
 export const dayNumber = (value: string) =>
   Date.parse(`${value}T12:00:00Z`) / 86_400_000;

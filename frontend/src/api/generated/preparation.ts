@@ -1862,6 +1862,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/ocr/cloud/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Cloud Models
+         * @description Кандидаты в распознаватели страниц: годные первыми, с причиной у остальных.
+         */
+        get: operations["get_cloud_models_api_settings_ocr_cloud_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/ocr/cloud": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Cloud Settings
+         * @description Выбор модели уходит в настройки шлюза, стратегия — в строку движка.
+         *
+         *     `ai_model_modality_unsupported` — выбрана модель, не принимающая картинки.
+         */
+        put: operations["put_cloud_settings_api_settings_ocr_cloud_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings/ocr/models/{model_key}/install": {
         parameters: {
             query?: never;
@@ -2203,6 +2245,40 @@ export interface paths {
         put?: never;
         /** Cancel Background Job */
         post: operations["cancel_background_job_api_background_jobs__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/preparation/ai/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ai Preflight */
+        post: operations["ai_preflight_api_projects__project_id__preparation_ai_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/preparation/ai": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ai Start */
+        post: operations["ai_start_api_projects__project_id__preparation_ai_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2727,7 +2803,7 @@ export interface components {
              * Modality
              * @enum {string}
              */
-            modality: "text" | "speech";
+            modality: "text" | "speech" | "vision";
             /**
              * Provider Id
              * Format: uuid
@@ -2746,11 +2822,11 @@ export interface components {
             /** Estimated Output Tokens */
             estimated_output_tokens: number;
             /** Estimated Cost Usd */
-            estimated_cost_usd: number | string | null;
+            estimated_cost_usd: string | null;
             /** Estimated Cost Rub */
-            estimated_cost_rub: number | string | null;
+            estimated_cost_rub: string | null;
             /** Usd Rub Rate */
-            usd_rub_rate: number | string | null;
+            usd_rub_rate: string | null;
             /** Usd Rub Rate Date */
             usd_rub_rate_date: string | null;
             /** Cached */
@@ -2845,7 +2921,7 @@ export interface components {
              * Modality
              * @enum {string}
              */
-            modality: "text" | "speech";
+            modality: "text" | "speech" | "vision";
             /** Enabled */
             enabled: boolean;
             /** Provider Override Id */
@@ -2970,6 +3046,17 @@ export interface components {
             /** Models */
             models: components["schemas"]["AiModelRead"][];
             today_usage: components["schemas"]["AiTodayUsage"];
+        };
+        /**
+         * AiStartRead
+         * @description Для offline и подтверждения затрат запуск может не создавать job.
+         */
+        AiStartRead: {
+            /** Job Id */
+            job_id: string | null;
+            coach?: components["schemas"]["CoachRead"] | null;
+            /** Reason */
+            reason?: string | null;
         };
         /** AiTodayUsage */
         AiTodayUsage: {
@@ -3795,16 +3882,10 @@ export interface components {
              * @enum {string}
              */
             action: "start" | "redistribute" | "create";
-            /**
-             * Job Id
-             * @default null
-             */
-            job_id: string | null;
-            /**
-             * Reason
-             * @default null
-             */
-            reason: string | null;
+            /** Job Id */
+            job_id?: string | null;
+            /** Reason */
+            reason?: string | null;
         };
         /** ConspectImageRead */
         ConspectImageRead: {
@@ -3932,6 +4013,33 @@ export interface components {
             missing: number;
         };
         /**
+         * DailyIntervalRead
+         * @description Отрезок фактического времени без наложений разных вкладок.
+         */
+        DailyIntervalRead: {
+            /** Node Id */
+            node_id: string | null;
+            /** Title */
+            title: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "view" | "reading" | "material" | "conspect" | "chat" | "answer" | "manual";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Ended At
+             * Format: date-time
+             */
+            ended_at: string;
+            /** Seconds */
+            seconds: number;
+        };
+        /**
          * DayLoad
          * @description Фактическое время и вместимость дня не зависят от числа дорожек.
          */
@@ -4002,6 +4110,10 @@ export interface components {
             removed_ids: string[];
             /** Unassigned Ids */
             unassigned_ids: string[];
+            /** Unassigned Reasons */
+            unassigned_reasons?: {
+                [key: string]: string;
+            };
             /** Changes */
             changes: string[];
             /** Days */
@@ -5006,6 +5118,83 @@ export interface components {
          * @enum {string}
          */
         NodeType: "section" | "topic" | "subpoint";
+        /**
+         * OcrCloudModelRead
+         * @description Кандидат в распознаватели страниц из локального каталога моделей.
+         */
+        OcrCloudModelRead: {
+            /**
+             * Provider Id
+             * Format: uuid
+             */
+            provider_id: string;
+            /** Provider Label */
+            provider_label: string;
+            /** Model Id */
+            model_id: string;
+            /** Display Name */
+            display_name: string;
+            /** Context Length */
+            context_length: number | null;
+            /** Suitable */
+            suitable: boolean;
+            /** Reason */
+            reason: string;
+            /** Recommended Note */
+            recommended_note: string;
+            /** Price Per Page Usd */
+            price_per_page_usd: string | null;
+        };
+        /**
+         * OcrCloudRead
+         * @description Состояние режима «Облако»: выбранная модель, стратегия и цена страницы.
+         */
+        OcrCloudRead: {
+            /** External Models Enabled */
+            external_models_enabled: boolean;
+            /** Provider Id */
+            provider_id: string | null;
+            /** Provider Label */
+            provider_label: string;
+            /** Model Id */
+            model_id: string | null;
+            /**
+             * Strategy
+             * @enum {string}
+             */
+            strategy: "auto" | "page";
+            /** Strategies */
+            strategies: components["schemas"]["OcrCloudStrategyRead"][];
+            /** Price Per Page Usd */
+            price_per_page_usd: string | null;
+        };
+        /**
+         * OcrCloudSettingsWrite
+         * @description Что можно поменять в режиме «Облако» с экрана распознавания.
+         */
+        OcrCloudSettingsWrite: {
+            /** Provider Id */
+            provider_id?: string | null;
+            /** Model Id */
+            model_id?: string | null;
+            /**
+             * Strategy
+             * @enum {string}
+             */
+            strategy: "auto" | "page";
+        };
+        /** OcrCloudStrategyRead */
+        OcrCloudStrategyRead: {
+            /**
+             * Value
+             * @enum {string}
+             */
+            value: "auto" | "page";
+            /** Title */
+            title: string;
+            /** Hint */
+            hint: string;
+        };
         /** OcrEngineRead */
         OcrEngineRead: {
             /** Mode */
@@ -5021,8 +5210,6 @@ export interface components {
              * @enum {string}
              */
             runtime: "worker" | "gpu_service" | "cloud";
-            /** Configurable */
-            configurable: boolean;
             /** Enabled */
             enabled: boolean;
             /** Available */
@@ -5150,6 +5337,7 @@ export interface components {
             raster_scale: number;
             /** Engines */
             engines: components["schemas"]["OcrEngineRead"][];
+            cloud: components["schemas"]["OcrCloudRead"];
         };
         /**
          * OriginKind
@@ -5196,6 +5384,8 @@ export interface components {
             deadline: string | null;
             /** Exam Time */
             exam_time: string | null;
+            /** Exam At */
+            exam_at?: string | null;
             settings: components["schemas"]["SettingsRead"];
             plan: components["schemas"]["PlanRead"];
             /** Units */
@@ -5207,6 +5397,8 @@ export interface components {
             summary: components["schemas"]["PreparationSummary"];
             memory: components["schemas"]["MemoryForecast"];
             coach: components["schemas"]["CoachRead"];
+            /** Today Intervals */
+            today_intervals?: components["schemas"]["DailyIntervalRead"][];
         };
         /** PageCorrectionRead */
         PageCorrectionRead: {
@@ -5271,7 +5463,7 @@ export interface components {
          * ParserMode
          * @enum {string}
          */
-        ParserMode: "fast";
+        ParserMode: "fast" | "cloud";
         /**
          * Phase
          * @description Название блока свободное; алгоритмы используют назначение kind.
@@ -5395,6 +5587,57 @@ export interface components {
             unassigned_ids: string[];
             /** Can Undo */
             can_undo: boolean;
+        };
+        /**
+         * PreparationAiPreflightRead
+         * @description Стоимость последовательного запуска складывается из всех обращений.
+         */
+        PreparationAiPreflightRead: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "phases" | "distribute" | "full" | "coach";
+            /** Calls */
+            calls: components["schemas"]["AiPreflight"][];
+            /** Context */
+            context: components["schemas"]["ProgramContextRead"][];
+            /** Confirmation Required */
+            confirmation_required: boolean;
+            /** Confirmation Reasons */
+            confirmation_reasons: string[];
+        };
+        /**
+         * PreparationAiWrite
+         * @description Один запрос для трёх ролей и последовательного полного плана.
+         */
+        PreparationAiWrite: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "phases" | "distribute" | "full" | "coach";
+            /**
+             * Instruction
+             * @default
+             */
+            instruction: string;
+            /**
+             * Confirmed
+             * @default false
+             */
+            confirmed: boolean;
+            /**
+             * Automatic
+             * @default false
+             */
+            automatic: boolean;
+            /** Expected Plan Revision */
+            expected_plan_revision: number;
+            /** Expected Program Revision */
+            expected_program_revision: number;
+            /** Expected Settings Revision */
+            expected_settings_revision: number;
         };
         /**
          * PreparationConfig
@@ -5593,6 +5836,19 @@ export interface components {
             seconds_by_kind: {
                 [key: string]: number;
             };
+            /**
+             * Assessment Pairs
+             * @default 0
+             */
+            assessment_pairs: number;
+            /** Disagreement Percent */
+            disagreement_percent?: number | null;
+            /** Results By Mode */
+            results_by_mode?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
         };
         /**
          * ProcessingStage
@@ -5650,6 +5906,37 @@ export interface components {
             latest_undoable_action: components["schemas"]["LatestUndoableAction"] | null;
             /** Draft Revision */
             draft_revision: number | null;
+        };
+        /**
+         * ProgramContextRead
+         * @description Полное дерево раскрывается пользователю до обращения к модели.
+         */
+        ProgramContextRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Node Type */
+            node_type: string;
+            /** Exam Kind */
+            exam_kind: string | null;
+            /** Title */
+            title: string;
+            /** Path */
+            path: string[];
+            /** Sort Order */
+            sort_order: number;
+            /** Target Level */
+            target_level: string | null;
+            /** Subpoints */
+            subpoints: string[];
+            /** Has Answer */
+            has_answer: boolean;
+            /** Answer Chars */
+            answer_chars: number;
         };
         /** ProgramGroupingApplyWrite */
         ProgramGroupingApplyWrite: {
@@ -6496,6 +6783,10 @@ export interface components {
             reason: string;
             /** Missed Points */
             missed_points: string[];
+            /** Recurring Omissions */
+            recurring_omissions?: {
+                [key: string]: number;
+            };
             /** Active Seconds */
             active_seconds: number;
         };
@@ -6649,23 +6940,7 @@ export interface components {
             active_tab?: components["schemas"]["WorkspaceTab"] | null;
         };
         /** WorkspaceLayout */
-        "WorkspaceLayout-Input": {
-            /** Selected Node Id */
-            selected_node_id?: string | null;
-            /** Expanded Node Ids */
-            expanded_node_ids?: string[];
-            /**
-             * Tree Width
-             * @default 320
-             */
-            tree_width: number;
-            /** Groups */
-            groups: components["schemas"]["WorkspaceGroup"][];
-            /** Group Weights */
-            group_weights: number[];
-        };
-        /** WorkspaceLayout */
-        "WorkspaceLayout-Output": {
+        WorkspaceLayout: {
             /** Selected Node Id */
             selected_node_id?: string | null;
             /** Expanded Node Ids */
@@ -6684,7 +6959,7 @@ export interface components {
         WorkspaceStateRead: {
             /** Schema Version */
             schema_version: number;
-            layout: components["schemas"]["WorkspaceLayout-Output"];
+            layout: components["schemas"]["WorkspaceLayout"];
             /**
              * Project Id
              * Format: uuid
@@ -6700,7 +6975,7 @@ export interface components {
         WorkspaceStateWrite: {
             /** Schema Version */
             schema_version: number;
-            layout: components["schemas"]["WorkspaceLayout-Input"];
+            layout: components["schemas"]["WorkspaceLayout"];
         };
         /**
          * WorkspaceTab
@@ -6712,103 +6987,6 @@ export interface components {
          * @enum {string}
          */
         WorkspaceVariant: "exam" | "textbook";
-        /**
-         * AiStartRead
-         * @description Для offline и подтверждения затрат запуск может не создавать job.
-         */
-        AiStartRead: {
-            /** Job Id */
-            job_id: string | null;
-            /** @default null */
-            coach: components["schemas"]["CoachRead"] | null;
-            /**
-             * Reason
-             * @default null
-             */
-            reason: string | null;
-        };
-        /**
-         * PreparationAiPreflightRead
-         * @description Стоимость последовательного запуска складывается из всех обращений.
-         */
-        PreparationAiPreflightRead: {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "phases" | "distribute" | "full" | "coach";
-            /** Calls */
-            calls: components["schemas"]["AiPreflight"][];
-            /** Context */
-            context: components["schemas"]["ProgramContextRead"][];
-            /** Confirmation Required */
-            confirmation_required: boolean;
-            /** Confirmation Reasons */
-            confirmation_reasons: string[];
-        };
-        /**
-         * PreparationAiWrite
-         * @description Один запрос для трёх ролей и последовательного полного плана.
-         */
-        PreparationAiWrite: {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "phases" | "distribute" | "full" | "coach";
-            /**
-             * Instruction
-             * @default
-             */
-            instruction: string;
-            /**
-             * Confirmed
-             * @default false
-             */
-            confirmed: boolean;
-            /**
-             * Automatic
-             * @default false
-             */
-            automatic: boolean;
-            /** Expected Plan Revision */
-            expected_plan_revision: number;
-            /** Expected Program Revision */
-            expected_program_revision: number;
-            /** Expected Settings Revision */
-            expected_settings_revision: number;
-        };
-        /**
-         * ProgramContextRead
-         * @description Полное дерево раскрывается пользователю до обращения к модели.
-         */
-        ProgramContextRead: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Parent Id */
-            parent_id: string | null;
-            /** Node Type */
-            node_type: string;
-            /** Exam Kind */
-            exam_kind: string | null;
-            /** Title */
-            title: string;
-            /** Path */
-            path: string[];
-            /** Sort Order */
-            sort_order: number;
-            /** Target Level */
-            target_level: string | null;
-            /** Subpoints */
-            subpoints: string[];
-            /** Has Answer */
-            has_answer: boolean;
-            /** Answer Chars */
-            answer_chars: number;
-        };
     };
     responses: never;
     parameters: never;
@@ -10767,7 +10945,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                modality: "text" | "speech";
+                modality: "text" | "speech" | "vision";
             };
             cookie?: never;
         };
@@ -10982,6 +11160,59 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["OcrEngineWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OcrSettingsRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_cloud_models_api_settings_ocr_cloud_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OcrCloudModelRead"][];
+                };
+            };
+        };
+    };
+    put_cloud_settings_api_settings_ocr_cloud_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OcrCloudSettingsWrite"];
             };
         };
         responses: {
@@ -11692,6 +11923,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BackgroundJobRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ai_preflight_api_projects__project_id__preparation_ai_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreparationAiWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparationAiPreflightRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ai_start_api_projects__project_id__preparation_ai_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreparationAiWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiStartRead"];
                 };
             };
             /** @description Validation Error */

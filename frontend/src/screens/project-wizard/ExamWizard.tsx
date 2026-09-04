@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { preparationHeuristics } from "../../api/generated/preparationHeuristics";
 import { Brain, Calculator, CalendarDays, Check, ClipboardCheck, FileCheck2, FileText, Files, LibraryBig, ListChecks, Pencil, Sparkles, TicketCheck, Upload } from "lucide-react";
 import {
   controlMaterialProcessing,
@@ -226,10 +227,10 @@ function getPreparationForecast(form: ExamForm, itemCount: number) {
   const deadline = new Date(`${form.deadline}T${form.examTime || "23:59"}:00`);
   const daysLeft = Math.max(1, Math.ceil((deadline.getTime() - Date.now()) / 86_400_000));
   const minutes = positive(form.minutesPerDay) ?? 0;
-  const minutesPerItem = form.format === "tickets" ? 50 : form.format === "questions_tasks" ? 36 : 30;
-  const startMultiplier: Record<StartingLevel, number> = { beginner: 1.35, familiar: 1, refreshing: 0.75 };
-  const goalMultiplier: Record<TargetOutcome, number> = { awareness: 0.6, understanding: 0.8, application: 1, mastery: 1.25 };
-  const practiceMultiplier = form.studyFormat === "practice" ? 1.1 : 1;
+  const minutesPerItem = preparationHeuristics.minutes[form.format === "tickets" ? "ticket" : form.format === "questions_tasks" ? "task" : "question"];
+  const startMultiplier = preparationHeuristics.starting_level;
+  const goalMultiplier = preparationHeuristics.target_level;
+  const practiceMultiplier = form.studyFormat === "practice" ? preparationHeuristics.practice_multiplier : 1;
   const ratio = (daysLeft * minutes) / (Math.max(1, itemCount) * minutesPerItem * startMultiplier[form.startingLevel] * goalMultiplier[form.targetOutcome] * practiceMultiplier);
 
   if (ratio < 0.35) return { title: "будет очень тяжело", text: "времени заметно меньше, чем требует выбранная цель." };

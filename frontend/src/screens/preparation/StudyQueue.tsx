@@ -18,6 +18,7 @@ export function StudyQueue({
   const [queue, setQueue] = useState<Queue | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [understood, setUnderstood] = useState<string | null>(null);
   useEffect(() => {
     if (!date) return;
     const controller = new AbortController();
@@ -32,6 +33,16 @@ export function StudyQueue({
   if (!date) return null;
   const current = queue?.items[queue.position];
   const expected = current?.topic_ids[queue?.topic_position ?? 0];
+  async function markUnderstood() {
+    if (!expected) return;
+    setBusy(true);
+    try {
+      await preparation.understood(projectId, expected);
+      setUnderstood(expected);
+      setError(null);
+    } catch (caught) { setError(errorText(caught)); }
+    finally { setBusy(false); }
+  }
   async function move(direction: number, finish = false) {
     if (!queue || !date) return;
     setBusy(true);
@@ -83,6 +94,11 @@ export function StudyQueue({
           ? `${queue!.position + 1}/${queue!.items.length} · ${current.title} · вопрос ${queue!.topic_position + 1}/${current.topic_ids.length}`
           : "Загружаем очередь…"}
       </strong>
+      {current?.kind === "learn" && <Button variant="secondary"
+        disabled={busy || nodeId !== expected || understood === expected}
+        onClick={() => void markUnderstood()}>
+        {understood === expected ? "Вопрос разобран" : "Разобрался в вопросе"}
+      </Button>}
       <Button
         variant="ghost"
         disabled={
@@ -130,6 +146,7 @@ export function StudyQueue({
         </p>
       )}
       {error && <p role="alert">{error}</p>}
+      <small>Очередь учитывает дневные лимиты. Остальные задания остаются в календаре.</small>
     </section>
   );
 }

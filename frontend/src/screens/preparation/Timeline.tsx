@@ -1,8 +1,8 @@
 /** Числовая ось с отдельными дорожками для пересекающихся блоков. */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, ContextMenu, SegmentedTabs } from "../../components/ui";
 import type { Overview, Phase } from "../../api/preparation";
-import { addDays, dateLabel, dayNumber } from "./dates";
+import { addDays, dateLabel, dayNumber, duration } from "./dates";
 export function Timeline({
   overview,
   selected,
@@ -13,6 +13,19 @@ export function Timeline({
   onEdit: (phase: Phase) => void;
 }) {
   const [scale, setScale] = useState<"week" | "month" | "all">("all");
+  const [now, setNow] = useState(Date.parse(overview.now));
+  useEffect(() => {
+    const started = Date.now();
+    const tick = () => setNow(Date.parse(overview.now) + Date.now() - started);
+    tick();
+    const timer = window.setInterval(tick, 30_000);
+    return () => clearInterval(timer);
+  }, [overview.now]);
+  const remaining = overview.exam_at ? Math.max(0, Date.parse(overview.exam_at) - now) : null;
+  const countdown = remaining === null
+    ? overview.deadline ? `${Math.max(0, dayNumber(overview.deadline) - dayNumber(overview.today))} дней · уточните время экзамена` : "Укажите дату экзамена"
+    : remaining === 0 ? "Экзамен уже начался"
+      : `${Math.floor(remaining / 86_400_000)} д ${Math.floor(remaining / 3_600_000) % 24} ч ${Math.floor(remaining / 60_000) % 60} мин`;
   const phases = [...overview.plan.phases].sort((a, b) =>
     a.start.localeCompare(b.start),
   );
@@ -73,6 +86,10 @@ export function Timeline({
           Добавить блок
         </Button>
       </header>
+      <div className="prep-section-head">
+        <p>До экзамена — <strong>{countdown}</strong></p>
+        <p>На занятия — <strong>{duration(overview.summary.available_minutes * 60)}</strong></p>
+      </div>
       <ContextMenu
         label="Блоки подготовки"
         items={[{ label: "Добавить блок", onSelect: create }]}
@@ -99,6 +116,11 @@ export function Timeline({
                 style={{ left: `${percent(overview.today)}%` }}
               >
                 <small>Сейчас</small>
+              </div>
+            )}
+            {overview.deadline && overview.deadline >= start && overview.deadline <= end && (
+              <div className="prep-now prep-exam" style={{left: `${percent(overview.deadline)}%`}}>
+                <small>Экзамен</small>
               </div>
             )}
             {positioned.map(({ phase, lane }) => (

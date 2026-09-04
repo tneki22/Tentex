@@ -6,12 +6,19 @@ import { errorText, type Activity } from "../../api/preparation";
 import { ErrorState, LoadingState } from "../../components/ui";
 import { VerdictCard, verdictFromGrade } from "../workspace/chat/VerdictCard";
 import { QualityControl } from "./QualityControl";
+import { personaLabel, strictnessLabel } from "../workspace/chat/ExaminerControl";
 export function AttemptDetails({
   projectId,
   activity,
+  readonly = false,
+  onSaved,
+  timezone,
 }: {
   projectId: string;
   activity: Activity;
+  readonly?: boolean;
+  onSaved?: () => void;
+  timezone?: string;
 }) {
   const [detail, setDetail] = useState<AttemptDetailRead | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,9 +38,12 @@ export function AttemptDetails({
   return (
     <section className="prep-attempt">
       <p>
-        {detail.attempt.persona} · {detail.attempt.strictness} ·{" "}
-        {new Date(detail.attempt.created_at).toLocaleString("ru-RU")}
+        {personaLabel(detail.attempt.persona)} · {strictnessLabel(detail.attempt.strictness)} ·{" "}
+        {new Date(activity.occurred_at).toLocaleString("ru-RU", {timeZone: timezone})}
       </p>
+      <h4>Вопрос на момент сдачи</h4>
+      <p>{String(detail.attempt.context_snapshot.question ?? activity.title)}</p>
+      <h4>Ваш ответ</h4>
       <div className="chat-answer-text">{detail.attempt.text}</div>
       {detail.grade ? (
         <VerdictCard
@@ -44,11 +54,12 @@ export function AttemptDetails({
       ) : (
         <p>Проверка ещё не завершена.</p>
       )}
-      <QualityControl
+      {!readonly && <QualityControl
         projectId={projectId}
         attemptId={detail.attempt.id}
         value={activity.quality}
-      />
+        onSaved={onSaved}
+      />}
       {activity.chat_id && (
         <Link
           to={`/projects/${projectId}?topic=${activity.node_id}&tab=chat&chat=${activity.chat_id}`}

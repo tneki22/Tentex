@@ -1,5 +1,6 @@
 /** Свободные названия блоков не подменяют назначение, нужное алгоритмам. */
 import { useState } from "react";
+import { addDays } from "./dates";
 import { Button, Dialog, Field, Select } from "../../components/ui";
 import {
   workLabels,
@@ -23,7 +24,18 @@ export function PhaseEditor({
   const [destination, setDestination] = useState<string | null>(null);
   const exists = overview.plan.phases.some((item) => item.id === phase.id);
   const others = overview.plan.phases.filter((item) => item.id !== phase.id);
-  const save = () => onPreview({ phases: [...others, value] });
+  const save = () => {
+    const shift = Math.round((Date.parse(value.start) - Date.parse(phase.start)) / 86400000);
+    const items = overview.plan.items.map((item) => {
+      if (item.phase_id !== phase.id) return item;
+      const fixed = item.pinned || item.on_date < overview.today || overview.plan.completed_ids.includes(item.id);
+      if (fixed) return item.on_date < value.start || item.on_date > value.end
+        ? {...item, phase_id: null} : item;
+      const shifted = addDays(item.on_date, shift);
+      return {...item, on_date: shifted < value.start ? value.start : shifted > value.end ? value.end : shifted};
+    });
+    onPreview({ phases: [...others, value], items });
+  };
   return (
     <Dialog
       open
@@ -87,6 +99,9 @@ export function PhaseEditor({
           />
         </Field>
       </div>
+      {exists && <p className="prep-muted">При переносе блока сдвигаются его будущие задания.
+        Выполненные и закреплённые сохранят дату; за новыми границами они останутся без блока.
+        Распределение и нагрузка будут видны перед применением.</p>}
       {exists && (
         <div className="prep-actions">
           <Button

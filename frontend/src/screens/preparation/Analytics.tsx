@@ -18,7 +18,7 @@ export function Analytics({
       ? topic.status !== "mastered"
       : filter === "unscored"
         ? topic.latest_outcome === null || topic.latest_outcome === "unscored"
-        : true,
+        : filter === "errors" ? ["partial", "failed"].includes(topic.latest_outcome ?? "") : true,
   );
   const sections = [
     ...new Set(topics.map((topic) => topic.path[0] ?? "Без раздела")),
@@ -31,6 +31,12 @@ export function Analytics({
     ]),
   );
   const memory = overview.memory;
+  const trend = overview.days.filter((day) => day.date <= overview.today);
+  const points = (key: "passed_count" | "confirmed_count") => trend.map((day, index) =>
+    `${20 + index * 600 / Math.max(1, trend.length - 1)},${110 - (day[key] ?? 0) * 90 / Math.max(1, summary.total_topics)}`).join(" ");
+  const timeLabel = (value: string) => new Date(value).toLocaleTimeString("ru-RU", {
+    hour: "2-digit", minute: "2-digit", timeZone: overview.settings.config.timezone,
+  });
   return (
     <section className="prep-analytics">
       <div className="plan-summary">
@@ -54,11 +60,23 @@ export function Analytics({
         </div>
       </div>
       <p>{summary.pace_explanation}</p>
+      <p>Учебных дней подряд: {summary.streak_days}. Запланированный отдых не прерывает серию.</p>
       <p>
         {summary.projected_finish
           ? `При таком темпе: ${dateLabel(summary.projected_finish)}`
           : "Даты завершения пока нет."}
       </p>
+      <section className="prep-card">
+        <h3>Занятия сегодня</h3>
+        {!overview.today_intervals?.length ? <p>Активных интервалов пока нет.</p> :
+          overview.today_intervals.map((interval, index) => <button className="prep-time-row" key={index}
+            onClick={() => onHistory({date_from: overview.today, date_to: overview.today,
+              ...(interval.node_id ? {node_id: interval.node_id} : {}), kind: interval.kind})}>
+            <span>{timeLabel(interval.started_at)}–{timeLabel(interval.ended_at)}</span>
+            <span>{activityLabels[interval.kind]} · {interval.title}</span>
+            <strong>{duration(interval.seconds)}</strong>
+          </button>)}
+      </section>
       <section className="prep-card">
         <h3>Время: план и факт</h3>
         <p className="prep-muted">
@@ -95,6 +113,13 @@ export function Analytics({
       </section>
       <section className="prep-card">
         <h3>Проход и подтверждение по дням</h3>
+        <svg viewBox="0 0 640 130" role="img" aria-label="Динамика пройденных и подтверждённых вопросов" style={{width: "100%"}}>
+          <path d="M20 15V110H620" fill="none" stroke="var(--line)" />
+          <polyline points={points("passed_count")} fill="none" stroke="var(--muted)" strokeWidth="2" strokeDasharray="5 4" />
+          <polyline points={points("confirmed_count")} fill="none" stroke="var(--ink)" strokeWidth="2" />
+          <text x="20" y="125" fill="var(--muted)" fontSize="10">{trend[0] ? dateLabel(trend[0].date) : ""}</text>
+          <text x="620" y="125" textAnchor="end" fill="var(--muted)" fontSize="10">{dateLabel(overview.today)}</text>
+        </svg>
         <div className="prep-trend">
           {overview.days.map((day) => (
             <button
@@ -116,12 +141,20 @@ export function Analytics({
       </section>
       <section className="prep-card">
         <h3>Попытки и занятия</h3>
+        <table className="prep-results-table">
+          <thead><tr><th>Условия</th><th>Успешно</th><th>Частично</th><th>Неуспешно</th><th>Ожидают проверки</th></tr></thead>
+          <tbody>{[["memory", "По памяти"], ["supported", "С опорой"], ["unknown", "Условия неизвестны"]].map(([mode,label]) =>
+            <tr key={mode}><th>{label}</th>{["passed","partial","failed","pending"].map((outcome) =>
+              <td key={outcome}>{summary.results_by_mode?.[mode]?.[outcome] ?? 0}</td>)}</tr>)}</tbody>
+        </table>
+        <p>{summary.disagreement_percent === null ? "Для сравнения оценок нужны системная оценка и самооценка одной попытки."
+          : `Оценки расходятся в ${summary.disagreement_percent}% из ${summary.assessment_pairs} сопоставимых попыток.`}</p>
         <div className="prep-actions">
           {[
             ["passed", "Зачтено", summary.passed_attempts],
             ["partial", "Частично", summary.partial_attempts],
             ["failed", "Не зачтено", summary.failed_attempts],
-            ["unscored", "Без оценки", summary.pending_attempts],
+            ["pending", "Ожидают проверки", summary.pending_attempts],
           ].map(([key, label, count]) => (
             <Button
               key={key}
@@ -205,6 +238,7 @@ export function Analytics({
             options={[
               { value: "weak", label: "Ещё не освоены" },
               { value: "unscored", label: "Без проверки" },
+              { value: "errors", label: "С последними ошибками" },
             ]}
             onValueChange={setFilter}
           />
@@ -241,6 +275,8 @@ export function Analytics({
                   {topic.missed_points.length > 0 && (
                     <p>Упущено: {topic.missed_points.join("; ")}</p>
                   )}
+                  {Object.entries(topic.recurring_omissions ?? {}).map(([point, count]) =>
+                    <p key={point}>Повторяющийся пропуск ({count} попытки): {point}</p>)}
                   <Button
                     variant="ghost"
                     onClick={() => onHistory({ node_id: topic.node_id })}

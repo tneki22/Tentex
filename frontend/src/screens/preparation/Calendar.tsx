@@ -1,5 +1,6 @@
 /** Дневной календарь показывает план и факт без рейтинга или окраски метрик. */
 import { Link } from "react-router";
+import { useEffect, useRef } from "react";
 import { Button } from "../../components/ui";
 import {
   workLabels,
@@ -22,11 +23,21 @@ export function Calendar({
   onStart: (date: string) => void;
   onUnderstood: (id: string) => void;
 }) {
+  const agenda = useRef<HTMLElement>(null);
+  const lastSelected = useRef(selected);
+  useEffect(() => {
+    if (lastSelected.current === selected) return;
+    lastSelected.current = selected;
+    agenda.current?.querySelector(`[data-date="${selected}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [selected]);
   return (
-    <section className="plan-agenda" aria-label="Календарь подготовки">
-      {overview.days.map((day) => (
+    <section ref={agenda} className="plan-agenda" aria-label="Календарь подготовки">
+      {overview.days.filter((day) => day.date === selected || day.planned_count > 0
+        || day.active_seconds > 0 || (day.date >= overview.today
+          && day.date <= (overview.deadline ?? overview.days.at(-1)!.date))).map((day) => (
         <article
           key={day.date}
+          data-date={day.date}
           className={`plan-day ${selected === day.date ? "is-selected" : ""}`}
         >
           <button

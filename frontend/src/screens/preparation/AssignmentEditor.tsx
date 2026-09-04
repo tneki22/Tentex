@@ -48,7 +48,7 @@ export function AssignmentEditor({
       unit_id,
       order: value.order + index,
       origin: "manual",
-      estimate_source: "Оценка вручную",
+      estimate_source: "Ручная оценка",
       reason: "Назначено вручную",
     }));
     onPreview({

@@ -35,7 +35,10 @@ import { addDays, dateLabel, duration } from "./preparation/dates";
 export function Plan() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
-  const [params, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParams(localStorage.getItem(`tentex-preparation-view:${projectId}`) ?? "");
+  useEffect(() => {
+    localStorage.setItem(`tentex-preparation-view:${projectId}`, params.toString());
+  }, [projectId, params]);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
@@ -242,12 +245,17 @@ export function Plan() {
         )}
         <section className="prep-coach">
           <p className="eyebrow">Сегодня</p>
-          <strong>{overview.coach.text}</strong>
+          {overview.readonly && <strong>{overview.coach.text}</strong>}
           {!overview.readonly && (
             <AiPreparation
               key={projectId}
               overview={overview}
               onDraft={showDraft}
+              onAction={(action) => {
+                if (action === "start") void startDay(overview.today);
+                else if (action === "redistribute") void preview({mode: "spread"});
+                else setSchedule(true);
+              }}
             />
           )}
         </section>
@@ -258,22 +266,24 @@ export function Plan() {
           </div>
           <div>
             <span>Доступно до экзамена</span>
-            <strong>{overview.summary.available_minutes} мин</strong>
+            <strong>{duration(overview.summary.available_minutes * 60)}</strong>
           </div>
           <div>
             <span>Осталось работы</span>
-            <strong>{overview.summary.remaining_work_minutes} мин</strong>
+            <strong>{duration(overview.summary.remaining_work_minutes * 60)}</strong>
           </div>
-          <div>
+          <div><span>Пройдено</span><strong>{overview.summary.passed_topics} / {overview.summary.total_topics}</strong></div>
+          <div><span>Подтверждено</span><strong>{overview.summary.confirmed_topics}</strong></div>
+          {overview.plan.unassigned_ids.length > 0 && <div>
             <span>Без даты</span>
             <Button
               variant="ghost"
               disabled={overview.readonly}
               onClick={() => setSchedule(true)}
             >
-              {overview.plan.unassigned_ids.length} вопросов · распределить
+              {overview.plan.unassigned_ids.length} заданий · распределить
             </Button>
-          </div>
+          </div>}
         </section>
         {overview.settings.config.daily_minutes == null && (
           <section className="prep-card">
@@ -370,14 +380,9 @@ export function Plan() {
                     ? `План ${selected.planned_minutes} мин · факт ${duration(selected.active_seconds)} · доступно ${selected.capacity_minutes} мин`
                     : "Выберите день в календаре."}
                 </p>
-                {overview.plan.items
-                  .filter((item) => item.on_date === date)
-                  .map((item) => (
-                    <p key={item.id}>
-                      {item.reason}
-                      {item.pinned ? " Дата закреплена." : ""}
-                    </p>
-                  ))}
+                {[...new Set(overview.plan.items.filter((item) => item.on_date === date)
+                  .map((item) => item.reason + (item.pinned ? " Дата закреплена." : "")))]
+                  .map((reason) => <p key={reason}>{reason}</p>)}
                 <h3>Если пропустил</h3>
                 <p>
                   Выберите, как обработать невыполненные назначения. Сначала

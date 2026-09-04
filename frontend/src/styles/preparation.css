@@ -1,4 +1,6 @@
 /* Плотность и спокойная палитра существующего Плана; метрики остаются нейтральными. */
+.prep-results-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.prep-results-table th, .prep-results-table td { padding: var(--space-2); text-align: left; border-bottom: 1px solid var(--line); }
 .prep-screen .plan-main {
   overflow-y: auto;
 }
