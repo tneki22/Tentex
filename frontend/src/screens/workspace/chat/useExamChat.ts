@@ -1,3 +1,4 @@
+import { useSearchParams } from "react-router";
 import { useEffect, useRef, useState } from "react";
 import {
   checkAttempt,
@@ -45,6 +46,8 @@ interface UseExamChatOptions {
  * лента не мигает и `completed` не требует полного перечитывания сессии.
  */
 export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatOptions) {
+  const [urlParams] = useSearchParams();
+  const preferredChat = urlParams.get("chat");
   const [sessions, setSessions] = useState<ChatSessionSummary[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -98,7 +101,7 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
           setActiveSessionId(created.id);
         } else {
           setSessions(list);
-          setActiveSessionId(list[0].id);
+          setActiveSessionId(list.find(item => item.id === preferredChat)?.id ?? list[0].id);
         }
       } catch (error) {
         if (controller.signal.aborted) return;
@@ -106,7 +109,7 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
       }
     })();
     return () => controller.abort();
-  }, [projectId, node?.id, sessionsReloadKey]);
+  }, [projectId, node?.id, sessionsReloadKey, preferredChat]);
 
   useEffect(() => {
     if (!node) {
@@ -296,11 +299,11 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
     abortRef.current?.abort();
   }
 
-  async function submitAnswer(text: string) {
+  async function submitAnswer(text: string, tracking?: Parameters<typeof submitChatAnswer>[3]) {
     if (!activeSessionId || !text.trim() || submittingAnswer) return;
     setSubmittingAnswer(true);
     try {
-      const result = await submitChatAnswer(projectId, activeSessionId, text.trim());
+      const result = await submitChatAnswer(projectId, activeSessionId, text.trim(), tracking);
       for (const message of result.messages) upsertMessage(message);
       await saveChatDraft(projectId, activeSessionId, "");
       setDraft("");
