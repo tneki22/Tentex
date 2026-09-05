@@ -169,6 +169,21 @@ function isStudyNode(node: ProgramNodeRead): boolean {
   return STUDY_TYPES.has(node.node_type) && node.is_in_current_program && !node.is_archived;
 }
 
+function ancestorSectionIds(nodes: ProgramNodeRead[], nodeId: string | null): string[] {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const sectionIds: string[] = [];
+  let current = nodeId ? nodesById.get(nodeId) : undefined;
+
+  while (current?.parent_id) {
+    const parent = nodesById.get(current.parent_id);
+    if (!parent) break;
+    if (parent.node_type === "section") sectionIds.push(parent.id);
+    current = parent;
+  }
+
+  return sectionIds;
+}
+
 function renderHighlighted(text: string, highlights: SearchHighlightRead[]): ReactNode {
   if (highlights.length === 0) return text;
   const sorted = [...highlights].sort((left, right) => left.start - right.start);
@@ -227,9 +242,14 @@ function sanitizeLayout(
   const groupWeights = finalGroups.length === 1
     ? [1]
     : finalGroups.map((_, index) => source?.group_weights[index] && source.group_weights[index] > 0 ? source.group_weights[index] : 1);
+  const expandedNodeIds = new Set([
+    ...(source?.expanded_node_ids ??
+      visibleNodes.filter((node) => node.node_type === "section").map((node) => node.id)),
+    ...ancestorSectionIds(visibleNodes, selected),
+  ]);
   return {
     selected_node_id: selected,
-    expanded_node_ids: [...new Set(source?.expanded_node_ids ?? visibleNodes.filter((node) => node.node_type === "section").map((node) => node.id))].filter((id) => currentIds.has(id)),
+    expanded_node_ids: [...expandedNodeIds].filter((id) => currentIds.has(id)),
     tree_width: Math.round(Math.min(460, Math.max(260, source?.tree_width ?? 320))),
     groups: finalGroups,
     group_weights: groupWeights,
@@ -288,7 +308,7 @@ export function ProjectWorkspace() {
       setLayout(sanitized);
       resizeReadyRef.current = false;
       if (JSON.stringify(sanitized) !== JSON.stringify(next.workspace_state?.layout)) {
-        await saveWorkspaceState(projectId, sanitized);
+        enqueueSave(sanitized);
       }
       if (next.project.workspace_variant === "exam") {
         getCoverageMap(projectId, signal).then(setCoverage).catch(() => undefined);
@@ -362,6 +382,14 @@ export function ProjectWorkspace() {
   const textbook = detail?.project.workspace_variant === "textbook";
   const availableTabs = allowedTabs(detail?.project ?? null);
   const filteredTree = useMemo(() => filterProgramTree(treeResult.tree, query), [treeResult.tree, query]);
+
+  useEffect(() => {
+    if (loading || !selected) return;
+    document
+      .querySelector<HTMLElement>(".workspace-question-tree .workspace-question-row.is-active")
+      ?.scrollIntoView({ block: "center", inline: "nearest" });
+  }, [loading, selected?.id]);
+
   const answerStatusByNode = useMemo(() => {
     const map = new Map<string, ReferenceAnswerStatus>();
     for (const row of coverage?.rows ?? []) {
