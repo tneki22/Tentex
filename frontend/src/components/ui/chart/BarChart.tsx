@@ -8,6 +8,8 @@ export interface BarDatum {
   /** Подпись под столбцом. */
   label: string;
   value: number;
+  /** Индивидуальный бюджет дня: контур за фактическим временем. */
+  target?: number;
   /** Контурная часть сверху: сколько ещё осталось до цели сегодня. */
   ghost?: number;
   /** Явно пропущенный день: вместо столбца точка на базовой линии. */
@@ -46,23 +48,31 @@ export function BarChart({
   const { ref, width } = useChartWidth();
   const [hover, setHover] = useState<number | null>(null);
   // Запас сверху: иначе линия цели встаёт вплотную к краю и её подпись обрезается.
-  const peak = Math.max(target ?? 0, ...data.map((d) => d.value + (d.ghost ?? 0)), 1) * 1.15;
+  const maximum = Math.max(target ?? 0, ...data.map((d) => Math.max(d.target ?? 0, d.value + (d.ghost ?? 0))), 1);
+  const tick = Math.max(1, Math.ceil(maximum / 3 / (maximum > 30 ? 10 : 1))) * (maximum > 30 ? 10 : 1);
+  const peak = tick * 3;
   const empty = data.every((d) => d.value === 0);
-  const step = width && data.length ? width / data.length : 0;
+  const left = 28;
+  const step = width && data.length ? (width - left) / data.length : 0;
   const barWidth = Math.max(3, Math.min(18, step * 0.56));
   const scale = (value: number) => (value / peak) * height;
-  const labelEvery = Math.max(1, Math.ceil(data.length / 12));
+  const labelEvery = Math.max(1, Math.ceil(data.length / Math.max(2, Math.floor(width / 34))));
 
   return (
     <div className="chart" ref={ref}>
       {width > 0 && (
         <svg
           width={width}
-          height={height + AXIS}
+          height={height + AXIS + 8}
           role="img"
           aria-label={ariaLabel}
           onMouseLeave={() => setHover(null)}
+          style={{ paddingTop: 8 }}
         >
+          {[0, tick, tick * 2, peak].map(value => <g key={value}>
+            <line x1={left} x2={width} y1={height - scale(value)} y2={height - scale(value)} className="chart-grid" />
+            <text x={left - 6} y={height - scale(value) + 4} textAnchor="end" className="chart-axis-label">{value}</text>
+          </g>)}
           {target != null && target > 0 && (
             <g>
               <line
@@ -84,9 +94,9 @@ export function BarChart({
               )}
             </g>
           )}
-          <line x1={0} x2={width} y1={height} y2={height} className="chart-baseline" />
+          <line x1={left} x2={width} y1={height} y2={height} className="chart-baseline" />
           {data.map((datum, index) => {
-            const x = index * step + (step - barWidth) / 2;
+            const x = left + index * step + (step - barWidth) / 2;
             const over = target != null && target > 0 ? Math.max(0, datum.value - target) : 0;
             const base = datum.value - over;
             const ghost = datum.ghost ?? 0;
@@ -94,9 +104,15 @@ export function BarChart({
               <g
                 key={datum.key}
                 onMouseEnter={() => setHover(index)}
+                onFocus={() => setHover(index)}
+                onBlur={() => setHover(null)}
+                tabIndex={0}
+                aria-label={datum.tooltip ?? `${datum.label}: ${datum.value}`}
                 className={`chart-bar-group${datum.current ? " is-current" : ""}`}
               >
-                <rect x={index * step} y={0} width={step} height={height} fill="transparent" />
+                <title>{datum.tooltip ?? datum.label}</title>
+                <rect x={left + index * step} y={0} width={step} height={height} fill="transparent" />
+                {(datum.target ?? 0) > 0 && <rect x={x - 2} y={height - scale(datum.target!)} width={barWidth + 4} height={scale(datum.target!)} rx={3} className="chart-day-budget" />}
                 {datum.hollow ? (
                   <circle cx={x + barWidth / 2} cy={height - 3} r={2.5} className="chart-bar-rest" />
                 ) : (
@@ -133,7 +149,7 @@ export function BarChart({
                     )}
                   </>
                 )}
-                {index % labelEvery === 0 && (
+                {(index % labelEvery === 0 || index === data.length - 1) && (
                   <text x={x + barWidth / 2} y={height + 13} textAnchor="middle" className="chart-axis-label">
                     {datum.label}
                   </text>

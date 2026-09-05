@@ -10,12 +10,9 @@ from conftest import make_exam_project, make_topic_node
 from sqlalchemy import select
 
 from app.ai.gateway import ModelGateway
-from app.ai.jobs import _dispatch
 from app.ai.provider import FakeTransport, ProviderCompletion, ProviderUsage
 from app.models import (
     AiSettings,
-    BackgroundJob,
-    BackgroundJobState,
     ExamKind,
     NodeType,
     ProgramNode,
@@ -234,16 +231,8 @@ async def test_coach_automatic_once_and_manual_retry(session, ai_config, prepara
     gateway = ModelGateway(session, fake)
     started = await ai.start(session, gateway, project.id, command)
     again = await ai.start(session, gateway, project.id, command)
-    assert started.job_id == again.job_id
-    job = session.get(BackgroundJob, started.job_id)
-    assert job.state == BackgroundJobState.QUEUED
-    result = await _dispatch(session, job, gateway)
-    assert result.origin == "ai" and "Сегодня доступно" in result.text
-    with session.begin():
-        job.state = BackgroundJobState.COMPLETED
-    completed = await ai.start(session, gateway, project.id, command)
-    assert completed.job_id == started.job_id
-    assert fake.complete_calls == 1
+    assert started.job_id is None and again.job_id is None
+    assert fake.complete_calls == 0
     command.automatic = False
     retry = await ai.start(session, gateway, project.id, command)
     assert retry.job_id != started.job_id
@@ -258,10 +247,10 @@ async def test_automatic_coach_never_forces_paid_confirmation(session, ai_config
     session.commit()
     fake = FakeTransport()
     result = await ai.start(session, ModelGateway(session, fake), project.id, command)
-    assert result.job_id is None and result.coach.origin == "local"
+    assert result.job_id is None and result.coach is None
     assert result.reason and fake.complete_calls == 0
     row = session.scalar(select(PreparationCoach))
-    assert row.automatic_attempted
+    assert row is None
 
 
 @pytest.mark.asyncio
@@ -269,7 +258,7 @@ async def test_disabled_coach_keeps_local_fallback(session, preparation):
     project, _, command = preparation
     command.action, command.automatic = "coach", True
     result = await ai.start(session, ModelGateway(session, FakeTransport()), project.id, command)
-    assert result.coach.origin == "local" and result.reason
+    assert result.coach is None and result.reason
 
 
 @pytest.mark.asyncio

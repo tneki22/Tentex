@@ -28,6 +28,16 @@ export function useStudyTracking(
   const [state, setState] = useState("Ожидание");
   const [seconds, setSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!enabled || !nodeId) return;
+    const opened = () => {
+      if (!document.hidden) void preparation.opened(projectId, nodeId).catch(caught => setError(errorText(caught)));
+    };
+    opened();
+    document.addEventListener("visibilitychange", opened);
+    const timer = window.setInterval(opened, 60_000);
+    return () => { document.removeEventListener("visibilitychange", opened); window.clearInterval(timer); };
+  }, [projectId, nodeId, enabled]);
   const answerSeconds = useRef(0);
   const answerKey = `tentex-answer-time:${projectId}:${nodeId}`;
   useEffect(() => {

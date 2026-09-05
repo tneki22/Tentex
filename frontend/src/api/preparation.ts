@@ -33,6 +33,7 @@ export const preparation = {
       `${path(id)}?${new URLSearchParams({ ...(start ? { start } : {}), ...(end ? { end } : {}) })}`,
       { signal },
     ),
+  opened: (id: string, node: string): Promise<void> => request(`${path(id)}/opened/${encodeURIComponent(node)}`, { method: "POST" }),
   settings: (
     id: string,
     value: Schema["SettingsWrite"],
@@ -74,11 +75,11 @@ export const preparation = {
     request(`${path(id)}/undo`, body("POST", { expected_revision })),
   queue: (
     id: string,
-    date: string,
+    date?: string,
     start = false,
     signal?: AbortSignal,
   ): Promise<Queue> =>
-    request(`${path(id)}/queue?on_date=${date}`, {
+    request(`${path(id)}/queue${date ? `?on_date=${date}` : ""}`, {
       method: start ? "POST" : "GET",
       signal,
     }),
@@ -111,6 +112,8 @@ export const activityLabels: Record<string, string> = {
   chat: "Чат",
   answer: "Ответ",
   manual: "Ручное занятие",
+  day_start: "Начало дня",
+  plan_change: "Изменение плана",
   understood: "Разобрался",
 };
 export const outcomeLabels: Record<string, string> = {

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import GoalPassport, NodeType, ProjectStatus
-from app.preparation.activity import time_segments, time_totals
+from app.preparation.activity import history, time_segments, time_totals
 from app.preparation.calendar import budget_minutes, day_bounds, study_date
 from app.preparation.data import (
     answer_presence,
@@ -22,8 +22,9 @@ from app.preparation.data import (
 )
 from app.preparation.evidence import TARGET_SUCCESSES, project_attempts, replay
 from app.preparation.forecast import memory_forecast
-from app.preparation.models import PreparationCoach, StudyActivity
+from app.preparation.models import PreparationCoach, PreparationQueue, StudyActivity
 from app.preparation.planner import day_loads, read_plan
+from app.preparation.progress import milestones, openings, remaining_budget
 from app.preparation.schemas import (
     CoachRead,
     DailyIntervalRead,
@@ -246,8 +247,8 @@ def overview(
     settings = get_settings(session, project_id)
     config = settings.config
     today = study_date(now, config)
-    start = min(start or today - timedelta(days=30), today - timedelta(days=7))
-    end = max(end or today + timedelta(days=30), project.deadline or today, today)
+    start = min(start or study_date(project.created_at, config), today - timedelta(days=13))
+    end = max(end or project.deadline or today + timedelta(days=30), today)
     if (end - start).days > 730:
         from app.projects.errors import ProjectDomainError
 
@@ -259,6 +260,12 @@ def overview(
     rows = project_attempts(session, project_id, now)
     topics, evidence = topic_progress(session, project_id, config, unit_rows, rows=rows)
     days = day_loads(session, project_id, plan.items, start, end, now=now)
+    opened = openings(session, project_id, config)
+    first_opened = {}
+    for day, node_ids in sorted(opened.items()):
+        for node_id in node_ids:
+            first_opened.setdefault(node_id, day)
+    done = set(plan.completed_ids)
     by_kind, by_node = defaultdict(int), defaultdict(int)
     for day in days:
         kinds, nodes = time_totals(session, project_id, day.date, config)
@@ -266,14 +273,15 @@ def overview(
             by_kind[k] += seconds
         for k, seconds in nodes.items():
             by_node[k] += seconds
-        cutoff = min(now, day_bounds(day.date, config)[1] - timedelta(microseconds=1))
-        if day.date <= today:
-            historical = project_attempts(session, project_id, cutoff)
-            states, _ = topic_progress(
-                session, project_id, config, unit_rows, before=cutoff, rows=historical
-            )
-            day.passed_count = sum(t.status != "unseen" for t in states)
-            day.confirmed_count = sum(t.status in {"practiced", "mastered"} for t in states)
+        day.opened_topic_ids = list(opened.get(day.date, set()))
+        day.passed_count = sum(
+            at <= day.date
+            for node, at in first_opened.items()
+            if node in {t.node_id for t in topics}
+        )
+        completed = [i for i in plan.items if i.on_date == day.date and i.id in done]
+        day.opened_new_count = len({i.unit_id for i in completed if i.kind != "review"})
+        day.opened_review_count = len({i.unit_id for i in completed if i.kind == "review"})
     for topic in topics:
         topic.active_seconds = by_node[topic.node_id]
     summary = _summary(
@@ -317,6 +325,7 @@ def overview(
                     seconds=int((right - left).total_seconds()),
                 )
             )
+    events = history(session, project_id, limit=100000).items
     return OverviewRead(
         project_id=project_id,
         project_name=project.name or "Экзамен",
@@ -337,4 +346,8 @@ def overview(
         memory=memory,
         coach=coach,
         today_intervals=intervals,
+        day_started=session.get(PreparationQueue, (project_id, today)) is not None,
+        budget=remaining_budget(days, config, today, project.deadline),
+        milestones=milestones(events),
+        recent_events=events[:3],
     )

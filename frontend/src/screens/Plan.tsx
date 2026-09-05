@@ -1,7 +1,7 @@
 /** «Моя подготовка»: дашборд, очередь дня, периоды и три вкладки на одном экране. */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { ChevronDown, Settings2, Sparkles, Undo2, Wand2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, Settings2, Sparkles, Undo2, Wand2 } from "lucide-react";
 import {
   Button,
   ConfirmDialog,
@@ -13,22 +13,18 @@ import {
   PageHead,
   SegmentedTabs,
   StatusBadge,
-  Tooltip,
 } from "../components/ui";
 import { ProjectNav } from "../components/domain";
 import {
   preparation,
   revisions,
   errorText,
-  type Activity,
-  type Draft,
-  type Overview,
   type Phase,
   type PlanItem,
 } from "../api/preparation";
-import { getBackgroundJobResult } from "../api/backgroundJobs";
-import { getProject, type ModuleKey } from "../api/projects";
-import { useBackgroundJob } from "../hooks/useBackgroundJob";
+import { cancelBackgroundJob } from "../api/backgroundJobs";
+import { usePreparationData } from "../hooks/usePreparationData";
+import { usePreparationAi } from "../hooks/usePreparationAi";
 import { Dashboard, type DashboardPeriod } from "./preparation/Dashboard";
 import { TodayQueue } from "./preparation/TodayQueue";
 import { BlocksStrip } from "./preparation/BlocksStrip";
@@ -37,12 +33,14 @@ import { DayTree } from "./preparation/DayTree";
 import { DayQuestionsEditor } from "./preparation/DayQuestionsEditor";
 import { HistoryTab } from "./preparation/HistoryTab";
 import { AnalyticsTab } from "./preparation/AnalyticsTab";
+import { AiDistributionDialog } from "./preparation/AiDistributionDialog";
+import { ExamBudget } from "./preparation/ExamBudget";
+import { PreparationEvents } from "./preparation/PreparationEvents";
 import { StartDayGreeting } from "./preparation/StartDayGreeting";
 import { Settings } from "./preparation/Settings";
 import { addDays, dateLabel } from "./preparation/dates";
 import {
   autoPhases,
-  autoRestDate,
   buildDays,
   debtOf,
   planStatus,
@@ -52,14 +50,13 @@ import {
 
 type Tab = "calendar" | "history" | "analytics";
 
-const PERIOD_DAYS: Record<DashboardPeriod, number> = { "14": 14, "30": 30, "90": 90 };
-
 const COMPOSED_LABEL = {
   none: "План не составлен",
   partial: "План частично составлен",
   full: "План составлен",
 } as const;
 
+/** Экран управляет действиями пользователя; загрузка и фоновые задачи изолированы в хуках. */
 export function Plan() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
@@ -70,119 +67,46 @@ export function Plan() {
     localStorage.setItem(`tentex-preparation-view:${projectId}`, params.toString());
   }, [projectId, params]);
 
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [answers, setAnswers] = useState<Activity[]>([]);
-  /** Панель проекта должна быть той же, что на других экранах: без лишних вкладок. */
-  const [modules, setModules] = useState<ModuleKey[] | undefined>(undefined);
+  const { overview, setOverview, answers, modules, error: dataError, refresh } = usePreparationData(projectId);
   const [error, setError] = useState<string | null>(null);
+  const [aiDialog, setAiDialog] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [version, setVersion] = useState(0);
   const [block, setBlock] = useState<Phase | { start: string; end: string } | null>(null);
   const [confirm, setConfirm] = useState<{ title: string; body: string; run: () => void } | null>(null);
   const [greeting, setGreeting] = useState(false);
   const [settings, setSettings] = useState(false);
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const delivered = useRef<string | null>(null);
+  const { jobId, setJobId, job, draft, clearDraft, error: aiError, retry: retryAi } = usePreparationAi(projectId);
+  const displayError = error ?? dataError ?? aiError;
 
-  const period = (params.get("period") as DashboardPeriod) ?? "14";
+  const period: DashboardPeriod = params.get("period") === "14" ? "14" : "7";
   const tab = (params.get("view") as Tab) ?? "calendar";
   const date = params.get("date") ?? overview?.today ?? "";
 
-  const refresh = useCallback(() => setVersion((value) => value + 1), []);
-  const ui = (key: string, value: string) =>
+  const ui = (key: string, value: string, extra: Record<string, string> = {}) =>
     setParams(
       (current) => {
         const next = new URLSearchParams(current);
         next.set(key, value);
+        Object.entries(extra).forEach(([name, entry]) => next.set(name, entry));
         return next;
       },
       { replace: true },
     );
 
-  useEffect(() => {
-    const controller = new AbortController();
-    const back = PERIOD_DAYS[period] ?? 14;
-    preparation
-      .overview(projectId, undefined, undefined, controller.signal)
-      .then((snapshot) =>
-        preparation.overview(
-          projectId,
-          addDays(snapshot.today, -back),
-          snapshot.deadline && snapshot.deadline > snapshot.today
-            ? snapshot.deadline
-            : addDays(snapshot.today, 30),
-          controller.signal,
-        ),
-      )
-      .then((value) => {
-        setOverview(value);
-        setError(null);
-      })
-      .catch((caught) => {
-        if (!controller.signal.aborted) setError(errorText(caught));
-      });
-    return () => controller.abort();
-  }, [projectId, period, version]);
-
-  useEffect(() => {
-    if (!overview) return;
-    const controller = new AbortController();
-    const query = new URLSearchParams({
-      kind: "answer",
-      date_from: addDays(overview.today, -(PERIOD_DAYS[period] ?? 14)),
-      date_to: overview.today,
-      limit: "200",
-    });
-    preparation
-      .history(projectId, query, controller.signal)
-      .then((value) => setAnswers(value.items))
-      .catch(() => undefined);
-    return () => controller.abort();
-  }, [projectId, period, overview?.plan.revision, version]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    getProject(projectId, controller.signal)
-      .then((detail) => setModules(detail.project.enabled_modules))
-      .catch(() => undefined);
-    return () => controller.abort();
-  }, [projectId]);
-
-  const { job } = useBackgroundJob(jobId);
-  useEffect(() => {
-    if (job?.state !== "completed" || !jobId || delivered.current === jobId) return;
-    delivered.current = jobId;
-    getBackgroundJobResult<Draft>(jobId)
-      .then((value) => {
-        if (value && "items" in value) setDraft(value);
-        setJobId(null);
-      })
-      .catch((caught) => setError(errorText(caught)));
-  }, [job?.state, jobId]);
-
-  const days: DayFacts[] = useMemo(() => {
-    if (!overview) return [];
-    const start = overview.days[0]?.date ?? overview.today;
-    const end = overview.days[overview.days.length - 1]?.date ?? overview.today;
-    return buildDays(overview, start, end);
-  }, [overview]);
-
-  const cards = useMemo(
-    () => (overview ? queueCards(overview, overview.today) : []),
-    [overview],
-  );
-  const debt = useMemo(() => (overview ? debtOf(overview) : null), [overview]);
-  const status = useMemo(() => (overview ? planStatus(overview) : null), [overview]);
+  const days: DayFacts[] = overview ? buildDays(overview, overview.days[0]?.date ?? overview.today, overview.days[overview.days.length - 1]?.date ?? overview.today) : [];
+  const cards = overview ? queueCards(overview, overview.today) : [];
+  const debt = overview ? debtOf(overview) : null;
+  const status = overview ? planStatus(overview) : null;
 
   /** Любая правка плана идёт черновиком: сервер сам защищает прошлое и закрепления. */
-  const commit = useCallback(
-    async (change: { items?: PlanItem[]; phases?: Phase[] }) => {
+  const commit = async (change: { items?: PlanItem[]; phases?: Phase[] }) => {
       if (!overview || overview.readonly) return;
       setBusy(true);
       try {
         const created = await preparation.draft(projectId, {
           mode: "manual",
+          include_pinned: false,
           phases: change.phases ?? null,
           items: change.items ?? null,
           unit_ids: null,
@@ -195,29 +119,29 @@ export function Plan() {
           apply_phases: change.phases != null,
         });
         setError(null);
+        setNotice("Изменения сохранены. Их можно откатить ниже.");
+        window.dispatchEvent(new Event("tentex-preparation-changed"));
         refresh();
       } catch (caught) {
         setError(errorText(caught));
       } finally {
         setBusy(false);
       }
-    },
-    [overview, projectId, refresh],
-  );
+    };
 
   /** Серверные режимы распределения и долга: результат сразу виден в календаре. */
-  const runMode = useCallback(
-    async (mode: "count" | "catch_up" | "dismiss", range?: { start: string; end: string }) => {
+  const runMode = async (mode: "count" | "catch_up" | "dismiss", range?: { start: string; end: string }) => {
       if (!overview || overview.readonly) return;
       setBusy(true);
       try {
         const created = await preparation.draft(projectId, {
           mode,
+          include_pinned: mode === "dismiss" || mode === "catch_up",
           phases: null,
           items: null,
           unit_ids: null,
           start: range?.start ?? overview.today,
-          end: range?.end ?? overview.deadline ?? addDays(overview.today, 30),
+          end: mode === "dismiss" ? overview.today : range?.end ?? overview.deadline ?? addDays(overview.today, 30),
           ...revisions(overview),
         });
         await preparation.apply(projectId, created.id, {
@@ -225,19 +149,23 @@ export function Plan() {
           apply_phases: false,
         });
         setError(null);
+        const before = new Map(overview.plan.items.map(item => [item.id, item]));
+        const changed = created.items.filter(item => JSON.stringify(before.get(item.id)) !== JSON.stringify(item)).length;
+        setNotice(mode === "dismiss"
+          ? `Снято назначений: ${created.removed_ids.length}. Занятия и ответы сохранены.`
+          : `${mode === "catch_up" ? "Перенесено" : "Распределено"} назначений: ${changed}. Без даты: ${created.unassigned_ids.length}.${changed === 0 ? " Свободных дат с достаточным бюджетом нет или все вопросы уже назначены. Проверь параметры и календарь." : ""}`);
+        window.dispatchEvent(new Event("tentex-preparation-changed"));
+        ui("view", "calendar");
         refresh();
       } catch (caught) {
         setError(errorText(caught));
       } finally {
         setBusy(false);
       }
-    },
-    [overview, projectId, refresh],
-  );
+    };
 
   /** Отметка даты пропускаемой живёт в параметрах, отдельной сущности не нужно. */
-  const toggleRest = useCallback(
-    async (value: string) => {
+  const toggleRest = async (value: string) => {
       if (!overview || overview.readonly) return;
       const current = overview.settings.config.rest_dates ?? [];
       const next = current.includes(value)
@@ -256,9 +184,7 @@ export function Plan() {
       } finally {
         setBusy(false);
       }
-    },
-    [overview, projectId, refresh],
-  );
+    };
 
   async function undo() {
     if (!overview || overview.readonly) return;
@@ -273,32 +199,13 @@ export function Plan() {
     }
   }
 
-  async function startAi() {
-    if (!overview || overview.readonly) return;
-    setBusy(true);
-    try {
-      const started = await preparation.ai(projectId, {
-        action: "distribute",
-        instruction: "",
-        confirmed: true,
-        automatic: false,
-        ...revisions(overview),
-      });
-      if (started.job_id) setJobId(started.job_id);
-      else setError(started.reason ?? "Внешние модели недоступны.");
-    } catch (caught) {
-      setError(errorText(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function applyDraft() {
     if (!draft) return;
     setBusy(true);
     try {
       await preparation.apply(projectId, draft.id, { selected_item_ids: null, apply_phases: true });
-      setDraft(null);
+      clearDraft();
+      setNotice("Предложение ИИ применено. План можно откатить.");
       refresh();
     } catch (caught) {
       setError(errorText(caught));
@@ -315,9 +222,9 @@ export function Plan() {
   if (!overview)
     return (
       <main className="prep-loading">
-        {error ? (
+        {displayError ? (
           <>
-            <ErrorState title="Подготовка не загрузилась" message={error} />
+            <ErrorState title="Подготовка не загрузилась" message={displayError!} />
             <Button onClick={refresh}>Повторить</Button>
           </>
         ) : (
@@ -326,14 +233,14 @@ export function Plan() {
       </main>
     );
 
-  const readonly = overview.readonly;
+  const readonly = overview.readonly || Boolean(overview.deadline && overview.deadline < overview.today);
   const stripStart = overview.today;
   const stripEnd =
     overview.deadline && overview.deadline > overview.today
       ? overview.deadline
       : addDays(overview.today, 30);
-  const started = cards.some((card) => card.opened);
-  const invite = !readonly && cards.length > 0 && !started;
+  const started = overview.day_started;
+  const invite = !readonly && cards.some(card => !card.opened) && !started;
   const draftDates = draft ? new Set(draft.items.map((item) => item.on_date)) : undefined;
 
   return (
@@ -341,40 +248,22 @@ export function Plan() {
       <aside className="plan-project-panel">
         <header className="program-project-title">
           <Link to={`/projects/${projectId}`} aria-label="В рабочую область">
-            ←
+            <ArrowLeft size={16} />
           </Link>
           <strong>{overview.project_name}</strong>
         </header>
+        <PreparationEvents overview={overview} onHistory={() => ui("view", "history")} />
         <ProjectNav
           projectId={projectId}
           active="plan"
           modules={modules}
-          className={`program-project-nav${invite ? " is-inviting" : ""}`}
+          className="program-project-nav"
         />
       </aside>
 
       <main className="plan-main prep-main">
         <PageHead
           title="Моя подготовка"
-          eyebrow={
-            overview.deadline
-              ? `Экзамен ${dateLabel(overview.deadline)}${overview.exam_time ? `, ${overview.exam_time.slice(0, 5)}` : ""}`
-              : "Дата экзамена не задана"
-          }
-          leading={
-            status && (
-              <span className="prep-status">
-                <StatusBadge tone={status.composed === "full" ? "info" : "neutral"}>
-                  {COMPOSED_LABEL[status.composed]}
-                </StatusBadge>
-                {status.progress && (
-                  <StatusBadge tone={status.progress === "onTrack" ? "success" : "warning"}>
-                    {status.progress === "onTrack" ? "Идёшь по плану" : `Отстаёшь · ${status.debt}`}
-                  </StatusBadge>
-                )}
-              </span>
-            )
-          }
           actions={
             <>
               {started ? (
@@ -383,7 +272,13 @@ export function Plan() {
                 <Button
                   className={invite ? "is-inviting" : undefined}
                   disabled={busy || readonly}
-                  onClick={() => setGreeting(true)}
+                  onClick={() => {
+                    setBusy(true);
+                    preparation.queue(projectId, overview.today, true).then(() => {
+                      setGreeting(true); setOverview({ ...overview, day_started: true });
+                      window.dispatchEvent(new Event("tentex-preparation-changed")); refresh();
+                    }).catch(caught => setError(errorText(caught))).finally(() => setBusy(false));
+                  }}
                 >
                   Начать день
                 </Button>
@@ -401,7 +296,7 @@ export function Plan() {
                     label: "Распределить с ИИ…",
                     icon: <Sparkles size={13} />,
                     disabled: busy || readonly || Boolean(jobId),
-                    onSelect: () => void startAi(),
+                    onSelect: () => setAiDialog(true),
                   },
                 ]}
                 trigger={
@@ -414,7 +309,20 @@ export function Plan() {
           }
         />
 
-        {error && <ErrorState title="Действие не завершено" message={error} />}
+        {status && <span className="prep-status">
+                <StatusBadge tone={status.composed === "full" ? "info" : "neutral"}>
+                  {COMPOSED_LABEL[status.composed]}
+                </StatusBadge>
+                {status.progress && (
+                  <StatusBadge tone={status.progress === "onTrack" ? "success" : "warning"}>
+                    {status.progress === "onTrack" ? "Идёшь по плану" : `Отстаёшь · ${status.debt}`}
+                  </StatusBadge>
+                )}
+              </span>}
+        <ExamBudget overview={overview} />
+        {notice && <p className="prep-action-notice" role="status">{notice}</p>}
+        {displayError && <ErrorState title="Действие не завершено" message={displayError} />}
+        {aiError && job?.state === "completed" && <Button variant="secondary" onClick={retryAi}>Повторить загрузку предложения</Button>}
         {readonly && <p className="prep-note">Проект только для чтения. История и план сохранены.</p>}
 
         <Dashboard
@@ -425,8 +333,7 @@ export function Plan() {
           projectId={projectId}
           onPeriod={(value) => ui("period", value)}
           onDayAnswers={(value) => {
-            ui("view", "history");
-            ui("date", value);
+            ui("view", "history", { date: value });
           }}
         />
 
@@ -436,8 +343,7 @@ export function Plan() {
           onOpen={openQuestion}
           onDistribute={() => void runMode("count")}
           onPickDay={() => {
-            ui("view", "calendar");
-            ui("date", overview.today);
+            ui("view", "calendar", { date: overview.today });
           }}
           disabled={busy || readonly}
         />
@@ -450,10 +356,7 @@ export function Plan() {
           onEdit={setBlock}
           onAdd={setBlock}
           onAuto={() => {
-            if (!overview.deadline) return;
-            void commit({ phases: autoPhases(overview.today, overview.deadline) });
-            const rest = autoRestDate(overview.today, overview.deadline);
-            if (rest && !(overview.settings.config.rest_dates ?? []).includes(rest)) void toggleRest(rest);
+            if (overview.deadline) void commit({ phases: autoPhases(overview.today, overview.deadline) });
           }}
         />
 
@@ -491,14 +394,14 @@ export function Plan() {
                 <Button disabled={busy} onClick={() => void applyDraft()}>
                   Применить
                 </Button>
-                <Button variant="secondary" disabled={busy} onClick={() => setDraft(null)}>
+                <Button variant="secondary" disabled={busy} onClick={() => { clearDraft(); }}>
                   Отклонить предложение
                 </Button>
               </div>
             )}
             {jobId && (
               <p className="prep-note">
-                ИИ распределяет вопросы: {job?.done ?? 0} из {job?.total ?? 0}.
+                {job?.state === "completed" ? "Загружаем предложение ИИ" : "ИИ распределяет вопросы"}{job?.total ? `: ${job.done} из ${job.total}` : "…"} <Button variant="ghost" onClick={() => { void cancelBackgroundJob(jobId).catch(caught => setError(errorText(caught))); }}>Отменить запрос</Button>
               </p>
             )}
             <div className="prep-calendar-body">
@@ -530,13 +433,7 @@ export function Plan() {
                   >
                     <Wand2 size={13} /> Распределить вопросы
                   </Button>
-                  <Tooltip label="Сложный пересчёт в эту переделку не входит" side="top">
-                    <span>
-                      <Button variant="ghost" disabled>
-                        Пересчитать
-                      </Button>
-                    </span>
-                  </Tooltip>
+
                 </div>
               </aside>
               <DayQuestionsEditor
@@ -550,14 +447,14 @@ export function Plan() {
                 onDropDebt={() =>
                   setConfirm({
                     title: "Снять долг?",
-                    body: `В долге ${debt?.count ?? 0} вопросов с ${debt?.dates.length ?? 0} дат. Назначения будут сняты, реальные занятия и ответы останутся.`,
+                    body: `В долге ${debt?.count ?? 0} вопросов с ${debt?.dates.length ?? 0} дат. Неоткрытые назначения, включая закреплённые, будут сняты. Занятия и ответы останутся.`,
                     run: () => void runMode("dismiss"),
                   })
                 }
                 onCatchUp={() =>
                   setConfirm({
                     title: "Наверстать долг?",
-                    body: `В долге ${debt?.count ?? 0} вопросов с ${debt?.dates.length ?? 0} дат. Они переедут на ближайшие свободные дни, старые незакрытые назначения снимутся.`,
+                    body: `В долге ${debt?.count ?? 0} вопросов с ${debt?.dates.length ?? 0} дат. Они переедут на ближайшие свободные дни, включая закреплённые назначения. Старые незакрытые назначения снимутся.`,
                     run: () => void runMode("catch_up", { start: date, end: stripEnd }),
                   })
                 }
@@ -583,9 +480,6 @@ export function Plan() {
             overview={overview}
             days={days}
             answers={answers}
-            aiAvailable={!readonly}
-            aiBusy={busy}
-            onRefreshCoach={() => void startAi()}
           />
         )}
       </main>
@@ -634,6 +528,7 @@ export function Plan() {
         />
       </Dialog>
 
+      {aiDialog && <AiDistributionDialog overview={overview} onClose={() => setAiDialog(false)} onStarted={id => { setJobId(id); setAiDialog(false); ui("view", "calendar"); }} />}
       {greeting && <StartDayGreeting cards={cards} onClose={() => setGreeting(false)} />}
     </div>
   );

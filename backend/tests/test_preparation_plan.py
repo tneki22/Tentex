@@ -91,7 +91,7 @@ def test_ticket_is_atomic_in_distribution_and_manual_draft(session):
         planner.create_draft(session, project_id, command)
 
 
-def test_intersecting_phases_share_budget_and_stale_preview_is_rejected(session):
+def test_intersecting_phases_are_rejected_and_stale_preview_is_rejected(session):
     project, node = _project(session)
     today = study_date(datetime.now(UTC), get_settings(session, project.id).config)
     tomorrow = today + timedelta(days=1)
@@ -102,10 +102,13 @@ def test_intersecting_phases_share_budget_and_stale_preview_is_rejected(session)
     item = PlanItem(
         id=uuid4(), unit_id=node.id, on_date=tomorrow, minutes=150, phase_id=phases[0].id
     )
+    project_id = project.id
+    command = _command(session, project_id, mode="manual", phases=phases, items=[item])
+    with pytest.raises(ProjectDomainError, match="пересекаются"):
+        planner.create_draft(session, project_id, command)
     proposal = planner.create_draft(
-        session,
-        project.id,
-        _command(session, project.id, mode="manual", phases=phases, items=[item]),
+        session, project.id,
+        _command(session, project.id, mode="manual", phases=phases[:1], items=[item]),
     )
     day = next(d for d in proposal.days if d.date == tomorrow)
     assert day.capacity_minutes == 120 and day.overload_minutes == 30
@@ -121,4 +124,4 @@ def test_queue_resumes_position_and_never_splits_ticket(session):
     first = queue.start_queue(session, project.id)
     second = queue.start_queue(session, project.id)
     assert first == second
-    assert first.items
+    assert first.items == []

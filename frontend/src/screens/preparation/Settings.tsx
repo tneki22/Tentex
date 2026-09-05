@@ -331,26 +331,11 @@ export function Settings({
           }
         />
       </Field>
-      <Field label="Тон наставника">
-        <Select
-          value={config.coach_tone}
-          ariaLabel="Тон наставника"
-          options={[
-            { value: "calm", label: "Спокойный" },
-            { value: "gentle", label: "Мягкий" },
-            { value: "strict", label: "Строгий" },
-          ]}
-          onValueChange={(value) =>
-            patch({ coach_tone: value as Config["coach_tone"] })
-          }
-        />
-      </Field>
       <details>
         <summary>Пожелания к ИИ</summary>
         {[
           ["phases", "Блоки"],
           ["distribute", "Распределение"],
-          ["coach", "Наставник"],
         ].map(([key, label]) => (
           <Field key={key} label={label}>
             <textarea

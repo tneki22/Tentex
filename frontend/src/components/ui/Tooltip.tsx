@@ -1,9 +1,9 @@
-import type { PropsWithChildren } from "react";
+import type { PropsWithChildren, ReactNode } from "react";
 import { Tooltip as RadixTooltip } from "radix-ui";
 
 interface TooltipProps {
   /** Короткая подпись. Длинному тексту место в тексте экрана, а не в подсказке. */
-  label: string;
+  label: ReactNode;
   side?: "top" | "right" | "bottom" | "left";
 }
 

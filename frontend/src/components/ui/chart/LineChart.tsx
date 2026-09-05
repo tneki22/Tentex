@@ -1,5 +1,5 @@
 /** Накопительный график: план, факт, потолок программы и пунктирный прогноз. */
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useChartWidth } from "./useChartWidth";
 
 export interface LinePoint {
@@ -76,12 +76,13 @@ export function LineChart({
   readout,
 }: LineChartProps) {
   const { ref, width } = useChartWidth();
+  const clipId = useId();
   const [hover, setHover] = useState<number | null>(null);
   const plotWidth = Math.max(1, width - PAD_LEFT - PAD_RIGHT);
   const plotHeight = height - PAD_TOP - PAD_BOTTOM;
   const px = (x: number) => PAD_LEFT + (x / Math.max(maxX, 1)) * plotWidth;
   const py = (y: number) => PAD_TOP + plotHeight - (y / Math.max(maxY, 1)) * plotHeight;
-  const ticks = [0, 0.5, 1].map((share) => Math.round(maxY * share));
+  const ticks = [...new Set([0, 0.25, 0.5, 0.75, 1].map((share) => Math.round(maxY * share)))];
 
   return (
     <div className="chart is-line" ref={ref}>
@@ -99,6 +100,7 @@ export function LineChart({
             setHover(value >= 0 && value <= maxX ? value : null);
           }}
         >
+          <defs><clipPath id={clipId}><rect x={PAD_LEFT} y={PAD_TOP - 2} width={plotWidth} height={plotHeight + 4} /></clipPath></defs>
           {ticks.map((tick) => (
             <g key={tick}>
               <line x1={PAD_LEFT} x2={width - PAD_RIGHT} y1={py(tick)} y2={py(tick)} className="chart-grid" />
@@ -138,7 +140,7 @@ export function LineChart({
                 className="chart-marker"
                 style={marker.token ? { stroke: `var(${marker.token})` } : undefined}
               />
-              <text x={px(marker.x) + 4} y={PAD_TOP + 9} className="chart-marker-label">
+              <text x={px(marker.x) + (marker.x > maxX * .8 ? -4 : 4)} textAnchor={marker.x > maxX * .8 ? "end" : "start"} y={PAD_TOP + 16} className="chart-marker-label">
                 {marker.label}
               </text>
             </g>
@@ -149,7 +151,7 @@ export function LineChart({
             const last = line.points[line.points.length - 1];
             const first = line.points[0];
             return (
-              <g key={line.key}>
+              <g key={line.key} clipPath={`url(#${clipId})`}>
                 {line.filled && (
                   <path
                     d={`${path} L ${px(last.x)} ${py(0)} L ${px(first.x)} ${py(0)} Z`}
@@ -166,6 +168,7 @@ export function LineChart({
             );
           })}
           {hover != null && (
+            <g>
             <line
               x1={px(hover)}
               x2={px(hover)}
@@ -173,15 +176,21 @@ export function LineChart({
               y2={PAD_TOP + plotHeight}
               className="chart-crosshair"
             />
+            {series.filter(line => !line.dashed).map(line => {
+              const point = line.points.find(point => point.x === hover);
+              return point ? <circle key={line.key} cx={px(point.x)} cy={py(point.y)} r={4} fill={`var(${line.token})`} stroke="var(--paper)" strokeWidth={2} /> : null;
+            })}
+            </g>
           )}
           {xLabels.map((tick) => (
-            <text key={tick.label} x={px(tick.x)} y={height - 5} textAnchor="middle" className="chart-axis-label">
+            <text key={tick.x} x={px(tick.x)} y={height - 5} textAnchor={tick.x >= maxX ? "end" : "middle"} className="chart-axis-label">
               {tick.label}
             </text>
           ))}
         </svg>
       )}
-      {hover != null && readout && <p className="chart-readout" role="status">{readout(hover)}</p>}
+      {readout && <p className="chart-readout" role="status">{hover != null ? readout(hover) : "Наведи на график, чтобы сравнить план и факт за день"}</p>}
+      <div className="chart-series-legend">{series.map(line => <span key={line.key}><i style={{ borderColor: `var(${line.token})`, borderTopStyle: line.dashed ? "dashed" : "solid" }} />{line.label}</span>)}</div>
     </div>
   );
 }

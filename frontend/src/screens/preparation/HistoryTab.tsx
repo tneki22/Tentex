@@ -20,7 +20,7 @@ import {
 } from "../../api/preparation";
 import { AttemptDetails } from "./AttemptDetails";
 import { ManualActivityDialog } from "./ManualActivityDialog";
-import { durationLabel, dateLabel } from "./dates";
+import { durationLabel, dateLabel, studyDate } from "./dates";
 import { longDateLabel, plural, WEEKDAYS_LONG, weekdayIndexOf, type DayFacts } from "./model";
 
 const PAGE = 30;
@@ -54,15 +54,15 @@ const KIND_ICON: Record<string, typeof BookOpen> = {
 };
 
 /** Первое открытие и сумма времени вместо десятка одинаковых строк. */
-function rollUp(items: Activity[]) {
+function rollUp(items: Activity[], config: Overview["settings"]["config"]) {
   const seen = new Map<string, Activity>();
   const result: Activity[] = [];
   for (const item of items) {
-    if (item.kind === "answer" || item.attempt_id) {
+    if (item.kind === "answer" || item.kind === "plan_change" || item.kind === "day_start" || item.attempt_id) {
       result.push(item);
       continue;
     }
-    const key = `${item.occurred_at.slice(0, 10)}:${item.node_id ?? item.title}:${item.kind}`;
+    const key = `${studyDate(item.occurred_at, config)}:${item.node_id ?? item.title}:${item.kind}`;
     const known = seen.get(key);
     if (known) {
       known.seconds = (known.seconds ?? 0) + (item.seconds ?? 0);
@@ -119,7 +119,7 @@ export function HistoryTab({ projectId, overview, days, selected, onSelect, onCh
         if (!controller.signal.aborted) setError(errorText(caught));
       });
     return () => controller.abort();
-  }, [projectId, query]);
+  }, [projectId, query, overview]);
 
   useEffect(() => setOffset(0), [allDays, selected, filters]);
 
@@ -131,11 +131,11 @@ export function HistoryTab({ projectId, overview, days, selected, onSelect, onCh
   ].filter(Boolean) as { key: keyof Filters; label: string }[];
 
   const visible = data
-    ? rollUp(data.items).filter((item) => !filters.section || item.path[0] === filters.section)
+    ? rollUp(data.items, overview.settings.config).filter((item) => !filters.section || item.path[0] === filters.section)
     : [];
   const grouped = new Map<string, Activity[]>();
   for (const item of visible) {
-    const date = item.occurred_at.slice(0, 10);
+    const date = studyDate(item.occurred_at, overview.settings.config);
     grouped.set(date, [...(grouped.get(date) ?? []), item]);
   }
 
@@ -249,9 +249,10 @@ export function HistoryTab({ projectId, overview, days, selected, onSelect, onCh
             <ol className="prep-events">
               {items.map((item) => {
                 const Icon = KIND_ICON[item.kind] ?? Clock;
-                const time = new Date(item.occurred_at).toLocaleTimeString("ru-RU", {
+                const time = new Date(/(?:Z|[+-]\d{2}:\d{2})$/.test(item.occurred_at) ? item.occurred_at : `${item.occurred_at}Z`).toLocaleTimeString("ru-RU", {
                   hour: "2-digit",
                   minute: "2-digit",
+                  timeZone: overview.settings.config.timezone,
                 });
                 const isAnswer = Boolean(item.attempt_id);
                 return (

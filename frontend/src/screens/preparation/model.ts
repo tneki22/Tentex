@@ -192,6 +192,7 @@ const topicOpened = (topic: Overview["topics"][number]) =>
 
 /** Состав программы по разделам экзамена: открыто, назначено, не в плане. */
 export function sectionStats(overview: Overview): SectionStat[] {
+  const openedIds = new Set(overview.days.flatMap(day => day.opened_topic_ids ?? []));
   const assignedUnits = new Set(overview.plan.items.map((item) => item.unit_id));
   const order: string[] = [];
   const map = new Map<string, SectionStat>();
@@ -204,7 +205,7 @@ export function sectionStats(overview: Overview): SectionStat[] {
       order.push(title);
     }
     stat.total += 1;
-    if (topicOpened(topic)) stat.opened += 1;
+    if (openedIds.has(topic.node_id) || topicOpened(topic)) stat.opened += 1;
     else if (assignedUnits.has(topic.unit_id)) stat.assigned += 1;
   }
   return order.map((title) => map.get(title)!);
@@ -307,6 +308,8 @@ export const PHASE_KINDS = [
   { value: "answer", label: "Сдача ответов", token: "--purpose-review" },
   { value: "gaps", label: "Разбор пробелов", token: "--purpose-study" },
   { value: "final", label: "Финальный проход", token: "--accent" },
+  { value: "rest", label: "Отдых", token: "--muted" },
+  { value: "skip", label: "Пропуск", token: "--faint" },
 ] as const;
 
 export const phaseKind = (kind: string) =>
@@ -360,6 +363,7 @@ export function autoPhases(today: string, deadline: string) {
       order: 1,
       origin: "local",
     });
+  if (rest) phases.push({ id: crypto.randomUUID(), title: "Отдых перед экзаменом", start: addDays(deadline, -1), end: addDays(deadline, -1), kind: "rest", order: phases.length, origin: "local" });
   return phases;
 }
 
@@ -373,16 +377,21 @@ export function paceOf(overview: Overview, days: DayFacts[]) {
   const window = days.filter(
     (day) => day.date <= overview.today && day.date > addDays(overview.today, -7),
   );
-  const studied = window.filter((day) => day.opened > 0 || day.seconds > 0);
-  const opened = window.reduce((sum, day) => sum + day.opened, 0);
+  const loads = new Map(overview.days.map(day => [day.date, day]));
+  const studied = window.filter(day => (loads.get(day.date)?.opened_topic_ids?.length ?? 0) > 0 || day.seconds > 0);
+  const first = window[0]?.date ?? overview.today;
+  const before = [...overview.days].reverse().find(day => day.date < first)?.passed_count ?? 0;
+  const opened = Math.max(0, (loads.get(overview.today)?.passed_count ?? 0) - before);
+  const eligible = window.filter(day => !day.isRest && !day.isOffDay || day.seconds > 0);
   const totals = programTotals(overview);
   const remaining = totals.total - totals.opened;
   const available = days.filter(
-    (day) => day.date > overview.today && !day.isRest && !day.isExam,
+    (day) => day.date > overview.today && !day.isRest && !day.isOffDay && !day.isExam
+      && (!overview.deadline || day.date < overview.deadline),
   ).length;
 
   return {
-    actual: studied.length >= 1 ? opened / studied.length : null,
+    actual: studied.length >= 1 && eligible.length ? opened / eligible.length : null,
     required: available > 0 ? remaining / available : null,
     observedDays: studied.length,
     remaining,

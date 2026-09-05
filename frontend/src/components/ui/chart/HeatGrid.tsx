@@ -27,6 +27,7 @@ export function HeatGrid({ weeks, ariaLabel }: HeatGridProps) {
   return (
     <div className="heat-grid" role="img" aria-label={ariaLabel}>
       <div className="heat-grid-days" aria-hidden="true">
+        <span />
         {WEEKDAYS.map((day) => (
           <span key={day}>{day}</span>
         ))}
@@ -34,6 +35,7 @@ export function HeatGrid({ weeks, ariaLabel }: HeatGridProps) {
       <div className="heat-grid-weeks">
         {weeks.map((week, index) => (
           <div className="heat-grid-week" key={index}>
+            <span className="heat-week-label">{week.find(Boolean)?.date.slice(8)}.{week.find(Boolean)?.date.slice(5, 7)}</span>
             {week.map((cell, dayIndex) =>
               cell ? (
                 <span
@@ -41,6 +43,8 @@ export function HeatGrid({ weeks, ariaLabel }: HeatGridProps) {
                   className={`heat-cell${cell.state ? ` is-${cell.state}` : ""}`}
                   style={{ background: `var(--heat-${cell.level})` }}
                   title={cell.title}
+                  tabIndex={0}
+                  aria-label={cell.title}
                 />
               ) : (
                 <span key={dayIndex} className="heat-cell is-blank" />

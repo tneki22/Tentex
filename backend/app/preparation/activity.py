@@ -236,48 +236,18 @@ def mark_understood(session: Session, project_id: UUID, command: UnderstoodWrite
 
 
 def completed_items(session: Session, project_id: UUID, items, unit_rows, config) -> set[UUID]:
-    """Выполнение — факт нужного вида работы, независимо от успешности проверки."""
+    """Открытие закрывает оба назначения только своего учебного дня; билет неделим."""
+    from app.preparation.progress import openings
+
+    by_day = openings(session, project_id, config)
     unit_map = {u.id: u for u in unit_rows}
-    learned = defaultdict(list)
-    answered = defaultdict(list)
-    for row in session.scalars(
-        select(StudyActivity).where(
-            StudyActivity.project_id == project_id, StudyActivity.understood.is_(True)
-        )
-    ):
-        learned[row.node_id].append((study_date(row.occurred_at, config), row.id))
-    for attempt, grade in session.execute(
-        select(Attempt, Grade)
-        .join(Grade, Grade.attempt_id == Attempt.id)
-        .where(Attempt.project_id == project_id)
-    ):
-        if grade.outcome.value != "unscored" or grade.self_assessment:
-            answered[attempt.program_node_id].append(
-                (study_date(attempt.created_at, config), attempt.id)
-            )
-    done = set()
-    used = set()
-    for item in sorted(items, key=lambda i: (i.on_date, i.order, str(i.id))):
-        unit = unit_map.get(item.unit_id)
-        if unit is None:
-            continue
-        dates = learned if item.kind == "learn" else answered
-        # Позднее выполнение закрывает долг; повтор на следующую дату остаётся новым заданием.
-        chosen = [
-            next(
-                (
-                    key
-                    for day, key in sorted(dates[node])
-                    if day >= item.on_date and key not in used
-                ),
-                None,
-            )
-            for node in unit.topic_ids
-        ]
-        if chosen and all(key is not None for key in chosen):
-            done.add(item.id)
-            used.update(chosen)
-    return done
+    return {
+        item.id
+        for item in items
+        if item.unit_id in unit_map
+        and set(unit_map[item.unit_id].topic_ids)
+        and set(unit_map[item.unit_id].topic_ids) <= by_day.get(item.on_date, set())
+    }
 
 
 def _attempt_history(session: Session, project_id: UUID, nodes) -> list[ActivityRead]:

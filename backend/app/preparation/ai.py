@@ -48,10 +48,11 @@ ROLE = {
 }
 PROMPTS = {
     "phases": "Предложи блоки подготовки в пределах дат. Сохрани существующие id блоков, "
-    "на которые ссылаются задания. Блоки могут пересекаться; дневной бюджет общий.",
+    "на которые ссылаются задания. Блоки не пересекаются и не владеют назначениями вопросов.",
     "distribute": "Распредели все units этого пакета: каждый unit_id ровно один раз в items "
     "или unassigned с причиной. Билет неделим. Соблюдай remaining_minutes "
-    "с учётом existing_items, дневные лимиты и даты блоков. Не назначай новые "
+    "с учётом existing_items и дневные лимиты. Используй только available_dates. "
+    "phase_id=null. Не назначай новые "
     "вопросы в финальный день. Закрепления, прошлые и выполненные задания "
     "уже сохранены сервером. Нельзя подменять ручные или фактические оценки времени.",
     "coach": "Выбери fact_key из facts, напиши consequence и next_step: факт → следствие → "
@@ -92,6 +93,13 @@ def _request(
             i.model_dump(mode="json") for i in (items if items is not None else view.plan.items)
         ],
         "days": [d.model_dump(mode="json") for d in view.days if d.date >= view.today],
+        "available_dates": [
+            str(d.date)
+            for d in view.days
+            if planner.allocation_date(d.date, view.today, view.deadline, view.plan.phases)
+            and d.remaining_minutes > 0
+            and d.date not in {i.on_date for i in view.plan.items}
+        ],
         "facts": facts(context),
         "summary": view.summary.model_dump(mode="json"),
         "instruction": command.instruction,
@@ -316,6 +324,8 @@ async def start(
     session: Session, gateway: ModelGateway, project_id: UUID, command: PreparationAiWrite
 ) -> AiStartRead:
     """Запуск возвращает job; автоматический coach не требует платного подтверждения."""
+    if command.action == "coach" and command.automatic:
+        return AiStartRead(job_id=None, reason="Автоматический наставник отключён")
     context = build_context(session, project_id, command)
     coach = None
     if command.action == "coach":
@@ -405,12 +415,10 @@ def _validate_plan(context, phases, items):
         if item.id not in old_ids:
             if item.on_date not in days:
                 raise _error("Назначение выходит за срок подготовки")
-            if (
-                view.deadline
-                and item.on_date >= view.deadline - timedelta(days=1)
-                and item.kind in {"learn", "answer"}
-            ):
-                raise _error("В финальные дни нельзя назначать новые вопросы")
+            if not planner.allocation_date(
+                item.on_date, view.today, view.deadline, phases
+            ) or item.on_date in {old.on_date for old in view.plan.items}:
+                raise _error("Используйте только свободные будущие даты без экзамена и отдыха")
     for day, load in minutes.items():
         if day in days and (
             load > days[day].remaining_minutes
