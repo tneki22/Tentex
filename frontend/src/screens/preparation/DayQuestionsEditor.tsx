@@ -16,7 +16,10 @@ interface DayQuestionsEditorProps {
   onDropDebt: () => void;
   onCatchUp: () => void;
   onEditProgram: () => void;
+  /** Есть ли долг вообще — определяет доступность «Наверстать». */
   hasDebt: boolean;
+  /** Есть ли долг именно на выбранной дате — определяет доступность «Снять долг». */
+  hasDayDebt: boolean;
   busy?: boolean;
   disabled?: boolean;
 }
@@ -53,6 +56,7 @@ export function DayQuestionsEditor({
   onCatchUp,
   onEditProgram,
   hasDebt,
+  hasDayDebt,
   busy = false,
   disabled = false,
 }: DayQuestionsEditorProps) {
@@ -121,15 +125,12 @@ export function DayQuestionsEditor({
       setSelection(new Set(range));
       return;
     }
-    if (event.ctrlKey || event.metaKey) {
-      const next = new Set(selection);
-      if (next.has(unitId)) next.delete(unitId);
-      else next.add(unitId);
-      setSelection(next);
-      setAnchor(unitId);
-      return;
-    }
-    setSelection(new Set([unitId]));
+    // Обычный клик сразу добавляет вопрос к выделению — как раньше только с Ctrl:
+    // почти всегда нужно выбрать больше одного вопроса за раз.
+    const next = new Set(selection);
+    if (next.has(unitId)) next.delete(unitId);
+    else next.add(unitId);
+    setSelection(next);
     setAnchor(unitId);
   }
 
@@ -298,7 +299,7 @@ export function DayQuestionsEditor({
               Отменить
             </Button>
           )}
-          <Button variant="ghost" disabled={disabled || busy || !hasDebt} onClick={onDropDebt}>
+          <Button variant="ghost" disabled={disabled || busy || !hasDayDebt} onClick={onDropDebt}>
             Снять долг
           </Button>
           <Button variant="ghost" disabled={disabled || busy || !hasDebt} onClick={onCatchUp}>

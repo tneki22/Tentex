@@ -39,8 +39,8 @@ MAX_PLAN_DAYS = 730  # Ограничение размера редактиру�
 
 
 def allocation_date(day: date, today: date, deadline: date | None, phases=()) -> bool:
-    """Общий фильтр локальной и ИИ-раскладки: будущие дни без экзамена и отдыха."""
-    if day <= today or (deadline and day >= deadline):
+    """Общий фильтр локальной и ИИ-раскладки: сегодня и будущие дни без экзамена и отдыха."""
+    if day < today or (deadline and day >= deadline):
         return False
     if deadline and (deadline - today).days >= 5 and day == deadline - timedelta(days=1):
         return False
@@ -291,7 +291,9 @@ def _distribute(session, project_id, command, project, plan, settings, now):
     today = study_date(now, config)
     start = max(today, command.start or today)
     end = command.end or project.deadline or start + timedelta(days=13)
-    if (end - start).days > MAX_PLAN_DAYS or end < start:
+    # У «Снять долг» start/end (если заданы) адресуют прошлую дату долга напрямую
+    # (см. ниже в _recovery) и не обязаны укладываться в это окно на будущее.
+    if command.mode != "dismiss" and ((end - start).days > MAX_PLAN_DAYS or end < start):
         raise ProjectDomainError(
             "Выберите срок до двух лет, заканчивающийся не раньше начала",
             status=422,
@@ -302,6 +304,15 @@ def _distribute(session, project_id, command, project, plan, settings, now):
     # Долг — отдельная операция: прошлую запись оставляем, перенос создаёт новое назначение.
     if command.mode in {"spread", "catch_up", "dismiss"}:
         return _recovery(session, project_id, command, plan, phases, start, end, now)
+    if command.full_reset:
+        # Полная перестройка: остаются только прошлые, выполненные и закреплённые записи,
+        # остальное возвращается в общий пул и распределяется заново, как с чистого листа.
+        protected_ids = set(plan.completed_ids)
+        retained = [
+            item
+            for item in retained
+            if item.on_date < today or item.id in protected_ids or item.pinned
+        ]
     capacities = {
         d.date: d.remaining_minutes for d in day_loads(session, project_id, [], start, end, now=now)
     }
@@ -380,6 +391,10 @@ def _recovery(session, project_id, command, plan, phases, start, end, now):
         and i.id not in plan.completed_ids
         and (not i.pinned or command.include_pinned)
     ]
+    if command.mode == "dismiss" and command.start is not None and command.end is not None:
+        # Обе границы заданы явно — снятие долга ограничено этим диапазоном (обычно одной
+        # выбранной датой). Без полного диапазона снимается весь долг, как и раньше.
+        debt = [i for i in debt if command.start <= i.on_date <= command.end]
     if command.unit_ids is not None:
         debt = [i for i in debt if i.unit_id in command.unit_ids]
     if command.mode == "dismiss":

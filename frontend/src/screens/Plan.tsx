@@ -1,7 +1,7 @@
 /** «Моя подготовка»: дашборд, очередь дня, периоды и три вкладки на одном экране. */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { ArrowLeft, ChevronDown, Settings2, Sparkles, Undo2, Wand2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, Settings2, Sparkles, Trash2, Undo2, Wand2 } from "lucide-react";
 import {
   Button,
   ConfirmDialog,
@@ -44,6 +44,7 @@ import {
   buildDays,
   debtOf,
   planStatus,
+  plural,
   queueCards,
   type DayFacts,
 } from "./preparation/model";
@@ -76,6 +77,8 @@ export function Plan() {
   const [confirm, setConfirm] = useState<{ title: string; body: string; run: () => void } | null>(null);
   const [greeting, setGreeting] = useState(false);
   const [settings, setSettings] = useState(false);
+  const calendarRef = useRef<HTMLElement | null>(null);
+  const [pendingScroll, setPendingScroll] = useState(false);
   const { jobId, setJobId, job, draft, clearDraft, error: aiError, retry: retryAi } = usePreparationAi(projectId);
   const displayError = error ?? dataError ?? aiError;
 
@@ -99,6 +102,14 @@ export function Plan() {
   const debt = overview ? debtOf(overview) : null;
   const status = overview ? planStatus(overview) : null;
 
+  /** «Выбрать вопросы на этот день» открывает календарь на сегодня — если он уже открыт, просто докручивает. */
+  useEffect(() => {
+    if (pendingScroll && tab === "calendar") {
+      calendarRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setPendingScroll(false);
+    }
+  }, [pendingScroll, tab]);
+
   /** Любая правка плана идёт черновиком: сервер сам защищает прошлое и закрепления. */
   const commit = async (change: { items?: PlanItem[]; phases?: Phase[] }) => {
       if (!overview || overview.readonly) return;
@@ -107,6 +118,7 @@ export function Plan() {
         const created = await preparation.draft(projectId, {
           mode: "manual",
           include_pinned: false,
+          full_reset: false,
           phases: change.phases ?? null,
           items: change.items ?? null,
           unit_ids: null,
@@ -130,18 +142,23 @@ export function Plan() {
     };
 
   /** Серверные режимы распределения и долга: результат сразу виден в календаре. */
-  const runMode = async (mode: "count" | "catch_up" | "dismiss", range?: { start: string; end: string }) => {
+  const runMode = async (
+    mode: "count" | "catch_up" | "dismiss",
+    range?: { start: string; end: string },
+    fullReset = false,
+  ) => {
       if (!overview || overview.readonly) return;
       setBusy(true);
       try {
         const created = await preparation.draft(projectId, {
           mode,
           include_pinned: mode === "dismiss" || mode === "catch_up",
+          full_reset: fullReset,
           phases: null,
           items: null,
           unit_ids: null,
           start: range?.start ?? overview.today,
-          end: mode === "dismiss" ? overview.today : range?.end ?? overview.deadline ?? addDays(overview.today, 30),
+          end: range?.end ?? (mode === "dismiss" ? overview.today : overview.deadline ?? addDays(overview.today, 30)),
           ...revisions(overview),
         });
         await preparation.apply(projectId, created.id, {
@@ -163,6 +180,39 @@ export function Plan() {
         setBusy(false);
       }
     };
+
+  /** Единая логика кнопки «Распределить»: пересобирает план с нуля, спросив подтверждение, если есть что терять. */
+  function distributeAll() {
+    if (!overview) return;
+    const completed = new Set(overview.plan.completed_ids);
+    const hasExisting = overview.plan.items.some(
+      (item) => item.on_date >= overview.today && !item.pinned && !completed.has(item.id),
+    );
+    const run = () => void runMode("count", undefined, true);
+    if (hasExisting) {
+      setConfirm({
+        title: "Распределить заново?",
+        body: "Текущее распределение будет полностью перестроено с нуля. Прошлые, выполненные и закреплённые вопросы останутся на месте.",
+        run,
+      });
+    } else {
+      run();
+    }
+  }
+
+  /** Полностью снимает будущие незакреплённые назначения; периоды и факты не трогает. */
+  function clearPlan() {
+    if (!overview) return;
+    const completed = new Set(overview.plan.completed_ids);
+    const kept = overview.plan.items.filter(
+      (item) => item.on_date < overview.today || completed.has(item.id) || item.pinned,
+    );
+    setConfirm({
+      title: "Очистить план?",
+      body: "Все будущие незакреплённые назначения будут сняты. Прошлые, выполненные и закреплённые вопросы останутся.",
+      run: () => void commit({ items: kept }),
+    });
+  }
 
   /** Отметка даты пропускаемой живёт в параметрах, отдельной сущности не нужно. */
   const toggleRest = async (value: string) => {
@@ -264,6 +314,22 @@ export function Plan() {
       <main className="plan-main prep-main">
         <PageHead
           title="Моя подготовка"
+          center={
+            status && (
+              <span className="prep-status">
+                <StatusBadge tone={status.composed === "full" ? "info" : "neutral"}>
+                  {COMPOSED_LABEL[status.composed]}
+                </StatusBadge>
+                {status.progress && (
+                  <StatusBadge tone={status.progress === "onTrack" ? "success" : "warning"}>
+                    {status.progress === "onTrack"
+                      ? "Идёшь по плану"
+                      : `Задолжал ${status.debt} ${plural(status.debt, "вопрос", "вопроса", "вопросов")}`}
+                  </StatusBadge>
+                )}
+              </span>
+            )
+          }
           actions={
             <>
               {started ? (
@@ -290,7 +356,7 @@ export function Plan() {
                     label: "Распределить без ИИ",
                     icon: <Wand2 size={13} />,
                     disabled: busy || readonly || !overview.deadline,
-                    onSelect: () => void runMode("count"),
+                    onSelect: distributeAll,
                   },
                   {
                     label: "Распределить с ИИ…",
@@ -309,16 +375,6 @@ export function Plan() {
           }
         />
 
-        {status && <span className="prep-status">
-                <StatusBadge tone={status.composed === "full" ? "info" : "neutral"}>
-                  {COMPOSED_LABEL[status.composed]}
-                </StatusBadge>
-                {status.progress && (
-                  <StatusBadge tone={status.progress === "onTrack" ? "success" : "warning"}>
-                    {status.progress === "onTrack" ? "Идёшь по плану" : `Отстаёшь · ${status.debt}`}
-                  </StatusBadge>
-                )}
-              </span>}
         <ExamBudget overview={overview} />
         {notice && <p className="prep-action-notice" role="status">{notice}</p>}
         {displayError && <ErrorState title="Действие не завершено" message={displayError} />}
@@ -341,9 +397,9 @@ export function Plan() {
           cards={cards}
           title="Сегодня"
           onOpen={openQuestion}
-          onDistribute={() => void runMode("count")}
           onPickDay={() => {
             ui("view", "calendar", { date: overview.today });
+            setPendingScroll(true);
           }}
           disabled={busy || readonly}
         />
@@ -358,6 +414,8 @@ export function Plan() {
           onAuto={() => {
             if (overview.deadline) void commit({ phases: autoPhases(overview.today, overview.deadline) });
           }}
+          canUndo={overview.plan.can_undo && !readonly}
+          onUndo={() => void undo()}
         />
 
         <div className="prep-tabs">
@@ -377,6 +435,16 @@ export function Plan() {
                 <Undo2 size={13} /> Откатить план
               </Button>
             )}
+            {!readonly && overview.plan.items.length > 0 && (
+              <Button
+                variant="ghost"
+                className="is-destructive"
+                disabled={busy}
+                onClick={clearPlan}
+              >
+                <Trash2 size={13} /> Очистить план
+              </Button>
+            )}
             <IconButton label="Параметры подготовки" onClick={() => setSettings(true)}>
               <Settings2 size={15} />
             </IconButton>
@@ -384,7 +452,7 @@ export function Plan() {
         </div>
 
         {tab === "calendar" && (
-          <section className="prep-calendar">
+          <section className="prep-calendar" ref={calendarRef}>
             {draft && (
               <div className="prep-draft-ribbon">
                 <span>
@@ -429,7 +497,7 @@ export function Plan() {
                   <Button
                     variant="secondary"
                     disabled={busy || readonly || !overview.deadline}
-                    onClick={() => void runMode("count")}
+                    onClick={distributeAll}
                   >
                     <Wand2 size={13} /> Распределить вопросы
                   </Button>
@@ -443,14 +511,16 @@ export function Plan() {
                 busy={busy}
                 disabled={readonly}
                 hasDebt={Boolean(debt?.count)}
+                hasDayDebt={Boolean(debt?.items.some((item) => item.on_date === date))}
                 onSave={(items) => void commit({ items })}
-                onDropDebt={() =>
+                onDropDebt={() => {
+                  const dayDebt = debt?.items.filter((item) => item.on_date === date).length ?? 0;
                   setConfirm({
                     title: "Снять долг?",
-                    body: `В долге ${debt?.count ?? 0} вопросов с ${debt?.dates.length ?? 0} дат. Неоткрытые назначения, включая закреплённые, будут сняты. Занятия и ответы останутся.`,
-                    run: () => void runMode("dismiss"),
-                  })
-                }
+                    body: `На ${dateLabel(date)} в долге ${dayDebt} ${plural(dayDebt, "вопрос", "вопроса", "вопросов")}. Неоткрытые назначения на эту дату, включая закреплённые, будут сняты. Занятия и ответы останутся.`,
+                    run: () => void runMode("dismiss", { start: date, end: date }),
+                  });
+                }}
                 onCatchUp={() =>
                   setConfirm({
                     title: "Наверстать долг?",

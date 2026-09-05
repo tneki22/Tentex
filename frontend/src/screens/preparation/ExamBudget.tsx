@@ -1,5 +1,5 @@
-/** Дата экзамена и вычисленный сервером остаток доступного времени. */
-import { CalendarClock, Info } from "lucide-react";
+/** Дата экзамена и вычисленный сервером остаток доступного времени: простая надпись, без карточки. */
+import { Info } from "lucide-react";
 import { Link } from "react-router";
 import { IconButton, Tooltip } from "../../components/ui";
 import type { Overview } from "../../api/preparation";
@@ -22,16 +22,22 @@ export function ExamBudget({ overview }: { overview: Overview }) {
     <strong>Осталось: {duration(budget.remaining_minutes * 60)}</strong>
     <small>Для каждого дня берём меньшую величину: остаток дневного бюджета или свободное время. Пересечения сна и занятости считаются один раз. День экзамена исключён. Часовой пояс: {settings.config.timezone}.</small>
   </div>;
+  const examTime = overview.exam_time ? <> в <strong>{overview.exam_time.slice(0, 5)}</strong></> : null;
+  const daysLabel =
+    days < 0 ? "экзамен уже прошёл" : days === 0 ? "экзамен сегодня" : `до экзамена ${days} ${plural(days, "день", "дня", "дней")}`;
   return <section className={`prep-exam-budget is-${tone}`} aria-label="До экзамена">
-    <div className="prep-exam-icon"><CalendarClock size={24} /></div>
-    <div className="prep-exam-copy">
-      <p>Экзамен <strong>{longDateLabel(deadline)}</strong>{overview.exam_time && <> в <strong>{overview.exam_time.slice(0, 5)}</strong></>}</p>
-      <span>{days < 0 ? "Экзамен уже прошёл" : days === 0 ? "Экзамен сегодня" : `${days} ${plural(days, "день", "дня", "дней")} до экзамена · ${budget.study_days} ${plural(budget.study_days, "день", "дня", "дней")} для занятий`}</span>
-    </div>
-    <div className="prep-exam-hours">
-      <span>На подготовку осталось</span>
-      <strong>{settings.config.daily_minutes == null ? "Бюджет не задан" : duration(budget.remaining_minutes * 60)}</strong>
-    </div>
-    <Tooltip label={explanation} side="bottom"><IconButton label="Как считается оставшееся время"><Info size={17} /></IconButton></Tooltip>
+    <p className="prep-exam-line">
+      Твой экзамен <strong>{longDateLabel(deadline)}</strong>{examTime}, {daysLabel}.
+    </p>
+    <p className="prep-exam-line">
+      {days > 0 && <>Из них {budget.study_days} {plural(budget.study_days, "день", "дня", "дней")} под этот экзамен. </>}
+      На подготовку осталось{" "}
+      <strong>{settings.config.daily_minutes == null ? "бюджет не задан" : duration(budget.remaining_minutes * 60)}</strong>
+      <Tooltip label={explanation} side="bottom">
+        <IconButton label="Как считается оставшееся время" hideNativeTitle>
+          <Info size={14} />
+        </IconButton>
+      </Tooltip>
+    </p>
   </section>;
 }

@@ -17,19 +17,16 @@
 }
 
 .prep-main > .page-head { margin: 0; align-items: center; }
-.prep-main > .page-head h1 { font-size: var(--text-2xl); }
-.prep-main > .prep-status { align-self: center; margin-top: calc(-1 * var(--space-2)); }
+.prep-main > .page-head h1 { font-size: var(--text-2xl); margin: 0; }
+.prep-main > .page-head.has-actions { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; }
+.prep-main > .page-head .page-head-text { max-width: none; }
 .prep-action-notice { margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--accent-wash); color: var(--ink); font-size: var(--text-sm); }
-.prep-exam-budget { display: flex; align-items: center; gap: var(--space-4); border: 1px solid color-mix(in srgb, var(--exam-tone) 25%, var(--line)); border-radius: var(--radius-lg); padding: var(--space-5); background: color-mix(in srgb, var(--exam-tone) 6%, var(--paper)); --exam-tone: var(--tone-success); }
+.prep-exam-budget { display: grid; gap: var(--space-1); --exam-tone: var(--tone-success); }
 .prep-exam-budget.is-warning { --exam-tone: var(--tone-warning); }
 .prep-exam-budget.is-danger { --exam-tone: var(--tone-danger); }
-.prep-exam-icon { display: grid; place-items: center; padding: var(--space-3); border-radius: var(--radius-md); color: var(--exam-tone); background: color-mix(in srgb, var(--exam-tone) 10%, transparent); }
-.prep-exam-copy { flex: 1; }
-.prep-exam-copy p { margin: 0 0 var(--space-1); font-size: var(--text-lg); }
-.prep-exam-copy p strong { color: var(--exam-tone); font-weight: var(--weight-semibold); }
-.prep-exam-copy > span, .prep-exam-hours > span { color: var(--muted); font-size: var(--text-xs); }
-.prep-exam-hours { display: grid; gap: var(--space-1); text-align: right; }
-.prep-exam-hours strong { font-size: var(--text-2xl); color: var(--exam-tone); font-variant-numeric: tabular-nums; }
+.prep-exam-line { margin: 0; color: var(--ink-soft); font-size: var(--text-md); }
+.prep-exam-line strong { color: var(--exam-tone); font-weight: var(--weight-semibold); }
+.prep-exam-line .icon-button { margin-left: var(--space-1); vertical-align: middle; }
 .prep-budget-explanation { display: grid; gap: var(--space-2); max-width: 360px; line-height: var(--leading-snug); }
 .prep-budget-explanation small { color: inherit; opacity: .8; }
 .prep-sidebar-events { margin-top: auto; display: grid; gap: var(--space-4); }
@@ -48,7 +45,6 @@
 .prep-recent-events ol { padding: var(--space-3) 0; }
 .prep-recent-events li { border-left: 1px solid var(--line); padding-left: var(--space-3); }
 .prep-screen .program-project-nav { margin-top: 0; }
-@media (max-width: 1100px) { .prep-exam-budget { flex-wrap: wrap; } .prep-exam-copy { flex-basis: 60%; } .prep-exam-hours { text-align: left; } }
 
 .prep-note {
   margin: 0;
@@ -520,33 +516,6 @@
   opacity: 1;
 }
 
-.prep-strip-now {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  z-index: 1;
-  pointer-events: none;
-}
-
-.prep-strip-now i {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--accent);
-}
-
-/* Подпись «сегодня» уходит под блоки: середина полосы занята их названиями. */
-.prep-strip-now em {
-  position: absolute;
-  bottom: -2px;
-  left: 4px;
-  color: var(--accent);
-  font-size: var(--text-xs);
-  font-style: normal;
-  white-space: nowrap;
-}
-
 .prep-strip-axis {
   display: flex;
   justify-content: space-between;
@@ -727,13 +696,16 @@
 }
 
 .prep-day.is-exam {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
   border-left-color: var(--tone-info);
   background: color-mix(in srgb, var(--tone-info) 8%, var(--paper));
-  color: var(--ink-soft);
-  font-size: var(--text-sm);
+}
+
+.prep-day.is-exam .prep-day-head b {
+  color: var(--tone-info);
+}
+
+.prep-day-exam-flag {
+  color: var(--tone-info);
 }
 
 /* --- Редактор вопросов дня --- */

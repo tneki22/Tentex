@@ -10,7 +10,6 @@ interface TodayQueueProps {
   cards: QueueCard[];
   title: string;
   onOpen: (topicId: string) => void;
-  onDistribute: () => void;
   onPickDay: () => void;
   disabled?: boolean;
 }
@@ -27,7 +26,6 @@ export function TodayQueue({
   cards,
   title,
   onOpen,
-  onDistribute,
   onPickDay,
   disabled = false,
 }: TodayQueueProps) {
@@ -40,9 +38,6 @@ export function TodayQueue({
         <h2 className="prep-area-title">{title}</h2>
         <EmptyState title="На этот день ничего не назначено" icon={<ListChecks size={20} />}>
           <div className="prep-actions">
-            <Button onClick={onDistribute} disabled={disabled}>
-              Распределить вопросы
-            </Button>
             <Button variant="secondary" onClick={onPickDay} disabled={disabled}>
               Выбрать вопросы на этот день
             </Button>
