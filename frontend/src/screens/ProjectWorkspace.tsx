@@ -23,7 +23,6 @@ import {
   Search,
   Tag,
   Target,
-  Unlink,
   X,
 } from "lucide-react";
 import type { BindingFragmentRead } from "../api/bindings";
@@ -85,6 +84,7 @@ import { ExamChatPanel } from "./workspace/chat/ExamChatPanel";
 import { AttemptHistory } from "./workspace/AttemptHistory";
 import { ReferenceAnswerContent, type ReferenceAnswerMedia } from "./workspace/ReferenceAnswerContent";
 import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
+import { BoundSourceReader } from "./workspace/BoundSourceReader";
 import { SourcePreviewDialog } from "./workspace/SourcePreviewDialog";
 import { toSourcePlaces, type SourcePlace } from "./workspace/sourcePlaces";
 import type { ConspectEditorHandle } from "../components/domain/ConspectEditor";
@@ -858,24 +858,13 @@ export function ProjectWorkspace() {
     return (
       <div className="workspace-source-tab">
         {sourceBindingsLoading ? <LoadingState label="Загружаем привязки" /> : topicSourceBindings.length > 0 ? (
-          <ul className="workspace-source-tab-list">
-            {topicSourceBindings.map((binding) => (
-              <li key={binding.id}>
-                <Link to={`/projects/${projectId}/materials/${binding.material_id}?page=${binding.page_number}&focus=${binding.fragment_id}`}>
-                  <p>{binding.text.length > 160 ? `${binding.text.slice(0, 160)}…` : binding.text}</p>
-                  <small>{binding.material_name} · стр. {binding.page_number}</small>
-                </Link>
-                <QualityBadge quality={binding.quality} />
-                <IconButton
-                  label="Это не по теме"
-                  disabled={sourceBusy}
-                  onClick={() => void unbindSourceBinding(binding.id)}
-                >
-                  <Unlink size={14} />
-                </IconButton>
-              </li>
-            ))}
-          </ul>
+          <BoundSourceReader
+            projectId={projectId}
+            nodeId={selected.id}
+            bindings={topicSourceBindings}
+            busy={sourceBusy}
+            onUnbind={(bindingId) => void unbindSourceBinding(bindingId)}
+          />
         ) : (
           <div className="workspace-empty-copy">
             <FileText size={26} />
@@ -891,6 +880,11 @@ export function ProjectWorkspace() {
               <Link className="secondary-button" to={`/projects/${projectId}/materials`}>Открыть материалы</Link>
             </div>
           </div>
+        )}
+        {topicSourceBindings.length > 0 && (
+          <p className="workspace-source-tab-search-lead">
+            Найти и привязать ещё
+          </p>
         )}
         <form
           className="workspace-source-tab-search"

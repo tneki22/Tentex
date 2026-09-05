@@ -655,7 +655,18 @@ def _text_layer_page(
             confidence=confidence,
             diagnostics=(*legacy.diagnostics, "layout_fallback"),
         )
-    images = tuple(element for element in legacy.elements if element.kind == "image")
+    # Схему разметчик теперь отдаёт сам (`picture`), а встроенный растр приходит
+    # из текстового слоя. На одной и той же иллюстрации это два описания одного
+    # объекта: без проверки перекрытия страница получала бы двойной фрагмент.
+    layout_pictures = tuple(
+        element.bbox for element in parsed.elements if element.kind == "image"
+    )
+    images = tuple(
+        element
+        for element in legacy.elements
+        if element.kind == "image"
+        and not any(_bbox_overlap(element.bbox, box) >= 0.6 for box in layout_pictures)
+    )
     if not images:
         return parsed
     elements = _merge_native_and_images(parsed.elements, images)

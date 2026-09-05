@@ -6471,6 +6471,137 @@ button.wizard-back-projects {
   }
 }
 
+/* ── Чтение привязанного источника ───────────────────────────────────────── */
+
+.source-reader {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.source-reader-material {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.source-reader-material-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.source-reader-material-head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.source-reader-material-head a {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-decoration: none;
+}
+
+.source-reader-material-head a:hover {
+  color: var(--accent);
+}
+
+/* Длинное чтение — засечный шрифт, тот же приём, что у конспекта и ответа. */
+.source-reader-page {
+  max-width: none;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper-strong);
+  font-family: var(--font-serif);
+  font-size: var(--text-base);
+  line-height: var(--leading-relaxed);
+}
+
+.source-reader-page .structured-page-head {
+  color: var(--faint);
+  font-family: var(--font-sans);
+}
+
+.source-reader-page .structured-fragment {
+  padding: var(--space-1) var(--space-2);
+  margin-inline: calc(-1 * var(--space-2));
+}
+
+.source-reader-page .structured-fragment:hover {
+  background: var(--surface-hover);
+}
+
+/* Снятие привязки живёт на поле и не наезжает на текст. */
+.source-reader-unbind {
+  position: absolute;
+  top: var(--space-1);
+  right: calc(-1 * var(--space-1));
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--muted);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
+}
+
+.source-reader-page .structured-fragment:hover .source-reader-unbind,
+.source-reader-unbind:focus-visible {
+  opacity: 1;
+}
+
+.source-reader-unbind:hover:not(:disabled) {
+  color: var(--tone-danger);
+  border-color: var(--tone-danger);
+}
+
+.source-reader-unbind:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* В чтении вырезка формулы и есть формула: раскрывать под каждой из них
+   «LaTeX требует проверки» незачем — на плотной странице это частокол, а
+   править распознанное всё равно ходят в Материалы. */
+.source-reader-page .structured-formula-fallback details,
+.source-reader-page .structured-transcript {
+  display: none;
+}
+
+.source-reader-page .structured-formula-fallback img,
+.source-reader-page .structured-figure {
+  margin: 0;
+}
+
+.source-reader-pending {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* Поиск отделён от чтения: это другая работа, а не продолжение текста. */
+.workspace-source-tab-search-lead {
+  margin: 0;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
 /* Карточка найденного места целиком нажимаема: клик открывает предпросмотр,
    а не привязывает вслепую — по одной строке нельзя решить, тот ли это кусок. */
 .workspace-source-tab-result-copy {
