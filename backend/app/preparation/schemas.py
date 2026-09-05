@@ -161,6 +161,7 @@ class DraftWrite(Contract):
     expected_settings_revision: int
     mode: Literal["manual", "count", "time", "catch_up", "spread", "dismiss"] = "manual"
     include_pinned: bool = False
+    full_reset: bool = False
     phases: list[Phase] | None = None
     items: list[PlanItem] | None = None
     unit_ids: list[UUID] | None = None

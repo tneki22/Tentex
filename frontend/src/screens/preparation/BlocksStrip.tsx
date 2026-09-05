@@ -1,9 +1,12 @@
 /** Полоса блоков подготовки: одна дорожка, пересечения запрещены (§3.2). */
-import { Flag, Plus, Wand2 } from "lucide-react";
-import { ContextMenu, IconButton, Tooltip } from "../../components/ui";
+import { Flag, Info, Plus, Undo2, Wand2 } from "lucide-react";
+import { Button, ContextMenu, IconButton, Tooltip } from "../../components/ui";
 import type { Overview, Phase } from "../../api/preparation";
 import { addDays, dateLabel, dayNumber } from "./dates";
 import { phaseKind } from "./model";
+
+const PERIODS_HINT =
+  "Общее понятие для первичной организации периода перед экзаменом. Не связано с календарём подготовки ниже.";
 
 interface BlocksStripProps {
   overview: Overview;
@@ -12,6 +15,8 @@ interface BlocksStripProps {
   onEdit: (phase: Phase) => void;
   onAdd: (range: { start: string; end: string }) => void;
   onAuto: () => void;
+  canUndo?: boolean;
+  onUndo?: () => void;
   disabled?: boolean;
 }
 
@@ -46,6 +51,8 @@ export function BlocksStrip({
   onEdit,
   onAdd,
   onAuto,
+  canUndo = false,
+  onUndo,
   disabled = false,
 }: BlocksStripProps) {
   const span = Math.max(1, dayNumber(end) - dayNumber(start) + 1);
@@ -58,14 +65,30 @@ export function BlocksStrip({
   return (
     <section className="prep-blocks" aria-label="Периоды подготовки">
       <header className="prep-area-head">
-        <h2 className="prep-area-title">Периоды подготовки</h2>
-        <Tooltip label="Разметить периоды автоматически" side="left">
-          <span>
-            <IconButton label="Разметить периоды автоматически" onClick={onAuto} disabled={disabled}>
-              <Wand2 size={15} />
-            </IconButton>
-          </span>
-        </Tooltip>
+        <h2 className="prep-area-title">
+          Периоды подготовки
+          <Tooltip label={PERIODS_HINT} side="right">
+            <span>
+              <IconButton label="Что такое периоды подготовки" hideNativeTitle>
+                <Info size={13} />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </h2>
+        <span className="prep-actions">
+          {canUndo && (
+            <Button variant="ghost" disabled={disabled} onClick={onUndo}>
+              <Undo2 size={13} /> Откатить
+            </Button>
+          )}
+          <Tooltip label="Разметить периоды автоматически" side="left">
+            <span>
+              <IconButton label="Разметить периоды автоматически" onClick={onAuto} disabled={disabled}>
+                <Wand2 size={15} />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </span>
       </header>
       <ContextMenu
         label="Периоды подготовки"
@@ -96,6 +119,8 @@ export function BlocksStrip({
               const kind = phaseKind(phase.kind);
               const from = phase.start < start ? start : phase.start;
               const to = phase.end > end ? end : phase.end;
+              const range =
+                phase.start === phase.end ? dateLabel(phase.start) : `${dateLabel(phase.start)} — ${dateLabel(phase.end)}`;
               return (
                 <button
                   type="button"
@@ -110,23 +135,15 @@ export function BlocksStrip({
                   disabled={disabled}
                 >
                   <strong>{phase.title}</strong>
-                  <small>
-                    {dateLabel(phase.start)} — {dateLabel(phase.end)} · {kind.label}
-                  </small>
+                  <small>{range}{phase.title !== kind.label ? ` · ${kind.label}` : ""}</small>
                 </button>
               );
             })}
-            {overview.today >= start && overview.today <= end && (
-              <span className="prep-strip-now" style={{ left: `${percent(overview.today)}%` }}>
-                <i />
-                <em>сегодня</em>
-              </span>
-            )}
           </div>
         }
       />
       <div className="prep-strip-axis" aria-hidden="true">
-        <span>{short ? dateLabel(start) : monthOf(start)}</span>
+        <span>сегодня · {short ? dateLabel(start) : monthOf(start)}</span>
         {overview.deadline && (
           <span className="prep-strip-exam">
             <Flag size={12} /> {dateLabel(overview.deadline)}

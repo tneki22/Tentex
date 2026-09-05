@@ -58,13 +58,13 @@ function DayCard({
         {
           label: day.isRest ? "Снять отметку пропуска" : "Отметить пропускаемым",
           icon: <CalendarOff size={13} />,
-          disabled,
+          disabled: disabled || day.isExam,
           onSelect: () => onToggleRest(day.date),
         },
         {
           label: "Наверстать сюда",
           icon: <Undo2 size={13} />,
-          disabled: disabled || !hasDebt,
+          disabled: disabled || day.isExam || !hasDebt,
           onSelect: () => onCatchUp(day.date),
         },
       ]}
@@ -77,6 +77,7 @@ function DayCard({
             selected ? "is-selected" : "",
             day.isRest ? "is-rest" : "",
             day.isToday ? "is-today" : "",
+            day.isExam ? "is-exam" : "",
             isDraft ? "is-draft" : "",
           ]
             .filter(Boolean)
@@ -88,15 +89,20 @@ function DayCard({
           <span className="prep-day-head">
             <b>{day.day}</b>
             <em>{WEEKDAYS_SHORT[day.weekdayIndex]}</em>
+            {day.isExam && <Flag size={12} className="prep-day-exam-flag" />}
           </span>
-          {label && <span className="prep-day-count">{label}</span>}
+          {day.isExam ? (
+            <span className="prep-day-count">экзамен</span>
+          ) : (
+            label && <span className="prep-day-count">{label}</span>
+          )}
           {day.phaseTitle && day.purpose !== "none" && (
             <span className="prep-day-purpose">
               <PurposeDot purpose={day.purpose} />
               {day.phaseTitle}
             </span>
           )}
-          <span className="sr-only">{stateLabel[day.state]}</span>
+          <span className="sr-only">{day.isExam ? "экзамен" : stateLabel[day.state]}</span>
         </button>
       }
     />
@@ -120,8 +126,7 @@ export function DayTree({
   disabled = false,
 }: DayTreeProps) {
   const past = days.filter((day) => day.isPast);
-  const upcoming = days.filter((day) => !day.isPast && !day.isExam);
-  const exam = days.find((day) => day.isExam) ?? null;
+  const upcoming = days.filter((day) => !day.isPast);
   const missed = past.filter((day) => day.state === "missed" || day.state === "partial").length;
 
   const months = new Map<string, DayFacts[]>();
@@ -160,18 +165,6 @@ export function DayTree({
           <div className="prep-day-grid">{list.map(card)}</div>
         </Disclosure>
       ))}
-      {exam && (
-        <button
-          type="button"
-          className={`prep-day is-exam${exam.date === selected ? " is-selected" : ""}`}
-          onClick={() => onSelect(exam.date)}
-        >
-          <Flag size={14} />
-          <span>
-            {exam.day} {monthLabel(exam.monthKey).split(" ")[0]} · экзамен
-          </span>
-        </button>
-      )}
     </div>
   );
 }

@@ -4205,6 +4205,11 @@ export interface components {
              * @default false
              */
             include_pinned: boolean;
+            /**
+             * Full Reset
+             * @default false
+             */
+            full_reset: boolean;
             /** Phases */
             phases?: components["schemas"]["Phase"][] | null;
             /** Items */

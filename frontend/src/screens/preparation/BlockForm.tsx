@@ -22,12 +22,16 @@ const isPhase = (value: BlockFormProps["value"]): value is Phase => "id" in valu
  * Пересечение не отклоняется молча: показывается, с чем именно, и предлагается
  * подвинуть границу соседа вместо ручного подбора дат.
  */
+const kindLabel = (kind: Phase["kind"]) => PHASE_KINDS.find((entry) => entry.value === kind)?.label ?? kind;
+
 export function BlockForm({ overview, value, onClose, onSave, busy = false }: BlockFormProps) {
   const existing = isPhase(value) ? value : null;
-  const [title, setTitle] = useState(existing?.title ?? "Первичное изучение");
+  const [title, setTitle] = useState(existing?.title ?? kindLabel("learn"));
   const [kind, setKind] = useState<Phase["kind"]>(existing?.kind ?? "learn");
   const [start, setStart] = useState(value.start);
   const [end, setEnd] = useState(value.end);
+  // Пока пользователь не тронул название сам, оно следует за выбранным назначением.
+  const [titleFollowsKind, setTitleFollowsKind] = useState(!existing);
 
   const id = existing?.id ?? "";
   const others = overview.plan.phases.filter((phase) => phase.id !== id);
@@ -87,14 +91,25 @@ export function BlockForm({ overview, value, onClose, onSave, busy = false }: Bl
     >
       <div className="prep-form">
         <Field label="Название">
-          <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} />
+          <input
+            value={title}
+            onChange={(event) => {
+              setTitle(event.target.value);
+              setTitleFollowsKind(false);
+            }}
+            maxLength={160}
+          />
         </Field>
         <Field label="Назначение" hint="Календарь берёт назначение отсюда, а не из текста названия">
           <Select
             ariaLabel="Назначение блока"
             value={kind}
             options={PHASE_KINDS.map((entry) => ({ value: entry.value, label: entry.label }))}
-            onValueChange={(next) => next && setKind(next as Phase["kind"])}
+            onValueChange={(next) => {
+              if (!next) return;
+              setKind(next as Phase["kind"]);
+              if (titleFollowsKind) setTitle(kindLabel(next as Phase["kind"]));
+            }}
           />
         </Field>
         <Field label="С даты">

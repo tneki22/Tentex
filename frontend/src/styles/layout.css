@@ -671,6 +671,14 @@
   gap: var(--space-2);
 }
 
+/* Пусто, пока экран не передаёт `center` в PageHead — сейчас только «Моя подготовка». */
+.page-head-center {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-width: 0;
+}
+
 /* Заголовок уехал в полосу: на странице осталась только подводка */
 .page-head.is-lifted {
   margin-bottom: var(--space-6);

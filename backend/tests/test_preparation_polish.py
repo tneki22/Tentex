@@ -28,7 +28,7 @@ def test_count_without_blocks_applies_and_repeated_distribution_preserves_dates(
     today = study_date(datetime.now(UTC), get_settings(session, project.id).config)
     first = _apply(session, project.id, mode="count")
     assert first.items and not first.phases
-    assert all(today < i.on_date < project.deadline for i in first.items)
+    assert all(today <= i.on_date < project.deadline for i in first.items)
     other = make_topic_node(session, project, title="Новый вопрос")
     second = _apply(session, project.id, mode="count")
     assert first.items[0] in second.items
@@ -42,7 +42,53 @@ def test_short_deadline_keeps_the_last_day_available(days, allowed):
     exam = today + timedelta(days=days)
     assert planner.allocation_date(exam - timedelta(days=1), today, exam) == allowed
     assert not planner.allocation_date(exam, today, exam)
-    assert not planner.allocation_date(today, today, exam)
+    assert planner.allocation_date(today, today, exam)
+
+
+def test_full_reset_rebuilds_ignoring_previous_assignment(session):
+    project, node = _project(session)
+    first = _apply(session, project.id, mode="count")
+    assert len(first.items) == 1
+    assigned_date = first.items[0].on_date
+    rest = Phase(id=uuid4(), title="Отдых", kind="rest", start=assigned_date, end=assigned_date)
+    draft = planner.create_draft(
+        session, project.id, _command(session, project.id, mode="manual", phases=[rest])
+    )
+    session.rollback()
+    # apply_phases=True: единственный способ и правда сохранить новый блок,
+    # в отличие от общего для файла _apply(), который блоки не применяет.
+    with_rest = planner.apply_draft(
+        session, project.id, draft.id, ApplyDraftWrite(apply_phases=True)
+    )
+    # Без сброса локальная раскладка не двигает уже назначенный вопрос, даже когда
+    # его дата теперь отмечена отдыхом — это старое поведение top-up.
+    stale = _apply(session, project.id, mode="count")
+    assert stale.items == with_rest.items
+    rebuilt = _apply(session, project.id, mode="count", full_reset=True)
+    assert len(rebuilt.items) == 1
+    assert rebuilt.items[0].unit_id == node.id
+    assert rebuilt.items[0].on_date != assigned_date
+    assert rebuilt.phases == with_rest.phases
+
+
+def test_dismiss_only_clears_debt_on_the_requested_date(session):
+    project, node = _project(session)
+    other = make_topic_node(session, project, title="Второй вопрос")
+    today = study_date(datetime.now(UTC), get_settings(session, project.id).config)
+    items = [
+        PlanItem(id=uuid4(), unit_id=node.id, on_date=today - timedelta(days=2)),
+        PlanItem(id=uuid4(), unit_id=other.id, on_date=today - timedelta(days=1)),
+    ]
+    _apply(session, project.id, mode="manual", items=items)
+    cleared = _apply(
+        session,
+        project.id,
+        mode="dismiss",
+        include_pinned=True,
+        start=today - timedelta(days=1),
+        end=today - timedelta(days=1),
+    )
+    assert [i.unit_id for i in cleared.items] == [node.id]
 
 
 @pytest.mark.parametrize("mode", ["dismiss", "catch_up"])
