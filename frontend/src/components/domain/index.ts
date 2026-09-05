@@ -45,3 +45,11 @@ export { TaskRow } from "./TaskRow";
 export type { BackgroundTask, TaskKind } from "./TaskRow";
 export { TopicStatusBadge, TOPIC_STATUSES, topicStatusLabel } from "./TopicStatusBadge";
 export type { TopicStatus } from "./TopicStatusBadge";
+export { PurposeDot, purposeLabel, purposeOf, type Purpose } from "./PurposeDot";
+export {
+  AnswerResultBadge,
+  answerResultLabel,
+  answerResultToken,
+  answerResultOf,
+  type AnswerResult,
+} from "./AnswerResultBadge";

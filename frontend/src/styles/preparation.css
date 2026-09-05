@@ -1,290 +1,1196 @@
-/* Плотность и спокойная палитра существующего Плана; метрики остаются нейтральными. */
-.prep-results-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
-.prep-results-table th, .prep-results-table td { padding: var(--space-2); text-align: left; border-bottom: 1px solid var(--line); }
-.prep-screen .plan-main {
-  overflow-y: auto;
+/* «Моя подготовка». Порядок блоков — как сверху вниз на экране.
+ * Описание интерфейса: docs/architecture/my-preparation-interface.md §7 */
+
+.prep-loading {
+  display: grid;
+  place-items: center;
+  gap: var(--space-4);
+  min-height: 60vh;
 }
-.prep-screen .plan-content-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 290px);
-}
-.prep-screen .plan-summary {
-  flex-wrap: wrap;
-}
-.prep-screen .plan-day-head {
+
+.prep-main {
   display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  max-width: 1440px;
+  padding-bottom: var(--space-12);
+}
+
+.prep-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.prep-note.is-warning {
+  color: var(--tone-warning);
+}
+
+.prep-area-title {
+  display: flex;
+  align-items: baseline;
   gap: var(--space-3);
-  flex-wrap: wrap;
-}
-.prep-screen .plan-day-head strong {
-  margin-right: auto;
-}
-.prep-screen h2,
-.prep-screen h3 {
+  margin: 0;
   font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
-.prep-card,
-.prep-coach,
-.prep-timeline {
-  padding: var(--space-4);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--paper);
-  margin-block: var(--space-3);
+
+.prep-area-title small {
+  color: var(--faint);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
 }
-.prep-coach > strong {
-  display: block;
-  font-weight: var(--weight-medium);
-  line-height: var(--leading-normal);
-}
-.prep-actions,
-.prep-section-head {
+
+.prep-area-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.prep-actions {
+  display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  margin-block: var(--space-3);
+  align-items: center;
 }
-.prep-section-head h2,
-.prep-section-head h3 {
-  margin-right: auto;
+
+.prep-form {
+  display: grid;
+  gap: var(--space-3);
 }
-.prep-muted,
-.prep-card small,
-.prep-coach-ai small {
+
+/* --- Шапка: два признака и приглашение начать день --- */
+
+.prep-status {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.prep-day-started {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  padding: 0 var(--space-2);
+}
+
+/* Приглашение дышит, а не мигает: это предложение, а не сигнал тревоги. */
+@keyframes prep-invite {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--accent-wash-strong);
+  }
+  50% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+.primary-button.is-inviting,
+.program-project-nav.is-inviting .workspace-project-link.is-active {
+  animation: prep-invite 2400ms var(--motion-ease-out) infinite;
+  border-radius: var(--radius-md);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primary-button.is-inviting,
+  .program-project-nav.is-inviting .workspace-project-link.is-active {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--accent-edge);
+  }
+}
+
+/* --- Центральное уведомление --- */
+
+.prep-greeting-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--canvas) 55%, transparent);
+  backdrop-filter: blur(2px);
+  animation: fade-in var(--motion-base) var(--motion-ease-out);
+}
+
+.prep-greeting {
+  display: grid;
+  gap: var(--space-2);
+  width: min(420px, calc(100vw - var(--space-8)));
+  margin: 0;
+  padding: var(--space-6);
+  border-radius: var(--radius-xl);
+  background: var(--paper-strong);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+
+.prep-greeting strong {
+  font-size: var(--text-xl);
+}
+
+.prep-greeting span {
+  color: var(--ink-soft);
+  line-height: var(--leading-snug);
+}
+
+.prep-greeting em {
+  color: var(--accent);
+  font-style: normal;
+  font-weight: var(--weight-medium);
+}
+
+/* --- Дашборд --- */
+
+.prep-dashboard {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.prep-dashboard-head {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: calc(var(--space-2) * -1);
+}
+
+.prep-period {
+  font-size: var(--text-xs);
+}
+
+.prep-card {
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+}
+
+.prep-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 232px;
+}
+
+.prep-tile h3,
+.prep-analytics-grid h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.prep-figure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.prep-figure strong {
+  font-size: var(--text-xl);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.prep-figure span {
   color: var(--muted);
   font-size: var(--text-sm);
 }
-.prep-coach-ai small,
-.prep-check small,
-.prep-diff-row small {
-  display: block;
+
+.prep-tile-link {
+  margin-top: auto;
+  font-size: var(--text-sm);
 }
-.prep-mini {
-  padding: var(--space-3);
-  border-bottom: 1px solid var(--line);
+
+.prep-result-line,
+.prep-trend-line {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
 }
-.prep-mini header {
+
+.prep-trend-line {
+  margin-top: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* Разделы: имя, полоса, число — три колонки, чтобы полосы начинались от одной линии. */
+.prep-sections {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prep-sections li {
+  display: grid;
+  grid-template-columns: minmax(0, 7rem) minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.prep-section-name {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prep-section-count {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.prep-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: auto 0 0;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.prep-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.prep-legend i:not(:first-child) {
+  margin-left: var(--space-2);
+}
+
+.prep-legend .is-open {
+  background: var(--chart-fact);
+}
+
+.prep-legend .is-assigned {
+  background: color-mix(in srgb, var(--chart-fact) 26%, transparent);
+}
+
+.prep-legend .is-rest {
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+}
+
+/* --- Очередь на сегодня --- */
+
+.prep-queue-area {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.prep-queue-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prep-queue-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  transition:
+    border-color var(--ease-fast),
+    box-shadow var(--ease-fast),
+    transform var(--ease-fast);
+}
+
+.prep-queue-card:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.prep-queue-card.is-ticket {
+  grid-column: span 2;
+}
+
+.prep-queue-card.is-opened {
+  background: color-mix(in srgb, var(--day-done) 8%, var(--paper));
+  border-color: color-mix(in srgb, var(--day-done) 30%, var(--line));
+}
+
+.prep-queue-card > button {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.prep-queue-card strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.prep-queue-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: var(--text-sm);
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
 }
-.prep-month-grid {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+
+.prep-queue-head em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.prep-queue-state {
+  display: flex;
+  align-items: center;
   gap: var(--space-1);
-  text-align: center;
+  color: var(--muted);
+  font-size: var(--text-xs);
 }
-.prep-month-grid button {
-  padding: var(--space-2) 0;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-xs);
+
+.prep-queue-state.is-done {
+  color: var(--day-done);
+}
+
+.prep-ticket-questions {
+  display: grid;
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-3);
+  list-style: none;
+}
+
+.prep-ticket-questions button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-soft);
+  font: inherit;
   font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
 }
-.prep-month-grid button:hover {
+
+.prep-ticket-questions button:hover {
   background: var(--surface-hover);
 }
-.prep-month-grid .is-selected {
-  background: var(--accent-wash);
-  color: var(--accent);
+
+.prep-ticket-questions button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.prep-month-grid .is-outside {
-  color: var(--faint);
+
+.prep-ticket-questions i {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xs);
 }
-.prep-month-grid [aria-current="date"] {
-  text-decoration: underline;
+
+/* --- Полоса блоков --- */
+
+.prep-blocks {
+  display: grid;
+  gap: var(--space-2);
 }
-.prep-axis {
+
+.prep-strip {
   position: relative;
-  border-top: 1px solid var(--line-strong);
-  margin-bottom: var(--space-6);
+  height: 88px;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
 }
-.prep-axis-labels {
-  display: flex;
-  justify-content: space-between;
-  position: relative;
-  font-size: var(--text-xs);
-  padding-top: var(--space-2);
-}
-.prep-future {
+
+.prep-block {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: calc(-1 * var(--space-4));
-  background: var(--accent-wash);
+  top: var(--space-3);
+  bottom: var(--space-3);
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  overflow: hidden;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-left: 3px solid var(--purpose, var(--accent));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--purpose, var(--accent)) 14%, var(--paper));
+  text-align: left;
+  cursor: pointer;
+  transition: filter var(--ease-fast);
 }
-.prep-now {
+
+.prep-block:hover {
+  filter: brightness(1.04);
+}
+
+.prep-block strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prep-block small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prep-strip-gap {
+  position: absolute;
+  top: var(--space-3);
+  bottom: var(--space-3);
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--ease-fast);
+}
+
+.prep-strip-gap:hover,
+.prep-strip-gap:focus-visible {
+  opacity: 1;
+}
+
+.prep-strip-now {
   position: absolute;
   top: 0;
   bottom: 0;
-  border-left: 1px solid var(--accent);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.prep-strip-now i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--accent);
+}
+
+/* Подпись «сегодня» уходит под блоки: середина полосы занята их названиями. */
+.prep-strip-now em {
+  position: absolute;
+  bottom: -2px;
+  left: 4px;
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.prep-strip-axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.prep-strip-exam {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+}
+
+.prep-conflict {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--tone-warning) 40%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--tone-warning) 8%, transparent);
+}
+
+.prep-conflict p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+/* --- Вкладки --- */
+
+.prep-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  background: var(--canvas);
+}
+
+/* --- Календарь --- */
+
+.prep-calendar {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.prep-calendar-body {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.prep-calendar-days {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.prep-calendar-tools {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.prep-day-tree {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.prep-day-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+.prep-day {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--ease-fast),
+    background var(--ease-fast);
+}
+
+.prep-day:hover {
+  border-color: var(--line-strong);
+}
+
+.prep-day-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.prep-day-head b {
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+}
+
+.prep-day-head em {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-style: normal;
+}
+
+.prep-day-count {
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.prep-day-purpose {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Состояние — заливка и левая кромка; выбор — кольцо. Они не спорят. */
+.prep-day.is-planned {
+  border-left-color: var(--day-planned);
+  background: color-mix(in srgb, var(--day-planned) 10%, var(--paper));
+}
+
+.prep-day.is-partial {
+  border-left-color: var(--day-partial);
+  background: color-mix(in srgb, var(--day-partial) 10%, var(--paper));
+}
+
+.prep-day.is-done {
+  border-left-color: var(--day-done);
+  background: color-mix(in srgb, var(--day-done) 10%, var(--paper));
+}
+
+.prep-day.is-missed {
+  border-left-color: var(--day-missed);
+  background: color-mix(in srgb, var(--day-missed) 10%, var(--paper));
+}
+
+/* Запланированный пропуск — не провал: штриховка вместо красного. */
+.prep-day.is-rest {
+  border-left-color: var(--line-strong);
+  background: repeating-linear-gradient(
+    135deg,
+    var(--surface-sunken),
+    var(--surface-sunken) 5px,
+    transparent 5px,
+    transparent 10px
+  );
+}
+
+.prep-day.is-selected {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.prep-day.is-today .prep-day-head b {
   color: var(--accent);
 }
-.prep-now small {
-  position: absolute;
-  top: var(--space-5);
-  padding-left: var(--space-1);
-  white-space: nowrap;
-  font-size: var(--text-xs);
-}
-.prep-phase {
-  position: absolute;
-  height: var(--space-10);
-  padding: var(--space-1) var(--space-2);
-  text-align: left;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--paper-strong);
-  overflow: hidden;
-}
-.prep-phase strong,
-.prep-phase small {
-  display: block;
-  text-overflow: ellipsis;
-  overflow: hidden;
-  white-space: nowrap;
-  font-size: var(--text-xs);
-}
-.prep-phase:hover {
+
+.prep-day.is-draft {
+  border-style: dashed;
   border-color: var(--accent);
 }
-.prep-form,
-.prep-filters {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-  margin-block: var(--space-3);
-}
-.prep-settings {
-  display: grid;
-  gap: var(--space-3);
-  padding-block: var(--space-4);
-}
-.prep-settings details > *,
-.prep-card > * {
-  margin-block: var(--space-2);
-}
-.prep-settings details {
-  border-bottom: 1px solid var(--line);
-  padding-bottom: var(--space-3);
-}
-.prep-check {
+
+.prep-day.is-exam {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2);
+  border-left-color: var(--tone-info);
+  background: color-mix(in srgb, var(--tone-info) 8%, var(--paper));
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
 }
-.prep-check input,
-.prep-diff-row input,
-.prep-history-row header input {
-  accent-color: var(--accent);
-  width: auto;
-}
-.prep-unit-list,
-.prep-diff-list {
-  max-height: 35vh;
-  overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-}
-.prep-dialog {
-  width: min(1050px, 95vw);
-  max-width: 95vw;
-}
-.prep-comparison {
+
+/* --- Редактор вопросов дня --- */
+
+.prep-editor {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-4);
-}
-.prep-comparison > * {
-  min-width: 0;
-}
-.prep-diff-row {
-  display: flex;
-  align-items: start;
   gap: var(--space-3);
-  padding: var(--space-3);
-  border-bottom: 1px solid var(--line);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
 }
-.prep-assignment,
-.prep-history-row,
-.prep-topic {
-  padding: var(--space-3);
-  border-bottom: 1px solid var(--line);
+
+.prep-editor-head h3 {
+  margin: 0;
+  font-size: var(--text-md);
 }
-.prep-assignment header,
-.prep-history-row header {
+
+.prep-editor-head p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.prep-toggles {
   display: flex;
-  gap: var(--space-3);
   flex-wrap: wrap;
   align-items: center;
-}
-.prep-assignment header strong {
-  flex: 1 1 100%;
-}
-.prep-history-row header span {
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-.prep-quality {
-  display: grid;
   gap: var(--space-2);
-  padding-block: var(--space-3);
 }
-.prep-quality small {
+
+.prep-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition:
+    border-color var(--ease-fast),
+    background var(--ease-fast);
+}
+
+.prep-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.prep-toggle i {
+  width: 30px;
+  height: 17px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  transition: background var(--ease-fast);
+}
+
+.prep-toggle i::after {
+  content: "";
+  display: block;
+  width: 13px;
+  height: 13px;
+  margin: 2px;
+  border-radius: 50%;
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--ease-fast);
+}
+
+.prep-toggle.is-on i {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.prep-toggle.is-on i::after {
+  transform: translateX(13px);
+}
+
+/* Разнородное выделение: чёрточка вместо кружка и подпись словом. */
+.prep-toggle.is-mixed i {
+  background: var(--accent-wash-strong);
+}
+
+.prep-toggle.is-mixed i::after {
+  width: 9px;
+  height: 3px;
+  margin: 7px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.prep-toggle small {
   color: var(--muted);
-}
-.prep-manifest {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
   font-size: var(--text-xs);
 }
-.prep-time-row {
+
+.prep-selection-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.prep-unit-tree {
+  position: relative;
+  max-height: 420px;
+  overflow: auto;
+  padding: var(--space-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  user-select: none;
+}
+
+.prep-unit-section ul {
   display: grid;
-  grid-template-columns: var(--space-16) 1fr auto;
-  gap: var(--space-3);
-  width: 100%;
-  border: none;
-  background: transparent;
-  padding: var(--space-2);
-  text-align: left;
-  font-size: var(--text-xs);
+  margin: 0;
+  padding: 0 0 var(--space-2);
+  list-style: none;
 }
-.prep-time-row:hover {
+
+.prep-unit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.prep-unit:hover {
   background: var(--surface-hover);
 }
-.prep-time-bars {
-  display: grid;
-  align-content: center;
-  gap: var(--space-1);
+
+.prep-unit.is-selected {
+  border-color: var(--accent-edge);
+  background: var(--accent-wash);
+  color: var(--ink);
 }
-.prep-time-bars i {
-  height: 1px;
-  background: var(--muted);
+
+.prep-unit.is-dirty {
+  border-left: 2px solid var(--accent);
 }
-.prep-time-bars b {
-  height: var(--space-2);
-  background: var(--ink-soft);
+
+.prep-unit-title {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prep-unit-kind,
+.prep-unit-time {
+  color: var(--faint);
+  font-size: var(--text-xs);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.prep-unit-check {
+  color: var(--day-done);
+}
+
+.prep-marquee {
+  position: absolute;
+  z-index: 2;
+  border: 1px solid var(--accent);
   border-radius: var(--radius-xs);
+  background: var(--accent-wash);
+  pointer-events: none;
 }
-.prep-trend {
+
+.prep-editor-foot {
   display: flex;
-  gap: var(--space-2);
-  overflow-x: auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
 }
-.prep-trend button {
+
+.prep-editor-foot.is-dirty {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line);
+}
+
+.prep-dirty-note {
+  color: var(--tone-warning);
+  font-size: var(--text-sm);
+}
+
+.prep-draft-ribbon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-wash);
+  font-size: var(--text-sm);
+}
+
+.prep-draft-ribbon span {
+  margin-right: auto;
+}
+
+/* --- История --- */
+
+.prep-history {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.prep-history-days {
   display: grid;
   gap: var(--space-2);
-  min-width: var(--space-16);
+}
+
+.prep-history-days ul {
+  display: grid;
+  gap: 2px;
+  max-height: 480px;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prep-history-days button {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.prep-history-days button:hover {
+  background: var(--surface-hover);
+}
+
+.prep-history-days button.is-selected {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.prep-history-days em {
+  color: var(--faint);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.prep-history-feed {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.prep-history-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.prep-history-bar > span:first-child {
+  margin-right: auto;
+}
+
+.prep-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
   background: var(--surface-sunken);
-  border: none;
-  border-radius: var(--radius-xs);
-  padding: var(--space-2);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
 }
-.prep-debt-actions {
+
+.prep-chip:hover {
+  border-color: var(--line-strong);
+}
+
+.prep-history-day h3 {
+  position: sticky;
+  top: var(--space-10);
+  margin: 0 0 var(--space-2);
+  padding: var(--space-1) 0;
+  background: var(--canvas);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.prep-events {
   display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0 0 0 var(--space-2);
+  list-style: none;
+  border-left: 1px solid var(--line);
 }
+
+.prep-event {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.prep-event-time {
+  color: var(--faint);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 22px;
+}
+
+.prep-event-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--muted);
+}
+
+.prep-event-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 22px;
+}
+
+.prep-event-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.prep-event-result {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.prep-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Аналитика --- */
+
+.prep-analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.prep-summary-sentence {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-lg);
+  line-height: var(--leading-snug);
+}
+
+.prep-summary-sentence strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.prep-analytics-wide {
+  grid-column: span 12;
+}
+
+.prep-analytics-main {
+  grid-column: span 7;
+}
+
+.prep-analytics-side {
+  grid-column: span 5;
+}
+
+.prep-analytics-grid article {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.prep-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin: 0 var(--space-1);
+  border-radius: 2px;
+  vertical-align: baseline;
+}
+
+.prep-swatch.is-study {
+  background: var(--purpose-study);
+}
+
+.prep-swatch.is-review {
+  background: var(--purpose-review);
+}
+
+.prep-coach-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.prep-coach-text {
+  margin: 0;
+  color: var(--ink-soft);
+  line-height: var(--leading-normal);
+}
+
+/* --- Узкое окно --- */
+
+@media (max-width: 1279px) {
+  .prep-dashboard {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .prep-dashboard article:last-of-type {
+    grid-column: 1 / -1;
+    min-height: 0;
+  }
+
+  .prep-analytics-main,
+  .prep-analytics-side {
+    grid-column: span 12;
+  }
+}
+
+@media (max-width: 1023px) {
+  .prep-dashboard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .prep-calendar-body,
+  .prep-history {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .prep-day-tree {
+    max-height: 320px;
+    overflow: auto;
+  }
+
+  .prep-queue-card.is-ticket {
+    grid-column: span 1;
+  }
+}
+
+/* --- Компоненты, живущие вне этого экрана.
+ * Полоса времени и очередь дня рисуются в Рабочей области, разбор попытки
+ * и ручное занятие — в Истории. Внешний вид сохранён от прежней редакции. --- */
+
 .prep-study-bar,
 .prep-queue {
   display: flex;
@@ -296,23 +1202,76 @@
   background: var(--paper);
   font-size: var(--text-xs);
 }
+
 .prep-study-bar > strong,
 .prep-queue > strong {
-  margin-right: auto;
+  font-size: var(--text-sm);
 }
+
 .prep-study-error {
   color: var(--tone-danger);
 }
+
 .prep-queue p {
   width: 100%;
   margin: 0;
 }
-@media (max-width: 1100px) {
-  .prep-screen .plan-content-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .prep-form,
-  .prep-filters {
-    grid-template-columns: minmax(0, 1fr);
-  }
+
+.prep-attempt {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.prep-quality {
+  display: grid;
+  gap: var(--space-2);
+  padding-block: var(--space-3);
+}
+
+.prep-quality small {
+  color: var(--muted);
+}
+
+.prep-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.prep-check input {
+  accent-color: var(--accent);
+  width: auto;
+}
+
+.prep-check small {
+  display: block;
+}
+
+/* Параметры подготовки открываются диалогом из полосы вкладок: постоянной
+ * панели им не нужно, но правило долга и лимиты должны оставаться доступны. */
+.prep-settings {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.prep-settings details {
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.prep-settings details > *,
+.prep-settings .prep-card > * {
+  margin-block: var(--space-2);
+}
+
+.prep-tabs-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
