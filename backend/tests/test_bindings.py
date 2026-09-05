@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.bindings import search as search_module
 from app.bindings import service
-from app.bindings.schemas import BindingCreateWrite
+from app.bindings.schemas import BindingBulkRemoveWrite, BindingCreateWrite
 from app.materials.schemas import MaterialPurpose
 from app.models import (
     Binding,
@@ -300,3 +300,75 @@ def test_answers_file_binding_does_not_mark_study_result_as_bound(session: Sessi
         session, project.id, "реляционная модель", node_id=node.id
     )
     assert results.results[0].already_bound is False
+
+
+def test_bulk_remove_for_one_node_keeps_other_questions_on_the_page(session: Session) -> None:
+    """Предпросмотр снимает то, что сам привязал, а не чужие связи той же страницы."""
+    project = make_exam_project(session)
+    mine = make_topic_node(session, project, title="Неравенство Чебышёва")
+    other = make_topic_node(session, project, title="Закон больших чисел")
+    material = make_material(session, "b7")
+    link_material(session, project, material)
+    page = add_page_with_fragments(
+        session,
+        material,
+        page_number=1,
+        revision=1,
+        fragments=["Первый абзац страницы.", "Второй абзац страницы."],
+    )
+    _bind(session, project, mine, page.fragment_ids)
+    _bind(session, project, other, page.fragment_ids[:1])
+
+    result = service.remove_bindings_bulk(
+        session,
+        project.id,
+        BindingBulkRemoveWrite(
+            material_id=material.id, page_number=1, program_node_id=mine.id
+        ),
+    )
+
+    assert len(result.bindings) == 2
+    active = list(
+        session.scalars(
+            select(Binding).where(
+                Binding.project_id == project.id,
+                Binding.status.in_(service.ACTIVE_STATUSES),
+            )
+        )
+    )
+    assert [binding.program_node_id for binding in active] == [other.id]
+
+
+def test_bulk_remove_for_one_node_is_undone_as_one_batch(session: Session) -> None:
+    project = make_exam_project(session)
+    node = make_topic_node(session, project, title="Неравенство Чебышёва")
+    material = make_material(session, "b8")
+    link_material(session, project, material)
+    page = add_page_with_fragments(
+        session,
+        material,
+        page_number=1,
+        revision=1,
+        fragments=["Первый абзац.", "Второй абзац.", "Третий абзац."],
+    )
+    _bind(session, project, node, page.fragment_ids)
+
+    removed = service.remove_bindings_bulk(
+        session,
+        project.id,
+        BindingBulkRemoveWrite(
+            material_id=material.id, page_number=1, program_node_id=node.id
+        ),
+    )
+    assert removed.latest_undoable_action is not None
+    undo_last_project_action(session, project.id, removed.latest_undoable_action.sequence)
+
+    active = list(
+        session.scalars(
+            select(Binding).where(
+                Binding.project_id == project.id,
+                Binding.status.in_(service.ACTIVE_STATUSES),
+            )
+        )
+    )
+    assert len(active) == 3

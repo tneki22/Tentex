@@ -136,12 +136,18 @@ export const removeBinding = (
   { method: "DELETE" },
 );
 
+/** `nodeId` сужает снятие до одного вопроса: без него страница очищается у всех
+ *  вопросов сразу, и предпросмотр источника снёс бы чужие связи. */
 export const removeBindingsBulk = (
   projectId: string,
-  command: { materialId: string; pageNumber?: number },
+  command: { materialId: string; pageNumber?: number; nodeId?: string },
 ): Promise<BindingChangeResult> => request(`${bindingsPath(projectId)}/bulk-remove`, {
   method: "POST",
-  body: JSON.stringify({ material_id: command.materialId, page_number: command.pageNumber ?? null }),
+  body: JSON.stringify({
+    material_id: command.materialId,
+    page_number: command.pageNumber ?? null,
+    program_node_id: command.nodeId ?? null,
+  }),
 });
 
 /** Не используется ни одним экраном: ручной автоподбор идёт через

@@ -35,6 +35,7 @@ from app.materials.lexicon import (
     query_terms,
     tokenize_with_positions,
 )
+from app.materials.presentation import MaterialPresentationKind, presentation_kind
 from app.models import Material, MaterialBlock, MaterialFragment, MaterialPage, PageQuality
 
 RESULT_LIMIT = 50
@@ -133,10 +134,27 @@ class Highlight:
 
 
 @dataclass(frozen=True, slots=True)
+class SearchHitPage:
+    """Одна страница попадания: что на ней нашлось и как это выглядит.
+
+    Своё превью у страницы обязательно. Блок тянется через несколько страниц, а
+    лучший его фрагмент лежит на одной из них: без собственного текста карточка
+    страницы 73 показывала бы отрывок со страницы 71.
+    """
+
+    page_number: int
+    fragment_ids: list[UUID]
+    quality: PageQuality
+    text: str
+    highlights: list[Highlight]
+
+
+@dataclass(frozen=True, slots=True)
 class SearchHit:
     fragment_ids: list[UUID]
     material_id: UUID
     material_name: str
+    presentation_kind: MaterialPresentationKind
     block_id: UUID
     block_title: str | None
     page_from: int
@@ -145,6 +163,7 @@ class SearchHit:
     text: str
     highlights: list[Highlight]
     matched_forms: list[str]
+    pages: list[SearchHitPage]
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +294,7 @@ def search_fragments(
                 "page_numbers": [],
                 "best_rank": rank,
                 "best_fragment": fragment,
+                "pages": {},
             }
             groups[block.id] = group
             group_order.append(block.id)
@@ -283,6 +303,18 @@ def search_fragments(
         if rank < group["best_rank"]:
             group["best_rank"] = rank
             group["best_fragment"] = fragment
+        by_page = group["pages"].get(page.page_number)
+        if by_page is None:
+            group["pages"][page.page_number] = {
+                "fragment_ids": [fragment_id],
+                "best_rank": rank,
+                "best_fragment": fragment,
+            }
+        else:
+            by_page["fragment_ids"].append(fragment_id)
+            if rank < by_page["best_rank"]:
+                by_page["best_rank"] = rank
+                by_page["best_fragment"] = fragment
 
     group_order.sort(key=lambda block_id: groups[block_id]["best_rank"])
     hits: list[SearchHit] = []
@@ -297,6 +329,7 @@ def search_fragments(
                 fragment_ids=group["fragment_ids"],
                 material_id=material.id,
                 material_name=material.original_name,
+                presentation_kind=presentation_kind(material),
                 block_id=block.id,
                 block_title=block.title,
                 page_from=min(group["page_numbers"]),
@@ -305,6 +338,28 @@ def search_fragments(
                 text=fragment.text,
                 highlights=spans,
                 matched_forms=forms,
+                pages=_hit_pages(group["pages"], term_set, prefix),
             )
         )
     return SearchOutcome(terms=terms, prefix=prefix, hits=hits)
+
+
+def _hit_pages(
+    pages: dict[int, dict], terms: set[str], prefix: str | None
+) -> list[SearchHitPage]:
+    """Разложить попадание по страницам в порядке чтения документа."""
+    result: list[SearchHitPage] = []
+    for page_number in sorted(pages):
+        entry = pages[page_number]
+        best = entry["best_fragment"]
+        spans, _ = _highlights(best.text, terms, prefix)
+        result.append(
+            SearchHitPage(
+                page_number=page_number,
+                fragment_ids=entry["fragment_ids"],
+                quality=best.quality,
+                text=best.text,
+                highlights=spans,
+            )
+        )
+    return result

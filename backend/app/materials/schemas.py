@@ -13,6 +13,7 @@ from pydantic import (
 )
 
 from app.bindings.schemas import AffectedProjectPreview
+from app.materials.presentation import MaterialPresentationKind
 from app.models import (
     BackgroundJobState,
     BlockClass,
@@ -244,9 +245,6 @@ class LibraryMaterialRead(ApiModel):
     usage: list[LibraryUsageRead]
 
 
-MaterialPresentationKind = Literal[
-    "pdf", "image", "document", "plain_text", "web", "youtube", "audio"
-]
 OutlineSource = Literal["embedded", "recognized", "none"]
 
 

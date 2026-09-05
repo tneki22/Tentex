@@ -17,6 +17,7 @@ from app.bindings.schemas import (
     ReindexResult,
     SearchHighlightRead,
     SearchResponse,
+    SearchResultPageRead,
     SearchResultRead,
 )
 from app.marker_labels import material_image_label
@@ -315,7 +316,10 @@ def restore_binding(session: Session, project_id: UUID, binding_id: UUID) -> Bin
 def remove_bindings_bulk(
     session: Session, project_id: UUID, command: BindingBulkRemoveWrite
 ) -> BindingChangeResult:
-    """Снять разом все активные привязки материала — на одной странице или во всём файле.
+    """Снять разом активные привязки материала — на одной странице или во всём файле.
+
+    С `program_node_id` очищается только один вопрос: предпросмотр источника
+    снимает то, что сам же и привязал, а не чужие связи на той же странице.
 
     Одна запись в журнале на всю операцию: undo (Ctrl+Z или кнопка в уведомлении)
     возвращает всю пачку разом, тем же механизмом, что и одиночное снятие.
@@ -336,6 +340,8 @@ def remove_bindings_bulk(
         )
         if command.page_number is not None:
             query = query.where(MaterialPage.page_number == command.page_number)
+        if command.program_node_id is not None:
+            query = query.where(Binding.program_node_id == command.program_node_id)
         rows = session.execute(query).all()
 
         touched_ids: list[UUID] = []
@@ -353,6 +359,10 @@ def remove_bindings_bulk(
         if touched_ids:
             label = (link.display_name if link else None) or material.original_name
             scope = f", стр. {command.page_number}" if command.page_number is not None else ""
+            if command.program_node_id is not None:
+                node = session.get(ProgramNode, command.program_node_id)
+                if node is not None:
+                    scope = f"{scope} → {node.title}"
             _record_action(
                 session,
                 project,
@@ -515,23 +525,41 @@ def search_project_materials(
             fragment_ids=hit.fragment_ids,
             material_id=hit.material_id,
             material_name=hit.material_name,
+            presentation_kind=hit.presentation_kind,
             block_id=hit.block_id,
             block_title=hit.block_title,
             page_from=hit.page_from,
             page_to=hit.page_to,
             quality=hit.quality,
             text=hit.text,
-            highlights=[
-                SearchHighlightRead(start=highlight.start, end=highlight.end)
-                for highlight in hit.highlights
-            ],
+            highlights=_highlight_reads(hit.highlights),
             matched_forms=hit.matched_forms,
             already_bound=bool(bound_fragment_ids)
             and any(fragment_id in bound_fragment_ids for fragment_id in hit.fragment_ids),
+            pages=[
+                SearchResultPageRead(
+                    page_number=page.page_number,
+                    fragment_ids=page.fragment_ids,
+                    quality=page.quality,
+                    text=page.text,
+                    highlights=_highlight_reads(page.highlights),
+                    already_bound=bool(bound_fragment_ids)
+                    and any(
+                        fragment_id in bound_fragment_ids for fragment_id in page.fragment_ids
+                    ),
+                )
+                for page in hit.pages
+            ],
         )
         for hit in outcome.hits
     ]
     return SearchResponse(terms=outcome.terms, prefix=outcome.prefix, results=results)
+
+
+def _highlight_reads(highlights: Sequence[search_module.Highlight]) -> list[SearchHighlightRead]:
+    return [
+        SearchHighlightRead(start=highlight.start, end=highlight.end) for highlight in highlights
+    ]
 
 
 def reindex_material(session: Session, project_id: UUID, material_id: UUID) -> ReindexResult:

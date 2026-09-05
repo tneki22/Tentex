@@ -229,3 +229,54 @@ def test_matched_forms_carry_the_wordform_not_the_lemma(session: Session) -> Non
     hits = search.search_fragments(session, [material.id], "мил").hits
 
     assert hits[0].matched_forms == ["Мили"]
+
+
+def test_hit_splits_into_pages_with_their_own_preview(session: Session) -> None:
+    """Блок через две страницы даёт две записи: у каждой свои фрагменты и свой текст.
+
+    Интерфейс группирует выдачу по страницам, и превью страницы 2 не должно
+    приезжать со страницы 1 — иначе карточка врёт о том, что на ней найдено.
+    """
+    material = make_material(session, "a8")
+    first = add_page_with_fragments(
+        session,
+        material,
+        page_number=1,
+        revision=1,
+        fragments=["Второе неравенство Чебышёва оценивает отклонение."],
+        block_title="Неравенства",
+    )
+    second = add_page_with_fragments(
+        session,
+        material,
+        page_number=2,
+        revision=1,
+        fragments=["Доказательство второго неравенства Чебышёва."],
+        block_id=first.block_id,
+    )
+    search.reindex_material(session, material.id)
+
+    hits = search.search_fragments(session, [material.id], "неравенство Чебышёва").hits
+
+    assert len(hits) == 1
+    hit = hits[0]
+    assert (hit.page_from, hit.page_to) == (1, 2)
+    assert [page.page_number for page in hit.pages] == [1, 2]
+    assert hit.pages[0].fragment_ids == first.fragment_ids
+    assert hit.pages[1].fragment_ids == second.fragment_ids
+    assert hit.pages[0].text.startswith("Второе неравенство")
+    assert hit.pages[1].text.startswith("Доказательство")
+    assert all(page.highlights for page in hit.pages)
+
+
+def test_hit_carries_presentation_kind_of_its_material(session: Session) -> None:
+    """Предпросмотр выбирает растр или текст до запроса, а не по ошибке 422."""
+    material = make_material(session, "a9")
+    add_page_with_fragments(
+        session, material, page_number=1, revision=1, fragments=["Схема нормализации отношений."]
+    )
+    search.reindex_material(session, material.id)
+
+    hits = search.search_fragments(session, [material.id], "нормализация").hits
+
+    assert hits[0].presentation_kind == "plain_text"

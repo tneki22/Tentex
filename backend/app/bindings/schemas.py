@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.materials.presentation import MaterialPresentationKind
 from app.models import BindingMechanism, BindingStatus, PageQuality
 from app.projects.schemas import LatestUndoableAction
 
@@ -17,10 +18,28 @@ class SearchHighlightRead(ApiModel):
     end: int
 
 
+class SearchResultPageRead(ApiModel):
+    """Одна страница попадания со своим превью и своими фрагментами.
+
+    Интерфейс группирует выдачу по страницам, а не по блокам: диапазон
+    «стр. 71–75» не отвечает на вопрос, где именно совпало.
+    """
+
+    page_number: int
+    fragment_ids: list[UUID]
+    quality: PageQuality
+    text: str
+    highlights: list[SearchHighlightRead]
+    already_bound: bool = False
+
+
 class SearchResultRead(ApiModel):
     fragment_ids: list[UUID]
     material_id: UUID
     material_name: str
+    #: Есть ли у материала растр страницы, знает вид источника: предпросмотр
+    #: выбирает картинку или подготовленный текст до запроса, а не по 422.
+    presentation_kind: MaterialPresentationKind
     block_id: UUID
     block_title: str | None
     page_from: int
@@ -30,6 +49,7 @@ class SearchResultRead(ApiModel):
     highlights: list[SearchHighlightRead]
     matched_forms: list[str] = []
     already_bound: bool = False
+    pages: list[SearchResultPageRead] = []
 
 
 class SearchResponse(ApiModel):
@@ -129,6 +149,9 @@ class BindingFragmentRead(ApiModel):
 class BindingBulkRemoveWrite(ApiModel):
     material_id: UUID
     page_number: int | None = None
+    #: Снять только привязки одного вопроса. Без него страница очищается у всех
+    #: вопросов сразу — в предпросмотре источника это было бы не то действие.
+    program_node_id: UUID | None = None
 
 
 class BindingCreateWrite(ApiModel):

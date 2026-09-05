@@ -1,4 +1,4 @@
-import type { PageQuality } from "./materials";
+import type { MaterialPresentationKind, PageQuality } from "./materials";
 import { request } from "./projects";
 
 export interface SearchHighlightRead {
@@ -6,10 +6,25 @@ export interface SearchHighlightRead {
   end: number;
 }
 
+/** Одна страница попадания: свои фрагменты и своё превью.
+ *  Блок тянется через несколько страниц, поэтому текст лучшего фрагмента блока
+ *  не годится карточке каждой страницы. */
+export interface SearchResultPageRead {
+  page_number: number;
+  fragment_ids: string[];
+  quality: PageQuality;
+  text: string;
+  highlights: SearchHighlightRead[];
+  already_bound: boolean;
+}
+
 export interface SearchResultRead {
   fragment_ids: string[];
   material_id: string;
   material_name: string;
+  /** Есть ли у материала растр страницы: предпросмотр выбирает картинку или
+   *  подготовленный текст заранее, а не по ошибке 422. */
+  presentation_kind: MaterialPresentationKind;
   block_id: string;
   block_title: string | null;
   page_from: number;
@@ -20,6 +35,7 @@ export interface SearchResultRead {
   /** Словоформы из текста, совпавшие с запросом, — для подсветки на клиенте. */
   matched_forms: string[];
   already_bound: boolean;
+  pages: SearchResultPageRead[];
 }
 
 export interface SearchResponse {

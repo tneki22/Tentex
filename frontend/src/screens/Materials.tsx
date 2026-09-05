@@ -1402,6 +1402,15 @@ function MaterialSurface() {
       setFocusedFragmentId(focusParam);
       setInspectorTab("bindings");
     }
+    // `node` приходит из предпросмотра источника в Рабочей области: там вопрос
+    // уже выбран, и переспрашивать его здесь незачем. Режим привязки включается
+    // сразу — иначе клики по абзацам молча ничего не делают.
+    const nodeParam = searchParams.get("node");
+    if (nodeParam) {
+      setActiveNodeId(nodeParam);
+      setInspectorTab("bindings");
+      setBindingMode(true);
+    }
     // Параметры читаются один раз при переходе на материал, дальше страницами
     // управляет сам экран — эффект не должен реагировать на их изменения.
     // eslint-disable-next-line react-hooks/exhaustive-deps

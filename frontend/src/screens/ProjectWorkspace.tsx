@@ -85,6 +85,8 @@ import { ExamChatPanel } from "./workspace/chat/ExamChatPanel";
 import { AttemptHistory } from "./workspace/AttemptHistory";
 import { ReferenceAnswerContent, type ReferenceAnswerMedia } from "./workspace/ReferenceAnswerContent";
 import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
+import { SourcePreviewDialog } from "./workspace/SourcePreviewDialog";
+import { toSourcePlaces, type SourcePlace } from "./workspace/sourcePlaces";
 import type { ConspectEditorHandle } from "../components/domain/ConspectEditor";
 
 // Прямой динамический импорт файла, а не барреля components/domain: так Milkdown
@@ -288,6 +290,10 @@ export function ProjectWorkspace() {
   const [sourceTerms, setSourceTerms] = useState<string[]>([]);
   const [sourceBusy, setSourceBusy] = useState(false);
   const [sourceNotice, setSourceNotice] = useState("");
+  /** Скрытые места живут только в сессии: это уборка выдачи, а не решение о
+   *  материале, и записывать её в базу нечего. */
+  const [hiddenPlaces, setHiddenPlaces] = useState<Set<string>>(new Set());
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
   const sourceSearchInput = useRef<HTMLInputElement>(null);
   const sourceSearchRef = useRef<AbortController | null>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
@@ -480,6 +486,8 @@ export function ProjectWorkspace() {
     setSourceTerms([]);
     setSourceNotice("");
     setSourceBindings([]);
+    setHiddenPlaces(new Set());
+    setPreviewKey(null);
     // Смысл продукта — открыл вопрос и сразу видишь, где про это в учебниках.
     void runSourceSearch(selected.id, selected.title);
     const controller = new AbortController();
@@ -492,22 +500,43 @@ export function ProjectWorkspace() {
   }, [projectId, selected?.id, selected?.title, textbook, runSourceSearch]);
 
 
-  async function bindSourceCandidate(result: SearchResultRead) {
+  /** Привязки вопроса и выдача — один источник правды на вкладку и на окно
+   *  предпросмотра: «уже привязано» считается из `sourceBindings`, а не из
+   *  локальных флажков, которые разъезжались бы после действий в окне. */
+  function addSourceBindings(created: BindingFragmentRead[]) {
+    setSourceBindings((current) => [
+      ...current,
+      ...created.filter((binding) => !current.some((existing) => existing.id === binding.id)),
+    ]);
+    void bindings.refreshSummary();
+  }
+
+  function dropSourceBindings(bindingIds: string[]) {
+    if (bindingIds.length > 0) {
+      const removed = new Set(bindingIds);
+      setSourceBindings((current) => current.filter((binding) => !removed.has(binding.id)));
+    }
+    void bindings.refreshSummary();
+    if (selected) void reloadSourceBindings(selected.id);
+  }
+
+  function reloadSourceBindings(nodeId: string) {
+    return listBindings(projectId, { nodeId })
+      .then(setSourceBindings)
+      .catch(() => undefined);
+  }
+
+  async function bindSourcePlace(place: SourcePlace) {
     if (!selected) return;
     setSourceBusy(true);
     try {
       const created = await createBindings(projectId, {
         program_node_id: selected.id,
-        fragment_ids: result.fragment_ids,
+        fragment_ids: place.fragmentIds,
         mechanism: "search",
       });
-      setSourceBindings((current) => [
-        ...current,
-        ...created.bindings.filter((binding) => !current.some((existing) => existing.id === binding.id)),
-      ]);
-      setSourceResults((current) => current.map((item) => item === result ? { ...item, already_bound: true } : item));
-      setSourceNotice("Фрагмент привязан.");
-      void bindings.refreshSummary();
+      addSourceBindings(created.bindings);
+      setSourceNotice(`Привязано со стр. ${place.pageNumber}: ${created.bindings.length}.`);
     } catch (caught) {
       setSourceNotice(caught instanceof Error ? caught.message : "Не удалось привязать фрагмент");
     } finally {
@@ -520,9 +549,6 @@ export function ProjectWorkspace() {
     try {
       await removeBinding(projectId, bindingId);
       setSourceBindings((current) => current.filter((binding) => binding.id !== bindingId));
-      setSourceResults((current) => current.map((item) => item.fragment_ids.includes(
-        sourceBindings.find((binding) => binding.id === bindingId)?.fragment_id ?? "",
-      ) ? { ...item, already_bound: false } : item));
       setSourceNotice("Привязка снята.");
       void bindings.refreshSummary();
     } catch (caught) {
@@ -819,9 +845,18 @@ export function ProjectWorkspace() {
     // Привязки файла эталонных ответов (mechanism "answers_file") уже показаны
     // во вкладке «Ответ» как страницы/медиа эталона — здесь это другая сущность.
     const topicSourceBindings = sourceBindings.filter((binding) => binding.mechanism !== "answers_file");
+    // Выдача группируется по странице: «стр. 71–75» из блочной группировки не
+    // отвечает на вопрос, где именно совпало, и открывать там нечего.
+    const visiblePlaces = toSourcePlaces(sourceResults)
+      .filter((place) => !hiddenPlaces.has(place.key));
+    const boundFragmentIds = new Set(topicSourceBindings.map((binding) => binding.fragment_id));
+    const isPlaceBound = (place: SourcePlace) => place.fragmentIds
+      .every((fragmentId) => boundFragmentIds.has(fragmentId));
+    const previewPlace = previewKey
+      ? visiblePlaces.find((place) => place.key === previewKey) ?? null
+      : null;
     return (
       <div className="workspace-source-tab">
-        {sourceNotice && <p className="workspace-source-tab-notice" role="status">{sourceNotice}</p>}
         {sourceBindingsLoading ? <LoadingState label="Загружаем привязки" /> : topicSourceBindings.length > 0 ? (
           <ul className="workspace-source-tab-list">
             {topicSourceBindings.map((binding) => (
@@ -879,30 +914,38 @@ export function ProjectWorkspace() {
             Искали по: {sourceTerms.join(" · ")}
           </p>
         )}
+        {sourceNotice && (
+          <p className="workspace-source-tab-notice" role="status">{sourceNotice}</p>
+        )}
         {sourceSearching && <LoadingState label="Ищем" />}
         {sourceSearched && !sourceSearching && (
-          sourceResults.length > 0 ? (
+          visiblePlaces.length > 0 ? (
             <>
             <p className="workspace-source-tab-count" role="status">
-              Найдено мест: {sourceResults.length}
+              Найдено мест: {visiblePlaces.length}
             </p>
             <ul className="workspace-source-tab-results">
-              {sourceResults.map((result) => {
-                const alreadyBound = result.already_bound
-                  || topicSourceBindings.some((binding) => result.fragment_ids.includes(binding.fragment_id));
+              {visiblePlaces.map((place) => {
+                const alreadyBound = isPlaceBound(place);
                 return (
-                  <li key={result.fragment_ids.join(",")}>
-                    <div className="workspace-source-tab-result-copy">
-                      <p>{renderHighlighted(result.text, result.highlights)}</p>
+                  <li key={place.key}>
+                    <button
+                      type="button"
+                      className="workspace-source-tab-result-copy"
+                      onClick={() => setPreviewKey(place.key)}
+                    >
+                      <p>{renderHighlighted(place.text, place.highlights)}</p>
                       <small>
-                        {result.material_name} · стр. {result.page_from === result.page_to ? result.page_from : `${result.page_from}–${result.page_to}`}
+                        {place.materialName} · стр. {place.pageNumber}
+                        {" · "}
+                        {place.fragmentIds.length} совпад.
                       </small>
-                    </div>
-                    <QualityBadge quality={result.quality} />
+                    </button>
+                    <QualityBadge quality={place.quality} />
                     <Button
                       variant="secondary"
                       disabled={alreadyBound || sourceBusy}
-                      onClick={() => void bindSourceCandidate(result)}
+                      onClick={() => void bindSourcePlace(place)}
                     >
                       {alreadyBound ? "Уже привязано" : "Привязать"}
                     </Button>
@@ -912,6 +955,21 @@ export function ProjectWorkspace() {
             </ul>
             </>
           ) : <p className="workspace-list-empty">Ничего не найдено.</p>
+        )}
+        {previewPlace && selected && (
+          <SourcePreviewDialog
+            projectId={projectId}
+            node={{ id: selected.id, number: selected.number, title: selected.title }}
+            places={visiblePlaces}
+            activeKey={previewPlace.key}
+            terms={sourceTerms}
+            bindings={topicSourceBindings}
+            onActiveKeyChange={setPreviewKey}
+            onBound={addSourceBindings}
+            onUnbound={dropSourceBindings}
+            onHidePlace={(key) => setHiddenPlaces((current) => new Set(current).add(key))}
+            onClose={() => setPreviewKey(null)}
+          />
         )}
       </div>
     );

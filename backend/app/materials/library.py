@@ -41,6 +41,10 @@ from app.materials.external import fetch_web_page, fetch_youtube_transcript
 from app.materials.lexicon import index_text, prefix_term, query_terms
 from app.materials.parsers.base import ParsedElement, ParsedPage
 from app.materials.parsers.native import inspect, parse_text_page
+from app.materials.presentation import (
+    MaterialPresentationKind,
+    presentation_kind,
+)
 from app.materials.schemas import (
     BlockRead,
     ExamMaterialSlot,
@@ -55,7 +59,6 @@ from app.materials.schemas import (
     LibraryTextMaterialCreate,
     LibraryUsageRead,
     MaterialDeletePreview,
-    MaterialPresentationKind,
     MaterialPurpose,
     MaterialRevisionRead,
     MaterialsDeletePreview,
@@ -102,10 +105,6 @@ ACTIVE_TASK_STATES = {
 }
 PURPOSE_VALUES = {purpose.value for purpose in MaterialPurpose}
 AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
-DOCUMENT_MEDIA_TYPES = {
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/msword",
-}
 TEXT_MEDIA_TYPES = {"text/plain", "text/markdown", "text/x-markdown"}
 # Оглавление из заголовков имеет смысл, пока его можно прочитать глазами.
 RECOGNIZED_OUTLINE_LIMIT = 400
@@ -120,24 +119,6 @@ def material_or_404(session: Session, material_id: UUID) -> Material:
     if material is None:
         raise ProjectNotFoundError("Материал не найден", code="material_not_found")
     return material
-
-
-def presentation_kind(material: Material) -> MaterialPresentationKind:
-    """Один производный вид вместо проверок MIME по всему фронтенду."""
-    if material.source_kind == MaterialSourceKind.YOUTUBE:
-        return "youtube"
-    if material.source_kind == MaterialSourceKind.AUDIO or material.media_type.startswith("audio/"):
-        return "audio"
-    if material.source_kind == MaterialSourceKind.URL:
-        return "web"
-    if material.media_type == "application/pdf":
-        return "pdf"
-    if material.media_type.startswith("image/"):
-        return "image"
-    if material.media_type in DOCUMENT_MEDIA_TYPES:
-        return "document"
-    # Неизвестный формат сюда не доходит: загрузка отклоняет его в storage.
-    return "plain_text"
 
 
 def _capabilities(

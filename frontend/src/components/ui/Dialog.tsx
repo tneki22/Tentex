@@ -11,6 +11,12 @@ interface DialogProps {
   description?: string;
   /** Кнопки подвала. Если не задать — только «Закрыть». */
   footer?: ReactNode;
+  /**
+   * Куда встаёт фокус при открытии. По умолчанию Radix берёт первый доступный
+   * элемент; диалог со списком слева перехватывает событие, чтобы фокус и
+   * прокрутка ушли на выбранную строку, а не на верхнюю.
+   */
+  onOpenAutoFocus?: (event: Event) => void;
   className?: string;
 }
 
@@ -21,6 +27,7 @@ export function Dialog({
   title,
   description,
   footer,
+  onOpenAutoFocus,
   className = "",
   children,
 }: PropsWithChildren<DialogProps>) {
@@ -47,7 +54,10 @@ export function Dialog({
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="dialog-overlay" />
-        <RadixDialog.Content className={`dialog ${className}`.trim()}>
+        <RadixDialog.Content
+          className={`dialog ${className}`.trim()}
+          onOpenAutoFocus={onOpenAutoFocus}
+        >
           <RadixDialog.Title className="dialog-title">{title}</RadixDialog.Title>
           {description ? (
             <RadixDialog.Description className="dialog-lead">{description}</RadixDialog.Description>
