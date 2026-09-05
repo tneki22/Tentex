@@ -16,6 +16,7 @@ from app.bindings.schemas import (
     NodeBindingSummary,
     ReindexResult,
     SearchHighlightRead,
+    SearchResponse,
     SearchResultRead,
 )
 from app.marker_labels import material_image_label
@@ -489,12 +490,12 @@ def search_project_materials(
     material_id: UUID | None = None,
     node_id: UUID | None = None,
     limit: int = search_module.RESULT_LIMIT,
-) -> list[SearchResultRead]:
+) -> SearchResponse:
     project = session.get(Project, project_id)
     if project is None:
         raise ProjectNotFoundError()
     material_ids = _project_material_ids(session, project_id, material_id)
-    hits = search_module.search_fragments(session, material_ids, query, limit=limit)
+    outcome = search_module.search_fragments(session, material_ids, query, limit=limit)
 
     bound_fragment_ids: set[UUID] = set()
     if node_id is not None:
@@ -509,7 +510,7 @@ def search_project_materials(
             )
         )
 
-    return [
+    results = [
         SearchResultRead(
             fragment_ids=hit.fragment_ids,
             material_id=hit.material_id,
@@ -524,11 +525,13 @@ def search_project_materials(
                 SearchHighlightRead(start=highlight.start, end=highlight.end)
                 for highlight in hit.highlights
             ],
+            matched_forms=hit.matched_forms,
             already_bound=bool(bound_fragment_ids)
             and any(fragment_id in bound_fragment_ids for fragment_id in hit.fragment_ids),
         )
-        for hit in hits
+        for hit in outcome.hits
     ]
+    return SearchResponse(terms=outcome.terms, prefix=outcome.prefix, results=results)
 
 
 def reindex_material(session: Session, project_id: UUID, material_id: UUID) -> ReindexResult:

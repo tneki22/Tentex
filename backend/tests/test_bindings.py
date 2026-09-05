@@ -265,11 +265,11 @@ def test_general_search_excludes_reference_answers_material(session: Session) ->
     search_module.reindex_material(session, material.id)
     session.commit()
 
-    assert service.search_project_materials(session, project.id, "реляционная модель") == []
+    assert service.search_project_materials(session, project.id, "реляционная модель").results == []
     explicit = service.search_project_materials(
         session, project.id, "реляционная модель", material_id=material.id
     )
-    assert explicit[0].fragment_ids == page.fragment_ids
+    assert explicit.results[0].fragment_ids == page.fragment_ids
 
 
 def test_answers_file_binding_does_not_mark_study_result_as_bound(session: Session) -> None:
@@ -299,4 +299,4 @@ def test_answers_file_binding_does_not_mark_study_result_as_bound(session: Sessi
     results = service.search_project_materials(
         session, project.id, "реляционная модель", node_id=node.id
     )
-    assert results[0].already_bound is False
+    assert results.results[0].already_bound is False

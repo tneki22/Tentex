@@ -5,6 +5,7 @@
  * то, что общее у Библиотеки и проектного просмотрщика, живёт здесь, а
  * проектная композиция остаётся в проектном экране.
  */
+export { DocumentSearchField } from "./DocumentSearchField";
 export { DocumentStage } from "./DocumentStage";
 export { PdfOutline } from "./PdfOutline";
 export { StructuredPage, MarkdownTable, highlight } from "./StructuredPage";

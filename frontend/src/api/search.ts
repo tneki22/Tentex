@@ -17,7 +17,16 @@ export interface SearchResultRead {
   quality: PageQuality;
   text: string;
   highlights: SearchHighlightRead[];
+  /** Словоформы из текста, совпавшие с запросом, — для подсветки на клиенте. */
+  matched_forms: string[];
   already_bound: boolean;
+}
+
+export interface SearchResponse {
+  /** Леммы, по которым искали: длинная формулировка сводится к ключевым словам. */
+  terms: string[];
+  prefix: string | null;
+  results: SearchResultRead[];
 }
 
 export interface ReindexResult {
@@ -32,7 +41,7 @@ export const searchProjectMaterials = (
   query: string,
   options: { materialId?: string; nodeId?: string; limit?: number } = {},
   signal?: AbortSignal,
-): Promise<SearchResultRead[]> => {
+): Promise<SearchResponse> => {
   const params = new URLSearchParams({ q: query });
   if (options.materialId) params.set("material_id", options.materialId);
   if (options.nodeId) params.set("node_id", options.nodeId);

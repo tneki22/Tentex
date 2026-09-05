@@ -11,7 +11,8 @@ interface StructuredPageProps {
   page: MaterialPageRead;
   showOcrReview?: boolean;
   /** Подсветка совпадений поиска. Пустая строка — ничего не подсвечивать. */
-  query?: string;
+  /** Словоформы для подсветки — их считает поиск, здесь морфологии нет. */
+  terms?: string[];
   /** Ссылка на картинку фрагмента: у проекта и Библиотеки маршруты разные. */
   assetUrl?: (fragmentId: string) => string;
   /** Фрагмент, к которому нужно прокрутить и который выделен. */
@@ -40,7 +41,7 @@ interface StructuredPageProps {
 export function StructuredPage({
   page,
   showOcrReview = true,
-  query = "",
+  terms = [],
   assetUrl,
   focusedFragmentId = null,
   renderFragmentOverlay,
@@ -94,7 +95,7 @@ export function StructuredPage({
               <FragmentBody
                 fragment={fragment}
                 page={page}
-                query={query}
+                terms={terms}
                 assetUrl={assetUrl}
                 suppressImage={withCrops}
                 preserveLayout={spatial}
@@ -114,7 +115,7 @@ export function StructuredPage({
 function FragmentBody({
   fragment,
   page,
-  query,
+  terms,
   assetUrl,
   suppressImage = false,
   preserveLayout = false,
@@ -122,7 +123,7 @@ function FragmentBody({
   fragment: MaterialFragmentRead;
   /** Нужна для масштаба вырезок: доля страницы задаёт их размер на экране. */
   page: MaterialPageRead;
-  query: string;
+  terms: string[];
   assetUrl?: (fragmentId: string) => string;
   /** Вырезку оригинала уже показывает `SourceCrop` — свои картинки не дублируем. */
   suppressImage?: boolean;
@@ -135,10 +136,10 @@ function FragmentBody({
       && !/^\[?(изображение|image)\]?$/iu.test(transcript);
     if (suppressImage) {
       // Фото фрагмента уже над текстом — здесь только расшифровка, если есть.
-      return hasTranscript ? <p>{renderInlineMath(transcript, query)}</p> : null;
+      return hasTranscript ? <p>{renderInlineMath(transcript, terms)}</p> : null;
     }
     if (!fragment.has_asset || !assetUrl) {
-      return hasTranscript ? <p>{renderInlineMath(transcript, query)}</p> : null;
+      return hasTranscript ? <p>{renderInlineMath(transcript, terms)}</p> : null;
     }
     if (preserveLayout) {
       return <img className="structured-image" src={assetUrl(fragment.id)} alt="Изображение из документа" loading="lazy" />;
@@ -155,7 +156,7 @@ function FragmentBody({
           <details className="structured-transcript">
             <summary>Распознанный текст</summary>
             <p className="structured-transcript-note">Может содержать ошибки, особенно в формулах.</p>
-            <p>{renderInlineMath(transcript, query)}</p>
+            <p>{renderInlineMath(transcript, terms)}</p>
           </details>
         )}
       </figure>
@@ -163,9 +164,9 @@ function FragmentBody({
   }
   if (fragment.element_kind === "heading") {
     const level = fragment.structure_level ?? 1;
-    if (level <= 1) return <h2>{renderInlineMath(fragment.text, query)}</h2>;
-    if (level === 2) return <h3>{renderInlineMath(fragment.text, query)}</h3>;
-    return <h4>{renderInlineMath(fragment.text, query)}</h4>;
+    if (level <= 1) return <h2>{renderInlineMath(fragment.text, terms)}</h2>;
+    if (level === 2) return <h3>{renderInlineMath(fragment.text, terms)}</h3>;
+    return <h4>{renderInlineMath(fragment.text, terms)}</h4>;
   }
   if (fragment.element_kind === "list") {
     return (
@@ -173,7 +174,7 @@ function FragmentBody({
         className="structured-list-item"
         style={{ "--list-level": fragment.structure_level ?? 1 } as CSSProperties}
       >
-        {renderInlineMath(fragment.text, query)}
+        {renderInlineMath(fragment.text, terms)}
       </p>
     );
   }
@@ -208,7 +209,7 @@ function FragmentBody({
       </>
     );
   }
-  return <p>{renderInlineMath(fragment.text, query)}</p>;
+  return <p>{renderInlineMath(fragment.text, terms)}</p>;
 }
 
 /** Ниже этого распознаванию нельзя верить без сверки с оригиналом. */
@@ -385,7 +386,7 @@ function Formula({
   const { runs, leftover } = displayMathRuns(source);
   // Формула вперемешку с пояснением — это абзац, а не выносная формула:
   // рисуем как текст, иначе пояснение пришлось бы выбросить.
-  if (runs.length > 0 && leftover) return <p>{renderInlineMath(source, "")}</p>;
+  if (runs.length > 0 && leftover) return <p>{renderInlineMath(source, [])}</p>;
   const pieces = runs.length > 0 ? runs : [latexFromFragment(source)];
   try {
     const html = pieces
@@ -458,12 +459,12 @@ function formulaLooksReliable(latex: string, source: RecognitionSource): boolean
 
 const INLINE_MATH = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$|\\\(([\s\S]+?)\\\)/g;
 
-function renderInlineMath(text: string, query: string): ReactNode {
+function renderInlineMath(text: string, terms: string[]): ReactNode {
   const parts: ReactNode[] = [];
   let cursor = 0;
   for (const match of text.matchAll(INLINE_MATH)) {
     const start = match.index;
-    if (start > cursor) parts.push(highlight(text.slice(cursor, start), query));
+    if (start > cursor) parts.push(highlight(text.slice(cursor, start), terms));
     const source = match[1] ?? match[2] ?? match[3] ?? "";
     // `$$…$$` — выносная формула даже посреди абзаца. В строчном режиме KaTeX
     // отказывается рисовать `\tag{}`, а номер формулы модель ставит именно им.
@@ -487,8 +488,8 @@ function renderInlineMath(text: string, query: string): ReactNode {
     }
     cursor = start + match[0].length;
   }
-  if (cursor === 0) return highlight(text, query);
-  if (cursor < text.length) parts.push(highlight(text.slice(cursor), query));
+  if (cursor === 0) return highlight(text, terms);
+  if (cursor < text.length) parts.push(highlight(text.slice(cursor), terms));
   return parts;
 }
 
@@ -542,16 +543,38 @@ export function MarkdownTable({ markdown }: { markdown: string }) {
   );
 }
 
-export function highlight(text: string, query: string) {
-  const needle = query.trim().toLocaleLowerCase("ru");
-  if (!needle) return text;
-  const index = text.toLocaleLowerCase("ru").indexOf(needle);
-  if (index < 0) return text;
-  return (
-    <>
-      {text.slice(0, index)}
-      <mark>{text.slice(index, index + needle.length)}</mark>
-      {text.slice(index + needle.length)}
-    </>
-  );
+/**
+ * Подсветить в тексте все вхождения любой из словоформ.
+ *
+ * Формы приходят от поиска, потому что здесь нет морфологии: лемма «миля» не
+ * найдёт «Мили» подстрокой, а форма из текста — найдёт. Вхождения ищутся все:
+ * раньше подсвечивалось только первое, и счётчик совпадений расходился с тем,
+ * что видно на странице.
+ */
+export function highlight(text: string, terms: string[]) {
+  const needles = terms
+    .map((term) => term.trim().toLocaleLowerCase("ru"))
+    .filter((term) => term.length > 0);
+  if (needles.length === 0) return text;
+  const haystack = text.toLocaleLowerCase("ru");
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    let at = -1;
+    let length = 0;
+    for (const needle of needles) {
+      const found = haystack.indexOf(needle, cursor);
+      // Из двух совпадений в одной точке берём длинное: «мили» важнее «мил».
+      if (found < 0 || (at >= 0 && (found > at || needle.length <= length))) continue;
+      at = found;
+      length = needle.length;
+    }
+    if (at < 0) break;
+    if (at > cursor) parts.push(text.slice(cursor, at));
+    parts.push(<mark key={at}>{text.slice(at, at + length)}</mark>);
+    cursor = at + length;
+  }
+  if (parts.length === 0) return text;
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return <>{parts}</>;
 }

@@ -201,6 +201,7 @@ export function LibraryMaterialWorkspace() {
         pageNumber: hit.page_number,
         text: hit.text,
         blockTitle: hit.block_title,
+        matchedForms: hit.matched_forms,
       }));
     },
     [materialId, selectedRevision],
@@ -403,7 +404,7 @@ export function LibraryMaterialWorkspace() {
             material={detail}
             parserMode={store.revisions.find((item) => item.revision === primaryRevision)?.parser_mode ?? detail.parser_mode}
             page={page}
-            query={search.query}
+            terms={search.forms}
             focusedFragmentId={focusedFragmentId}
             currentTime={currentTime}
             onSeek={setCurrentTime}
@@ -414,7 +415,7 @@ export function LibraryMaterialWorkspace() {
             page={page}
             pageNumber={activePage}
             revision={selectedRevision}
-            query={search.query}
+            terms={search.forms}
             zoom={view.effectiveZoom}
             showRegions={view.showRegions}
             focusedFragmentId={focusedFragmentId}
@@ -448,7 +449,7 @@ export function LibraryMaterialWorkspace() {
               material={detail}
               parserMode={store.revisions.find((item) => item.revision === compareRevision)?.parser_mode ?? detail.parser_mode}
               page={comparisonPage}
-              query={search.query}
+              terms={search.forms}
               focusedFragmentId={null}
               currentTime={currentTime}
               onSeek={setCurrentTime}
@@ -460,7 +461,7 @@ export function LibraryMaterialWorkspace() {
             material={detail}
             parserMode={store.revisions.find((item) => item.revision === primaryRevision)?.parser_mode ?? detail.parser_mode}
             page={page}
-            query={search.query}
+            terms={search.forms}
             focusedFragmentId={focusedFragmentId}
             currentTime={currentTime}
             onSeek={setCurrentTime}

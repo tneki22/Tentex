@@ -23,7 +23,13 @@ from fastapi import UploadFile
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.orm import Session
 
-from app.bindings.search import delete_material_index, reindex_material, search_fragments
+from app.bindings.search import (
+    delete_material_index,
+    matched_forms,
+    matches_query,
+    reindex_material,
+    search_fragments,
+)
 from app.bindings.service import (
     affected_projects_preview,
     binding_count_for_materials,
@@ -32,7 +38,7 @@ from app.bindings.service import (
 from app.config import settings
 from app.materials import revisions as revision_registry
 from app.materials.external import fetch_web_page, fetch_youtube_transcript
-from app.materials.lexicon import index_text, query_terms
+from app.materials.lexicon import index_text, prefix_term, query_terms
 from app.materials.parsers.base import ParsedElement, ParsedPage
 from app.materials.parsers.native import inspect, parse_text_page
 from app.materials.schemas import (
@@ -632,20 +638,24 @@ def search_library_material(
     material = material_or_404(session, material_id)
     limit = max(1, min(SEARCH_LIMIT_MAX, limit))
     target = material.active_parse_revision if revision is None else revision
+    terms = query_terms(query)
     if not query.strip() or target == 0:
-        return LibrarySearchResult(query=query, revision=target, hits=[])
+        return LibrarySearchResult(query=query, revision=target, terms=terms, hits=[])
     if target != material.active_parse_revision:
         revision_registry.require_revision(session, material_id, target)
         return LibrarySearchResult(
             query=query,
             revision=target,
+            terms=terms,
             hits=_scan_revision(session, material_id, target, query, limit),
         )
 
     # BM25 группирует совпадения по блоку; в просмотрщике полезнее список мест,
     # поэтому каждое совпадение раскрывается в свои фрагменты с номерами страниц.
     hits: list[LibrarySearchHit] = []
-    for hit in search_fragments(session, [material_id], query, limit=limit):
+    outcome = search_fragments(session, [material_id], query, limit=limit)
+    term_set = set(outcome.terms)
+    for hit in outcome.hits:
         for fragment_id in hit.fragment_ids:
             fragment = session.get(MaterialFragment, fragment_id)
             page = session.get(MaterialPage, fragment.page_id) if fragment else None
@@ -659,20 +669,22 @@ def search_library_material(
                     bbox=list(fragment.bbox),
                     text=fragment.text,
                     rank=float(len(hits)),
+                    matched_forms=matched_forms(fragment.text, term_set, outcome.prefix),
                 )
             )
             if len(hits) >= limit:
                 break
         if len(hits) >= limit:
             break
-    return LibrarySearchResult(query=query, revision=target, hits=hits)
+    return LibrarySearchResult(query=query, revision=target, terms=outcome.terms, hits=hits)
 
 
 def _scan_revision(
     session: Session, material_id: UUID, revision: int, query: str, limit: int
 ) -> list[LibrarySearchHit]:
     terms = set(query_terms(query))
-    if not terms:
+    prefix = prefix_term(query)
+    if not (terms or prefix):
         return []
     rows = session.execute(
         select(MaterialFragment, MaterialPage.page_number, MaterialBlock.title)
@@ -686,10 +698,9 @@ def _scan_revision(
     ).all()
     hits: list[LibrarySearchHit] = []
     for fragment, page_number, block_title in rows:
-        lemmas = set(index_text(fragment.text).split())
-        matched = len(terms & lemmas)
-        if not matched:
+        if not matches_query(fragment.text, terms, prefix):
             continue
+        matched = len(terms & set(index_text(fragment.text).split()))
         hits.append(
             LibrarySearchHit(
                 fragment_id=fragment.id,
@@ -698,6 +709,7 @@ def _scan_revision(
                 bbox=list(fragment.bbox),
                 text=fragment.text,
                 rank=float(len(terms) - matched),
+                matched_forms=matched_forms(fragment.text, terms, prefix),
             )
         )
         if len(hits) >= limit * 4:

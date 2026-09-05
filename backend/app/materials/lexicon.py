@@ -32,6 +32,21 @@ _STOP_WORDS = frozenset(
     }
 )
 
+# Слова, которыми задают вопрос, а не отвечают на него: в учебнике они стоят
+# где угодно и только шумят. Содержательные «определение», «пример», «свойство»
+# сюда не попадают — их частотность и так гасит IDF внутри BM25.
+_QUESTION_WORDS = frozenset(
+    {
+        "такой", "каков", "который", "свой", "дать", "перечислить", "привести",
+        "назвать", "рассказать", "изложить", "сформулировать", "охарактеризовать",
+    }
+)
+
+_SKIP_WORDS = _STOP_WORDS | _QUESTION_WORDS
+
+#: Короче двух букв префикс не сужает выдачу — искать по нему нечего.
+MIN_PREFIX_LENGTH = 2
+
 _analyzer: pymorphy3.MorphAnalyzer | None = None
 
 
@@ -42,15 +57,24 @@ def _get_analyzer() -> pymorphy3.MorphAnalyzer:
     return _analyzer
 
 
+def fold(token: str) -> str:
+    """Нижний регистр и ё→е — единственная нормализация, общая для индекса и запроса.
+
+    Токенизатор `unicode61` сам приводит регистр, но ё и е считает разными
+    буквами, поэтому «чёт» не нашло бы «чётность» через сырую колонку.
+    """
+    return token.lower().replace("ё", "е")
+
+
 def normalize(text: str) -> list[str]:
-    """Токены: буквы и цифры, нижний регистр, ё сведено к е для сравнения регистра."""
-    return [match.group(0).lower() for match in _TOKEN_RE.finditer(text)]
+    """Токены: буквы и цифры, нижний регистр, ё сведено к е."""
+    return [fold(match.group(0)) for match in _TOKEN_RE.finditer(text)]
 
 
 def tokenize_with_positions(text: str) -> list[tuple[str, int, int]]:
     """Токены с позициями в исходном тексте — для серверной подсветки совпадений."""
     return [
-        (match.group(0).lower(), match.start(), match.end())
+        (fold(match.group(0)), match.start(), match.end())
         for match in _TOKEN_RE.finditer(text)
     ]
 
@@ -72,7 +96,24 @@ def index_text(text: str) -> str:
     return " ".join(lemmatize(normalize(text)))
 
 
+def norm_text(text: str) -> str:
+    """Строка нормализованных словоформ — колонка `norm`, по ней идёт префикс.
+
+    Леммы для префикса не годятся: pymorphy3 доугадывает огрызок до другого
+    слова («мил» → «мила»), поэтому «мил» не был бы началом ни одной леммы.
+    """
+    return " ".join(normalize(text))
+
+
 def query_terms(query: str) -> list[str]:
-    """Леммы запроса без стоп-слов. Пустой запрос или запрос из стоп-слов даёт []."""
+    """Леммы запроса без служебных слов. Пустой или целиком служебный запрос даёт []."""
     lemmas = lemmatize(normalize(query))
-    return [lemma for lemma in lemmas if lemma not in _STOP_WORDS]
+    return [lemma for lemma in lemmas if lemma not in _SKIP_WORDS]
+
+
+def prefix_term(query: str) -> str | None:
+    """Последний токен запроса как недопечатанное слово, если он не слишком короток."""
+    tokens = normalize(query)
+    if not tokens or len(tokens[-1]) < MIN_PREFIX_LENGTH:
+        return None
+    return tokens[-1]

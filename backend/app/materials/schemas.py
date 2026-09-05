@@ -322,11 +322,14 @@ class LibrarySearchHit(ApiModel):
     bbox: list[float]
     text: str
     rank: float
+    matched_forms: list[str] = []
 
 
 class LibrarySearchResult(ApiModel):
     query: str
     revision: int
+    #: Леммы, по которым искали, — просмотрщику для подписи под полем поиска.
+    terms: list[str] = []
     hits: list[LibrarySearchHit]
 
 

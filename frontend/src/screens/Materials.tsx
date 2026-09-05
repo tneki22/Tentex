@@ -36,6 +36,7 @@ import {
   importMaterialReferenceAnswers,
   materialFragmentAssetUrl,
   materialPageImageUrl,
+  searchLibraryMaterial,
   updateMaterialPageText,
 } from "../api/materials";
 import type {
@@ -71,6 +72,7 @@ import {
 import { MetricList } from "../components/domain";
 import { useBindings } from "../hooks/useBindings";
 import { useConspectSummary } from "../hooks/useConspect";
+import { useDocumentSearch } from "../hooks/useDocumentSearch";
 
 // Прямой импорт файла, а не барреля components/domain: тянет Milkdown только
 // когда реально открыт «Сводный конспект» (см. ProjectWorkspace.tsx).
@@ -84,7 +86,7 @@ import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTr
 import { AiCleanupPanel } from "./AiCleanupPanel";
 import { MaterialFileTab } from "./materials/MaterialFileTab";
 import { MaterialProcessingPanels } from "./materials/MaterialProcessingPanels";
-import { StructuredPage } from "../components/domain/material-viewer";
+import { DocumentSearchField, StructuredPage } from "../components/domain/material-viewer";
 
 const EMPTY_STRING_SET: Set<string> = new Set();
 const EMPTY_TITLES_MAP: Map<string, string[]> = new Map();
@@ -466,14 +468,14 @@ function DocumentView({
   material,
   page,
   viewMode,
-  query,
+  terms,
   binding,
 }: {
   projectId: string;
   material: MaterialRead;
   page: MaterialPageRead;
   viewMode: "original" | "text";
-  query: string;
+  terms: string[];
   binding: DocumentBindingProps;
 }) {
   if (viewMode === "original" && (material.media_type === "application/pdf" || material.media_type.startsWith("image/"))) {
@@ -514,7 +516,7 @@ function DocumentView({
       <StructuredPage
         showOcrReview={material.parser_mode !== "fast"}
         page={page}
-        query={query}
+        terms={terms}
         assetUrl={(fragmentId) => materialFragmentAssetUrl(projectId, material.id, fragmentId)}
         className={`materials-page materials-structured-page ${material.parser_mode !== "fast" && page.quality === "ocr_low" ? "is-ocr-low" : ""}`.trim()}
         fragmentProps={(fragment) => {
@@ -1196,7 +1198,6 @@ function MaterialSurface() {
   const [pageError, setPageError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"original" | "text">("original");
   const [notice, setNotice] = useState<NoticeState | null>(null);
-  const [documentQuery, setDocumentQuery] = useState("");
   /** «fit» — вписать страницу целиком: с ним документ открывается, а не с обрезанного 100%. */
   const [zoom, setZoom] = useState<number | "fit">("fit");
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
@@ -1314,6 +1315,35 @@ function MaterialSurface() {
       return target;
     });
   }, [pageCount]);
+
+  // Поиск идёт по всему материалу через тот же FTS5, что и в Библиотеке:
+  // ручка `/api/materials/{id}/search` про проект ничего не знает.
+  const searchProvider = useCallback(async (value: string, signal: AbortSignal) => {
+    if (!material) return [];
+    const result = await searchLibraryMaterial(material.id, value, { signal });
+    return result.hits.map((hit) => ({
+      fragmentId: hit.fragment_id,
+      pageNumber: hit.page_number,
+      text: hit.text,
+      blockTitle: hit.block_title,
+      matchedForms: hit.matched_forms,
+    }));
+  }, [material]);
+  const search = useDocumentSearch(searchProvider);
+
+  useEffect(() => {
+    if (!search.current) return;
+    if (search.current.pageNumber !== pageNumber) goToPage(search.current.pageNumber);
+    // Страница успевает смениться и отрисоваться раньше, чем ищется якорь.
+    const timer = window.setTimeout(() => {
+      document
+        .getElementById(`fragment-${search.current?.fragmentId}`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 120);
+    return () => window.clearTimeout(timer);
+    // Перепрыгивать надо на смену совпадения, а не на каждый рендер страницы.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.current?.fragmentId, search.current?.pageNumber]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1838,7 +1868,13 @@ function MaterialSurface() {
                   <span>{pageNumber} / {pageCount}</span>
                   <IconButton label="Следующая страница" disabled={pageNumber >= pageCount} onClick={() => goToPage(pageNumber + 1)}><ChevronRight size={15} /></IconButton>
                 </div>
-                <label className="materials-search-tools is-open"><Search size={14} /><span className="sr-only">Найти на странице</span><input type="search" value={documentQuery} onChange={(event) => setDocumentQuery(event.target.value)} placeholder="Найти на странице" /></label>
+                <DocumentSearchField
+                  query={search.query}
+                  matchLabel={search.label}
+                  searching={search.loading}
+                  onQueryChange={search.setQuery}
+                  onQuerySubmit={search.step}
+                />
                 <div className="materials-zoom-tools">
                   <IconButton label="Уменьшить" disabled={effectiveZoom <= 0.5} onClick={() => setZoom(Math.max(0.5, Number((effectiveZoom - 0.25).toFixed(2))))}><ZoomOut size={15} /></IconButton>
                   <Tooltip label={viewMode === "original" ? "Вписать страницу в окно" : "Вернуть обычный кегль"}>
@@ -1915,7 +1951,7 @@ function MaterialSurface() {
                     material={material}
                     page={page}
                     viewMode={viewMode}
-                    query={documentQuery}
+                    terms={search.forms}
                     binding={{
                       bindingMode: bindingMode && documentBindingEnabled,
                       activeNodeId: documentBindingEnabled ? activeNodeId : null,

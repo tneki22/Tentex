@@ -1,7 +1,7 @@
 import { useStudyTracking } from "../hooks/useStudyTracking";
 import { StudyTimer } from "./preparation/StudyTimer";
 import { StudyQueue } from "./preparation/StudyQueue";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
@@ -265,9 +265,11 @@ export function ProjectWorkspace() {
   const [sourceResults, setSourceResults] = useState<SearchResultRead[]>([]);
   const [sourceSearching, setSourceSearching] = useState(false);
   const [sourceSearched, setSourceSearched] = useState(false);
+  const [sourceTerms, setSourceTerms] = useState<string[]>([]);
   const [sourceBusy, setSourceBusy] = useState(false);
   const [sourceNotice, setSourceNotice] = useState("");
   const sourceSearchInput = useRef<HTMLInputElement>(null);
+  const sourceSearchRef = useRef<AbortController | null>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   const resizeReadyRef = useRef(false);
   const layoutRef = useRef<WorkspaceLayout>(DEFAULT_LAYOUT);
@@ -404,18 +406,54 @@ export function ProjectWorkspace() {
     return () => controller.abort();
   }, [projectId, selected?.id, textbook]);
 
+  /**
+   * Поиск материала по формулировке вопроса.
+   *
+   * Устаревший запрос отменяется: при быстром переключении вопросов ответ на
+   * предыдущий приходил после текущего и подменял выдачу.
+   */
+  const runSourceSearch = useCallback(async (nodeId: string, query: string) => {
+    if (!query.trim()) return;
+    sourceSearchRef.current?.abort();
+    const controller = new AbortController();
+    sourceSearchRef.current = controller;
+    setSourceSearching(true);
+    setSourceNotice("");
+    try {
+      const found = await searchProjectMaterials(
+        projectId,
+        query,
+        { nodeId },
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      setSourceResults(found.results);
+      setSourceTerms(found.terms);
+      setSourceSearched(true);
+    } catch (caught) {
+      if (controller.signal.aborted) return;
+      setSourceNotice(caught instanceof Error ? caught.message : "Поиск не выполнен");
+    } finally {
+      if (!controller.signal.aborted) setSourceSearching(false);
+    }
+  }, [projectId]);
+
   useEffect(() => {
     if (!selected || textbook) {
       setSourceBindings([]);
       setSourceResults([]);
       setSourceSearched(false);
+      setSourceTerms([]);
       return;
     }
     setSourceQuery(selected.title);
     setSourceResults([]);
     setSourceSearched(false);
+    setSourceTerms([]);
     setSourceNotice("");
     setSourceBindings([]);
+    // Смысл продукта — открыл вопрос и сразу видишь, где про это в учебниках.
+    void runSourceSearch(selected.id, selected.title);
     const controller = new AbortController();
     setSourceBindingsLoading(true);
     listBindings(projectId, { nodeId: selected.id }, controller.signal)
@@ -423,30 +461,8 @@ export function ProjectWorkspace() {
       .catch(() => undefined)
       .finally(() => { if (!controller.signal.aborted) setSourceBindingsLoading(false); });
     return () => controller.abort();
-  }, [projectId, selected?.id, textbook]);
+  }, [projectId, selected?.id, selected?.title, textbook, runSourceSearch]);
 
-  async function runSourceSearch() {
-    if (!selected || !sourceQuery.trim()) return;
-    setSourceSearching(true);
-    setSourceNotice("");
-    try {
-      const results = await searchProjectMaterials(projectId, sourceQuery, { nodeId: selected.id });
-      setSourceResults(results);
-      setSourceSearched(true);
-    } catch (caught) {
-      setSourceNotice(caught instanceof Error ? caught.message : "Поиск не выполнен");
-    } finally {
-      setSourceSearching(false);
-    }
-  }
-
-  function runSourceSearchOrFocus() {
-    if (sourceQuery.trim()) {
-      void runSourceSearch();
-      return;
-    }
-    sourceSearchInput.current?.focus();
-  }
 
   async function bindSourceCandidate(result: SearchResultRead) {
     if (!selected) return;
@@ -801,16 +817,21 @@ export function ProjectWorkspace() {
           <div className="workspace-empty-copy">
             <FileText size={26} />
             <h2>Для этого вопроса материал ещё не привязан</h2>
-            <p>Найдите подходящий фрагмент в материалах проекта или откройте Материалы, чтобы привязать вручную.</p>
+            <p>Подходящие места найдены ниже — привяжите нужное. Или откройте Материалы, чтобы выбрать фрагмент вручную.</p>
             <div className="workspace-source-tab-empty-actions">
-              <Button onClick={runSourceSearchOrFocus}>Найти в материалах</Button>
+              <Button
+                disabled={sourceSearching || !sourceQuery.trim()}
+                onClick={() => selected && void runSourceSearch(selected.id, sourceQuery)}
+              >
+                Искать ещё раз
+              </Button>
               <Link className="secondary-button" to={`/projects/${projectId}/materials`}>Открыть материалы</Link>
             </div>
           </div>
         )}
         <form
           className="workspace-source-tab-search"
-          onSubmit={(event) => { event.preventDefault(); void runSourceSearch(); }}
+          onSubmit={(event) => { event.preventDefault(); if (selected) void runSourceSearch(selected.id, sourceQuery); }}
         >
           <label>
             <Search size={14} />
@@ -825,9 +846,18 @@ export function ProjectWorkspace() {
           </label>
           <Button type="submit" disabled={sourceSearching || !sourceQuery.trim()}>Найти</Button>
         </form>
+        {sourceTerms.length > 0 && !sourceSearching && (
+          <p className="workspace-source-tab-terms">
+            Искали по: {sourceTerms.join(" · ")}
+          </p>
+        )}
         {sourceSearching && <LoadingState label="Ищем" />}
         {sourceSearched && !sourceSearching && (
           sourceResults.length > 0 ? (
+            <>
+            <p className="workspace-source-tab-count" role="status">
+              Найдено мест: {sourceResults.length}
+            </p>
             <ul className="workspace-source-tab-results">
               {sourceResults.map((result) => {
                 const alreadyBound = result.already_bound
@@ -852,6 +882,7 @@ export function ProjectWorkspace() {
                 );
               })}
             </ul>
+            </>
           ) : <p className="workspace-list-empty">Ничего не найдено.</p>
         )}
       </div>

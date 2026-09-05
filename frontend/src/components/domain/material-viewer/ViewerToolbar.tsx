@@ -5,12 +5,12 @@ import {
   Minimize2,
   Pencil,
   ScanLine,
-  Search,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { IconButton, SegmentedTabs, Tooltip } from "../../ui";
+import { DocumentSearchField } from "./DocumentSearchField";
 import type { MaterialPresentation, MaterialViewMode, ViewerZoom } from "./types";
 
 export interface ViewerToolbarProps {
@@ -72,23 +72,6 @@ export function ViewerToolbar({
   onToggleRegions,
   onToggleFullscreen,
 }: ViewerToolbarProps) {
-  const searchInput = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      const typing = event.target instanceof HTMLElement
-        && (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA");
-      if (typing) return;
-      if (event.key === "/" || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f")) {
-        event.preventDefault();
-        searchInput.current?.focus();
-        searchInput.current?.select();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
   const tabs = versionComparison
     ? [{ value: "compare" as const, label: `${versionComparison.left} ↔ ${versionComparison.right}` }]
     : [
@@ -129,23 +112,13 @@ export function ViewerToolbar({
           </div>
         )}
 
-        <label className={`viewer-search ${searching ? "is-busy" : ""}`.trim()}>
-          <Search size={14} aria-hidden="true" />
-          <span className="sr-only">Найти в материале</span>
-          <input
-            ref={searchInput}
-            type="search"
-            value={query}
-            placeholder="Найти в материале"
-            onChange={(event) => onQueryChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              onQuerySubmit?.(event.shiftKey ? -1 : 1);
-            }}
-          />
-          {matchLabel && <span className="viewer-search-count">{matchLabel}</span>}
-        </label>
+        <DocumentSearchField
+          query={query}
+          matchLabel={matchLabel}
+          searching={searching}
+          onQueryChange={onQueryChange}
+          onQuerySubmit={onQuerySubmit}
+        />
         </>}
 
         {presentation.supportsZoom && (

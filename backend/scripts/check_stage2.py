@@ -6,6 +6,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from contextlib import closing
 from pathlib import Path
@@ -45,6 +46,7 @@ class ApiServer:
         self.seed_demo_project = seed_demo_project
         self.process: subprocess.Popen[str] | None = None
         self.stderr_output = ""
+        self._drain: threading.Thread | None = None
 
     @property
     def base_url(self) -> str:
@@ -73,6 +75,11 @@ class ApiServer:
             stderr=subprocess.PIPE,
             text=True,
         )
+        # Лог миграций идёт в stderr; непрочитанная труба переполняется, процесс
+        # встаёт до конца старта, и проверка падает по таймауту без причины.
+        # Поэтому stderr вычитывается фоном, а не только после смерти процесса.
+        self._drain = threading.Thread(target=self._read_stderr, daemon=True)
+        self._drain.start()
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
@@ -96,14 +103,24 @@ class ApiServer:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout=5)
-        if self.process.stderr:
-            self.stderr_output += self.process.stderr.read()
+        if self._drain is not None:
+            self._drain.join(timeout=5)
+            self._drain = None
         self.process = None
+
+    def _read_stderr(self) -> None:
+        """Копить stderr, пока процесс жив: труба не должна переполняться."""
+        process = self.process
+        if process is None or process.stderr is None:
+            return
+        for line in process.stderr:
+            self.stderr_output += line
 
     def _raise_startup_error(self) -> None:
         assert self.process is not None
-        error = self.process.stderr.read() if self.process.stderr else ""
-        raise RuntimeError(f"API завершился при старте:\n{error}")
+        if self._drain is not None:
+            self._drain.join(timeout=5)
+        raise RuntimeError(f"API завершился при старте:\n{self.stderr_output}")
 
 
 def request(

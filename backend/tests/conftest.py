@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
+from app.bindings.search import create_fragment_search
 from app.config import settings
 from app.db import Base
 from app.models import (
@@ -46,15 +47,7 @@ def session(tmp_path: Path) -> Iterator[Session]:
 
     Base.metadata.create_all(engine)
     with engine.begin() as connection:
-        connection.exec_driver_sql(
-            "CREATE VIRTUAL TABLE fragment_search USING fts5("
-            "text, lemmas, fragment_id UNINDEXED, material_id UNINDEXED, "
-            "tokenize = 'unicode61 remove_diacritics 2')"
-        )
-        connection.exec_driver_sql(
-            "CREATE TABLE fragment_search_map ("
-            "fragment_id TEXT PRIMARY KEY, material_id TEXT NOT NULL, rowid INTEGER NOT NULL)"
-        )
+        create_fragment_search(connection)
     with Session(engine, expire_on_commit=False) as db_session:
         yield db_session
     engine.dispose()

@@ -237,11 +237,15 @@ export interface LibrarySearchHit {
   bbox: number[];
   text: string;
   rank: number;
+  /** Словоформы из текста, совпавшие с запросом, — для подсветки на клиенте. */
+  matched_forms: string[];
 }
 
 export interface LibrarySearchResult {
   query: string;
   revision: number;
+  /** Леммы, по которым искали. */
+  terms: string[];
   hits: LibrarySearchHit[];
 }
 

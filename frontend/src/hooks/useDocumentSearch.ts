@@ -1,15 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export interface DocumentMatch {
   fragmentId: string;
   pageNumber: number;
   text: string;
   blockTitle: string | null;
+  /** Словоформы, совпавшие с запросом: по ним подсвечивается страница. */
+  matchedForms: string[];
 }
 
 type SearchProvider = (query: string, signal: AbortSignal) => Promise<DocumentMatch[]>;
 
 const DEBOUNCE_MS = 250;
+
+/** Одна буква совпадает почти со всем — до двух символов запрос не отправляется. */
+const MIN_QUERY_LENGTH = 2;
 
 /**
  * Поиск по документу поверх любого источника совпадений.
@@ -31,7 +36,7 @@ export function useDocumentSearch(provider: SearchProvider) {
   useEffect(() => {
     controller.current?.abort();
     const trimmed = query.trim();
-    if (!trimmed) {
+    if (trimmed.length < MIN_QUERY_LENGTH) {
       setMatches([]);
       setIndex(0);
       setLoading(false);
@@ -79,9 +84,14 @@ export function useDocumentSearch(provider: SearchProvider) {
   }, []);
 
   const current = matches[index] ?? null;
-  const label = query.trim() && !loading
+  const label = query.trim().length >= MIN_QUERY_LENGTH && !loading
     ? matches.length ? `${index + 1} / ${matches.length}` : "нет совпадений"
     : null;
+  /** Подсвечивать надо все совпадения на странице, а не только текущее. */
+  const forms = useMemo(
+    () => [...new Set(matches.flatMap((match) => match.matchedForms))],
+    [matches],
+  );
 
-  return { query, setQuery, matches, index, current, step, loading, error, reset, label };
+  return { query, setQuery, matches, index, current, step, loading, error, reset, label, forms };
 }

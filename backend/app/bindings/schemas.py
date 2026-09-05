@@ -28,7 +28,20 @@ class SearchResultRead(ApiModel):
     quality: PageQuality
     text: str
     highlights: list[SearchHighlightRead]
+    matched_forms: list[str] = []
     already_bound: bool = False
+
+
+class SearchResponse(ApiModel):
+    """Выдача вместе со словами, по которым искали.
+
+    Слова нужны интерфейсу: без них пустой результат по длинной формулировке
+    читается как поломка поиска, а не как отсутствие материала.
+    """
+
+    terms: list[str]
+    prefix: str | None
+    results: list[SearchResultRead]
 
 
 class HeadingSuggestionCandidateRead(ApiModel):

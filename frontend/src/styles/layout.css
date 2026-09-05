@@ -6361,6 +6361,18 @@ button.wizard-back-projects {
   color: var(--ink);
 }
 
+.workspace-source-tab-terms,
+.workspace-source-tab-count {
+  margin: 0;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+/* Слова запроса объяснимее длинной формулировки: видно, по чему искали. */
+.workspace-source-tab-terms {
+  overflow-wrap: anywhere;
+}
+
 .workspace-source-tab-search {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -7592,8 +7604,7 @@ button.wizard-back-projects {
 
 .materials-page-tools,
 .materials-zoom-tools,
-.materials-toolbar-end,
-.materials-search-tools {
+.materials-toolbar-end {
   flex: none;
   display: flex;
   align-items: center;
@@ -7679,29 +7690,6 @@ button.wizard-back-projects {
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.materials-search-tools {
-  min-width: 30px;
-}
-
-.materials-search-tools.is-open {
-  /* Раньше был запас 210px при реальном содержимом ~170px — оставлял пустую полосу. */
-  padding-left: var(--space-2);
-  border-left: 1px solid var(--line);
-}
-
-.materials-search-tools input {
-  width: 145px;
-  height: 30px;
-  padding: 0 var(--space-2);
-  font-size: var(--text-xs);
-}
-
-.materials-search-tools small {
-  color: var(--faint);
-  font-size: 10px;
   white-space: nowrap;
 }
 

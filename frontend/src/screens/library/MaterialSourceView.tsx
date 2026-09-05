@@ -49,7 +49,7 @@ interface MaterialSourceViewProps {
   page: MaterialPageRead | null;
   pageNumber: number;
   revision: number | null;
-  query: string;
+  terms: string[];
   zoom: number;
   showRegions: boolean;
   focusedFragmentId: string | null;
@@ -69,7 +69,7 @@ export function MaterialSourceView({
   page,
   pageNumber,
   revision,
-  query,
+  terms,
   zoom,
   showRegions,
   focusedFragmentId,
@@ -132,7 +132,7 @@ export function MaterialSourceView({
               <StructuredPage
                 showOcrReview={material.parser_mode !== "fast"}
                 page={page}
-                query={query}
+                terms={terms}
                 assetUrl={(fragmentId) => libraryFragmentAssetUrl(material.id, fragmentId)}
                 focusedFragmentId={focusedFragmentId}
                 className="is-document"
@@ -201,7 +201,7 @@ interface MaterialTextViewProps {
   material: LibraryMaterialDetailRead;
   parserMode?: ParserMode | null;
   page: MaterialPageRead | null;
-  query: string;
+  terms: string[];
   focusedFragmentId: string | null;
   currentTime: number;
   onSeek: (seconds: number) => void;
@@ -220,7 +220,7 @@ export function MaterialTextView({
   material,
   parserMode = material.parser_mode,
   page,
-  query,
+  terms,
   focusedFragmentId,
   currentTime,
   onSeek,
@@ -261,7 +261,7 @@ export function MaterialTextView({
         <TimedTranscript
           fragments={page.fragments}
           currentTime={currentTime}
-          query={query}
+          terms={terms}
           onSeek={(seconds) => {
             if (material.presentation_kind === "youtube" && material.source_url) {
               window.open(
@@ -300,7 +300,7 @@ export function MaterialTextView({
       <StructuredPage
         showOcrReview={parserMode !== "fast"}
         page={page}
-        query={query}
+        terms={terms}
         assetUrl={(fragmentId) => libraryFragmentAssetUrl(material.id, fragmentId)}
         focusedFragmentId={focusedFragmentId}
         pageImageUrl={canShowPhotos ? libraryPageImageUrl(material.id, page.page_number) : undefined}

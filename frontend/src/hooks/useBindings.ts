@@ -13,7 +13,6 @@ import type {
   BindingStatus,
   NodeBindingSummary,
 } from "../api/bindings";
-import { searchProjectMaterials } from "../api/search";
 
 export function useBindings(projectId: string | undefined) {
   const [summary, setSummary] = useState<NodeBindingSummary[]>([]);
@@ -80,11 +79,6 @@ export function useBindings(projectId: string | undefined) {
       projectId
         ? listBindings(projectId, { nodeId, status: "orphaned" as BindingStatus }, signal)
         : Promise.resolve([]),
-    search: (
-      query: string,
-      options: { materialId?: string; nodeId?: string; limit?: number } = {},
-      signal?: AbortSignal,
-    ) => (projectId ? searchProjectMaterials(projectId, query, options, signal) : Promise.resolve([])),
     bind: (command: BindingCreateCommand) =>
       projectId ? mutate(() => createBindings(projectId, command)) : null,
     unbind: (bindingId: string) =>

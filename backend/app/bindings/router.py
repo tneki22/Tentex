@@ -19,7 +19,7 @@ from app.bindings.schemas import (
     BindingFragmentRead,
     NodeBindingSummary,
     ReindexResult,
-    SearchResultRead,
+    SearchResponse,
 )
 from app.db import SessionLocal, get_session
 from app.models import BindingStatus
@@ -29,7 +29,7 @@ SessionDependency = Annotated[Session, Depends(get_session)]
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["bindings"])
 
 
-@router.get("/search", response_model=list[SearchResultRead])
+@router.get("/search", response_model=SearchResponse)
 def search_materials(
     project_id: UUID,
     session: SessionDependency,
@@ -37,7 +37,7 @@ def search_materials(
     material_id: UUID | None = None,
     node_id: UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 50,
-) -> list[SearchResultRead]:
+) -> SearchResponse:
     return service.search_project_materials(
         session, project_id, q, material_id=material_id, node_id=node_id, limit=limit
     )
