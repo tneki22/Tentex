@@ -11,6 +11,17 @@ export function ExamBudget({ overview }: { overview: Overview }) {
   const { budget, deadline, settings } = overview;
   if (!deadline) return <p className="prep-note">Дата экзамена не задана. <Link to={`/projects/${overview.project_id}/settings`}>Указать дату</Link></p>;
   const days = dayNumber(deadline) - dayNumber(overview.today);
+  if (days < 0) {
+    return (
+      <section className="prep-exam-budget" aria-label="Экзамен прошёл">
+        <p className="prep-exam-line">Твой экзамен уже прошёл. Как сдал?</p>
+        <p className="prep-exam-line">
+          Если дата указана неверно, измени её в{" "}
+          <Link to={`/projects/${overview.project_id}/settings`}>настройках проекта</Link>.
+        </p>
+      </section>
+    );
+  }
   const tone = days <= 3 ? "danger" : days <= 7 ? "warning" : "success";
   const explanation = <div className="prep-budget-explanation">
     <strong>Как считается время</strong>
@@ -24,7 +35,7 @@ export function ExamBudget({ overview }: { overview: Overview }) {
   </div>;
   const examTime = overview.exam_time ? <> в <strong>{overview.exam_time.slice(0, 5)}</strong></> : null;
   const daysLabel =
-    days < 0 ? "экзамен уже прошёл" : days === 0 ? "экзамен сегодня" : `до экзамена ${days} ${plural(days, "день", "дня", "дней")}`;
+    days === 0 ? "экзамен сегодня" : `до экзамена ${days} ${plural(days, "день", "дня", "дней")}`;
   return <section className={`prep-exam-budget is-${tone}`} aria-label="До экзамена">
     <p className="prep-exam-line">
       Твой экзамен <strong>{longDateLabel(deadline)}</strong>{examTime}, {daysLabel}.
