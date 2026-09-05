@@ -98,7 +98,7 @@ class Phase(Contract):
     title: str = Field(min_length=1, max_length=160)
     start: date
     end: date
-    kind: WorkKind = "learn"
+    kind: WorkKind | Literal["rest", "skip"] = "learn"
     order: int = Field(default=0, ge=0)
     origin: Origin = "manual"
 
@@ -160,6 +160,7 @@ class DraftWrite(Contract):
     expected_program_revision: int
     expected_settings_revision: int
     mode: Literal["manual", "count", "time", "catch_up", "spread", "dismiss"] = "manual"
+    include_pinned: bool = False
     phases: list[Phase] | None = None
     items: list[PlanItem] | None = None
     unit_ids: list[UUID] | None = None
@@ -183,6 +184,9 @@ class DayLoad(Contract):
     confirmed_count: int = 0
     new_count: int = 0
     review_count: int = 0
+    opened_new_count: int = 0
+    opened_review_count: int = 0
+    opened_topic_ids: list[UUID] = Field(default_factory=list)
 
 
 class DraftRead(Contract):
@@ -299,7 +303,7 @@ class ActivityRead(Contract):
     node_id: UUID | None
     title: str
     path: list[str]
-    kind: ActivityKind
+    kind: ActivityKind | Literal["day_start", "plan_change"]
     occurred_at: datetime
     seconds: int | None
     note: str
@@ -416,6 +420,31 @@ class OverviewRead(Contract):
     memory: MemoryForecast
     coach: CoachRead
     today_intervals: list[DailyIntervalRead] = Field(default_factory=list)
+    day_started: bool = False
+    budget: "BudgetRead"
+    milestones: list["MilestoneRead"] = Field(default_factory=list)
+    recent_events: list[ActivityRead] = Field(default_factory=list)
+
+
+class BudgetRead(Contract):
+    """Слагаемые остатка без двойного вычитания пересечений и дневного лимита."""
+
+    base_minutes: int
+    rest_minutes: int
+    exception_minutes: int
+    used_minutes: int
+    unavailable_minutes: int
+    remaining_minutes: int
+    study_days: int
+
+
+class MilestoneRead(Contract):
+    """Первое реальное событие; отмена плана не стирает факт действия."""
+
+    key: str
+    title: str
+    emoji: str
+    occurred_at: datetime
 
 
 class QueueItem(Contract):
@@ -437,6 +466,8 @@ class QueueRead(Contract):
     position: int
     topic_position: int
     completed: bool
+    started: bool = False
+    has_plan: bool = False
 
 
 class QueuePositionWrite(Contract):

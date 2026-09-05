@@ -20,7 +20,7 @@ from app.preparation.models import (
     PreparationSettings,
     PreparationVersion,
 )
-from app.preparation.repetitions import due_items
+from app.preparation.progress import record_event
 from app.preparation.schemas import (
     ApplyDraftWrite,
     DayLoad,
@@ -38,6 +38,15 @@ from app.projects.errors import ProjectDomainError
 MAX_PLAN_DAYS = 730  # Ограничение размера редактируемого локального документа.
 
 
+def allocation_date(day: date, today: date, deadline: date | None, phases=()) -> bool:
+    """Общий фильтр локальной и ИИ-раскладки: будущие дни без экзамена и отдыха."""
+    if day <= today or (deadline and day >= deadline):
+        return False
+    if deadline and (deadline - today).days >= 5 and day == deadline - timedelta(days=1):
+        return False
+    return not any(p.kind in {"rest", "skip"} and p.start <= day <= p.end for p in phases)
+
+
 def conflict(detail: str = "План изменился в другом окне. Обновите данные.") -> ProjectDomainError:
     """Все stale-конфликты имеют один устойчивый код для перечитывания интерфейса."""
     return ProjectDomainError(detail, status=409, code="preparation_stale")
@@ -52,9 +61,6 @@ def read_plan(session: Session, project_id: UUID) -> PlanRead:
     items = [PlanItem.model_validate(i) for i in row.items] if row else []
     unit_rows = units(session, project_id)
     done = completed_items(session, project_id, items, unit_rows, settings.config)
-    items.extend(
-        due_items(session, project_id, settings.config, unit_rows, items, done, project.deadline)
-    )
     assigned = {i.unit_id for i in items if i.kind in {"learn", "answer"}}
     can_undo = session.scalar(
         select(PreparationVersion.revision)
@@ -198,6 +204,7 @@ def day_loads(
     grouped = defaultdict(list)
     for item in items:
         grouped[item.on_date].append(item)
+    phases = read_plan(session, project_id).phases
     result = []
     for day in dates_between(start, end):
         active = sum(time_totals(session, project_id, day, config)[0].values())
@@ -207,6 +214,8 @@ def day_loads(
             if day >= today
             else 0
         )
+        if any(p.kind in {"rest", "skip"} and p.start <= day <= p.end for p in phases):
+            capacity, remaining = 0, 0
         planned = sum(i.minutes for i in grouped[day])
         result.append(
             DayLoad(
@@ -234,6 +243,14 @@ def _validate_document(
         raise ProjectDomainError(
             "Повторяющиеся идентификаторы в плане", status=422, code="preparation_duplicate"
         )
+    ordered = sorted(phases, key=lambda phase: phase.start)
+    for left, right in zip(ordered, ordered[1:], strict=False):
+        if left.end >= right.start:
+            raise ProjectDomainError(
+                f"Блоки «{left.title}» и «{right.title}» пересекаются",
+                status=422,
+                code="preparation_phase_overlap",
+            )
     seen = set()
     archived = {i.id: i for i in previous if i.unit_id not in unit_map}
     for item in items:
@@ -245,14 +262,7 @@ def _validate_document(
                 code="preparation_unit_invalid",
             )
         seen.add(key)
-        if item.phase_id is not None:
-            phase = phase_map.get(item.phase_id)
-            if phase is None or not phase.start <= item.on_date <= phase.end:
-                raise ProjectDomainError(
-                    "Дата задания должна входить в его блок",
-                    status=422,
-                    code="preparation_phase_invalid",
-                )
+        # Старые phase_id читаются для совместимости; блок больше не владеет назначением.
 
 
 def _protect_existing(plan: PlanRead, proposed: list[PlanItem], today: date, *, manual: bool):
@@ -288,17 +298,7 @@ def _distribute(session, project_id, command, project, plan, settings, now):
             code="preparation_range_invalid",
         )
     phases = command.phases if command.phases is not None else plan.phases
-    phases = phases or default_phases(start, end, config, project.deadline)
-    selected_units = set(command.unit_ids) if command.unit_ids is not None else None
-    retained = [
-        i
-        for i in plan.items
-        if i.pinned
-        or i.on_date < today
-        or i.id in plan.completed_ids
-        or i.kind in {"review", "gaps", "final"}
-        or (selected_units is not None and i.unit_id not in selected_units)
-    ]
+    retained = list(plan.items)
     # Долг — отдельная операция: прошлую запись оставляем, перенос создаёт новое назначение.
     if command.mode in {"spread", "catch_up", "dismiss"}:
         return _recovery(session, project_id, command, plan, phases, start, end, now)
@@ -321,12 +321,14 @@ def _distribute(session, project_id, command, project, plan, settings, now):
                 code="preparation_unit_invalid",
             )
         unit_rows = [u for u in unit_rows if u.id in selected]
+    occupied = {i.on_date for i in retained}
     candidates = [
-        d for d in capacities if not project.deadline or d < project.deadline - timedelta(days=1)
+        d
+        for d in capacities
+        if d not in occupied
+        and capacities[d] > 0
+        and allocation_date(d, today, project.deadline, phases)
     ]
-    primary = [p for p in phases if p.kind == "learn"]
-    if primary:
-        candidates = [d for d in candidates if any(p.start <= d <= p.end for p in primary)]
     items = list(retained)
     pending_count = sum(unit.id not in assigned for unit in unit_rows)
     daily_target = max(1, ceil(pending_count / max(1, len(candidates))))
@@ -347,14 +349,13 @@ def _distribute(session, project_id, command, project, plan, settings, now):
         if chosen is None:
             continue
         cursor = chosen
-        phase = next((p for p in primary if p.start <= chosen <= p.end), None)
         items.append(
             PlanItem(
                 id=uuid4(),
                 unit_id=unit.id,
                 on_date=chosen,
                 minutes=unit.minutes,
-                phase_id=phase.id if phase else None,
+                phase_id=None,
                 order=counts[chosen],
                 origin="local",
                 estimate_source=unit.estimate_source,
@@ -371,8 +372,13 @@ def _distribute(session, project_id, command, project, plan, settings, now):
 def _recovery(session, project_id, command, plan, phases, start, end, now):
     """Прошлый факт не переписывается; черновик переносит только выбранный остаток."""
     items = list(plan.items)
+    today = study_date(now, get_settings(session, project_id).config)
     debt = [
-        i for i in items if i.on_date < start and i.id not in plan.completed_ids and not i.pinned
+        i
+        for i in items
+        if i.on_date < today
+        and i.id not in plan.completed_ids
+        and (not i.pinned or command.include_pinned)
     ]
     if command.unit_ids is not None:
         debt = [i for i in debt if i.unit_id in command.unit_ids]
@@ -385,15 +391,17 @@ def _recovery(session, project_id, command, plan, phases, start, end, now):
     new_counts = {d.date: d.new_count for d in loads}
     review_counts = {d.date: d.review_count for d in loads}
     remaining = {d.date: max(0, d.remaining_minutes - d.planned_minutes) for d in loads}
+    occupied = {i.on_date for i in plan.items}
     for old in debt:
-        if old.pinned:
+        if old.pinned and not command.include_pinned:
             continue
         is_new = old.kind in {"learn", "answer"}
         candidates = [
             d
             for d in remaining
             if remaining[d] >= old.minutes
-            and (not is_new or not deadline or d < deadline - timedelta(days=1))
+            and d not in occupied
+            and allocation_date(d, today, deadline, phases)
             and (
                 new_counts[d] < config.max_new_per_day
                 if is_new
@@ -408,12 +416,11 @@ def _recovery(session, project_id, command, plan, phases, start, end, now):
             else max(candidates, key=lambda d: (remaining[d], -d.toordinal()))
         )
         items.remove(old)
-        phase = next((p for p in phases if p.start <= chosen <= p.end and p.kind == old.kind), None)
         items.append(
             old.model_copy(
                 update={
                     "on_date": chosen,
-                    "phase_id": phase.id if phase else None,
+                    "phase_id": None,
                     "origin": "local",
                     "reason": "Перенесено после пропуска",
                 }
@@ -446,7 +453,7 @@ def create_draft(
             phases = command.phases if command.phases is not None else plan.phases
             items = command.items if command.items is not None else plan.items
         else:
-            if settings.config.daily_minutes is None:
+            if settings.config.daily_minutes is None and command.mode != "dismiss":
                 raise ProjectDomainError(
                     "Сначала задайте дневной бюджет занятий",
                     status=422,
@@ -461,9 +468,9 @@ def create_draft(
             )
         else:
             for old in plan.items:
-                if (old.id in plan.completed_ids or old.pinned) and next(
-                    (i for i in items if i.id == old.id), None
-                ) != old:
+                if (
+                    old.id in plan.completed_ids or (old.pinned and not command.include_pinned)
+                ) and next((i for i in items if i.id == old.id), None) != old:
                     raise ProjectDomainError(
                         "Выполнение и закрепления сохраняются при переносе долга",
                         status=409,
@@ -480,6 +487,7 @@ def create_draft(
             origin,
             now,
             recovery=command.mode in {"spread", "catch_up", "dismiss"},
+            allow_pinned=command.include_pinned,
         )
 
 
@@ -495,6 +503,7 @@ def persist_draft(
     now,
     *,
     recovery=False,
+    allow_pinned=False,
     unassigned_reasons=None,
 ) -> DraftRead:
     """Общее сохранение для алгоритма и проверенного предложения модели, внутри транзакции."""
@@ -530,7 +539,11 @@ def persist_draft(
             base_revision=plan.revision,
             program_revision=program_revision,
             settings_revision=settings_revision,
-            payload={**result.model_dump(mode="json"), "recovery": recovery},
+            payload={
+                **result.model_dump(mode="json"),
+                "recovery": recovery,
+                "allow_pinned": allow_pinned,
+            },
             origin=origin,
         )
     )
@@ -545,7 +558,9 @@ def get_draft(session: Session, project_id: UUID, draft_id: UUID) -> DraftRead:
         raise ProjectDomainError(
             "Черновик не найден", status=404, code="preparation_draft_not_found"
         )
-    return DraftRead.model_validate({k: v for k, v in row.payload.items() if k != "recovery"})
+    return DraftRead.model_validate(
+        {k: v for k, v in row.payload.items() if k not in {"recovery", "allow_pinned"}}
+    )
 
 
 def _write_version(session, project_id, plan, phases, items, program_revision, settings_revision):
@@ -617,13 +632,29 @@ def apply_draft(
             )
         else:
             for old in plan.items:
-                if (old.id in plan.completed_ids or old.pinned) and next(
-                    (i for i in items if i.id == old.id), None
-                ) != old:
+                if (
+                    old.id in plan.completed_ids
+                    or (old.pinned and not row.payload.get("allow_pinned"))
+                ) and next((i for i in items if i.id == old.id), None) != old:
                     raise conflict("Задание выполнено или закреплено после создания черновика")
+        if items == plan.items and phases == plan.phases:
+            row.applied_revision = plan.revision
+            return plan
         _write_version(
             session, project_id, plan, phases, items, project.program_revision, settings.revision
         )
+        if items != plan.items or phases != plan.phases:
+            distribution = bool(
+                [i for i in items if i not in plan.items and i.origin in {"local", "ai"}]
+            )
+            record_event(
+                session,
+                project_id,
+                "plan_change",
+                "Распределены вопросы" if distribution else "Обновлён план подготовки",
+                key=f"plan:{plan.revision + 1}",
+                note="distribution" if distribution else "edit",
+            )
         row.applied_revision = plan.revision + 1
         session.flush()
         result = read_plan(session, project_id)

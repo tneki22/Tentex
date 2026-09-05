@@ -2492,6 +2492,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/preparation/opened/{node_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Opened
+         * @description Нулевое по длительности открытие не запускает счётчик занятий.
+         */
+        post: operations["opened_api_projects__project_id__preparation_opened__node_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2526,11 +2546,8 @@ export interface components {
             title: string;
             /** Path */
             path: string[];
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "view" | "reading" | "material" | "conspect" | "chat" | "answer" | "manual";
+            /** Kind */
+            kind: ("view" | "reading" | "material" | "conspect" | "chat" | "answer" | "manual") | ("day_start" | "plan_change");
             /**
              * Occurred At
              * Format: date-time
@@ -3285,6 +3302,16 @@ export interface components {
             material_id: string | null;
             /** Project Id */
             project_id: string | null;
+            /**
+             * Subject
+             * @default
+             */
+            subject: string;
+            /**
+             * Model Label
+             * @default
+             */
+            model_label: string;
             stage: components["schemas"]["ProcessingStage"] | null;
             parser_mode: components["schemas"]["ParserMode"] | null;
             /** Done */
@@ -3475,6 +3502,26 @@ export interface components {
              */
             purposes: string;
             exam_slot?: components["schemas"]["ExamMaterialSlot"] | null;
+        };
+        /**
+         * BudgetRead
+         * @description Слагаемые остатка без двойного вычитания пересечений и дневного лимита.
+         */
+        BudgetRead: {
+            /** Base Minutes */
+            base_minutes: number;
+            /** Rest Minutes */
+            rest_minutes: number;
+            /** Exception Minutes */
+            exception_minutes: number;
+            /** Used Minutes */
+            used_minutes: number;
+            /** Unavailable Minutes */
+            unavailable_minutes: number;
+            /** Remaining Minutes */
+            remaining_minutes: number;
+            /** Study Days */
+            study_days: number;
         };
         /**
          * BusyWindow
@@ -4085,6 +4132,18 @@ export interface components {
              * @default 0
              */
             review_count: number;
+            /**
+             * Opened New Count
+             * @default 0
+             */
+            opened_new_count: number;
+            /**
+             * Opened Review Count
+             * @default 0
+             */
+            opened_review_count: number;
+            /** Opened Topic Ids */
+            opened_topic_ids?: string[];
         };
         /**
          * DraftRead
@@ -4141,6 +4200,11 @@ export interface components {
              * @enum {string}
              */
             mode: "manual" | "count" | "time" | "catch_up" | "spread" | "dismiss";
+            /**
+             * Include Pinned
+             * @default false
+             */
+            include_pinned: boolean;
             /** Phases */
             phases?: components["schemas"]["Phase"][] | null;
             /** Items */
@@ -5096,6 +5160,23 @@ export interface components {
             estimated_topics: number;
         };
         /**
+         * MilestoneRead
+         * @description Первое реальное событие; отмена плана не стирает факт действия.
+         */
+        MilestoneRead: {
+            /** Key */
+            key: string;
+            /** Title */
+            title: string;
+            /** Emoji */
+            emoji: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+        };
+        /**
          * ModuleKey
          * @enum {string}
          */
@@ -5399,6 +5480,16 @@ export interface components {
             coach: components["schemas"]["CoachRead"];
             /** Today Intervals */
             today_intervals?: components["schemas"]["DailyIntervalRead"][];
+            /**
+             * Day Started
+             * @default false
+             */
+            day_started: boolean;
+            budget: components["schemas"]["BudgetRead"];
+            /** Milestones */
+            milestones?: components["schemas"]["MilestoneRead"][];
+            /** Recent Events */
+            recent_events?: components["schemas"]["ActivityRead"][];
         };
         /** PageCorrectionRead */
         PageCorrectionRead: {
@@ -5489,9 +5580,8 @@ export interface components {
             /**
              * Kind
              * @default learn
-             * @enum {string}
              */
-            kind: "learn" | "answer" | "review" | "gaps" | "final";
+            kind: ("learn" | "answer" | "review" | "gaps" | "final") | ("rest" | "skip");
             /**
              * Order
              * @default 0
@@ -6360,6 +6450,16 @@ export interface components {
             topic_position: number;
             /** Completed */
             completed: boolean;
+            /**
+             * Started
+             * @default false
+             */
+            started: boolean;
+            /**
+             * Has Plan
+             * @default false
+             */
+            has_plan: boolean;
         };
         /**
          * RecognitionSource
@@ -6940,7 +7040,23 @@ export interface components {
             active_tab?: components["schemas"]["WorkspaceTab"] | null;
         };
         /** WorkspaceLayout */
-        WorkspaceLayout: {
+        "WorkspaceLayout-Input": {
+            /** Selected Node Id */
+            selected_node_id?: string | null;
+            /** Expanded Node Ids */
+            expanded_node_ids?: string[];
+            /**
+             * Tree Width
+             * @default 320
+             */
+            tree_width: number;
+            /** Groups */
+            groups: components["schemas"]["WorkspaceGroup"][];
+            /** Group Weights */
+            group_weights: number[];
+        };
+        /** WorkspaceLayout */
+        "WorkspaceLayout-Output": {
             /** Selected Node Id */
             selected_node_id?: string | null;
             /** Expanded Node Ids */
@@ -6959,7 +7075,7 @@ export interface components {
         WorkspaceStateRead: {
             /** Schema Version */
             schema_version: number;
-            layout: components["schemas"]["WorkspaceLayout"];
+            layout: components["schemas"]["WorkspaceLayout-Output"];
             /**
              * Project Id
              * Format: uuid
@@ -6975,7 +7091,7 @@ export interface components {
         WorkspaceStateWrite: {
             /** Schema Version */
             schema_version: number;
-            layout: components["schemas"]["WorkspaceLayout"];
+            layout: components["schemas"]["WorkspaceLayout-Input"];
         };
         /**
          * WorkspaceTab
@@ -12516,6 +12632,36 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["QueueRead"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opened_api_projects__project_id__preparation_opened__node_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

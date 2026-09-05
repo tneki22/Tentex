@@ -41,7 +41,7 @@ export function StackedColumns({
   const { ref, width } = useChartWidth();
   const [hover, setHover] = useState<number | null>(null);
   const totals = data.map((d) => d.segments.reduce((sum, s) => sum + s.value, 0));
-  const peak = Math.max(...totals, 1);
+  const peak = Math.max(...totals, 1) * 1.25;
   const empty = totals.every((value) => value === 0);
   const step = width && data.length ? width / data.length : 0;
   const barWidth = Math.max(3, Math.min(18, step * 0.56));
@@ -53,7 +53,7 @@ export function StackedColumns({
         <svg
           width={width}
           height={height + AXIS}
-          role="img"
+          role={onSelect ? "group" : "img"}
           aria-label={ariaLabel}
           onMouseLeave={() => setHover(null)}
         >
@@ -65,10 +65,18 @@ export function StackedColumns({
               <g
                 key={datum.key}
                 onMouseEnter={() => setHover(index)}
+                onFocus={() => setHover(index)}
+                onBlur={() => setHover(null)}
+                role={onSelect ? "button" : undefined}
+                tabIndex={0}
+                aria-label={datum.tooltip ?? `${datum.label}: ${totals[index]}`}
+                onKeyDown={event => { if (onSelect && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onSelect(datum.key); } }}
                 onClick={onSelect ? () => onSelect(datum.key) : undefined}
                 className={onSelect ? "chart-bar-group is-clickable" : "chart-bar-group"}
               >
+                <title>{datum.tooltip ?? datum.label}</title>
                 <rect x={index * step} y={0} width={step} height={height} fill="transparent" />
+                {totals[index] > 0 && data.length <= 21 && <text x={x + barWidth / 2} y={height - totals[index] / peak * height - 5} textAnchor="middle" className="chart-axis-label">{totals[index]}</text>}
                 {datum.segments.map((segment, segmentIndex) => {
                   if (segment.value <= 0) return null;
                   const size = (segment.value / peak) * height;

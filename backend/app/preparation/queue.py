@@ -1,18 +1,17 @@
 """Очередь рабочего дня сохраняется отдельно от плана и фактов занятий."""
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from app.db import project_write_transaction
-from app.models import GoalPassport
-from app.preparation.activity import time_totals
-from app.preparation.calendar import capacity_minutes, study_date
+from app.preparation.calendar import study_date
 from app.preparation.data import get_settings, require_project, units
 from app.preparation.models import PreparationQueue
 from app.preparation.planner import read_plan
+from app.preparation.progress import record_event
 from app.preparation.schemas import QueueItem, QueuePositionWrite, QueueRead
 from app.projects.errors import ProjectDomainError
 
@@ -26,6 +25,7 @@ def _read(row: PreparationQueue | None, day: date) -> QueueRead:
         position=position,
         topic_position=row.topic_position if row else 0,
         completed=bool(row and position >= len(items)),
+        started=row is not None,
     )
 
 
@@ -33,26 +33,20 @@ def get_queue(session: Session, project_id: UUID, day: date | None = None) -> Qu
     """Чтение не создаёт очередь и не сдвигает курсор."""
     require_project(session, project_id)
     day = day or study_date(datetime.now(UTC), get_settings(session, project_id).config)
-    return _read(session.get(PreparationQueue, (project_id, day)), day)
+    result = _read(session.get(PreparationQueue, (project_id, day)), day)
+    plan = read_plan(session, project_id)
+    result.has_plan = any(i.on_date == day and i.id not in plan.completed_ids for i in plan.items)
+    return result
 
 
 def _build(session, project_id, day, now):
-    project = require_project(session, project_id, writable=True)
+    require_project(session, project_id, writable=True)
     config = get_settings(session, project_id).config
-    passport = session.get(GoalPassport, project_id)
     unit_rows = units(session, project_id)
     unit_map = {u.id: u for u in unit_rows}
     plan = read_plan(session, project_id)
-    done = set(plan.completed_ids)
-    candidates = [i for i in plan.items if i.id not in done and i.on_date <= day]
-    candidates.sort(
-        key=lambda i: (
-            0 if i.kind == "review" and i.on_date < day else 1 if i.kind == "review" else 2,
-            i.on_date,
-            i.order,
-            str(i.id),
-        )
-    )
+    candidates = [i for i in plan.items if i.on_date == day]
+    candidates.sort(key=lambda i: (i.order, str(i.id)))
     result, seen = [], set()
     new_count, review_count = 0, 0
     for item in candidates:
@@ -82,38 +76,6 @@ def _build(session, project_id, day, now):
                 reason=reason,
             )
         )
-    used = sum(time_totals(session, project_id, day, config)[0].values())
-    budget = capacity_minutes(
-        day,
-        config,
-        project.deadline,
-        passport.exam_time if passport else None,
-        now=now,
-        used_seconds=used,
-    ) - sum(i.minutes for i in result)
-    final_day = project.deadline and day >= project.deadline - timedelta(days=1)
-    if not final_day:
-        unassigned = set(plan.unassigned_ids)
-        for unit in unit_rows:
-            if (
-                unit.id in seen
-                or unit.id not in unassigned
-                or unit.minutes > budget
-                or new_count >= config.max_new_per_day
-            ):
-                continue
-            result.append(
-                QueueItem(
-                    unit_id=unit.id,
-                    title=unit.title,
-                    topic_ids=unit.topic_ids,
-                    kind="learn",
-                    minutes=unit.minutes,
-                    reason="Новый вопрос в свободном бюджете дня",
-                )
-            )
-            budget -= unit.minutes
-            new_count += 1
     return result
 
 
@@ -138,6 +100,7 @@ def start_queue(session: Session, project_id: UUID, day: date | None = None) -> 
                 .on_conflict_do_nothing()
             )
             row = session.get(PreparationQueue, (project_id, day))
+        record_event(session, project_id, "day_start", "Начат учебный день", key=f"day-start:{day}")
         result = _read(row, day)
     return result
 

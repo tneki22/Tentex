@@ -11,7 +11,7 @@ from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
 from app.db import get_session, project_write_transaction
 from app.models import Attempt
-from app.preparation import activity, ai, planner, queue, reporting
+from app.preparation import activity, ai, planner, progress, queue, reporting
 from app.preparation.ai_schemas import PreparationAiPreflightRead
 from app.preparation.data import require_project
 from app.preparation.evidence import synchronize_review
@@ -204,3 +204,10 @@ def move_queue(
     on_date: date | None = None,
 ) -> QueueRead:
     return queue.move_queue(session, project_id, command, on_date)
+
+
+@router.post("/opened/{node_id}", status_code=204)
+def opened(project_id: UUID, node_id: UUID, session: SessionDependency) -> Response:
+    """Нулевое по длительности открытие не запускает счётчик занятий."""
+    progress.record_opening(session, project_id, node_id)
+    return Response(status_code=204)

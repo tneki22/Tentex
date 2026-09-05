@@ -49,14 +49,7 @@ def build_context(
 def protected_items(context: PreparationContext):
     """Выполнение, прошлые даты и закрепления нельзя переписать предложением ИИ."""
     view = context.overview
-    return [
-        item
-        for item in view.plan.items
-        if item.pinned
-        or item.on_date < view.today
-        or item.id in view.plan.completed_ids
-        or item.kind in {"review", "gaps", "final"}
-    ]
+    return list(view.plan.items)
 
 
 def pending_units(context: PreparationContext) -> list[UnitRead]:

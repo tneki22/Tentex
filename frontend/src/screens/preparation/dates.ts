@@ -18,6 +18,18 @@ export const duration = (seconds: number) => {
 export const dayNumber = (value: string) =>
   Date.parse(`${value}T12:00:00Z`) / 86_400_000;
 
+/** События до границы учебного дня относятся к предыдущей дате проекта. */
+export function studyDate(value: string, config: { timezone: string; day_boundary: string }): string {
+  const timestamp = /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: config.timezone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date(timestamp));
+  const part = (name: string) => parts.find(item => item.type === name)!.value;
+  const date = `${part("year")}-${part("month")}-${part("day")}`;
+  return `${part("hour")}:${part("minute")}` < config.day_boundary.slice(0, 5) ? addDays(date, -1) : date;
+}
+
 /**
  * Подпись времени или `null`, если писать нечего.
  *
