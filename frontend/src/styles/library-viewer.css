@@ -615,6 +615,31 @@
   white-space: nowrap;
 }
 
+.viewer-page-input {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.viewer-page-input input {
+  width: 2.5em;
+  padding: 0 var(--space-1);
+  text-align: center;
+  color: var(--ink);
+  background: var(--surface-sunken);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.viewer-page-input input:focus-visible {
+  background: var(--paper);
+  border-color: var(--accent-edge);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
 .viewer-search {
   display: flex;
   flex: 1 1 160px;

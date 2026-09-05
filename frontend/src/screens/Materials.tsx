@@ -86,7 +86,7 @@ import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTr
 import { AiCleanupPanel } from "./AiCleanupPanel";
 import { MaterialFileTab } from "./materials/MaterialFileTab";
 import { MaterialProcessingPanels } from "./materials/MaterialProcessingPanels";
-import { DocumentSearchField, StructuredPage } from "../components/domain/material-viewer";
+import { DocumentSearchField, PageNumberInput, StructuredPage } from "../components/domain/material-viewer";
 
 const EMPTY_STRING_SET: Set<string> = new Set();
 const EMPTY_TITLES_MAP: Map<string, string[]> = new Map();
@@ -1865,7 +1865,7 @@ function MaterialSurface() {
                 <Button variant={viewMode === "text" ? "secondary" : "ghost"} onClick={() => setViewMode("text")}>Текст</Button>
                 <div className="materials-page-tools">
                   <IconButton label="Предыдущая страница" disabled={pageNumber <= 1} onClick={() => goToPage(pageNumber - 1)}><ChevronLeft size={15} /></IconButton>
-                  <span>{pageNumber} / {pageCount}</span>
+                  <PageNumberInput page={pageNumber} pageCount={pageCount} onPageChange={goToPage} />
                   <IconButton label="Следующая страница" disabled={pageNumber >= pageCount} onClick={() => goToPage(pageNumber + 1)}><ChevronRight size={15} /></IconButton>
                 </div>
                 <DocumentSearchField

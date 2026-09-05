@@ -8,7 +8,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { IconButton, SegmentedTabs, Tooltip } from "../../ui";
 import { DocumentSearchField } from "./DocumentSearchField";
 import type { MaterialPresentation, MaterialViewMode, ViewerZoom } from "./types";
@@ -101,7 +101,7 @@ export function ViewerToolbar({
             >
               <ChevronLeft size={15} />
             </IconButton>
-            <span aria-live="polite">{page} / {pageCount}</span>
+            <PageNumberInput page={page} pageCount={pageCount} onPageChange={onPageChange} />
             <IconButton
               label="Следующая страница"
               disabled={page >= pageCount}
@@ -195,5 +195,50 @@ export function ViewerToolbar({
         {panelTools}
       </div>
     </div>
+  );
+}
+
+export function PageNumberInput({
+  page,
+  pageCount,
+  onPageChange,
+}: {
+  page: number;
+  pageCount: number;
+  onPageChange(page: number): void;
+}) {
+  const [draft, setDraft] = useState(String(page));
+
+  useEffect(() => {
+    setDraft(String(page));
+  }, [page]);
+
+  const commit = () => {
+    const parsed = Number.parseInt(draft, 10);
+    const clamped = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), pageCount) : page;
+    if (clamped !== page) onPageChange(clamped);
+    setDraft(String(clamped));
+  };
+
+  return (
+    <span className="viewer-page-input">
+      <input
+        type="text"
+        inputMode="numeric"
+        aria-label="Номер страницы"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value.replace(/[^0-9]/g, ""))}
+        onFocus={(event) => event.target.select()}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+            event.currentTarget.blur();
+          }
+        }}
+      />
+      <span>/ {pageCount}</span>
+    </span>
   );
 }

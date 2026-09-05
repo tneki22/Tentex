@@ -10,7 +10,7 @@ export { DocumentStage } from "./DocumentStage";
 export { PdfOutline } from "./PdfOutline";
 export { StructuredPage, MarkdownTable, highlight } from "./StructuredPage";
 export { TimedTranscript, formatTime } from "./TimedTranscript";
-export { ViewerToolbar } from "./ViewerToolbar";
+export { ViewerToolbar, PageNumberInput } from "./ViewerToolbar";
 export type { ViewerToolbarProps } from "./ViewerToolbar";
 export { getMaterialPresentation } from "./sourcePresentation";
 export type {
