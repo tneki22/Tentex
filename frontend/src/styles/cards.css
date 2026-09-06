@@ -7,36 +7,6 @@
   background: var(--canvas);
 }
 
-.cards-project-panel {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-topbar);
-  height: 100dvh;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-4);
-  overflow-y: auto;
-  border-inline-end: 1px solid var(--line);
-  background: var(--paper);
-}
-
-.cards-project-title {
-  min-height: var(--space-10);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--ink);
-  font-size: var(--text-sm);
-}
-
-.cards-project-title strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .cards-mode-switcher {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -67,12 +37,9 @@
 .cards-mode-switcher button.is-active,
 .bank-filter-tabs button.is-active { color: var(--accent); background: var(--paper-strong); box-shadow: var(--shadow-sm); }
 
-.cards-recent { min-height: 0; display: flex; flex: 1; flex-direction: column; }
-.cards-recent > header { display: flex; justify-content: space-between; padding: 0 var(--space-2) var(--space-2); color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
-.cards-recent > header small { color: var(--faint); font-variant-numeric: tabular-nums; }
-.cards-recent-list { min-height: 0; display: grid; align-content: start; gap: 1px; overflow-y: auto; }
-.cards-recent-item { display: grid; gap: var(--space-2); padding: var(--space-3); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink-soft); font: inherit; text-align: start; }
-.cards-recent-item:hover { color: var(--ink); background: var(--surface-hover); }
+/* Каркас раздела «недавнее» — общий с Ответами, см. .project-recent* в layout.css.
+ * Здесь только своя раскладка строки (.is-card) и содержимое карточки. */
+.project-recent-item.is-card { display: grid; gap: var(--space-2); padding: var(--space-3); }
 .cards-recent-front { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: var(--text-xs); font-weight: var(--weight-medium); line-height: var(--leading-snug); }
 .cards-recent-meta { display: flex; align-items: center; gap: var(--space-2); }
 .cards-recent-meta .status-badge { padding: 2px var(--space-2); font-size: 10px; }
@@ -81,7 +48,6 @@
 .cards-recent-empty { color: var(--faint); font-size: 10px; }
 .cards-recent-question { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cards-recent-empty { margin: var(--space-2); line-height: var(--leading-normal); }
-.cards-project-nav { margin: auto calc(-1 * var(--space-4)) calc(-1 * var(--space-4)); }
 
 .cards-main { min-width: 0; padding: var(--space-8); overflow: hidden; }
 .cards-main.is-session { padding: 0; }
@@ -330,9 +296,9 @@
 
 @media (max-width: 62rem) {
   .cards-screen { grid-template-columns: 1fr; }
-  .cards-project-panel { position: static; height: auto; border-inline-end: 0; border-bottom: 1px solid var(--line); }
-  .cards-recent,
-  .cards-project-nav { display: none; }
+  .cards-screen .project-side-panel { position: static; height: auto; border-inline-end: 0; border-bottom: 1px solid var(--line); }
+  .cards-screen .project-recent,
+  .cards-screen .project-side-nav { display: none; }
   .cards-main { padding: var(--space-5); }
   .repetition-lanes,
   .card-editor-layout { grid-template-columns: 1fr; }

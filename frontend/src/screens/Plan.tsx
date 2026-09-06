@@ -296,8 +296,8 @@ export function Plan() {
 
   return (
     <div className="plan-screen prep-screen">
-      <aside className="plan-project-panel">
-        <header className="program-project-title">
+      <aside className="project-side-panel">
+        <header className="project-side-title">
           <Tooltip label="Вернуться в рабочую область">
             <Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область">
               <ArrowLeft size={15} />
@@ -305,12 +305,12 @@ export function Plan() {
           </Tooltip>
           <strong>{overview.project_name}</strong>
         </header>
-        <PreparationEvents overview={overview} onHistory={() => ui("view", "history")} />
+        <PreparationEvents overview={overview} />
         <ProjectNav
           projectId={projectId}
           active="plan"
           modules={modules}
-          className="program-project-nav"
+          className="project-side-nav"
         />
       </aside>
 

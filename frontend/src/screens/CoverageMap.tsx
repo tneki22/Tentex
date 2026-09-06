@@ -468,15 +468,15 @@ export function CoverageMap() {
 
   return (
     <div className="program-screen coverage-screen">
-      <aside className="program-project-panel">
-        <header className="program-project-title"><Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong></header>
-        <section className="coverage-recent" aria-label="Последние изменённые ответы">
+      <aside className="project-side-panel">
+        <header className="project-side-title"><Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong></header>
+        <section className="project-recent" aria-label="Последние изменённые ответы">
           <header><span>Недавние ответы</span><small>{recentRows.length}</small></header>
-          <div className="coverage-recent-list">
+          <div className="project-recent-list">
             {recentRows.length === 0
               ? <p className="sidebar-empty">Пока ничего не сохраняли — здесь появятся последние правки в этой вкладке.</p>
               : recentRows.map((row) => (
-                <button type="button" className={`coverage-recent-item ${selectedId === row.node_id ? "is-active" : ""}`.trim()} key={row.node_id} onClick={() => setSelectedId(row.node_id)}>
+                <button type="button" className={`project-recent-item is-compact ${selectedId === row.node_id ? "is-active" : ""}`.trim()} key={row.node_id} onClick={() => setSelectedId(row.node_id)}>
                   <span>{numberByNodeId.get(row.node_id)}. {row.title}</span>
                   {row.answer_status && <ReferenceAnswerBadge status={row.answer_status} />}
                 </button>
@@ -488,7 +488,7 @@ export function CoverageMap() {
           active="answers"
           modules={detail.project.enabled_modules}
           counts={{ answers: `${coverage.totals.with_answer}/${coverage.totals.study_nodes}` }}
-          className="program-project-nav"
+          className="project-side-nav"
         />
       </aside>
 

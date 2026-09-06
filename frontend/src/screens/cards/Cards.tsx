@@ -82,8 +82,8 @@ export function Cards() {
 
   return (
     <div className="cards-screen">
-      <aside className="cards-project-panel">
-        <header className="cards-project-title">
+      <aside className="project-side-panel">
+        <header className="project-side-title">
           <Tooltip label="Вернуться в рабочую область">
             <Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область">
               <ArrowLeft size={15} />
@@ -106,11 +106,11 @@ export function Cards() {
           ))}
         </nav>
 
-        <section className="cards-recent" aria-label="Недавние карточки">
+        <section className="project-recent" aria-label="Недавние карточки">
           <header><span>Недавние карточки</span><small>{overview?.recent_cards.length ?? 0}</small></header>
-          <div className="cards-recent-list">
+          <div className="project-recent-list">
             {overview?.recent_cards.length ? overview.recent_cards.map((card) => (
-              <button type="button" className="cards-recent-item" key={card.id} onClick={() => openBank(card.id)}>
+              <button type="button" className="project-recent-item is-card" key={card.id} onClick={() => openBank(card.id)}>
                 <span className="cards-recent-front">{card.front}</span>
                 <span className="cards-recent-meta">
                   <StatusBadge tone={card.last_confidence && card.last_confidence <= 2 ? "warning" : "success"}>
@@ -128,7 +128,7 @@ export function Cards() {
           projectId={projectId}
           active="cards"
           counts={{ program: programCount, cards: overview?.active_card_count ?? 0 }}
-          className="cards-project-nav"
+          className="project-side-nav"
         />
       </aside>
 

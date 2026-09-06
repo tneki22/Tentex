@@ -666,8 +666,8 @@ export function Program() {
 
   return (
     <div className="program-screen">
-      <aside className="program-project-panel">
-        <header className="program-project-title">
+      <aside className="project-side-panel">
+        <header className="project-side-title">
           <Tooltip label="Вернуться в рабочую область">
             <Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link>
           </Tooltip>
@@ -693,7 +693,7 @@ export function Program() {
             program: currentFlat.filter((node) => node.node_type !== "section").length,
             materials: materials.materials.length,
           }}
-          className="program-project-nav"
+          className="project-side-nav"
         />
       </aside>
 

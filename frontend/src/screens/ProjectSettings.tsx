@@ -367,8 +367,8 @@ export function ProjectSettings() {
 
   return (
     <div className="program-screen settings-screen">
-      <aside className="program-project-panel">
-        <header className="program-project-title">
+      <aside className="project-side-panel">
+        <header className="project-side-title">
           <Tooltip label="Вернуться в рабочую область">
             <button type="button" className="workspace-back-button" onClick={returnToWorkspace} aria-label="Вернуться в рабочую область">
               <ArrowLeft size={15} />
@@ -389,7 +389,7 @@ export function ProjectSettings() {
           projectId={projectId}
           active="settings"
           modules={detail.project.enabled_modules}
-          className="program-project-nav"
+          className="project-side-nav"
         />
       </aside>
 
