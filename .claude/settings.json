@@ -8,25 +8,30 @@
       "Bash(npm run build:*)",
       "Bash(npm run lint:*)",
       "Bash(npm ci:*)",
-      "Bash(npm install:*)",
       "Bash(npm view:*)",
       "Bash(python -m pytest:*)",
       "Bash(python -m ruff:*)",
-      "Bash(pip install:*)",
       "Bash(pip index:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
       "Bash(git show:*)",
       "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git worktree list:*)",
       "Bash(npx ctx7@latest:*)",
       "Bash(docker compose config:*)",
-      "Bash(docker compose build:*)"
+      "Bash(docker compose build:*)",
+      "Bash(docker compose restart:*)",
+      "Bash(docker compose ps:*)",
+      "Bash(docker compose logs:*)"
     ],
     "ask": [
       "Bash(git push:*)",
-      "Bash(git commit:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(git worktree remove:*)",
+      "Bash(npm install:*)",
+      "Bash(pip install:*)"
     ],
     "deny": [
       "Read(./.env)",
