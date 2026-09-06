@@ -1,12 +1,13 @@
 """Факты открытий, начала дня и достижений отдельно от отменяемого плана."""
 
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert
 
-from app.models import Attempt
+from app.models import Activity, ActivityKind, Attempt
 from app.preparation.calendar import study_date
 from app.preparation.models import StudyActivity, StudyInterval
 from app.preparation.schemas import BudgetRead, MilestoneRead
@@ -30,8 +31,16 @@ def openings(session, project_id, config):
         )
     )
     rows.extend(
-        (a.program_node_id, a.created_at)
-        for a in session.scalars(select(Attempt).where(Attempt.project_id == project_id))
+        (node_id, created_at)
+        for node_id, created_at in session.execute(
+            select(Activity.program_node_id, Attempt.created_at)
+            .join(Attempt, Attempt.activity_id == Activity.id)
+            .where(
+                Attempt.project_id == project_id,
+                Activity.kind == ActivityKind.FREE_ANSWER,
+                Activity.program_node_id.is_not(None),
+            )
+        )
     )
     for node_id, at in rows:
         day = study_date(at, config)
@@ -130,3 +139,37 @@ def record_opening(session, project_id, node_id):
             key=f"opened:{today}:{node_id}",
             node_id=node_id,
         )
+
+
+def record_unit_opening(session, project_id, unit_id, *, at=None, in_transaction=False):
+    """Открыть вопрос или весь билет одной идемпотентной транзакцией."""
+    from app.db import project_write_transaction
+    from app.preparation.data import get_settings, require_project, units
+    from app.projects.errors import ProjectDomainError
+
+    transaction = (
+        nullcontext()
+        if in_transaction
+        else project_write_transaction(session, project_id)
+    )
+    with transaction:
+        require_project(session, project_id, writable=True)
+        unit = next((item for item in units(session, project_id) if item.id == unit_id), None)
+        if unit is None:
+            raise ProjectDomainError(
+                "Единица программы не найдена",
+                status=404,
+                code="preparation_unit_invalid",
+            )
+        moment = at or datetime.now(UTC)
+        today = study_date(moment, get_settings(session, project_id).config)
+        for node_id in unit.topic_ids:
+            record_event(
+                session,
+                project_id,
+                "view",
+                unit.title,
+                key=f"opened:{today}:{node_id}",
+                node_id=node_id,
+                at=moment,
+            )

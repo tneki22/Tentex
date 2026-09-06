@@ -18,6 +18,9 @@ from app.exam.checking import CheckResult, RubricPoint, deterministic_check
 from app.exam.context import ChatContext, build_context
 from app.exam.judge import JudgeResult, judge_attempt
 from app.models import (
+    Activity,
+    ActivityKind,
+    ActivityOrigin,
     Attempt,
     AttemptOutcome,
     ChatMessage,
@@ -40,6 +43,28 @@ AI_FALLBACK_CODES = {
     "ai_timeout",
     "ai_daily_limit",
 }
+
+
+def _free_answer_activity(session: Session, project_id: UUID, node_id: UUID) -> Activity:
+    """Reuse one activity per question so attempts form one evidence stream."""
+    activity = session.scalar(
+        select(Activity).where(
+            Activity.project_id == project_id,
+            Activity.program_node_id == node_id,
+            Activity.kind == ActivityKind.FREE_ANSWER,
+        )
+    )
+    if activity is None:
+        activity = Activity(
+            project_id=project_id,
+            program_node_id=node_id,
+            kind=ActivityKind.FREE_ANSWER,
+            evidence_strength=1.0,
+            origin=ActivityOrigin.EXAM_CHAT,
+        )
+        session.add(activity)
+        session.flush()
+    return activity
 
 
 @dataclass(frozen=True)
@@ -235,13 +260,17 @@ async def submit_answer(
             )
         ordinal = (
             session.scalar(
-                select(func.count(Attempt.id)).where(
+                select(func.count(Attempt.id))
+                .join(Activity, Activity.id == Attempt.activity_id)
+                .where(
                     Attempt.project_id == project_id,
-                    Attempt.program_node_id == chat_row.program_node_id,
+                    Activity.program_node_id == chat_row.program_node_id,
+                    Activity.kind == ActivityKind.FREE_ANSWER,
                 )
             )
             or 0
         ) + 1
+        activity = _free_answer_activity(session, project_id, chat_row.program_node_id)
         snapshot = _context_snapshot(ctx)
         # Замораживаем выбранную модель вместе с persona/strictness: повторная
         # проверка судит той же моделью, что была выбрана на момент сдачи,
@@ -249,7 +278,7 @@ async def submit_answer(
         snapshot["model_override"] = chat_row.model_override
         attempt = Attempt(
             project_id=project_id,
-            program_node_id=chat_row.program_node_id,
+            activity_id=activity.id,
             ordinal=ordinal,
             text=text,
             answer_mode=answer_mode,
@@ -405,10 +434,12 @@ def list_attempts(session: Session, project_id: UUID, node_id: UUID) -> list[Att
     chat_service._require_chat_node(session, project_id, node_id)
     rows = session.execute(
         select(Attempt, Grade)
+        .join(Activity, Activity.id == Attempt.activity_id)
         .outerjoin(Grade, Grade.attempt_id == Attempt.id)
         .where(
             Attempt.project_id == project_id,
-            Attempt.program_node_id == node_id,
+            Activity.program_node_id == node_id,
+            Activity.kind == ActivityKind.FREE_ANSWER,
         )
         .order_by(Attempt.created_at.desc())
     )

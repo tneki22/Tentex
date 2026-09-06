@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    Activity,
+    ActivityKind,
     Attempt,
     Binding,
     BindingStatus,
@@ -149,7 +151,13 @@ def units(session: Session, project_id: UUID) -> list[UnitRead]:
     passport = session.get(GoalPassport, project_id)
     observations = defaultdict(list)
     for attempt in session.scalars(
-        select(Attempt).where(Attempt.project_id == project_id, Attempt.active_seconds > 0)
+        select(Attempt)
+        .join(Activity, Activity.id == Attempt.activity_id)
+        .where(
+            Attempt.project_id == project_id,
+            Attempt.active_seconds > 0,
+            Activity.kind == ActivityKind.FREE_ANSWER,
+        )
     ):
         observations[attempt.program_node_id].append(attempt.active_seconds / 60)
     plan = session.get(PreparationPlan, project_id)

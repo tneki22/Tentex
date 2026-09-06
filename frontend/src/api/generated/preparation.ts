@@ -1483,6 +1483,298 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/cards/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Overview
+         * @description Сводка календарного покрытия и карточной аналитики.
+         */
+        get: operations["get_overview_api_projects__project_id__cards_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/cards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Cards
+         * @description Поиск и фильтры Банка выполняются на сервере.
+         */
+        get: operations["get_cards_api_projects__project_id__cards_get"];
+        put?: never;
+        /**
+         * Post Card
+         * @description Ручное создание карточки.
+         */
+        post: operations["post_card_api_projects__project_id__cards_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/cards/{card_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Card
+         * @description Мягкое удаление одной карточки.
+         */
+        delete: operations["delete_card_api_projects__project_id__cards__card_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Patch Card
+         * @description Редактирование с проверкой ревизии.
+         */
+        patch: operations["patch_card_api_projects__project_id__cards__card_id__patch"];
+        trace?: never;
+    };
+    "/api/projects/{project_id}/cards/{card_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore Card
+         * @description Восстановление мягко удалённой карточки.
+         */
+        post: operations["restore_card_api_projects__project_id__cards__card_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/cards/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Cards Bulk
+         * @description Массовое состояние, удаление или восстановление.
+         */
+        post: operations["post_cards_bulk_api_projects__project_id__cards_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/cards/fragments/{fragment_id}/prefill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Fragment Prefill
+         * @description Проверенный источник для перехода «В карточку».
+         */
+        get: operations["get_fragment_prefill_api_projects__project_id__cards_fragments__fragment_id__prefill_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/card-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Session
+         * @description Создать сохраняемый снимок очереди.
+         */
+        post: operations["post_session_api_projects__project_id__card_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/card-sessions/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Active Session
+         * @description Продолжить активный сеанс.
+         */
+        get: operations["get_active_session_api_projects__project_id__card_sessions_active_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/card-sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session
+         * @description Прочитать конкретный сеанс, включая итоговый.
+         */
+        get: operations["get_session_api_projects__project_id__card_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Session
+         * @description Сохранить позицию и активное время.
+         */
+        patch: operations["patch_session_api_projects__project_id__card_sessions__session_id__patch"];
+        trace?: never;
+    };
+    "/api/projects/{project_id}/card-sessions/{session_id}/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Open
+         * @description Открыть календарную единицу первой карточкой.
+         */
+        post: operations["post_open_api_projects__project_id__card_sessions__session_id__open_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/card-sessions/{session_id}/cards/{card_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Review
+         * @description Сохранить одну из четырёх самооценок идемпотентно.
+         */
+        post: operations["post_review_api_projects__project_id__card_sessions__session_id__cards__card_id__review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/card-sessions/{session_id}/cards/{card_id}/defer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Defer
+         * @description Отложить карточку без включения в среднюю уверенность.
+         */
+        post: operations["post_defer_api_projects__project_id__card_sessions__session_id__cards__card_id__defer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/card-sessions/{session_id}/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Finish
+         * @description Завершить либо явно отменить сеанс.
+         */
+        post: operations["post_finish_api_projects__project_id__card_sessions__session_id__finish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/card-sessions/{session_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Retry
+         * @description Повторить только сложные и отложенные карточки.
+         */
+        post: operations["post_retry_api_projects__project_id__card_sessions__session_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{project_id}/conspects": {
         parameters: {
             query?: never;
@@ -3363,6 +3655,8 @@ export interface components {
             material_id: string;
             /** Page Number */
             page_number?: number | null;
+            /** Program Node Id */
+            program_node_id?: string | null;
         };
         /** BindingChangeResult */
         BindingChangeResult: {
@@ -3523,6 +3817,16 @@ export interface components {
             /** Study Days */
             study_days: number;
         };
+        /** BulkCardItem */
+        BulkCardItem: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Expected Revision */
+            expected_revision: number;
+        };
         /**
          * BusyWindow
          * @description Недоступный интервал может переходить через полночь.
@@ -3553,6 +3857,313 @@ export interface components {
             available: boolean;
             /** Unavailable Reason */
             unavailable_reason?: string | null;
+        };
+        /** CardAnalyticsRead */
+        CardAnalyticsRead: {
+            /**
+             * Period
+             * @enum {integer}
+             */
+            period: 7 | 30;
+            /** Observation Count */
+            observation_count: number;
+            /** Distribution */
+            distribution: components["schemas"]["ConfidenceBucket"][];
+            /** Hard Card Count */
+            hard_card_count: number;
+            hardest_unit: components["schemas"]["CardUnitRead"] | null;
+            /** Hardest Low Share */
+            hardest_low_share: number | null;
+            /** Hardest Observation Count */
+            hardest_observation_count: number;
+        };
+        /** CardBulkWrite */
+        CardBulkWrite: {
+            /** Items */
+            items: components["schemas"]["BulkCardItem"][];
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "activate" | "suspend" | "delete" | "restore";
+        };
+        /** CardCreate */
+        CardCreate: {
+            /** Program Node Id */
+            program_node_id?: string | null;
+            /** Front */
+            front: string;
+            /** Back */
+            back: string;
+            /** Hint */
+            hint?: string | null;
+            source?: components["schemas"]["CardSourceWrite"];
+            /**
+             * State
+             * @default active
+             * @enum {string}
+             */
+            state: "active" | "suspended";
+        };
+        /** CardListRead */
+        CardListRead: {
+            /** Items */
+            items: components["schemas"]["CardRead"][];
+            /** Total */
+            total: number;
+            /** Units */
+            units: components["schemas"]["CardUnitRead"][];
+        };
+        /** CardOverviewRead */
+        CardOverviewRead: {
+            /** Program Exists */
+            program_exists: boolean;
+            /** Plan Exists */
+            plan_exists: boolean;
+            /** Today Units */
+            today_units: components["schemas"]["TodayUnitRead"][];
+            /** Covered Unit Count */
+            covered_unit_count: number;
+            /** Active Card Count */
+            active_card_count: number;
+            /** Estimated Minutes */
+            estimated_minutes: number;
+            /** Recent Cards */
+            recent_cards: components["schemas"]["CardRead"][];
+            /** Hard Cards */
+            hard_cards: components["schemas"]["CardRead"][];
+            analytics: components["schemas"]["CardAnalyticsRead"];
+            active_session: components["schemas"]["CardSessionSummaryRead"] | null;
+            /** Units */
+            units: components["schemas"]["CardUnitRead"][];
+        };
+        /** CardRead */
+        CardRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Program Node Id */
+            program_node_id: string | null;
+            unit: components["schemas"]["CardUnitRead"] | null;
+            /** Front */
+            front: string;
+            /** Back */
+            back: string;
+            /** Hint */
+            hint: string | null;
+            source: components["schemas"]["CardSourceRead"];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "active" | "suspended";
+            /** Revision */
+            revision: number;
+            /** Deleted At */
+            deleted_at: string | null;
+            /** Last Confidence */
+            last_confidence: number | null;
+            /** Attempt Count */
+            attempt_count: number;
+            /** Last Reviewed At */
+            last_reviewed_at: string | null;
+            /** Average Last Three */
+            average_last_three: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** CardSessionCreate */
+        CardSessionCreate: {
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "today" | "hard" | "selected" | "all";
+            /** Selected Unit Ids */
+            selected_unit_ids?: string[];
+            /**
+             * Pace
+             * @default calm
+             * @enum {string}
+             */
+            pace: "calm" | "fast";
+            /** Limit Minutes */
+            limit_minutes?: (5 | 10 | 15) | null;
+            /**
+             * Replace Active
+             * @default false
+             */
+            replace_active: boolean;
+        };
+        /** CardSessionRead */
+        CardSessionRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "today" | "hard" | "selected" | "all";
+            /** Selected Unit Ids */
+            selected_unit_ids: string[];
+            /**
+             * Pace
+             * @enum {string}
+             */
+            pace: "calm" | "fast";
+            /** Limit Minutes */
+            limit_minutes: number | null;
+            /** Queue */
+            queue: components["schemas"]["SessionCardRead"][];
+            /** Position */
+            position: number;
+            /** Active Seconds */
+            active_seconds: number;
+            /** Limit Reached */
+            limit_reached: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "active" | "completed" | "cancelled";
+            /** Revision */
+            revision: number;
+            /** Missing Units */
+            missing_units: components["schemas"]["CardUnitRead"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Completed At */
+            completed_at: string | null;
+        };
+        /** CardSessionSummaryRead */
+        CardSessionSummaryRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "today" | "hard" | "selected" | "all";
+            /**
+             * Pace
+             * @enum {string}
+             */
+            pace: "calm" | "fast";
+            /** Position */
+            position: number;
+            /** Card Count */
+            card_count: number;
+            /** Revision */
+            revision: number;
+        };
+        /** CardSourceRead */
+        CardSourceRead: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "none" | "fragment" | "reference";
+            /** Fragment Id */
+            fragment_id: string | null;
+            /** Reference Revision */
+            reference_revision: number | null;
+            /** Label */
+            label: string;
+            /** Material Name */
+            material_name?: string | null;
+            /** Page Number */
+            page_number?: number | null;
+            /** Text Snapshot */
+            text_snapshot?: string | null;
+            /**
+             * Lost
+             * @default false
+             */
+            lost: boolean;
+        };
+        /** CardSourceWrite */
+        CardSourceWrite: {
+            /**
+             * Kind
+             * @default none
+             * @enum {string}
+             */
+            kind: "none" | "fragment" | "reference";
+            /** Fragment Id */
+            fragment_id?: string | null;
+            /** Reference Revision */
+            reference_revision?: number | null;
+        };
+        /** CardUnitRead */
+        CardUnitRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Title */
+            title: string;
+            /** Path */
+            path: string[];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "ticket" | "question" | "task";
+            /** Topic Ids */
+            topic_ids: string[];
+            /** Reference Revision */
+            reference_revision?: number | null;
+        };
+        /** CardUpdate */
+        CardUpdate: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Program Node Id */
+            program_node_id?: string | null;
+            /** Front */
+            front?: string | null;
+            /** Back */
+            back?: string | null;
+            /** Hint */
+            hint?: string | null;
+            source?: components["schemas"]["CardSourceWrite"] | null;
+            /** State */
+            state?: ("active" | "suspended") | null;
         };
         /** ChatAnswerResult */
         ChatAnswerResult: {
@@ -3933,6 +4544,13 @@ export interface components {
             job_id?: string | null;
             /** Reason */
             reason?: string | null;
+        };
+        /** ConfidenceBucket */
+        ConfidenceBucket: {
+            /** Confidence */
+            confidence: number;
+            /** Count */
+            count: number;
         };
         /** ConspectImageRead */
         ConspectImageRead: {
@@ -4399,6 +5017,19 @@ export interface components {
             purposes?: components["schemas"]["MaterialPurpose"][];
             exam_slot?: components["schemas"]["ExamMaterialSlot"] | null;
         };
+        /** FragmentPrefillRead */
+        FragmentPrefillRead: {
+            /**
+             * Fragment Id
+             * Format: uuid
+             */
+            fragment_id: string;
+            /** Proposed Program Node Id */
+            proposed_program_node_id: string | null;
+            /** Back */
+            back: string;
+            source: components["schemas"]["CardSourceRead"];
+        };
         /** FragmentRead */
         FragmentRead: {
             /**
@@ -4859,6 +5490,11 @@ export interface components {
             text: string;
             /** Rank */
             rank: number;
+            /**
+             * Matched Forms
+             * @default []
+             */
+            matched_forms: string[];
         };
         /** LibrarySearchResult */
         LibrarySearchResult: {
@@ -4866,6 +5502,11 @@ export interface components {
             query: string;
             /** Revision */
             revision: number;
+            /**
+             * Terms
+             * @default []
+             */
+            terms: string[];
             /** Hits */
             hits: components["schemas"]["LibrarySearchHit"][];
         };
@@ -6658,14 +7299,6 @@ export interface components {
             /** Items */
             items: components["schemas"]["RepairedQuestion"][];
         };
-        /**
-         * RevisionWrite
-         * @description Команда отмены относится к конкретной видимой версии.
-         */
-        RevisionWrite: {
-            /** Expected Revision */
-            expected_revision: number;
-        };
         /** RubricPointRead */
         RubricPointRead: {
             /** Point */
@@ -6684,6 +7317,44 @@ export interface components {
             /** End */
             end: number;
         };
+        /**
+         * SearchResponse
+         * @description Выдача вместе со словами, по которым искали.
+         *
+         *     Слова нужны интерфейсу: без них пустой результат по длинной формулировке
+         *     читается как поломка поиска, а не как отсутствие материала.
+         */
+        SearchResponse: {
+            /** Terms */
+            terms: string[];
+            /** Prefix */
+            prefix: string | null;
+            /** Results */
+            results: components["schemas"]["SearchResultRead"][];
+        };
+        /**
+         * SearchResultPageRead
+         * @description Одна страница попадания со своим превью и своими фрагментами.
+         *
+         *     Интерфейс группирует выдачу по страницам, а не по блокам: диапазон
+         *     «стр. 71–75» не отвечает на вопрос, где именно совпало.
+         */
+        SearchResultPageRead: {
+            /** Page Number */
+            page_number: number;
+            /** Fragment Ids */
+            fragment_ids: string[];
+            quality: components["schemas"]["PageQuality"];
+            /** Text */
+            text: string;
+            /** Highlights */
+            highlights: components["schemas"]["SearchHighlightRead"][];
+            /**
+             * Already Bound
+             * @default false
+             */
+            already_bound: boolean;
+        };
         /** SearchResultRead */
         SearchResultRead: {
             /** Fragment Ids */
@@ -6695,6 +7366,11 @@ export interface components {
             material_id: string;
             /** Material Name */
             material_name: string;
+            /**
+             * Presentation Kind
+             * @enum {string}
+             */
+            presentation_kind: "pdf" | "image" | "document" | "plain_text" | "web" | "youtube" | "audio";
             /**
              * Block Id
              * Format: uuid
@@ -6712,14 +7388,107 @@ export interface components {
             /** Highlights */
             highlights: components["schemas"]["SearchHighlightRead"][];
             /**
+             * Matched Forms
+             * @default []
+             */
+            matched_forms: string[];
+            /**
              * Already Bound
              * @default false
              */
             already_bound: boolean;
+            /**
+             * Pages
+             * @default []
+             */
+            pages: components["schemas"]["SearchResultPageRead"][];
         };
         /** SelfAssessmentWrite */
         SelfAssessmentWrite: {
             outcome: components["schemas"]["AttemptOutcome"];
+        };
+        /** SessionCardRead */
+        SessionCardRead: {
+            /**
+             * Card Id
+             * Format: uuid
+             */
+            card_id: string;
+            /** Unit Id */
+            unit_id: string | null;
+            /** Unit Title */
+            unit_title: string | null;
+            /** Front */
+            front: string;
+            /** Back */
+            back: string;
+            /** Hint */
+            hint: string | null;
+            source: components["schemas"]["CardSourceRead"];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "rated" | "deferred";
+            /** Confidence */
+            confidence?: number | null;
+        };
+        /** SessionDeferWrite */
+        SessionDeferWrite: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /**
+             * Active Seconds
+             * @default 0
+             */
+            active_seconds: number;
+        };
+        /** SessionFinishWrite */
+        SessionFinishWrite: {
+            /** Expected Revision */
+            expected_revision: number;
+            /**
+             * Action
+             * @default complete
+             * @enum {string}
+             */
+            action: "complete" | "cancel";
+        };
+        /** SessionProgressWrite */
+        SessionProgressWrite: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Position */
+            position: number;
+            /** Active Seconds */
+            active_seconds: number;
+        };
+        /** SessionRetryWrite */
+        SessionRetryWrite: {
+            /** Expected Revision */
+            expected_revision: number;
+        };
+        /** SessionReviewWrite */
+        SessionReviewWrite: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Confidence */
+            confidence: number;
+            /**
+             * Active Seconds
+             * @default 0
+             */
+            active_seconds: number;
         };
         /**
          * SettingsRead
@@ -6838,6 +7607,16 @@ export interface components {
              * Format: date-time
              */
             ended_at: string;
+        };
+        /** TodayUnitRead */
+        TodayUnitRead: {
+            unit: components["schemas"]["CardUnitRead"];
+            /** Card Count */
+            card_count: number;
+            /** Covered */
+            covered: boolean;
+            /** Cards */
+            cards: components["schemas"]["CardRead"][];
         };
         /** ToolRunCreateWrite */
         ToolRunCreateWrite: {
@@ -7045,23 +7824,7 @@ export interface components {
             active_tab?: components["schemas"]["WorkspaceTab"] | null;
         };
         /** WorkspaceLayout */
-        "WorkspaceLayout-Input": {
-            /** Selected Node Id */
-            selected_node_id?: string | null;
-            /** Expanded Node Ids */
-            expanded_node_ids?: string[];
-            /**
-             * Tree Width
-             * @default 320
-             */
-            tree_width: number;
-            /** Groups */
-            groups: components["schemas"]["WorkspaceGroup"][];
-            /** Group Weights */
-            group_weights: number[];
-        };
-        /** WorkspaceLayout */
-        "WorkspaceLayout-Output": {
+        WorkspaceLayout: {
             /** Selected Node Id */
             selected_node_id?: string | null;
             /** Expanded Node Ids */
@@ -7080,7 +7843,7 @@ export interface components {
         WorkspaceStateRead: {
             /** Schema Version */
             schema_version: number;
-            layout: components["schemas"]["WorkspaceLayout-Output"];
+            layout: components["schemas"]["WorkspaceLayout"];
             /**
              * Project Id
              * Format: uuid
@@ -7096,7 +7859,7 @@ export interface components {
         WorkspaceStateWrite: {
             /** Schema Version */
             schema_version: number;
-            layout: components["schemas"]["WorkspaceLayout-Input"];
+            layout: components["schemas"]["WorkspaceLayout"];
         };
         /**
          * WorkspaceTab
@@ -7108,6 +7871,19 @@ export interface components {
          * @enum {string}
          */
         WorkspaceVariant: "exam" | "textbook";
+        /** RevisionWrite */
+        app__cards__schemas__RevisionWrite: {
+            /** Expected Revision */
+            expected_revision: number;
+        };
+        /**
+         * RevisionWrite
+         * @description Команда отмены относится к конкретной видимой версии.
+         */
+        app__preparation__schemas__RevisionWrite: {
+            /** Expected Revision */
+            expected_revision: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -10072,7 +10848,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SearchResultRead"][];
+                    "application/json": components["schemas"]["SearchResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10406,6 +11182,601 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BindingChangeResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_overview_api_projects__project_id__cards_overview_get: {
+        parameters: {
+            query?: {
+                period?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardOverviewRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_cards_api_projects__project_id__cards_get: {
+        parameters: {
+            query?: {
+                query?: string | null;
+                unit_id?: string | null;
+                state?: ("active" | "suspended") | null;
+                source?: ("none" | "fragment" | "reference") | null;
+                rating?: ("unrated" | "hard" | "recalled" | "lost") | null;
+                include_deleted?: boolean;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardListRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_card_api_projects__project_id__cards_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CardCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_card_api_projects__project_id__cards__card_id__delete: {
+        parameters: {
+            query: {
+                expected_revision: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                card_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_card_api_projects__project_id__cards__card_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                card_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CardUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_card_api_projects__project_id__cards__card_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                card_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["app__cards__schemas__RevisionWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_cards_bulk_api_projects__project_id__cards_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CardBulkWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardListRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_fragment_prefill_api_projects__project_id__cards_fragments__fragment_id__prefill_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                fragment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FragmentPrefillRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_session_api_projects__project_id__card_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CardSessionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardSessionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_active_session_api_projects__project_id__card_sessions_active_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardSessionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_api_projects__project_id__card_sessions__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardSessionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_session_api_projects__project_id__card_sessions__session_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionProgressWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardSessionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_open_api_projects__project_id__card_sessions__session_id__open_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["app__cards__schemas__RevisionWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardSessionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_review_api_projects__project_id__card_sessions__session_id__cards__card_id__review_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                session_id: string;
+                card_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionReviewWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardSessionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_defer_api_projects__project_id__card_sessions__session_id__cards__card_id__defer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                session_id: string;
+                card_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionDeferWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardSessionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_finish_api_projects__project_id__card_sessions__session_id__finish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionFinishWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardSessionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_retry_api_projects__project_id__card_sessions__session_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionRetryWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardSessionRead"];
                 };
             };
             /** @description Validation Error */
@@ -12522,7 +13893,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RevisionWrite"];
+                "application/json": components["schemas"]["app__preparation__schemas__RevisionWrite"];
             };
         };
         responses: {

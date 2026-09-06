@@ -75,6 +75,12 @@ def project_write_transaction(session: Session, project_id: UUID):
     rolling back caller data. Values and project revisions remain unchanged.
     Use only for short local transactions, never across a model request.
     """
+    # Read endpoints may leave SQLAlchemy's autobegun transaction open on a
+    # reused session (notably in TestClient and background workflows). Close
+    # that read transaction before reserving the writer; request-scoped
+    # sessions still have no-op overhead here.
+    if session.in_transaction():
+        session.commit()
     with session.begin():
         session.execute(text("UPDATE projects SET id = id WHERE id = :id"), {"id": project_id.hex})
         yield

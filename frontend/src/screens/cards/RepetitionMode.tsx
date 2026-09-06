@@ -1,155 +1,338 @@
-import { useMemo, useState } from "react";
-import { ArrowRight, Clock3, Play, Settings as SettingsIcon } from "lucide-react";
-import { Button, Checkbox, Dialog, PageHead, RadioCards, SegmentedTabs } from "../../components/ui";
-import { QUEUE_SUMMARY } from "./mockCards";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, BarChart3, Clock3, Play } from "lucide-react";
+import {
+  createCardSession,
+  type CardOverviewRead,
+  type CardSessionCreate,
+  type CardSessionRead,
+} from "../../api/cards";
+import {
+  Button,
+  Checkbox,
+  Dialog,
+  EmptyState,
+  PageHead,
+  RadioCards,
+  SegmentedTabs,
+  StatusBadge,
+} from "../../components/ui";
 
 interface RepetitionModeProps {
-  onStart: (config?: SessionConfig) => void;
+  projectId: string;
+  overview: CardOverviewRead;
+  period: 7 | 30;
+  onPeriodChange: (period: 7 | 30) => void;
+  onStart: (session: CardSessionRead) => void;
+  onContinue: () => void;
+  onOpenBank: (cardId: string) => void;
+  onCreate: (unitId?: string | null) => void;
 }
 
-type QueueKind = "today" | "new" | "hard" | "selected" | "exam";
+type Scope = CardSessionCreate["scope"];
+type Pace = CardSessionCreate["pace"];
 type Duration = "5" | "10" | "15" | "all";
-type Pace = "calm" | "fast" | "ticket";
 
-export interface SessionConfig {
-  questionIds: string[];
-  pace: Pace;
-  duration: Duration;
+const GRADE_LABELS = ["Не вспомнил", "Частично", "Вспомнил", "Легко"];
+
+function plural(value: number, one: string, few: string, many: string): string {
+  const mod100 = value % 100;
+  const mod10 = value % 10;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
 }
 
-const queueOptions = [
-  { value: "today" as const, title: "На сегодня", description: "Просроченные, запланированные, затем новые." },
-  { value: "new" as const, title: "Только новые", description: "Карточки, которые вы ещё не изучали." },
-  { value: "hard" as const, title: "Сложные", description: "Недавние ответы «не вспомнил» и «частично»." },
-  { value: "selected" as const, title: "Выбранные вопросы", description: "Соберите разовый набор вручную." },
-  { value: "exam" as const, title: "Перед экзаменом", description: "Свободный прогон без изменения расписания." },
-];
+function defaultScope(overview: CardOverviewRead): Scope {
+  if (overview.today_units.some((row) => row.card_count > 0)) return "today";
+  if (overview.hard_cards.length) return "hard";
+  return "all";
+}
 
-export function RepetitionMode({ onStart }: RepetitionModeProps) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [queueKind, setQueueKind] = useState<QueueKind>("today");
-  const [duration, setDuration] = useState<Duration>("15");
+function coverageStatus(overview: CardOverviewRead): string {
+  const total = overview.today_units.length;
+  if (!overview.program_exists) return "Сначала добавьте вопросы экзамена";
+  if (!overview.plan_exists) return "План подготовки пока не составлен";
+  if (!total) return "На сегодня повторений не запланировано";
+  if (!overview.covered_unit_count) {
+    return `Для сегодняшних ${total} ${plural(total, "вопроса", "вопросов", "вопросов")} карточек пока нет`;
+  }
+  if (overview.covered_unit_count === total) {
+    return `Карточки готовы для всех ${total} ${plural(total, "вопроса", "вопросов", "вопросов")}`;
+  }
+  return `Карточки есть для ${overview.covered_unit_count} из ${total} вопросов`;
+}
+
+export function RepetitionMode(props: RepetitionModeProps) {
+  const {
+    projectId,
+    overview,
+    period,
+    onPeriodChange,
+    onStart,
+    onContinue,
+    onOpenBank,
+    onCreate,
+  } = props;
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [scope, setScope] = useState<Scope>(() => defaultScope(overview));
   const [pace, setPace] = useState<Pace>("calm");
-  const [selectedQuestions, setSelectedQuestions] = useState(() => new Set(QUEUE_SUMMARY.slice(0, 3).map((item) => item.id)));
+  const [duration, setDuration] = useState<Duration>("15");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedUnitId, setSelectedUnitId] = useState(
+    overview.today_units[0]?.unit.id ?? null,
+  );
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState("");
 
-  const totalCards = QUEUE_SUMMARY.reduce((sum, item) => sum + item.cards, 0);
-  const configuredCount = useMemo(() => {
-    const available = queueKind === "new" ? 3 : queueKind === "hard" ? 4 : queueKind === "selected" ? selectedQuestions.size : QUEUE_SUMMARY.length;
-    return Math.min(available, duration === "5" ? 2 : duration === "10" ? 5 : available);
-  }, [duration, queueKind, selectedQuestions]);
+  useEffect(() => {
+    if (!selectedUnitId && overview.today_units[0]) {
+      setSelectedUnitId(overview.today_units[0].unit.id);
+    }
+  }, [overview.today_units, selectedUnitId]);
 
-  function toggleQuestion(id: string, checked: boolean) {
-    setSelectedQuestions((current) => {
-      const next = new Set(current);
-      if (checked) next.add(id);
-      else next.delete(id);
-      return next;
-    });
+  const selectedToday = overview.today_units.find(
+    (row) => row.unit.id === selectedUnitId,
+  );
+  const selectedCards = useMemo(
+    () => overview.today_units.find((row) => row.unit.id === selectedUnitId)?.cards ?? [],
+    [overview.today_units, selectedUnitId],
+  );
+  const laneCards = overview.today_units.length
+    ? selectedCards
+    : [...overview.hard_cards, ...overview.recent_cards].filter(
+        (card, index, rows) => rows.findIndex((item) => item.id === card.id) === index,
+      ).slice(0, 6);
+  const missingToday = overview.today_units.filter((row) => !row.covered);
+  const scopeCounts: Record<Scope, number> = {
+    today: overview.today_units.reduce((sum, row) => sum + row.card_count, 0),
+    hard: overview.hard_cards.length,
+    selected: overview.units.filter((unit) => selected.has(unit.id)).length,
+    all: overview.active_card_count,
+  };
+
+  async function start() {
+    setStarting(true);
+    setError("");
+    try {
+      const result = await createCardSession(projectId, {
+        scope,
+        selected_unit_ids: scope === "selected" ? [...selected] : [],
+        pace,
+        limit_minutes: duration === "all" ? null : Number(duration) as 5 | 10 | 15,
+        replace_active: false,
+      });
+      setDialogOpen(false);
+      onStart(result);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Не удалось начать сеанс");
+    } finally {
+      setStarting(false);
+    }
   }
 
-  function startConfigured() {
-    const byKind = queueKind === "new"
-      ? QUEUE_SUMMARY.filter((item) => item.due === "новые")
-      : queueKind === "hard"
-        ? QUEUE_SUMMARY.slice(0, 4)
-        : queueKind === "selected"
-          ? QUEUE_SUMMARY.filter((item) => selectedQuestions.has(item.id))
-          : QUEUE_SUMMARY;
-    const maxQuestions = duration === "5" ? 2 : duration === "10" ? 5 : byKind.length;
-    onStart({ questionIds: byKind.slice(0, maxQuestions).map((item) => item.id), pace, duration });
-  }
+  const hasToday = overview.today_units.length > 0;
+  const intro = hasToday
+    ? `На сегодня ${overview.today_units.length} ${plural(overview.today_units.length, "вопрос", "вопроса", "вопросов")}. По ним ${scopeCounts.today} ${plural(scopeCounts.today, "карточка", "карточки", "карточек")} — примерно ${overview.estimated_minutes} мин.`
+    : coverageStatus(overview);
 
   return (
     <div className="repetition-mode">
       <PageHead
-        eyebrow="Очередь SM-2"
+        eyebrow="Карточки вместо повторения"
         title="Повторение"
         actions={
-          <Button variant="secondary" onClick={() => setSettingsOpen(true)}>
-            <SettingsIcon size={15} /> Настроить сеанс
+          <Button onClick={overview.active_session ? onContinue : () => setDialogOpen(true)}>
+            <Play size={15} />
+            {overview.active_session ? "Продолжить сеанс" : "Начать сеанс"}
           </Button>
         }
       />
 
       <section className="repetition-intro" aria-labelledby="today-heading">
-        <h2 id="today-heading">
-          На сегодня у нас <mark>{QUEUE_SUMMARY.length} вопросов</mark>. По ним <mark>{totalCards} карточка</mark>.
-          Это примерно займёт <mark>15 минут</mark>.
-        </h2>
-        <p>Идём вопрос за вопросом: сначала вспоминаете отдельные мысли, затем оцениваете билет целиком.</p>
-        <div className="repetition-intro-actions">
-          <Button onClick={() => onStart()}><Play size={16} /> Начать повторение</Button>
-          <span><Clock3 size={14} /> Спокойный темп · без таймера</span>
+        <h2 id="today-heading">{intro}</h2>
+        {hasToday && <p className="repetition-coverage">{coverageStatus(overview)}</p>}
+        {!overview.program_exists ? (
+          <Button variant="secondary" onClick={() => window.location.assign(`/projects/${projectId}/program`)}>
+            Добавить вопросы
+          </Button>
+        ) : !overview.plan_exists ? (
+          <>
+            <p>Здесь появятся карточки по вопросам, которые вы запланируете повторить сегодня.</p>
+            <Button variant="secondary" onClick={() => window.location.assign(`/projects/${projectId}/preparation`)}>
+              Перейти в «Мою подготовку»
+            </Button>
+          </>
+        ) : !hasToday ? (
+          <p>Можно потренировать сложные, выбранные или все активные карточки.</p>
+        ) : (
+          <p>Оценка уверенности помогает находить сложные карточки, но не меняет календарный план.</p>
+        )}
+      </section>
+
+      <section className="repetition-lanes">
+        <div className="repetition-lane">
+          <header><div><h3>Сегодняшние вопросы</h3><p>В порядке календарного плана.</p></div></header>
+          {overview.today_units.length ? (
+            <ol className="repetition-queue-list">
+              {overview.today_units.map((row, index) => (
+                <li key={row.unit.id}>
+                  <button
+                    type="button"
+                    className={selectedUnitId === row.unit.id ? "is-active" : ""}
+                    onClick={() => setSelectedUnitId(row.unit.id)}
+                  >
+                    <span className="repetition-queue-number">{index + 1}</span>
+                    <span className="repetition-queue-copy">
+                      <small>{row.unit.path.join(" · ") || (row.unit.kind === "ticket" ? "Билет" : "Вопрос")}</small>
+                      <strong>{row.unit.title}</strong>
+                    </span>
+                    <span>{row.card_count} карт.</span>
+                    <StatusBadge tone={row.covered ? "success" : "neutral"}>
+                      {row.covered ? "есть" : "нет"}
+                    </StatusBadge>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <EmptyState title="Сегодняшняя лента пуста">
+              <p>Назначьте повторения в календаре или запустите одну из свободных подборок.</p>
+            </EmptyState>
+          )}
+        </div>
+        <div className="repetition-lane">
+          <header>
+            <div>
+              <h3>{selectedToday ? selectedToday.unit.title : "Недавние и сложные"}</h3>
+              <p>{selectedToday ? "Карточки выбранного вопроса." : "Короткая подборка без календарного назначения."}</p>
+            </div>
+          </header>
+          {laneCards.length ? (
+            <div className="repetition-card-list">
+              {laneCards.map((card) => (
+                <button type="button" key={card.id} onClick={() => onOpenBank(card.id)}>
+                  <strong>{card.front}</strong>
+                  <span>{card.source.label}</span>
+                  <small>{card.last_confidence ? `Последняя оценка: ${card.last_confidence}` : "Без оценок"}</small>
+                  <ArrowRight size={15} />
+                </button>
+              ))}
+            </div>
+          ) : selectedToday ? (
+            <EmptyState title="У вопроса пока нет карточек">
+              <p>Создайте первую вручную — вопрос уже будет выбран.</p>
+              <Button onClick={() => onCreate(selectedToday.unit.id)}>Создать карточку</Button>
+            </EmptyState>
+          ) : (
+            <EmptyState title="Карточек пока нет"><p>Создайте первую карточку вручную.</p><Button onClick={() => onCreate(null)}>Создать</Button></EmptyState>
+          )}
         </div>
       </section>
 
-      <section className="repetition-queue" aria-label="Очередь вопросов на сегодня">
-        <header className="repetition-queue-header">
-          <div>
-            <h3>Сегодняшние вопросы</h3>
-            <p>Просроченный вопрос идёт первым, новые — после запланированных.</p>
-          </div>
-          <span>{QUEUE_SUMMARY.length} вопросов · {totalCards} карточка</span>
+      <section className="cards-analytics">
+        <header>
+          <div><BarChart3 size={17} /><div><h3>Уверенность</h3><p>{overview.analytics.observation_count} оценок в выборке</p></div></div>
+          <SegmentedTabs
+            label="Период аналитики"
+            value={String(period)}
+            onChange={(value) => onPeriodChange(Number(value) as 7 | 30)}
+            tabs={[{ value: "7", label: "7 дней" }, { value: "30", label: "30 дней" }]}
+          />
         </header>
-        <ol className="repetition-queue-list">
-          {QUEUE_SUMMARY.map((item, index) => (
-            <li key={item.id} className="repetition-queue-item">
-              <span className="repetition-queue-number">{index + 1}</span>
-              <span className="repetition-queue-copy">
-                <small>{item.section}</small>
-                <strong>{item.title}</strong>
-              </span>
-              <span className="repetition-queue-count">{item.cards} карт.</span>
-              <span className={`repetition-queue-due ${item.due.startsWith("просрочено") ? "is-overdue" : item.due === "новые" ? "is-new" : ""}`.trim()}>{item.due}</span>
-              <ArrowRight size={15} aria-hidden="true" />
-            </li>
-          ))}
-        </ol>
+        {overview.analytics.observation_count ? (
+          <div className="cards-confidence-grid">
+            {overview.analytics.distribution.map((bucket, index) => (
+              <div key={bucket.confidence}>
+                <span>{GRADE_LABELS[index]}</span>
+                <strong>{bucket.count}</strong>
+                <progress max={overview.analytics.observation_count} value={bucket.count} />
+              </div>
+            ))}
+            <div><span>Сложных карточек</span><strong>{overview.analytics.hard_card_count}</strong></div>
+            <div>
+              <span>Чаще всего 1–2</span>
+              <strong>{overview.analytics.hardest_unit?.title ?? "—"}</strong>
+              <small>{overview.analytics.hardest_observation_count} наблюдений</small>
+            </div>
+          </div>
+        ) : (
+          <p className="cards-analytics-empty">Пока нет оценок. Аналитика появится после первого сеанса.</p>
+        )}
       </section>
 
       <Dialog
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        title="Настроить повторение"
-        description="Настройка действует только на ближайший сеанс. Режим перед экзаменом не меняет интервалы SM-2."
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title="Начать сеанс"
+        description="Состав фиксируется при старте и сохранится после перезагрузки."
         className="cards-session-dialog"
         footer={
           <>
-            <Button variant="ghost" onClick={() => setSettingsOpen(false)}>Отменить</Button>
-            <Button disabled={configuredCount === 0} onClick={() => { setSettingsOpen(false); startConfigured(); }}>Начать · {configuredCount} {configuredCount === 1 ? "вопрос" : configuredCount < 5 ? "вопроса" : "вопросов"}</Button>
+            <Button variant="ghost" onClick={() => setDialogOpen(false)}>Отменить</Button>
+            <Button disabled={starting || scopeCounts[scope] === 0} onClick={() => void start()}>
+              {starting ? "Начинаем…" : `Начать · ${scopeCounts[scope]}`}
+            </Button>
           </>
         }
       >
         <div className="cards-session-settings">
-          <section>
-            <h3>Что повторяем</h3>
-            <RadioCards label="Состав очереди" value={queueKind} options={queueOptions} onChange={setQueueKind} layout="rows" />
-          </section>
-
-          {queueKind === "selected" && (
+          <RadioCards
+            label="Состав сеанса"
+            value={scope}
+            onChange={setScope}
+            layout="rows"
+            options={[
+              { value: "today", title: "На сегодня", description: `${scopeCounts.today} активных карточек по календарю` },
+              { value: "hard", title: "Сложные", description: `${scopeCounts.hard} карточек с последней оценкой 1–2` },
+              { value: "selected", title: "Выбранные", description: "Вопросы и целые билеты из дерева программы" },
+              { value: "all", title: "Все", description: `${scopeCounts.all} активных карточек по порядку программы` },
+            ]}
+          />
+          {scope === "selected" && (
             <section className="cards-question-picker">
-              <h3>Вопросы</h3>
-              {QUEUE_SUMMARY.map((item) => (
-                <div key={item.id}>
-                  <Checkbox checked={selectedQuestions.has(item.id)} onCheckedChange={(checked) => toggleQuestion(item.id, checked)} label={item.title} />
-                  <small>{item.cards} карточек</small>
+              {overview.units.map((unit) => (
+                <div key={unit.id}>
+                  <Checkbox
+                    checked={selected.has(unit.id)}
+                    onCheckedChange={(checked) => {
+                      setSelected((current) => {
+                        const next = new Set(current);
+                        if (checked) next.add(unit.id); else next.delete(unit.id);
+                        return next;
+                      });
+                    }}
+                    label={unit.title}
+                  />
+                  <small>{unit.path.join(" · ")}{unit.kind === "ticket" ? " · билет целиком" : ""}</small>
                 </div>
               ))}
             </section>
           )}
-
+          {scope === "today" && missingToday.length > 0 && (
+            <div className="cards-missing-list">
+              <strong>Без карточек и будут пропущены:</strong>
+              <span>{missingToday.map((row) => row.unit.title).join(", ")}</span>
+            </div>
+          )}
           <section className="cards-setting-row">
-            <div><h3>Длительность</h3><p>Остановимся после текущего вопроса.</p></div>
-            <SegmentedTabs label="Длительность сеанса" value={duration} onChange={setDuration} tabs={[
-              { value: "5", label: "5 мин" }, { value: "10", label: "10 мин" }, { value: "15", label: "15 мин" }, { value: "all", label: "Всё" },
+            <div><h3>Длительность</h3><p>После лимита закончим текущий вопрос и предложим выбор.</p></div>
+            <SegmentedTabs label="Длительность" value={duration} onChange={setDuration} tabs={[
+              { value: "5", label: "5 мин" }, { value: "10", label: "10 мин" },
+              { value: "15", label: "15 мин" }, { value: "all", label: "Без ограничения" },
             ]} />
           </section>
           <section className="cards-setting-row">
-            <div><h3>Темп</h3><p>{pace === "ticket" ? "После карточек воспроизводим билет целиком." : pace === "fast" ? "Компактно, преимущественно с клавиатуры." : "Источники и редактирование всегда под рукой."}</p></div>
-            <SegmentedTabs label="Темп повторения" value={pace} onChange={setPace} tabs={[
-              { value: "calm", label: "Спокойный" }, { value: "fast", label: "Быстрый" }, { value: "ticket", label: "Билет" },
+            <div>
+              <h3>Темп</h3>
+              <p>{pace === "calm" ? "Подсказки, источники и редактирование всегда видимы." : "Вторичные сведения свёрнуты; акцент на клавиатуре и карточке."}</p>
+            </div>
+            <SegmentedTabs label="Темп" value={pace} onChange={setPace} tabs={[
+              { value: "calm", label: "Спокойный" }, { value: "fast", label: "Быстрый" },
             ]} />
           </section>
+          {error && <p className="cards-form-error" role="alert">{error}</p>}
+          <p className="cards-dialog-note"><Clock3 size={14} /> Активное время не считает паузу по бездействию.</p>
         </div>
       </Dialog>
     </div>

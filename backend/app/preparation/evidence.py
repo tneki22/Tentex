@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Attempt, Grade, GradeMethod
+from app.models import Activity, ActivityKind, Attempt, Grade, GradeMethod
 from app.preparation.calendar import naive_utc, study_date, utc
 from app.preparation.data import get_settings
 from app.preparation.models import ReviewQuality, ReviewState
@@ -89,9 +89,13 @@ def project_attempts(session: Session, project_id: UUID, before: datetime | None
     """Стабильный порядок нужен для воспроизводимой отмены качества и графиков."""
     query = (
         select(Attempt, Grade, ReviewQuality)
+        .join(Activity, Activity.id == Attempt.activity_id)
         .outerjoin(Grade, Grade.attempt_id == Attempt.id)
         .outerjoin(ReviewQuality, ReviewQuality.attempt_id == Attempt.id)
-        .where(Attempt.project_id == project_id)
+        .where(
+            Attempt.project_id == project_id,
+            Activity.kind == ActivityKind.FREE_ANSWER,
+        )
     )
     cutoff = naive_utc(before or datetime.now(UTC))
     query = query.where(Attempt.created_at <= cutoff)
