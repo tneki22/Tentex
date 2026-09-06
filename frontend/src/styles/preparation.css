@@ -29,7 +29,7 @@
 .prep-exam-line .icon-button { margin-left: var(--space-1); vertical-align: middle; }
 .prep-budget-explanation { display: grid; gap: var(--space-2); max-width: 360px; line-height: var(--leading-snug); }
 .prep-budget-explanation small { color: inherit; opacity: .8; }
-.prep-sidebar-events { margin-top: auto; display: grid; gap: var(--space-4); }
+.prep-sidebar-events { margin-top: var(--space-6); display: grid; gap: var(--space-4); }
 .prep-sidebar-events h2 { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-xs); color: var(--muted); font-weight: var(--weight-medium); margin: 0; }
 .prep-sidebar-events h2 small { margin-left: auto; color: var(--faint); }
 .prep-achievements, .prep-recent-events ol { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
@@ -38,13 +38,13 @@
 .prep-achievements li div { min-width: 0; }
 .prep-sidebar-events strong { display: block; font-size: var(--text-xs); font-weight: var(--weight-medium); }
 .prep-sidebar-events time { display: block; color: var(--faint); font-size: var(--text-xs); margin-top: var(--space-1); }
-.prep-recent-events { border-top: 1px solid var(--line); padding-top: var(--space-3); }
+.prep-recent-events + .prep-recent-events { border-top: 1px solid var(--line); padding-top: var(--space-3); margin-top: var(--space-3); }
 .prep-recent-events summary { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; color: var(--muted); font-size: var(--text-xs); list-style: none; }
+.prep-recent-events summary small { color: var(--faint); }
 .prep-recent-events summary svg:last-child { margin-left: auto; }
 .prep-recent-events[open] summary svg:last-child { transform: rotate(180deg); }
 .prep-recent-events ol { padding: var(--space-3) 0; }
 .prep-recent-events li { border-left: 1px solid var(--line); padding-left: var(--space-3); }
-.prep-screen .program-project-nav { margin-top: 0; }
 
 .prep-note {
   margin: 0;
