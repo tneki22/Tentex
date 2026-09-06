@@ -1,7 +1,7 @@
 """common activities, cards and resumable card sessions
 
-Revision ID: 20260906_0038
-Revises: 20260905_0037
+Revision ID: 20260906_0039
+Revises: 20260906_0038
 Create Date: 2026-09-06
 """
 
@@ -11,8 +11,8 @@ from uuid import NAMESPACE_URL, uuid5
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "20260906_0038"
-down_revision: str | Sequence[str] | None = "20260905_0037"
+revision: str = "20260906_0039"
+down_revision: str | Sequence[str] | None = "20260906_0038"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

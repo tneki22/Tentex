@@ -16,6 +16,7 @@ from app.models import (
     MaterialRevisionOrigin,
     PageQuality,
     ParserMode,
+    utc_now,
 )
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
 
