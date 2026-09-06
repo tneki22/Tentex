@@ -15,6 +15,7 @@ import {
   ProjectApiError,
   updateProjectSettings,
 } from "../api/projects";
+import { ProjectNav } from "../components/domain";
 import type {
   ExamFormat,
   GoalPassportWrite,
@@ -37,6 +38,7 @@ import {
   Field,
   LoadingState,
   PageHead,
+  Tooltip,
 } from "../components/ui";
 
 interface SettingsForm {
@@ -228,6 +230,10 @@ function statusLabel(detail: ProjectDetail): string {
   return "Активный проект";
 }
 
+function formatDateTime(value: string): string {
+  return new Date(value).toLocaleString("ru-RU", { dateStyle: "medium", timeStyle: "short" });
+}
+
 export function ProjectSettings() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
@@ -360,16 +366,35 @@ export function ProjectSettings() {
   }
 
   return (
-    <div className="screen project-settings-screen">
-      <PageHead
-        title="Настройки проекта"
-        lead="Параметры проекта и паспорт цели."
-        leading={
-          <button className="settings-back-button" type="button" onClick={returnToWorkspace}>
-            <ArrowLeft size={18} aria-hidden="true" /> Назад
-          </button>
-        }
-      />
+    <div className="program-screen settings-screen">
+      <aside className="program-project-panel">
+        <header className="program-project-title">
+          <Tooltip label="Вернуться в рабочую область">
+            <button type="button" className="workspace-back-button" onClick={returnToWorkspace} aria-label="Вернуться в рабочую область">
+              <ArrowLeft size={15} />
+            </button>
+          </Tooltip>
+          <strong>{detail.project.name}</strong>
+        </header>
+        <section className="settings-recent" aria-label="Последние изменения">
+          <header><span>Последние изменения</span></header>
+          <ul className="settings-recent-list">
+            <li><span>Проект</span><time dateTime={detail.project.updated_at}>{formatDateTime(detail.project.updated_at)}</time></li>
+            {detail.goal_passport && (
+              <li><span>Паспорт цели</span><time dateTime={detail.goal_passport.updated_at}>{formatDateTime(detail.goal_passport.updated_at)}</time></li>
+            )}
+          </ul>
+        </section>
+        <ProjectNav
+          projectId={projectId}
+          active="settings"
+          modules={detail.project.enabled_modules}
+          className="program-project-nav"
+        />
+      </aside>
+
+      <main className="program-main settings-main">
+      <PageHead title="Настройки" />
 
       {readOnly && (
         <Card className="settings-readonly" >
@@ -556,6 +581,7 @@ export function ProjectSettings() {
         </div>
         {saveError && <p className="settings-save-error" role="alert">{saveError}</p>}
       </form>
+      </main>
 
       <Dialog
         open={exitDialogOpen}

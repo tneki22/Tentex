@@ -38,7 +38,6 @@ interface ProjectNavProps {
 /**
  * Единый список разделов проекта: одни и те же шесть пунктов от «Материалов»
  * до «Настроек» на всех экранах проекта, а не урезанный подбор по месту.
- * Исключение — экран Настроек: там своей боковой панели нет вовсе.
  */
 export function ProjectNav({ projectId, active, textbook = false, modules, counts = {}, className = "" }: ProjectNavProps) {
   const hasModule = (key: ModuleKey) => (modules ? modules.includes(key) : true);
