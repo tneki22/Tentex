@@ -1,6 +1,6 @@
 ---
 name: better-ui
-description: Design engineering principles for making interfaces feel polished. Use when building UI components, reviewing frontend code, implementing animations, hover states, shadows, borders, micro-interactions, enter/exit animations, choosing or reviewing icons, or any visual detail work. Triggers on UI polish, design details, "make it feel better", "feels off", stagger animations, border radius, optical alignment, image outlines, box shadows, icons, icon stroke weight, icon states, motion restraint.
+description: Отделка интерфейса — анимации, тени, радиусы, ховеры, иконки. Брать поверх tentex-ui, когда экран уже работает, но «что-то не то».
 ---
 
 # Details that make interfaces feel better
