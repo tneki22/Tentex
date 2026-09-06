@@ -24,7 +24,10 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import (
+    text as sql_text,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.schema import conv
 
 from app.db import Base
@@ -328,6 +331,48 @@ class GradeMethod(StrEnum):
     SELF_ASSESSMENT = "self_assessment"
 
 
+class ActivityKind(StrEnum):
+    """Способ проверки знания; календарь не зависит от этого перечисления."""
+
+    FREE_ANSWER = "free_answer"
+    CARD = "card"
+
+
+class ActivityOrigin(StrEnum):
+    MANUAL = "manual"
+    FRAGMENT = "fragment"
+    EXAM_CHAT = "exam_chat"
+
+
+class CardState(StrEnum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+
+
+class CardSourceKind(StrEnum):
+    NONE = "none"
+    FRAGMENT = "fragment"
+    REFERENCE = "reference"
+
+
+class CardSessionState(StrEnum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class CardSessionPace(StrEnum):
+    CALM = "calm"
+    FAST = "fast"
+
+
+class CardSessionScope(StrEnum):
+    TODAY = "today"
+    HARD = "hard"
+    SELECTED = "selected"
+    ALL = "all"
+
+
 class Project(Base):
     __tablename__ = "projects"
     __table_args__ = (
@@ -606,9 +651,7 @@ class MaterialBlock(Base):
 class MaterialFragment(Base):
     __tablename__ = "material_fragments"
     __table_args__ = (
-        UniqueConstraint(
-            "page_id", "sort_order", name="uq_material_fragments_page_order"
-        ),
+        UniqueConstraint("page_id", "sort_order", name="uq_material_fragments_page_order"),
         CheckConstraint(
             "sort_order >= 0",
             name=conv("ck_material_fragments_ck_material_fragments_sort_order_nonnegative"),
@@ -949,9 +992,7 @@ class ProjectActionLog(Base):
         ),
         CheckConstraint(
             "payload_version >= 1",
-            name=conv(
-                "ck_project_action_log_ck_project_action_log_payload_version_positive"
-            ),
+            name=conv("ck_project_action_log_ck_project_action_log_payload_version_positive"),
         ),
         Index(
             "ix_project_action_log_project_phase_undone_sequence",
@@ -1163,36 +1204,136 @@ class AiCacheEntry(Base):
     hit_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
-class Attempt(Base):
-    __tablename__ = "attempts"
+class Activity(Base):
+    """Общая проверяемая активность связывает попытки с единицей программы."""
+
+    __tablename__ = "activities"
     __table_args__ = (
         ForeignKeyConstraint(
             ["project_id", "program_node_id"],
             ["program_nodes.project_id", "program_nodes.id"],
             ondelete="CASCADE",
         ),
-        CheckConstraint("ordinal >= 1", name="ordinal_positive"),
-        Index("ix_attempts_node_created", "project_id", "program_node_id", "created_at"),
+        CheckConstraint("evidence_strength >= 0 AND evidence_strength <= 1", name="strength_range"),
+        Index("ix_activities_project_node", "project_id", "program_node_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
-    program_node_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    program_node_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    kind: Mapped[ActivityKind] = mapped_column(enum_type(ActivityKind, "activity_kind"))
+    evidence_strength: Mapped[float] = mapped_column(Float, default=1.0)
+    origin: Mapped[ActivityOrigin] = mapped_column(enum_type(ActivityOrigin, "activity_origin"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class Card(Base):
+    """Карточка хранит снимок источника, поэтому переживает удаление материала."""
+
+    __tablename__ = "cards"
+    __table_args__ = (
+        Index("ix_cards_project_state", "project_id", "state", "deleted_at"),
+        Index("ix_cards_source_fragment", "source_fragment_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    )
+    activity_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE"), unique=True
+    )
+    front: Mapped[str] = mapped_column(Text)
+    back: Mapped[str] = mapped_column(Text)
+    hint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_kind: Mapped[CardSourceKind] = mapped_column(
+        enum_type(CardSourceKind, "card_source_kind"), default=CardSourceKind.NONE
+    )
+    source_fragment_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("material_fragments.id", ondelete="SET NULL"), nullable=True
+    )
+    source_reference_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    state: Mapped[CardState] = mapped_column(
+        enum_type(CardState, "card_state"), default=CardState.ACTIVE
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    activity: Mapped[Activity] = relationship(lazy="joined")
+
+
+class CardSession(Base):
+    """Снимок очереди позволяет продолжить сеанс после перезапуска клиента."""
+
+    __tablename__ = "card_sessions"
+    __table_args__ = (
+        Index(
+            "uq_card_sessions_active_project",
+            "project_id",
+            unique=True,
+            sqlite_where=sql_text("state = 'active'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    )
+    scope: Mapped[CardSessionScope] = mapped_column(
+        enum_type(CardSessionScope, "card_session_scope")
+    )
+    selected_unit_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    pace: Mapped[CardSessionPace] = mapped_column(
+        enum_type(CardSessionPace, "card_session_pace")
+    )
+    limit_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    queue: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    active_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    state: Mapped[CardSessionState] = mapped_column(
+        enum_type(CardSessionState, "card_session_state"), default=CardSessionState.ACTIVE
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class Attempt(Base):
+    __tablename__ = "attempts"
+    __table_args__ = (
+        CheckConstraint("ordinal >= 1", name="ordinal_positive"),
+        Index("ix_attempts_activity_created", "activity_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    activity_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE")
+    )
     parent_attempt_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("attempts.id", ondelete="SET NULL"), nullable=True
     )
     ordinal: Mapped[int] = mapped_column(Integer)
     answer_mode: Mapped[str | None] = mapped_column(String, nullable=True)
     active_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    text: Mapped[str] = mapped_column(Text)
-    persona: Mapped[ExaminerPersona] = mapped_column(
-        enum_type(ExaminerPersona, "examiner_persona")
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    persona: Mapped[ExaminerPersona | None] = mapped_column(
+        enum_type(ExaminerPersona, "examiner_persona"), nullable=True
     )
-    strictness: Mapped[ExaminerStrictness] = mapped_column(
-        enum_type(ExaminerStrictness, "examiner_strictness")
+    strictness: Mapped[ExaminerStrictness | None] = mapped_column(
+        enum_type(ExaminerStrictness, "examiner_strictness"), nullable=True
     )
     context_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    activity: Mapped[Activity] = relationship(lazy="joined")
+
+    @property
+    def program_node_id(self) -> UUID | None:
+        """Совместимое публичное поле экзамена берётся из общей Activity."""
+        return self.activity.program_node_id
 
 
 class Grade(Base):
@@ -1204,14 +1345,15 @@ class Grade(Base):
             "self_assessment IS NULL OR self_assessment <> 'unscored'",
             name="self_assessment_scored",
         ),
+        CheckConstraint(
+            "confidence IS NULL OR confidence BETWEEN 1 AND 4", name="confidence_range"
+        ),
     )
 
     attempt_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("attempts.id", ondelete="CASCADE"), primary_key=True
     )
-    outcome: Mapped[AttemptOutcome] = mapped_column(
-        enum_type(AttemptOutcome, "attempt_outcome")
-    )
+    outcome: Mapped[AttemptOutcome] = mapped_column(enum_type(AttemptOutcome, "attempt_outcome"))
     method: Mapped[GradeMethod | None] = mapped_column(
         enum_type(GradeMethod, "grade_method"), nullable=True
     )
@@ -1222,6 +1364,7 @@ class Grade(Base):
     self_assessment: Mapped[AttemptOutcome | None] = mapped_column(
         enum_type(AttemptOutcome, "attempt_outcome"), nullable=True
     )
+    confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_run_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True
     )
@@ -1251,9 +1394,7 @@ class ChatSession(Base):
     # Показывается и используется памятью раздела только с итерации 2.
     section_scope_node_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     title: Mapped[str] = mapped_column(String)
-    mode: Mapped[ChatMode] = mapped_column(
-        enum_type(ChatMode, "chat_mode"), default=ChatMode.EXAM
-    )
+    mode: Mapped[ChatMode] = mapped_column(enum_type(ChatMode, "chat_mode"), default=ChatMode.EXAM)
     persona: Mapped[ExaminerPersona] = mapped_column(
         enum_type(ExaminerPersona, "examiner_persona"),
         default=ExaminerPersona.NEUTRAL_EXAMINER,
@@ -1276,9 +1417,7 @@ class ChatMessage(Base):
 
     __tablename__ = "chat_messages"
     __table_args__ = (
-        UniqueConstraint(
-            "session_id", "sequence", name="uq_chat_messages_session_id_sequence"
-        ),
+        UniqueConstraint("session_id", "sequence", name="uq_chat_messages_session_id_sequence"),
         CheckConstraint("sequence >= 1", name="sequence_positive"),
     )
 
@@ -1403,9 +1542,7 @@ class Conspect(Base):
             ["program_nodes.project_id", "program_nodes.id"],
             ondelete="CASCADE",
         ),
-        CheckConstraint(
-            "revision >= 1", name=conv("ck_conspects_ck_conspects_revision_positive")
-        ),
+        CheckConstraint("revision >= 1", name=conv("ck_conspects_ck_conspects_revision_positive")),
         Index("ix_conspects_project", "project_id"),
     )
 

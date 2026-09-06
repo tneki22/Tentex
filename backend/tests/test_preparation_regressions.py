@@ -4,8 +4,12 @@ from datetime import UTC, date, datetime, time, timedelta
 from uuid import uuid4
 
 from conftest import make_exam_project, make_topic_node
+from sqlalchemy import select
 
 from app.models import (
+    Activity,
+    ActivityKind,
+    ActivityOrigin,
     Attempt,
     AttemptOutcome,
     ExaminerPersona,
@@ -29,10 +33,28 @@ from app.preparation.schemas import (
 
 
 def _answer(session, project, node, at, outcome=None, mode="memory"):
+    evidence = session.scalar(
+        select(Activity).where(
+            Activity.project_id == project.id,
+            Activity.program_node_id == node.id,
+            Activity.kind == ActivityKind.FREE_ANSWER,
+        )
+    )
+    if evidence is None:
+        evidence = Activity(
+            project_id=project.id,
+            program_node_id=node.id,
+            kind=ActivityKind.FREE_ANSWER,
+            evidence_strength=1,
+            origin=ActivityOrigin.EXAM_CHAT,
+            created_at=at.replace(tzinfo=None),
+        )
+        session.add(evidence)
+        session.flush()
     attempt = Attempt(
         id=uuid4(),
         project_id=project.id,
-        program_node_id=node.id,
+        activity_id=evidence.id,
         ordinal=1,
         text="Самостоятельный ответ",
         persona=ExaminerPersona.NEUTRAL_EXAMINER,

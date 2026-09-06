@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   BookOpen,
   CheckCircle2,
+  CreditCard,
   ChevronLeft,
   ChevronRight,
   FileImage,
@@ -741,6 +742,7 @@ const MECHANISM_LABEL: Record<BindingFragmentRead["mechanism"], string> = {
 };
 
 interface BindingsTabProps {
+  projectId: string;
   activeNode: ProgramTreeNode | null;
   studyNodeCount: number;
   onOpenPicker: () => void;
@@ -788,6 +790,7 @@ function nodeLabel(nodeNumberById: Map<string, string>, node: { program_node_id:
 }
 
 function BindingsTab({
+  projectId,
   activeNode,
   studyNodeCount,
   onOpenPicker,
@@ -1021,8 +1024,11 @@ function BindingsTab({
             </ul>
           )}
           <div className="materials-button-stack">
+            <Link className="primary-button" to={`/projects/${projectId}/cards?mode=creation&path=fragment&fragment=${focusedFragment.id}`}>
+              <CreditCard size={14} /> В карточку
+            </Link>
             {activeNode && !alreadyBoundToActive && (
-              <Button onClick={onBindFocusedToActive}><Link2 size={14} /> Привязать к выбранному вопросу</Button>
+              <Button variant="secondary" onClick={onBindFocusedToActive}><Link2 size={14} /> Привязать к выбранному вопросу</Button>
             )}
             <Button variant="secondary" onClick={onOpenPickerForFocused}>
               {focusedFragmentBindings.length > 0 ? "Привязать ещё к одному вопросу" : "Привязать к другому вопросу"}
@@ -2023,6 +2029,7 @@ function MaterialSurface() {
             onDismissNotice: () => setNotice(null),
           }}
           bindingsProps={{
+            projectId,
             activeNode,
             studyNodeCount: studyNodes.length,
             onOpenPicker: () => { setPickerTarget("active"); setPickerOpen(true); },

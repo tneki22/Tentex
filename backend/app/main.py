@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from app.ai.router import router as ai_router
 from app.background.router import router as background_router
 from app.bindings.router import router as bindings_router
+from app.cards.router import router as cards_router
 from app.config import settings
 from app.conspects.router import router as conspects_router
 from app.db import SessionLocal, upgrade_database
@@ -116,6 +117,7 @@ def create_app() -> FastAPI:
     app.include_router(projects_router)
     app.include_router(materials_router)
     app.include_router(bindings_router)
+    app.include_router(cards_router)
     app.include_router(conspects_router)
     app.include_router(ai_router)
     app.include_router(ocr_router)

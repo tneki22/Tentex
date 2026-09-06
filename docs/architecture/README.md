@@ -19,6 +19,7 @@
 | Экзаменационный мастер | `exam-wizard-material-onboarding.md` | `check_stage5.py` |
 | Глобальная Библиотека | `global-library-material-workspace.md` | `check_library_workspace.py` |
 | Конспекты | `conspects.md` | pytest |
+| Карточки и сохраняемый сеанс | `cards.md` | pytest, миграции, typecheck/build |
 | Фоновые операции | `background-jobs.md` | pytest |
 | Моя подготовка: функции для перепроектирования | `my-preparation-functions.md` | — |
 | Моя подготовка: существующие правила данных и расписание, часть правил заменяется | `my-preparation.md` | профильные pytest, миграции, typecheck/build |

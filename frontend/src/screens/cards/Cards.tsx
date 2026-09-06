@@ -1,13 +1,15 @@
-import { useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft } from "lucide-react";
+import { Link, useParams, useSearchParams } from "react-router";
+import type { CardSessionRead } from "../../api/cards";
+import { getProject } from "../../api/projects";
 import { ProjectNav } from "../../components/domain";
-import { StatusBadge, Tooltip } from "../../components/ui";
-import { RepetitionMode, type SessionConfig } from "./RepetitionMode";
-import { CreationMode, type CreationPath } from "./CreationMode";
+import { Button, ErrorState, LoadingState, StatusBadge, Tooltip } from "../../components/ui";
+import { useCardsOverview } from "../../hooks/useCardsOverview";
 import { BankMode } from "./BankMode";
+import { CreationMode, type CreationPath } from "./CreationMode";
+import { RepetitionMode } from "./RepetitionMode";
 import { SessionScreen } from "./SessionScreen";
-import { GRADES, QUEUE, RECENT_REVIEWS, type RecentReview, type StudyCard } from "./mockCards";
 
 type CardMode = "repetition" | "creation" | "bank";
 
@@ -17,50 +19,65 @@ const MODES: Array<{ value: CardMode; label: string }> = [
   { value: "bank", label: "Банк" },
 ];
 
-function resultTone(result: RecentReview["result"]) {
-  return GRADES.find((grade) => grade.value === result)?.tone ?? "neutral";
+const GRADE_LABELS = ["Не вспомнил", "Частично", "Вспомнил", "Легко"];
+
+function relativeTime(value: string | null): string {
+  if (!value) return "без оценки";
+  const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
+  if (seconds < 60) return "только что";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} мин назад`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} ч назад`;
+  return `${Math.floor(seconds / 86400)} дн назад`;
+}
+
+function queryMode(value: string | null): CardMode {
+  return value === "creation" || value === "bank" ? value : "repetition";
 }
 
 export function Cards() {
   const { projectId = "demo" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [mode, setMode] = useState<CardMode>("repetition");
-  const [inSession, setInSession] = useState(searchParams.get("session") === "today");
-  const [sessionConfig, setSessionConfig] = useState<SessionConfig | null>(null);
-  const [creationPath, setCreationPath] = useState<CreationPath | null>(null);
-  const [recent, setRecent] = useState(RECENT_REVIEWS);
+  const [period, setPeriod] = useState<7 | 30>(7);
+  const [projectName, setProjectName] = useState("Карточки проекта");
+  const [session, setSession] = useState<CardSessionRead | null>(null);
+  const mode = queryMode(searchParams.get("mode"));
+  const inSession = searchParams.has("session");
+  const { data: overview, loading, error, refresh } = useCardsOverview(projectId, period);
 
-  function selectMode(next: CardMode) {
-    setMode(next);
-    setInSession(false);
-    setSearchParams({});
-    if (next !== "creation") setCreationPath(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void getProject(projectId, controller.signal)
+      .then((detail) => setProjectName(detail.project.name ?? "Без названия"))
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [projectId]);
+
+  const programCount = useMemo(() => overview?.units.length ?? 0, [overview]);
+
+  function selectMode(next: CardMode, extra: Record<string, string> = {}) {
+    setSession(null);
+    setSearchParams(new URLSearchParams({ mode: next, ...extra }));
   }
 
-  function openCreation(path: CreationPath) {
-    setCreationPath(path);
-    setMode("creation");
-    setInSession(false);
+  function openCreation(path: CreationPath, unitId?: string | null) {
+    const extra: Record<string, string> = { path };
+    if (unitId) extra.unit = unitId;
+    selectMode("creation", extra);
   }
 
-  function startSession(config?: SessionConfig) {
-    setSessionConfig(config ?? null);
-    setInSession(true);
+  function openBank(cardId?: string) {
+    selectMode("bank", cardId ? { card: cardId } : {});
   }
 
-  function recordReview(card: StudyCard, result: 1 | 2 | 3 | 4) {
-    const grade = GRADES.find((candidate) => candidate.value === result);
-    const question = QUEUE.find((item) => item.id === card.questionId);
-    setRecent((current) => [
-      {
-        id: `${card.id}-${Date.now()}`,
-        front: card.front,
-        question: question?.title ?? card.questionId,
-        result,
-        nextDue: grade?.interval ?? "позже",
-      },
-      ...current,
-    ].slice(0, 6));
+  function openSession(next: CardSessionRead | null = null) {
+    setSession(next);
+    setSearchParams({ mode: "repetition", session: next?.id ?? "active" });
+  }
+
+  function exitSession() {
+    setSession(null);
+    setSearchParams({ mode: "repetition" });
+    refresh();
   }
 
   return (
@@ -72,7 +89,7 @@ export function Cards() {
               <ArrowLeft size={15} />
             </Link>
           </Tooltip>
-          <strong>Базы данных — экзамен</strong>
+          <strong>{projectName}</strong>
         </header>
 
         <nav className="cards-mode-switcher" aria-label="Режим карточек">
@@ -89,59 +106,68 @@ export function Cards() {
           ))}
         </nav>
 
-        <section className="cards-recent" aria-label="Последние разобранные карточки">
-          <header>
-            <span>Недавние карточки</span>
-            <small>{recent.length}</small>
-          </header>
+        <section className="cards-recent" aria-label="Недавние карточки">
+          <header><span>Недавние карточки</span><small>{overview?.recent_cards.length ?? 0}</small></header>
           <div className="cards-recent-list">
-            {recent.map((item) => (
-              <button type="button" className="cards-recent-item" key={item.id} onClick={() => selectMode("bank")}>
-                <span className="cards-recent-front">{item.front}</span>
+            {overview?.recent_cards.length ? overview.recent_cards.map((card) => (
+              <button type="button" className="cards-recent-item" key={card.id} onClick={() => openBank(card.id)}>
+                <span className="cards-recent-front">{card.front}</span>
                 <span className="cards-recent-meta">
-                  <StatusBadge tone={resultTone(item.result)}>{GRADES[item.result - 1].label}</StatusBadge>
-                  <small>{item.nextDue}</small>
+                  <StatusBadge tone={card.last_confidence && card.last_confidence <= 2 ? "warning" : "success"}>
+                    {card.last_confidence ? GRADE_LABELS[card.last_confidence - 1] : "Без оценки"}
+                  </StatusBadge>
+                  <small>{relativeTime(card.last_reviewed_at)}</small>
                 </span>
-                <span className="cards-recent-question">{item.question}</span>
+                <span className="cards-recent-question">{card.unit?.title ?? "Без вопроса"}</span>
               </button>
-            ))}
+            )) : <p className="cards-recent-empty">После первого ответа здесь появятся последние карточки.</p>}
           </div>
         </section>
 
         <ProjectNav
           projectId={projectId}
           active="cards"
-          counts={{ materials: 3, program: 10, plan: "7 дней", cards: 31 }}
+          counts={{ program: programCount, cards: overview?.active_card_count ?? 0 }}
           className="cards-project-nav"
         />
       </aside>
 
       <main className={`cards-main ${inSession ? "is-session" : ""}`.trim()}>
         {inSession ? (
-          <SessionScreen
-            projectId={projectId}
-            initialQueue={sessionConfig ? QUEUE.filter((item) => sessionConfig.questionIds.includes(item.id)) : QUEUE}
-            pace={sessionConfig?.pace ?? "calm"}
-            onExit={() => {
-              setInSession(false);
-              setSearchParams({});
-            }}
-            onReviewed={recordReview}
-          />
+          <SessionScreen projectId={projectId} initialSession={session} onExit={exitSession} />
+        ) : loading && !overview ? (
+          <LoadingState label="Загружаем карточки…" />
+        ) : error || !overview ? (
+          <ErrorState title="Не удалось открыть карточки" message={error || "Нет данных"}>
+            <Button variant="secondary" onClick={refresh}>Повторить</Button>
+          </ErrorState>
         ) : mode === "repetition" ? (
-          <RepetitionMode onStart={startSession} />
+          <RepetitionMode
+            projectId={projectId}
+            overview={overview}
+            period={period}
+            onPeriodChange={setPeriod}
+            onStart={openSession}
+            onContinue={() => openSession()}
+            onOpenBank={openBank}
+            onCreate={(unitId) => openCreation("manual", unitId)}
+          />
         ) : mode === "creation" ? (
           <CreationMode
-            key={creationPath ?? "choose"}
             projectId={projectId}
-            initialPath={creationPath}
-            onOpenBank={() => selectMode("bank")}
-            onStartStudy={() => startSession({ questionIds: QUEUE.slice(0, 2).map((item) => item.id), pace: "calm", duration: "5" })}
+            units={overview.units}
+            initialPath={(searchParams.get("path") as CreationPath | null) ?? null}
+            initialUnitId={searchParams.get("unit")}
+            fragmentId={searchParams.get("fragment")}
+            onOpenBank={openBank}
+            onChanged={refresh}
           />
         ) : (
           <BankMode
-            onCreate={() => openCreation("manual")}
-            onGenerate={() => openCreation("ai")}
+            projectId={projectId}
+            initialCardId={searchParams.get("card")}
+            onCreate={(unitId) => openCreation("manual", unitId)}
+            onChanged={refresh}
           />
         )}
       </main>
