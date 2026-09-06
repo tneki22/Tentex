@@ -43,6 +43,19 @@ function originText(revision: MaterialRevisionRead): string {
   return base;
 }
 
+/** Частичный запуск: часть страниц пришла нетронутой из родителя и хранит
+    свой собственный режим — версия целиком его в себе не несёт. */
+function isPartialRerun(revision: MaterialRevisionRead): boolean {
+  const summary = revision.summary as Record<string, number | undefined>;
+  return (
+    revision.origin === "parse"
+    && typeof summary.changed_pages === "number"
+    && typeof summary.page_count === "number"
+    && summary.changed_pages > 0
+    && summary.changed_pages < summary.page_count
+  );
+}
+
 function summaryText(revision: MaterialRevisionRead): string {
   const summary = revision.summary as Record<string, number | undefined>;
   const parts: string[] = [];
@@ -109,6 +122,7 @@ export function MaterialRevisionPanel({
           const mode = revision.parser_mode
             ? REVISION_MODE_LABEL[revision.parser_mode]
             : "Ручная или восстановленная версия";
+          const partial = isPartialRerun(revision);
           return (
             <div
               role="listitem"
@@ -124,7 +138,14 @@ export function MaterialRevisionPanel({
                     ? <StatusBadge tone="info">Сравнение</StatusBadge>
                     : isOpen && <StatusBadge tone="info">Открыта</StatusBadge>}
               </span>
-              <span className="revision-origin">{originText(revision)} · {mode}</span>
+              <span className="revision-origin">
+                {originText(revision)} · {mode}
+                {partial && (
+                  <span className="revision-mode-note" title="Остальные страницы этой версии не переразбирались и сохранили режим версии, из которой их скопировали.">
+                    {" "}· остальные страницы — прежним режимом
+                  </span>
+                )}
+              </span>
               <span className="revision-meta">
                 {new Date(revision.created_at).toLocaleString("ru-RU", {
                   dateStyle: "medium",

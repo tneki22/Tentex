@@ -463,6 +463,7 @@ def _page_read(session: Session, page: MaterialPage) -> PageRead:
         markdown=page.markdown,
         quality=page.quality,
         confidence=page.confidence,
+        parser_mode=page.parser_mode,
         reviewed_at=page.reviewed_at,
         diagnostics=page.diagnostics,
         fragments=[
@@ -1215,6 +1216,7 @@ def copy_page(session: Session, page: MaterialPage, revision: int) -> MaterialPa
         markdown=page.markdown,
         quality=page.quality,
         confidence=page.confidence,
+        parser_mode=page.parser_mode,
         elements=list(page.elements),
         diagnostics=list(page.diagnostics),
         image_path=page.image_path,

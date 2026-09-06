@@ -175,6 +175,8 @@ def _save_page(session: Session, task_id: UUID, parsed: ParsedPage) -> bool:
                 markdown=parsed.markdown,
                 quality=PageQuality(parsed.quality),
                 confidence=parsed.confidence,
+                # Текстовый слой обходится без распознавания — модели тут нет.
+                parser_mode=task.parser_mode if parsed.quality != "native" else None,
                 elements=[library.element_to_json(element) for element in parsed.elements],
                 diagnostics=list(parsed.diagnostics),
                 created_at=utc_now(),

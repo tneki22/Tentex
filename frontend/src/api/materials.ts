@@ -112,6 +112,8 @@ export interface MaterialPageRead {
   markdown: string;
   quality: PageQuality;
   confidence: number | null;
+  /** null — текстовый слой (распознавание не требовалось) либо старая страница без этого поля. */
+  parser_mode: ParserMode | null;
   reviewed_at: string | null;
   diagnostics: string[];
   fragments: MaterialFragmentRead[];

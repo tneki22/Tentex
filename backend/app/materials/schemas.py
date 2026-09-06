@@ -201,6 +201,9 @@ class PageRead(ApiModel):
     markdown: str
     quality: PageQuality
     confidence: float | None
+    # NULL у текстового слоя (распознавание не потребовалось) и у страниц,
+    # разобранных до появления этого поля — тогда просмотрщик берёт режим версии.
+    parser_mode: ParserMode | None
     reviewed_at: datetime | None
     diagnostics: list[str]
     fragments: list[FragmentRead]

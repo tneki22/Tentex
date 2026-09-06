@@ -1909,6 +1909,10 @@
   font-size: var(--text-sm);
 }
 
+.revision-mode-note {
+  color: var(--faint);
+}
+
 .revision-meta {
   color: var(--faint);
   font-size: var(--text-xs);

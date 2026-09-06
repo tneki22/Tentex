@@ -277,6 +277,12 @@ export function MaterialTextView({
       </div>
     );
   }
+  // У текстового слоя (`native`) распознавания не было вовсе — режим версии
+  // тут ни при чём, даже если сама версия сделана «Облаком»: тем режимом
+  // читались только отсканированные страницы. У страницы, перенесённой в
+  // версию без переразбора (частичный запуск), свой режим важнее режима
+  // версии — так соседняя пересобранная страница не подменяет его собой.
+  const pageMode = page?.quality === "native" ? null : (page?.parser_mode ?? parserMode ?? null);
   return (
     <div className="viewer-pane-scroll" style={{ "--viewer-text-zoom": zoom } as CSSProperties}>
       {/* Режим написан один раз наверху, а не подписью под каждым блоком:
@@ -284,8 +290,8 @@ export function MaterialTextView({
       {(parserMode || canShowPhotos) && (
         <div className="viewer-text-controls">
           <span className="viewer-text-mode">
-            {parserMode
-              ? <>Распознано режимом <b>«{PARSER_MODE_TITLES[parserMode]}»</b></>
+            {pageMode
+              ? <>Распознано режимом <b>«{PARSER_MODE_TITLES[pageMode]}»</b></>
               : "Текст без распознавания"}
           </span>
           {canShowPhotos && (

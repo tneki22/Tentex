@@ -550,6 +550,13 @@ class MaterialPage(Base):
     markdown: Mapped[str] = mapped_column(Text, default="")
     quality: Mapped[PageQuality] = mapped_column(enum_type(PageQuality, "page_quality"))
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # NULL у страниц текстового слоя (`quality=native`) — распознавание им не
+    # требовалось. У скопированной без переразбора страницы (частичный запуск)
+    # переносится значение источника, а не режим текущей задачи: иначе версия
+    # приписывала бы соседним нетронутым страницам чужую модель.
+    parser_mode: Mapped[ParserMode | None] = mapped_column(
+        enum_type(ParserMode, "material_page_parser_mode"), nullable=True
+    )
     elements: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     diagnostics: Mapped[list[str]] = mapped_column(JSON, default=list)
     image_path: Mapped[str | None] = mapped_column(String, nullable=True)
