@@ -13,6 +13,7 @@ import {
   PageHead,
   SegmentedTabs,
   StatusBadge,
+  Tooltip,
 } from "../components/ui";
 import { ProjectNav } from "../components/domain";
 import {
@@ -297,9 +298,11 @@ export function Plan() {
     <div className="plan-screen prep-screen">
       <aside className="plan-project-panel">
         <header className="program-project-title">
-          <Link to={`/projects/${projectId}`} aria-label="В рабочую область">
-            <ArrowLeft size={16} />
-          </Link>
+          <Tooltip label="Вернуться в рабочую область">
+            <Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область">
+              <ArrowLeft size={15} />
+            </Link>
+          </Tooltip>
           <strong>{overview.project_name}</strong>
         </header>
         <PreparationEvents overview={overview} onHistory={() => ui("view", "history")} />
