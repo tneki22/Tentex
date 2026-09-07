@@ -142,12 +142,84 @@ function BackgroundJobGroup({ jobs, navigate, onCancel, onDismiss }: BackgroundJ
   );
 }
 
+interface BackgroundJobsWidgetProps {
+  backgroundJobs: BackgroundJobRead[];
+  reviewJobs: BackgroundJobRead[];
+  runningJobs: BackgroundJobRead[];
+  navigate: (path: string) => void;
+  onDismiss: (jobId: string) => void;
+  onCancel: (jobId: string) => void;
+  /** Рабочая область проекта и материала Библиотеки рисуют свою оболочку без
+   *  общей навигации (см. ниже) — там кнопка плавает поверх содержимого,
+   *  а не стоит в панели слева. Без этого корзина «ждут проверки» была бы
+   *  не видна ровно там, где эти задачи запускают. */
+  floating?: boolean;
+}
+
+/** Кнопка и всплывашка «Фоновые задачи» — общие для обычной оболочки и для
+ *  полноэкранных рабочих областей, которые её не рисуют. */
+function BackgroundJobsWidget({
+  backgroundJobs,
+  reviewJobs,
+  runningJobs,
+  navigate,
+  onDismiss,
+  onCancel,
+  floating = false,
+}: BackgroundJobsWidgetProps) {
+  return (
+    <Popover
+      title="Фоновые задачи"
+      className={floating ? "app-widgets-floating" : undefined}
+      trigger={
+        <button
+          type="button"
+          className={[
+            "app-widget",
+            reviewJobs.length > 0 ? "has-review" : "",
+            floating ? "app-widget-floating-trigger" : "",
+          ].filter(Boolean).join(" ")}
+        >
+          <Activity size={15} aria-hidden="true" />
+          <b className="nav-label">Фоновая задача</b>
+          {backgroundJobs.length > 0 && (
+            <span className={reviewJobs.length > 0 ? "app-widget-value is-review" : "app-widget-value"}>
+              {backgroundJobs.length}
+            </span>
+          )}
+        </button>
+      }
+    >
+      {backgroundJobs.length === 0 ? (
+        <p className="popover-note">Фон свободен.</p>
+      ) : (
+        <>
+          {reviewJobs.length > 0 && (
+            <section className="popover-task-group">
+              <h4 className="popover-task-group-title">Ждут проверки</h4>
+              <BackgroundJobGroup jobs={reviewJobs} navigate={navigate} onDismiss={onDismiss} />
+            </section>
+          )}
+          {runningJobs.length > 0 && (
+            <section className="popover-task-group">
+              <h4 className="popover-task-group-title">Идут сейчас</h4>
+              <BackgroundJobGroup jobs={runningJobs} navigate={navigate} onCancel={onCancel} />
+            </section>
+          )}
+        </>
+      )}
+    </Popover>
+  );
+}
+
 /**
  * Оболочка: панель установки слева, полоса действий сверху, контент справа.
  * Описание — SCREENS.md, раздел «Оболочка».
  *
  * Рабочая область проекта рисует собственную полноэкранную оболочку: дерево
  * вопросов там заменяет глобальную навигацию, а не становится третьей панелью.
+ * Корзина «ждут проверки» всё равно нужна и там — она рисуется поверх
+ * содержимого плавающей кнопкой, см. `BackgroundJobsWidget`.
  */
 
 /** Глобальная навигация — уровень установки. */
@@ -260,6 +332,15 @@ export function AppLayout() {
     return (
       <TooltipProvider>
         <Outlet />
+        <BackgroundJobsWidget
+          backgroundJobs={backgroundJobs}
+          reviewJobs={reviewJobs}
+          runningJobs={runningJobs}
+          navigate={navigate}
+          onDismiss={dismissJob}
+          onCancel={cancelJob}
+          floating
+        />
       </TooltipProvider>
     );
   }
@@ -267,7 +348,9 @@ export function AppLayout() {
   /* Рабочая область материала Библиотеки — такая же полноразмерная поверхность,
      как проектные: оглавление, две половины документа и панель обработки не
      помещаются в контентную колонку обычной оболочки. Сам список `/library`
-     остаётся в ней. */
+     остаётся в ней. Общая навигация тут не рисуется, но фоновые задачи всё
+     равно должны быть видны — отсюда чаще всего их и запускают (Ш1 плана,
+     корзина «ждут проверки»). */
   if (
     /^\/projects\/[^/]+(?:\/.*)?$/.test(location.pathname)
     || /^\/library\/[^/]+$/.test(location.pathname)
@@ -275,6 +358,15 @@ export function AppLayout() {
     return (
       <TooltipProvider>
         <Outlet />
+        <BackgroundJobsWidget
+          backgroundJobs={backgroundJobs}
+          reviewJobs={reviewJobs}
+          runningJobs={runningJobs}
+          navigate={navigate}
+          onDismiss={dismissJob}
+          onCancel={cancelJob}
+          floating
+        />
       </TooltipProvider>
     );
   }
@@ -342,41 +434,14 @@ export function AppLayout() {
           </Disclosure>
 
           <div className="app-widgets" aria-label="Состояние установки">
-            <Popover
-              title="Фоновые задачи"
-              trigger={
-                <button type="button" className={reviewJobs.length > 0 ? "app-widget has-review" : "app-widget"}>
-                  <Activity size={15} aria-hidden="true" />
-                  <b className="nav-label">Фоновая задача</b>
-                  {backgroundJobs.length > 0 && (
-                    <span className={reviewJobs.length > 0 ? "app-widget-value is-review" : "app-widget-value"}>
-                      {backgroundJobs.length}
-                    </span>
-                  )}
-                </button>
-              }
-            >
-              {backgroundJobs.length === 0 ? (
-                <p className="popover-note">Фон свободен.</p>
-              ) : (
-                <>
-                  {/* Ждущие идут первыми: это то, из-за чего панель вообще
-                      открывают — работа уже сделана и упирается в человека. */}
-                  {reviewJobs.length > 0 && (
-                    <section className="popover-task-group">
-                      <h4 className="popover-task-group-title">Ждут проверки</h4>
-                      <BackgroundJobGroup jobs={reviewJobs} navigate={navigate} onDismiss={dismissJob} />
-                    </section>
-                  )}
-                  {runningJobs.length > 0 && (
-                    <section className="popover-task-group">
-                      <h4 className="popover-task-group-title">Идут сейчас</h4>
-                      <BackgroundJobGroup jobs={runningJobs} navigate={navigate} onCancel={cancelJob} />
-                    </section>
-                  )}
-                </>
-              )}
-            </Popover>
+            <BackgroundJobsWidget
+              backgroundJobs={backgroundJobs}
+              reviewJobs={reviewJobs}
+              runningJobs={runningJobs}
+              navigate={navigate}
+              onDismiss={dismissJob}
+              onCancel={cancelJob}
+            />
 
             <Popover
               title="Внешние модели"
