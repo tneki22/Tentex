@@ -149,15 +149,10 @@ interface BackgroundJobsWidgetProps {
   navigate: (path: string) => void;
   onDismiss: (jobId: string) => void;
   onCancel: (jobId: string) => void;
-  /** Рабочая область проекта и материала Библиотеки рисуют свою оболочку без
-   *  общей навигации (см. ниже) — там кнопка плавает поверх содержимого,
-   *  а не стоит в панели слева. Без этого корзина «ждут проверки» была бы
-   *  не видна ровно там, где эти задачи запускают. */
-  floating?: boolean;
 }
 
-/** Кнопка и всплывашка «Фоновые задачи» — общие для обычной оболочки и для
- *  полноэкранных рабочих областей, которые её не рисуют. */
+/** Кнопка и всплывашка «Фоновые задачи» в панели слева. Отдельным компонентом —
+ *  чтобы разметка кнопки и попапа не дублировалась там, где к ним обращаются. */
 function BackgroundJobsWidget({
   backgroundJobs,
   reviewJobs,
@@ -165,21 +160,12 @@ function BackgroundJobsWidget({
   navigate,
   onDismiss,
   onCancel,
-  floating = false,
 }: BackgroundJobsWidgetProps) {
   return (
     <Popover
       title="Фоновые задачи"
-      className={floating ? "app-widgets-floating" : undefined}
       trigger={
-        <button
-          type="button"
-          className={[
-            "app-widget",
-            reviewJobs.length > 0 ? "has-review" : "",
-            floating ? "app-widget-floating-trigger" : "",
-          ].filter(Boolean).join(" ")}
-        >
+        <button type="button" className={reviewJobs.length > 0 ? "app-widget has-review" : "app-widget"}>
           <Activity size={15} aria-hidden="true" />
           <b className="nav-label">Фоновая задача</b>
           {backgroundJobs.length > 0 && (
@@ -218,8 +204,6 @@ function BackgroundJobsWidget({
  *
  * Рабочая область проекта рисует собственную полноэкранную оболочку: дерево
  * вопросов там заменяет глобальную навигацию, а не становится третьей панелью.
- * Корзина «ждут проверки» всё равно нужна и там — она рисуется поверх
- * содержимого плавающей кнопкой, см. `BackgroundJobsWidget`.
  */
 
 /** Глобальная навигация — уровень установки. */
@@ -332,15 +316,6 @@ export function AppLayout() {
     return (
       <TooltipProvider>
         <Outlet />
-        <BackgroundJobsWidget
-          backgroundJobs={backgroundJobs}
-          reviewJobs={reviewJobs}
-          runningJobs={runningJobs}
-          navigate={navigate}
-          onDismiss={dismissJob}
-          onCancel={cancelJob}
-          floating
-        />
       </TooltipProvider>
     );
   }
@@ -348,9 +323,7 @@ export function AppLayout() {
   /* Рабочая область материала Библиотеки — такая же полноразмерная поверхность,
      как проектные: оглавление, две половины документа и панель обработки не
      помещаются в контентную колонку обычной оболочки. Сам список `/library`
-     остаётся в ней. Общая навигация тут не рисуется, но фоновые задачи всё
-     равно должны быть видны — отсюда чаще всего их и запускают (Ш1 плана,
-     корзина «ждут проверки»). */
+     остаётся в ней. */
   if (
     /^\/projects\/[^/]+(?:\/.*)?$/.test(location.pathname)
     || /^\/library\/[^/]+$/.test(location.pathname)
@@ -358,15 +331,6 @@ export function AppLayout() {
     return (
       <TooltipProvider>
         <Outlet />
-        <BackgroundJobsWidget
-          backgroundJobs={backgroundJobs}
-          reviewJobs={reviewJobs}
-          runningJobs={runningJobs}
-          navigate={navigate}
-          onDismiss={dismissJob}
-          onCancel={cancelJob}
-          floating
-        />
       </TooltipProvider>
     );
   }

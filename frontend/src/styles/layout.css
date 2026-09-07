@@ -333,30 +333,6 @@
   background: var(--tone-warning);
 }
 
-/* Рабочая область проекта и материала Библиотеки не рисуют общую навигацию
-   (см. AppLayout), поэтому кнопка «Фоновые задачи» там плавает поверх
-   содержимого отдельным элементом, а не строкой в панели слева. */
-.app-widget-floating-trigger {
-  position: fixed;
-  left: var(--space-4);
-  bottom: var(--space-4);
-  z-index: var(--z-overlay);
-  width: auto;
-  gap: var(--space-2);
-  border-radius: var(--radius-pill);
-  background: var(--paper-strong);
-  box-shadow: var(--shadow-md);
-  border: 1px solid var(--line);
-}
-
-.app-widget-floating-trigger:hover {
-  background: var(--surface-hover);
-}
-
-.app-widget-floating-trigger .nav-label {
-  display: inline;
-}
-
 .app-nav-footer {
   display: flex;
   align-items: center;
