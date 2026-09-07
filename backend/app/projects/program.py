@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
+from app.bindings.answers_link import apply_answers_link_undo
 from app.bindings.service import apply_undo as apply_binding_undo
 from app.models import (
     ExamKind,
@@ -882,6 +883,8 @@ def undo_last_project_action(
                     node.is_in_current_program = value["is_in_current_program"]
             case "binding_create" | "binding_remove":
                 apply_binding_undo(session, project_id, action.action_type, data)
+            case "answers_link":
+                apply_answers_link_undo(session, project_id, data)
             case "active_exam_import" | "ai_import_repair":
                 old_ids = {UUID(item["id"]) for item in data["nodes"]}
                 for item in data["nodes"]:

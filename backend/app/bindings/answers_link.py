@@ -42,6 +42,7 @@ from app.models import (
     ProjectStatus,
     ReferenceAnswer,
     ReferenceAnswerMatchMethod,
+    ReferenceAnswerOrigin,
     WorkspaceVariant,
     utc_now,
 )
@@ -398,6 +399,108 @@ def _fill_answers(
     return outcomes
 
 
+def _snapshot_answers(
+    session: Session, project_id: UUID, node_ids: set[UUID]
+) -> list[dict]:
+    """Состояние эталонов до автопривязки — чтобы undo мог вернуть не только
+
+    привязки, но и переписанный текст. Отсутствие ответа тоже снимок: undo
+    обязан удалить эталон, которого до операции не было.
+    """
+    if not node_ids:
+        return []
+    existing = {
+        answer.program_node_id: answer
+        for answer in session.scalars(
+            select(ReferenceAnswer).where(
+                ReferenceAnswer.project_id == project_id,
+                ReferenceAnswer.program_node_id.in_(node_ids),
+            )
+        )
+    }
+    snapshots: list[dict] = []
+    for node_id in node_ids:
+        answer = existing.get(node_id)
+        if answer is None:
+            snapshots.append({"node_id": str(node_id), "absent": True})
+            continue
+        snapshots.append(
+            {
+                "node_id": str(node_id),
+                "text": answer.text,
+                "origin_kind": answer.origin_kind.value,
+                "match_method": answer.match_method.value,
+                "matched_title": answer.matched_title,
+                "is_confirmed": answer.is_confirmed,
+                "is_active": answer.is_active,
+                "revision": answer.revision,
+                "source_label": answer.source_label,
+                "source_material_id": (
+                    str(answer.source_material_id) if answer.source_material_id else None
+                ),
+                "source_page_from": answer.source_page_from,
+                "source_page_to": answer.source_page_to,
+            }
+        )
+    return snapshots
+
+
+def apply_answers_link_undo(session: Session, project_id: UUID, data: dict) -> None:
+    """Откатить и привязки, и текст эталонов из снимка в `inverse_data`."""
+    now = utc_now()
+    for raw_id in data.get("binding_ids", []):
+        binding = session.get(Binding, UUID(raw_id))
+        if binding is None or binding.project_id != project_id:
+            raise ProjectConflictError(
+                "Привязка для отмены не найдена", code="binding_undo_missing"
+            )
+        binding.status = BindingStatus.REMOVED
+        binding.updated_at = now
+    for snapshot in data.get("answers", []):
+        node_id = UUID(snapshot["node_id"])
+        answer = session.get(ReferenceAnswer, (project_id, node_id))
+        if snapshot.get("absent"):
+            if answer is not None:
+                session.delete(answer)
+            continue
+        source_material_id = (
+            UUID(snapshot["source_material_id"]) if snapshot["source_material_id"] else None
+        )
+        if answer is None:
+            session.add(
+                ReferenceAnswer(
+                    project_id=project_id,
+                    program_node_id=node_id,
+                    text=snapshot["text"],
+                    origin_kind=ReferenceAnswerOrigin(snapshot["origin_kind"]),
+                    match_method=ReferenceAnswerMatchMethod(snapshot["match_method"]),
+                    matched_title=snapshot["matched_title"],
+                    is_confirmed=snapshot["is_confirmed"],
+                    is_active=snapshot["is_active"],
+                    revision=snapshot["revision"],
+                    source_label=snapshot["source_label"],
+                    source_material_id=source_material_id,
+                    source_page_from=snapshot["source_page_from"],
+                    source_page_to=snapshot["source_page_to"],
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            continue
+        answer.text = snapshot["text"]
+        answer.origin_kind = ReferenceAnswerOrigin(snapshot["origin_kind"])
+        answer.match_method = ReferenceAnswerMatchMethod(snapshot["match_method"])
+        answer.matched_title = snapshot["matched_title"]
+        answer.is_confirmed = snapshot["is_confirmed"]
+        answer.is_active = snapshot["is_active"]
+        answer.revision = snapshot["revision"]
+        answer.source_label = snapshot["source_label"]
+        answer.source_material_id = source_material_id
+        answer.source_page_from = snapshot["source_page_from"]
+        answer.source_page_to = snapshot["source_page_to"]
+        answer.updated_at = now
+
+
 def _build_link_result(
     session: Session,
     nodes: list[ProgramNode],
@@ -556,6 +659,14 @@ def iter_link_answers_material(
         phase_total=len(nodes),
     )
 
+    answer_node_ids = {
+        node_id
+        for section in sections
+        if section.bindable_fragments()
+        for node_id in section.node_ids
+    }
+    answers_before = _snapshot_answers(session, project_id, answer_node_ids)
+
     _clear_answer_bindings(session, project_id, material.id)
     linked_fragments = 0
     created_ids: list[UUID] = []
@@ -590,11 +701,14 @@ def iter_link_answers_material(
         session.add(
             ProjectActionLog(
                 project_id=project_id,
-                action_type="binding_create",
+                action_type="answers_link",
                 phase="active",
                 payload_version=1,
                 target_title=label,
-                inverse_data={"binding_ids": [str(value) for value in created_ids]},
+                inverse_data={
+                    "binding_ids": [str(value) for value in created_ids],
+                    "answers": answers_before,
+                },
             )
         )
     session.flush()
@@ -705,6 +819,13 @@ def resolve_answers_heading(
         header_fragment_ids=set(detected.header_fragment_ids),
     )
     sections = _expand_duplicate_sections(nodes, [section])
+    answer_node_ids = {
+        item_node_id
+        for item in sections
+        if item.bindable_fragments()
+        for item_node_id in item.node_ids
+    }
+    answers_before = _snapshot_answers(session, project_id, answer_node_ids)
     linked_fragments = 0
     created_ids: list[UUID] = []
     for item in sections:
@@ -716,11 +837,14 @@ def resolve_answers_heading(
         session.add(
             ProjectActionLog(
                 project_id=project_id,
-                action_type="binding_create",
+                action_type="answers_link",
                 phase="active",
                 payload_version=1,
                 target_title=node.title,
-                inverse_data={"binding_ids": [str(value) for value in created_ids]},
+                inverse_data={
+                    "binding_ids": [str(value) for value in created_ids],
+                    "answers": answers_before,
+                },
             )
         )
     session.flush()
