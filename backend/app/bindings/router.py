@@ -7,8 +7,10 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.ai.dependencies import get_model_gateway
+from app.ai.gateway import ModelGateway
 from app.background.schemas import BackgroundJobStartRead
-from app.bindings import answers_link, service
+from app.bindings import answers_ai, answers_link, service
 from app.bindings.schemas import (
     AnswersHeadingResolveWrite,
     AnswersLinkProgressRead,
@@ -26,6 +28,7 @@ from app.models import BindingStatus
 from app.projects.errors import ProjectDomainError
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["bindings"])
 
 
@@ -118,6 +121,49 @@ def resolve_answers_heading(
             command.anchor_fragment_id,
             command.program_node_id,
         )
+    return AnswersLinkRead.model_validate(result, from_attributes=True)
+
+
+@router.post(
+    "/materials/{material_id}/link-answers/ai/preflight",
+    response_model=answers_ai.AnswersAiPreflightRead,
+)
+async def preflight_link_answers_ai(
+    project_id: UUID,
+    material_id: UUID,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> answers_ai.AnswersAiPreflightRead:
+    return await answers_ai.preflight_answers_ai(session, gateway, project_id, material_id)
+
+
+@router.post(
+    "/materials/{material_id}/link-answers/ai",
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_link_answers_ai(
+    project_id: UUID,
+    material_id: UUID,
+    command: answers_ai.AnswersAiRunWrite,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> BackgroundJobStartRead:
+    return await answers_ai.start_answers_ai(session, gateway, project_id, material_id, command)
+
+
+@router.post(
+    "/materials/{material_id}/link-answers/ai/apply",
+    response_model=AnswersLinkRead,
+)
+def apply_link_answers_ai(
+    project_id: UUID,
+    material_id: UUID,
+    command: answers_ai.AnswersAiApplyWrite,
+    session: SessionDependency,
+) -> AnswersLinkRead:
+    with session.begin():
+        result = answers_ai.apply_answers_ai(session, project_id, material_id, command)
     return AnswersLinkRead.model_validate(result, from_attributes=True)
 
 

@@ -57,6 +57,7 @@ import {
   ProjectNav,
   QualityBadge,
 } from "../components/domain";
+import { AnswersAiPlanDialog } from "./answers/AnswersAiPlanDialog";
 import {
   Button,
   ConfirmDialog,
@@ -1199,6 +1200,7 @@ function MaterialSurface() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
   const [autoMatchOpen, setAutoMatchOpen] = useState(false);
+  const [aiPlanOpen, setAiPlanOpen] = useState(false);
   const [pageNumber, setPageNumber] = useState(1);
   const [page, setPage] = useState<MaterialPageRead | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -2086,8 +2088,24 @@ function MaterialSurface() {
         open={autoMatchOpen}
         onOpenChange={setAutoMatchOpen}
         onRunHeadings={() => void answerMatch.run()}
+        onRunAi={() => setAiPlanOpen(true)}
         onImportText={() => void importAnswers()}
       />
+      {material && (
+        <AnswersAiPlanDialog
+          open={aiPlanOpen}
+          projectId={projectId}
+          materialId={material.id}
+          nodeNumberById={nodeNumberById}
+          onOpenChange={setAiPlanOpen}
+          onApplied={(result) => {
+            refreshBindingData();
+            void bindings.refreshSummary();
+            setAnswersSuggestions({ materialId: material.id, items: result.suggestions });
+            if (result.suggestions.length) setInspectorTab("bindings");
+          }}
+        />
+      )}
       <AddMaterialDialog
         open={addOpen}
         busy={store.busy}

@@ -9,19 +9,18 @@ interface AutoMatchDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Режим «на основе заголовков»: нынешний разбор файла ответов. */
   onRunHeadings: () => void;
+  /** Режим «с ИИ»: скелет документа размечает модель (срез F). */
+  onRunAi: () => void;
   /** Запасной путь: разобрать ответы из сплошного текста страниц. */
   onImportText: () => void;
 }
 
-/**
- * Одна точка входа автосопоставления вместо двух кнопок в разных вкладках.
- * Режим «на основе заголовков» — существующий детерминированный разбор файла
- * ответов; режим «с ИИ» — будущий проход 2 (этап 8), пока честная заглушка.
- */
+/** Одна точка входа автосопоставления вместо двух кнопок в разных вкладках. */
 export function AutoMatchDialog({
   open,
   onOpenChange,
   onRunHeadings,
+  onRunAi,
   onImportText,
 }: AutoMatchDialogProps) {
   const [mode, setMode] = useState<AutoMatchMode>("headings");
@@ -41,10 +40,12 @@ export function AutoMatchDialog({
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Отмена</Button>
           <Button
-            disabled={mode !== "headings"}
-            onClick={() => { onOpenChange(false); onRunHeadings(); }}
+            onClick={() => {
+              onOpenChange(false);
+              if (mode === "headings") onRunHeadings(); else onRunAi();
+            }}
           >
-            <Link2 size={14} /> Сопоставить
+            <Link2 size={14} /> {mode === "headings" ? "Сопоставить" : "Разметить"}
           </Button>
         </>
       }
@@ -63,8 +64,7 @@ export function AutoMatchDialog({
           {
             value: "ai",
             title: "С помощью ИИ",
-            description: "Модель разнесёт разделы, когда формулировки сильно разошлись.",
-            unavailableReason: "Появится на этапе 8: проход 2 разнесёт разделы моделью и спросит подтверждение перед отправкой данных.",
+            description: "Модель разметит границы разделов по скелету документа, когда заголовки или нумерация разошлись со структурой файла. Перед применением — предпросмотр и подтверждение.",
           },
         ]}
       />

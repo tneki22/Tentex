@@ -86,6 +86,17 @@ ROLE_SPECS = {
             {"max_output_tokens": 8000},
         ),
         AiRoleSpec(
+            "exam_answer_sections",
+            "Разметка файла ответов",
+            "Разносит разделы файла эталонных ответов по вопросам программы, когда "
+            "заголовки или нумерация разошлись со структурой документа.",
+            "text",
+            frozenset({"structured_output"}),
+            "exact",
+            "answer-sections-v1",
+            {"max_output_tokens": 6000, "temperature": 0},
+        ),
+        AiRoleSpec(
             "exam_preparation_estimate",
             "Оценка времени подготовки",
             "Предлагает реалистичную дневную нагрузку по сроку и объёму экзамена.",

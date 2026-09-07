@@ -162,6 +162,8 @@ class ReferenceAnswerMatchMethod(StrEnum):
     RESOLVED_TITLE = "resolved_title"
     # Номер раздела совпал с порядком вопросов; до проверки пользователем не подтверждаем.
     NUMBERED_ORDER = "numbered_order"
+    # Границу раздела указала модель по скелету документа (срез F), пользователь подтвердил план.
+    AI_SECTION = "ai_section"
 
 
 class MaterialState(StrEnum):
@@ -220,6 +222,7 @@ class BackgroundJobKind(StrEnum):
     AI_PREPARATION = "ai_preparation"
     AI_CLEANUP = "ai_cleanup"
     LINK_ANSWERS = "link_answers"
+    AI_ANSWER_SECTIONS = "ai_answer_sections"
 
 
 class BackgroundJobState(StrEnum):

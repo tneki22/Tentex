@@ -364,7 +364,13 @@ export interface ReferenceAnswerRead {
   program_node_id: string;
   text: string;
   origin_kind: "manual" | "import";
-  match_method: "manual" | "exact_title";
+  match_method:
+    | "manual"
+    | "exact_title"
+    | "fuzzy_title"
+    | "resolved_title"
+    | "numbered_order"
+    | "ai_section";
   matched_title: string | null;
   is_confirmed: boolean;
   is_active: boolean;

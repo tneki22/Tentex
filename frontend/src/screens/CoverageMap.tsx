@@ -69,6 +69,7 @@ import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
 import { AnswerEditor } from "./answers/AnswerEditor";
 import { AnswerFileList, type AnswerFile } from "./answers/AnswerFileList";
 import { AnswerHeadingSuggestions } from "./answers/AnswerHeadingSuggestions";
+import { AnswersAiPlanDialog } from "./answers/AnswersAiPlanDialog";
 import { AnswerSourceDialog } from "./answers/AnswerSourceDialog";
 
 type CoverageFilter = "all" | "with_answer" | "missing" | "needs_review" | "outside";
@@ -152,6 +153,7 @@ export function CoverageMap() {
   const [importResult, setImportResult] = useState<ReferenceAnswerImportResult | null>(null);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [autoMatchOpen, setAutoMatchOpen] = useState(false);
+  const [aiPlanOpen, setAiPlanOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<HeadingSuggestion[]>([]);
   const [attachments, setAttachments] = useState<ReferenceAnswerAttachment[]>([]);
@@ -712,8 +714,20 @@ export function CoverageMap() {
         open={autoMatchOpen}
         onOpenChange={setAutoMatchOpen}
         onRunHeadings={() => void answerMatch.run()}
+        onRunAi={() => setAiPlanOpen(true)}
         onImportText={() => { setImportResult(null); setImportOpen(true); }}
       />
+
+      {answersMaterial && (
+        <AnswersAiPlanDialog
+          open={aiPlanOpen}
+          projectId={projectId}
+          materialId={answersMaterial.id}
+          nodeNumberById={numberByNodeId}
+          onOpenChange={setAiPlanOpen}
+          onApplied={(result) => { setSuggestions(result.suggestions); void refresh(); }}
+        />
+      )}
 
       <LibraryMaterialPickerDialog
         open={libraryOpen}

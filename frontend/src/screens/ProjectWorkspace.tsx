@@ -740,7 +740,9 @@ export function ProjectWorkspace() {
       const source = answer.source_label ? `Источник: ${answer.source_label}` : answer.origin_kind === "manual" ? "Добавлен вручную" : "Импортирован";
       const match = answer.match_method === "exact_title"
         ? `Сопоставлен по заголовку${answer.matched_title ? `: ${answer.matched_title}` : ""}`
-        : "Сопоставлен вручную";
+        : answer.match_method === "ai_section"
+          ? "Размечен моделью"
+          : "Сопоставлен вручную";
       const media: ReferenceAnswerMedia[] = [
         ...sourceBindings
           .filter((binding) => ["image", "table"].includes(binding.element_kind))

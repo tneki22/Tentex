@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.ai.gateway import ModelGateway
+from app.bindings import answers_ai
 from app.materials import ai_cleanup
 from app.models import BackgroundJob, BackgroundJobKind, BackgroundJobState, utc_now
 from app.projects import import_repair, preparation_ai, program_ai
@@ -39,6 +40,7 @@ DEADLINE_SECONDS: dict[BackgroundJobKind, int] = {
     BackgroundJobKind.AI_IMPORT_REPAIR: 900,
     BackgroundJobKind.AI_PREPARATION: 300,
     BackgroundJobKind.AI_CLEANUP: 300,
+    BackgroundJobKind.AI_ANSWER_SECTIONS: 900,
 }
 
 
@@ -86,6 +88,17 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
             gateway,
             job.project_id,
             preparation_ai.PreparationEstimateRunWrite.model_validate(command),
+            job_id=job.id,
+        )
+    elif job.kind == BackgroundJobKind.AI_ANSWER_SECTIONS:
+        assert job.project_id is not None
+        assert job.material_id is not None
+        return await answers_ai.run_answers_ai(
+            session,
+            gateway,
+            job.project_id,
+            job.material_id,
+            answers_ai.AnswersAiRunWrite.model_validate(command),
             job_id=job.id,
         )
     elif job.kind == BackgroundJobKind.AI_CLEANUP:

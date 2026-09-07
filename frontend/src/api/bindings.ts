@@ -1,3 +1,4 @@
+import type { AiPreflight, AiUsage } from "./ai";
 import type { PageQuality } from "./materials";
 import { ProjectApiError, request, type LatestUndoableAction } from "./projects";
 import type { BackgroundJobStartRead } from "./backgroundJobs";
@@ -234,6 +235,84 @@ export const resolveAnswersHeading = (
     }),
   },
 );
+
+export interface AnswersAiPreflightRead {
+  candidate_count: number;
+  batch_count: number;
+  question_count: number;
+  source_hash: string;
+  calls: AiPreflight[];
+  confirmation_required: boolean;
+  confirmation_reasons: string[];
+}
+
+export interface AnswerPlanRow {
+  index: number;
+  node_id: string;
+  node_title: string;
+  page_from: number;
+  page_to: number;
+  fragment_ids: string[];
+  char_count: number;
+  confidence: "high" | "low";
+  note: string;
+  heading: string;
+  preview: string;
+}
+
+export interface AnswersAiPlanRead {
+  run_id: string;
+  source_hash: string;
+  rows: AnswerPlanRow[];
+  skipped_questions: number[];
+  structural_boundaries: number;
+  warnings: string[];
+  usage: AiUsage;
+  requested_model_id: string;
+  actual_model_id: string;
+  cached: boolean;
+}
+
+const linkAnswersAiPath = (projectId: string, materialId: string): string =>
+  `/api/projects/${encodeURIComponent(projectId)}/materials/${encodeURIComponent(materialId)}/link-answers/ai`;
+
+export const preflightLinkAnswersAi = (
+  projectId: string,
+  materialId: string,
+  signal?: AbortSignal,
+): Promise<AnswersAiPreflightRead> => request(`${linkAnswersAiPath(projectId, materialId)}/preflight`, {
+  method: "POST",
+  signal,
+});
+
+export const startLinkAnswersAi = (
+  projectId: string,
+  materialId: string,
+  command: { expectedSourceHash: string; confirmed: boolean },
+  signal?: AbortSignal,
+): Promise<BackgroundJobStartRead> => request(linkAnswersAiPath(projectId, materialId), {
+  method: "POST",
+  signal,
+  body: JSON.stringify({
+    expected_source_hash: command.expectedSourceHash,
+    confirmed: command.confirmed,
+  }),
+});
+
+export const applyLinkAnswersAi = (
+  projectId: string,
+  materialId: string,
+  command: { runId: string; expectedSourceHash: string; accepted: number[] },
+  signal?: AbortSignal,
+): Promise<AnswersLinkRead> => request(`${linkAnswersAiPath(projectId, materialId)}/apply`, {
+  method: "POST",
+  signal,
+  body: JSON.stringify({
+    run_id: command.runId,
+    expected_source_hash: command.expectedSourceHash,
+    accepted: command.accepted,
+  }),
+});
 
 export const restoreBinding = (
   projectId: string,
