@@ -39,6 +39,7 @@ from app.models import (
     ProjectStatus,
     utc_now,
 )
+from app.preparation import queue
 from app.preparation.calendar import study_date
 from app.preparation.data import get_settings
 from app.preparation.models import PreparationPlan, StudyActivity
@@ -316,6 +317,15 @@ def test_ticket_opening_marks_all_topics_once(session):
     revision = card_session.revision
     session.rollback()
 
+    service.open_current_unit(session, project_id, session_id, revision)
+    assert not session.scalar(
+        select(StudyActivity.id).where(
+            StudyActivity.project_id == project_id,
+            StudyActivity.kind == "view",
+        )
+    )
+    session.rollback()
+    queue.start_queue(session, project_id)
     service.open_current_unit(session, project_id, session_id, revision)
     session.rollback()
     service.open_current_unit(session, project_id, session_id, revision)

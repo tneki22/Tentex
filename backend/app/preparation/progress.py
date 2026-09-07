@@ -8,15 +8,22 @@ from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert
 
 from app.models import Activity, ActivityKind, Attempt
-from app.preparation.calendar import study_date
+from app.preparation.calendar import study_date, utc
 from app.preparation.models import StudyActivity, StudyInterval
 from app.preparation.schemas import BudgetRead, MilestoneRead
 
 
+def event_id(project_id, key):
+    """Одинаковое предметное действие получает один UUID при повторной доставке."""
+    return uuid5(NAMESPACE_URL, f"tentex:{project_id}:{key}")
+
+
 def openings(session, project_id, config):
     """Открытия из журнала и старых занятий; один вопрос считается раз за учебный день."""
+    from app.preparation.queue import day_start_at
+
     result = {}
-    rows = [
+    automatic_rows = [
         (a.node_id, a.occurred_at)
         for a in session.scalars(
             select(StudyActivity).where(
@@ -24,13 +31,19 @@ def openings(session, project_id, config):
             )
         )
     ]
-    rows.extend(
+    automatic_rows.extend(
         (a.node_id, a.started_at)
         for a in session.scalars(
             select(StudyInterval).where(StudyInterval.project_id == project_id)
         )
     )
-    rows.extend(
+    for node_id, at in automatic_rows:
+        day = study_date(at, config)
+        started_at = day_start_at(session, project_id, day)
+        if started_at is not None and utc(at) >= started_at:
+            result.setdefault(day, set()).add(node_id)
+
+    answer_rows = (
         (node_id, created_at)
         for node_id, created_at in session.execute(
             select(Activity.program_node_id, Attempt.created_at)
@@ -42,7 +55,7 @@ def openings(session, project_id, config):
             )
         )
     )
-    for node_id, at in rows:
+    for node_id, at in answer_rows:
         day = study_date(at, config)
         result.setdefault(day, set()).add(node_id)
     return result
@@ -53,7 +66,7 @@ def record_event(session, project_id, kind, title, *, key, note="", at=None, nod
     session.execute(
         insert(StudyActivity)
         .values(
-            id=uuid5(NAMESPACE_URL, f"tentex:{project_id}:{key}"),
+            id=event_id(project_id, key),
             project_id=project_id,
             node_id=node_id,
             kind=kind,
@@ -118,9 +131,10 @@ def remaining_budget(days, config, today, deadline):
 
 
 def record_opening(session, project_id, node_id):
-    """Открытие сохраняется сразу, независимо от таймера и начала дня."""
+    """Просмотр закрывает назначение только после явного начала учебного дня."""
     from app.db import project_write_transaction
     from app.preparation.data import get_settings, require_project, units
+    from app.preparation.queue import day_start_at
     from app.projects.errors import ProjectDomainError
 
     with project_write_transaction(session, project_id):
@@ -130,7 +144,10 @@ def record_opening(session, project_id, node_id):
             raise ProjectDomainError(
                 "Вопрос не найден", status=404, code="preparation_unit_invalid"
             )
-        today = study_date(datetime.now(UTC), get_settings(session, project_id).config)
+        moment = datetime.now(UTC)
+        today = study_date(moment, get_settings(session, project_id).config)
+        if day_start_at(session, project_id, today) is None:
+            return False
         record_event(
             session,
             project_id,
@@ -138,13 +155,16 @@ def record_opening(session, project_id, node_id):
             topic.title,
             key=f"opened:{today}:{node_id}",
             node_id=node_id,
+            at=moment,
         )
+    return True
 
 
 def record_unit_opening(session, project_id, unit_id, *, at=None, in_transaction=False):
-    """Открыть вопрос или весь билет одной идемпотентной транзакцией."""
+    """Вопрос или билет засчитываются одной транзакцией только в начатый день."""
     from app.db import project_write_transaction
     from app.preparation.data import get_settings, require_project, units
+    from app.preparation.queue import day_start_at
     from app.projects.errors import ProjectDomainError
 
     transaction = (
@@ -163,6 +183,8 @@ def record_unit_opening(session, project_id, unit_id, *, at=None, in_transaction
             )
         moment = at or datetime.now(UTC)
         today = study_date(moment, get_settings(session, project_id).config)
+        if day_start_at(session, project_id, today) is None:
+            return False
         for node_id in unit.topic_ids:
             record_event(
                 session,
@@ -173,3 +195,4 @@ def record_unit_opening(session, project_id, unit_id, *, at=None, in_transaction
                 node_id=node_id,
                 at=moment,
             )
+    return True

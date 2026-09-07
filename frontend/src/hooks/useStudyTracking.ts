@@ -18,16 +18,39 @@ const sessionId = () => {
   }
   return id;
 };
+
+export interface StudyTrackingOptions {
+  enabled?: boolean;
+  studyDate?: string;
+  initialSeconds?: number;
+}
+
+/** Считает активное время, сохраняя итог вопроса при переходах между разделами. */
 export function useStudyTracking(
   projectId: string,
   nodeId: string | null,
   kind: Interval["kind"],
-  enabled = true,
+  options: StudyTrackingOptions = {},
 ) {
+  const { enabled = true, studyDate = "", initialSeconds = 0 } = options;
   const [paused, setPaused] = useState(false);
   const [state, setState] = useState("Ожидание");
   const [seconds, setSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const counterKey = `tentex-study-total:${projectId}:${studyDate}:${nodeId}`;
+  const seededKey = useRef("");
+  useEffect(() => {
+    if (!enabled || !nodeId || !studyDate) {
+      setState("Учебный день не начат");
+      return;
+    }
+    const saved = Number(sessionStorage.getItem(counterKey) ?? 0);
+    setSeconds((current) => {
+      const baseline = Math.max(initialSeconds, saved);
+      return seededKey.current === counterKey ? Math.max(current, baseline) : baseline;
+    });
+    seededKey.current = counterKey;
+  }, [counterKey, enabled, initialSeconds, nodeId, studyDate]);
   useEffect(() => {
     if (!enabled || !nodeId) return;
     const opened = () => {
@@ -39,7 +62,7 @@ export function useStudyTracking(
     return () => { document.removeEventListener("visibilitychange", opened); window.clearInterval(timer); };
   }, [projectId, nodeId, enabled]);
   const answerSeconds = useRef(0);
-  const answerKey = `tentex-answer-time:${projectId}:${nodeId}`;
+  const answerKey = `tentex-answer-time:${projectId}:${studyDate}:${nodeId}`;
   useEffect(() => {
     answerSeconds.current = Number(sessionStorage.getItem(answerKey) ?? 0);
   }, [answerKey]);
@@ -118,7 +141,10 @@ export function useStudyTracking(
             projectId,
             rows.slice(offset, offset + 200),
           );
-          await acknowledgeIntervals(result.accepted_ids);
+          await acknowledgeIntervals([
+            ...result.accepted_ids,
+            ...(result.ignored_ids ?? []),
+          ]);
         }
         if (!stopped) setError(null);
       } catch (caught) {
@@ -158,7 +184,11 @@ export function useStudyTracking(
           catch (caught) { report(caught); }
         }
         setState("Время учитывается");
-        setSeconds((value) => value + elapsed / 1000);
+        setSeconds((value) => {
+          const next = value + elapsed / 1000;
+          sessionStorage.setItem(counterKey, String(next));
+          return next;
+        });
         if (kind === "answer") {
           answerSeconds.current += elapsed / 1000;
           sessionStorage.setItem(answerKey, String(answerSeconds.current));
@@ -226,7 +256,7 @@ export function useStudyTracking(
       document.removeEventListener("visibilitychange", hide);
       window.removeEventListener("online", send);
     };
-  }, [projectId, nodeId, kind, enabled, paused]);
+  }, [answerKey, counterKey, projectId, nodeId, kind, enabled, paused]);
   return {
     state,
     seconds: Math.floor(seconds),

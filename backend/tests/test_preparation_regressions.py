@@ -18,7 +18,7 @@ from app.models import (
     Grade,
     GradeMethod,
 )
-from app.preparation import activity, planner, reporting
+from app.preparation import activity, planner, queue, reporting
 from app.preparation.calendar import capacity_minutes
 from app.preparation.evidence import project_attempts, replay, synchronize_review
 from app.preparation.models import ReviewQuality
@@ -125,6 +125,8 @@ def test_interval_crossing_study_boundary_is_split_without_increasing_readiness(
     project = make_exam_project(session)
     node = make_topic_node(session, project, title="Чтение")
     at = (datetime.now(UTC) - timedelta(days=1)).replace(hour=0, minute=59, second=0, microsecond=0)
+    queue.start_queue(session, project.id, now=at)
+    queue.start_queue(session, project.id, now=at + timedelta(minutes=1))
     activity.add_intervals(
         session,
         project.id,
@@ -193,6 +195,7 @@ def test_answer_interval_is_not_a_second_history_entry_for_the_saved_attempt(ses
     project = make_exam_project(session)
     node = make_topic_node(session, project, title="Вопрос")
     at = datetime.now(UTC) - timedelta(minutes=3)
+    queue.start_queue(session, project.id, now=at)
     activity.add_intervals(
         session,
         project.id,

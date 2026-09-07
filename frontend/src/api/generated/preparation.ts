@@ -7101,11 +7101,17 @@ export interface components {
              * @default false
              */
             started: boolean;
+            /** Started At */
+            started_at?: string | null;
             /**
              * Has Plan
              * @default false
              */
             has_plan: boolean;
+            /** Seconds By Node */
+            seconds_by_node?: {
+                [key: string]: number;
+            };
         };
         /**
          * RecognitionSource
@@ -7558,11 +7564,13 @@ export interface components {
         };
         /**
          * TimeBatchRead
-         * @description Клиент удаляет только подтверждённые id из временного буфера.
+         * @description Клиент удаляет сохранённые и осознанно пропущенные id из буфера.
          */
         TimeBatchRead: {
             /** Accepted Ids */
             accepted_ids: string[];
+            /** Ignored Ids */
+            ignored_ids?: string[];
         };
         /**
          * TimeBatchWrite

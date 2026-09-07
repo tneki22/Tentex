@@ -9,8 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import GoalPassport, NodeType, ProjectStatus
-from app.preparation.activity import history, time_segments, time_totals
-from app.preparation.calendar import budget_minutes, day_bounds, study_date
+from app.preparation.activity import counted_time_segments, history, time_totals
+from app.preparation.calendar import budget_minutes, study_date
 from app.preparation.data import (
     answer_presence,
     get_settings,
@@ -305,7 +305,7 @@ def overview(
         )
     intervals = []
     topic_names = {t.node_id: t.title for t in topics}
-    for row, left, right in time_segments(session, project_id, *day_bounds(today, config)):
+    for row, left, right in counted_time_segments(session, project_id, today, config):
         if (
             intervals
             and intervals[-1].node_id == row.node_id

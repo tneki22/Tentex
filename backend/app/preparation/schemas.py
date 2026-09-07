@@ -247,9 +247,10 @@ class TimeBatchWrite(Contract):
 
 
 class TimeBatchRead(Contract):
-    """Клиент удаляет только подтверждённые id из временного буфера."""
+    """Клиент удаляет сохранённые и осознанно пропущенные id из буфера."""
 
     accepted_ids: list[UUID]
+    ignored_ids: list[UUID] = Field(default_factory=list)
 
 
 class ManualActivityWrite(Contract):
@@ -468,7 +469,9 @@ class QueueRead(Contract):
     topic_position: int
     completed: bool
     started: bool = False
+    started_at: datetime | None = None
     has_plan: bool = False
+    seconds_by_node: dict[UUID, int] = Field(default_factory=dict)
 
 
 class QueuePositionWrite(Contract):
