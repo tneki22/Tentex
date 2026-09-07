@@ -1,4 +1,4 @@
-import { useStudyTracking } from "../hooks/useStudyTracking";
+import { useWorkspaceStudyTracking } from "../hooks/useWorkspaceStudyTracking";
 import { StudyTimer } from "./preparation/StudyTimer";
 import { StudyQueue } from "./preparation/StudyQueue";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -383,7 +383,8 @@ export function ProjectWorkspace() {
   const [answeringForTracking, setAnsweringForTracking] = useState(false);
   const focusedTab = layout.groups.find(group => group.id === activeGroupId)?.active_tab;
   const trackingKind = focusedTab === "chat" ? (answeringForTracking ? "answer" : "chat") : focusedTab === "conspect" ? "conspect" : focusedTab === "source" ? "material" : "reading";
-  const tracking = useStudyTracking(projectId, selected?.id ?? null, trackingKind, Boolean(selected) && detail?.project.workspace_variant === "exam" && (detail?.project.status === "active" || detail?.project.status === "draft"));
+  const study = useWorkspaceStudyTracking(projectId, selected?.id ?? null, trackingKind, Boolean(selected) && detail?.project.workspace_variant === "exam" && (detail?.project.status === "active" || detail?.project.status === "draft"));
+  const tracking = study.tracking;
   const selectedIndex = selected ? studyNodes.findIndex((node) => node.id === selected.id) : -1;
   const textbook = detail?.project.workspace_variant === "textbook";
   const availableTabs = allowedTabs(detail?.project ?? null);
@@ -1087,7 +1088,7 @@ export function ProjectWorkspace() {
       />
 
       <main className="workspace-main">
-        <header className="workspace-question-bar"><div className="workspace-question-heading"><h1>{selected.title}</h1></div><div className="workspace-question-actions">{(textbook || (!sourceBindingsLoading && sourceBindings.length === 0)) && <div className={`workspace-material-notice ${textbook ? "is-textbook" : ""}`}><BookOpen size={15} /><span>{textbook ? "Материал появится после разбора" : "Ответы ещё не добавлены"}</span></div>}{!textbook && <StudyTimer tracking={tracking} />}<div className="workspace-question-nav" aria-label="Переход между темами"><IconButton label="Предыдущая тема" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><ChevronLeft size={15} /></IconButton><span>{selectedIndex + 1} из {studyNodes.length}</span><IconButton label="Следующая тема" disabled={selectedIndex >= studyNodes.length - 1} onClick={() => selectRelative(1)}><ChevronRight size={15} /></IconButton></div><IconButton label="Разделить рабочую область" disabled={editorGroups.length >= 3} onClick={addPanel}><PanelsTopLeft size={15} /></IconButton></div></header>
+        <header className="workspace-question-bar"><div className="workspace-question-heading"><h1>{selected.title}</h1></div><div className="workspace-question-actions">{(textbook || (!sourceBindingsLoading && sourceBindings.length === 0)) && <div className={`workspace-material-notice ${textbook ? "is-textbook" : ""}`}><BookOpen size={15} /><span>{textbook ? "Материал появится после разбора" : "Ответы ещё не добавлены"}</span></div>}{!textbook && <StudyTimer study={study} />}<div className="workspace-question-nav" aria-label="Переход между темами"><IconButton label="Предыдущая тема" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><ChevronLeft size={15} /></IconButton><span>{selectedIndex + 1} из {studyNodes.length}</span><IconButton label="Следующая тема" disabled={selectedIndex >= studyNodes.length - 1} onClick={() => selectRelative(1)}><ChevronRight size={15} /></IconButton></div><IconButton label="Разделить рабочую область" disabled={editorGroups.length >= 3} onClick={addPanel}><PanelsTopLeft size={15} /></IconButton></div></header>
         <div className="workspace-save-status">        <StudyQueue projectId={projectId} nodeId={selected?.id ?? null} onSelect={id => void selectNode(id)} />
 <div aria-live="polite">{saveError && <p className="inline-error" role="alert">{saveError}</p>}</div></div>
         <div className="workspace-editor-grid" ref={editorGridRef} style={{ gridTemplateColumns: editorColumns }}>

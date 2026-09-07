@@ -1,13 +1,22 @@
 /** Дашборд подготовки: время, состав программы и результаты сдач за один взгляд. */
 import { QuestionProgressGrid } from "./QuestionProgressGrid";
+import { useState } from "react";
 import { Link } from "react-router";
-import { BarChart, SegmentedTabs, StackedBar, StackedColumns, type ColumnDatum } from "../../components/ui";
+import {
+  BarChart,
+  SegmentedTabs,
+  StackedBar,
+  StackedColumns,
+  type BarDatum,
+  type ColumnDatum,
+} from "../../components/ui";
 import { answerResultOf, answerResultToken, type AnswerResult } from "../../components/domain";
 import type { Activity, Overview } from "../../api/preparation";
 import { duration, studyDate } from "./dates";
 import { dayOfMonth, programTotals, sectionStats, type DayFacts } from "./model";
 
 export type DashboardPeriod = "7" | "14";
+type TimeScope = "today" | "week";
 
 interface DashboardProps {
   overview: Overview;
@@ -22,6 +31,55 @@ interface DashboardProps {
 const RESULTS: AnswerResult[] = ["good", "partial", "weak", "unchecked"];
 const MAX_SECTIONS = 5;
 
+/** Раскладывает серверные интервалы по местным часам учебного дня. */
+function hourlyTimeData(overview: Overview): BarDatum[] {
+  const config = overview.settings.config;
+  const firstHour = Number(config.day_boundary.slice(0, 2));
+  const seconds = Array.from({ length: 24 }, () => 0);
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone: config.timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const currentHour = Number(
+    formatter.formatToParts(new Date(normalizedTimestamp(overview.now)))
+      .find((item) => item.type === "hour")?.value ?? firstHour,
+  );
+
+  for (const interval of overview.today_intervals ?? []) {
+    let cursor = new Date(normalizedTimestamp(interval.started_at));
+    const end = new Date(normalizedTimestamp(interval.ended_at));
+    while (cursor < end) {
+      const parts = formatter.formatToParts(cursor);
+      const part = (name: Intl.DateTimeFormatPartTypes) =>
+        Number(parts.find((item) => item.type === name)?.value ?? 0);
+      const hour = part("hour");
+      const untilNextHour = ((59 - part("minute")) * 60 + (60 - part("second"))) * 1_000
+        - cursor.getMilliseconds();
+      const next = new Date(Math.min(end.getTime(), cursor.getTime() + untilNextHour));
+      seconds[(hour - firstHour + 24) % 24] += (next.getTime() - cursor.getTime()) / 1_000;
+      cursor = next;
+    }
+  }
+
+  return seconds.map((value, index) => {
+    const hour = (firstHour + index) % 24;
+    const nextHour = (hour + 1) % 24;
+    return {
+      key: String(hour),
+      label: String(hour).padStart(2, "0"),
+      value: Math.round(value / 6) / 10,
+      current: hour === currentHour,
+      tooltip: `${String(hour).padStart(2, "0")}:00–${String(nextHour).padStart(2, "0")}:00 — ${duration(value)}`,
+    };
+  });
+}
+
+const normalizedTimestamp = (value: string) =>
+  /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`;
+
 /** Доля хороших ответов за отрезок, чтобы сравнить две недели одной строкой. */
 function goodShare(answers: Activity[], from: string, to: string, config: Overview["settings"]["config"]) {
   const slice = answers.filter((item) => studyDate(item.occurred_at, config) >= from && studyDate(item.occurred_at, config) < to);
@@ -33,8 +91,8 @@ function goodShare(answers: Activity[], from: string, to: string, config: Overvi
 /**
  * Три карточки дашборда с общей осью времени.
  *
- * «Время» и «Ответы» делят один период и одинаковый шаг столбцов, поэтому
- * день читается по вертикали без чтения подписей.
+ * Период ответов задаётся общей шапкой, а время отдельно раскрывается
+ * по часам текущего дня или по дням последней недели.
  */
 export function Dashboard({
   overview,
@@ -45,6 +103,7 @@ export function Dashboard({
   onDayAnswers,
   projectId,
 }: DashboardProps) {
+  const [timeScope, setTimeScope] = useState<TimeScope>("today");
   const start = shift(overview.today, 1 - Number(period));
   const past = days.filter((day) => day.date >= start && day.date <= overview.today);
   const answers = allAnswers.filter(answer => studyDate(answer.occurred_at, overview.settings.config) >= start);
@@ -54,7 +113,8 @@ export function Dashboard({
   const todayMinutes = Math.round((today?.seconds ?? 0) / 60);
   const remaining = budget != null ? Math.max(0, budget - todayMinutes) : null;
 
-  const timeData = past.map((day) => ({
+  const weekStart = shift(overview.today, -6);
+  const weekTimeData = days.filter((day) => day.date >= weekStart && day.date <= overview.today).map((day) => ({
     key: day.date,
     label: day.isToday ? "сег." : String(dayOfMonth(day.date)),
     target: overview.days.find(load => load.date === day.date)?.capacity_minutes ?? 0,
@@ -65,6 +125,7 @@ export function Dashboard({
       budget != null ? ` · бюджет ${overview.days.find(load => load.date === day.date)?.capacity_minutes ?? 0} мин` : ""
     }${day.planned ? `, открыто ${day.opened} из ${day.planned}` : ""}`,
   }));
+  const timeData = timeScope === "today" ? hourlyTimeData(overview) : weekTimeData;
 
   const totals = programTotals(overview);
   const sections = sectionStats(overview);
@@ -113,7 +174,19 @@ export function Dashboard({
       </header>
 
       <article className="prep-card prep-tile">
-        <h3>Время сегодня</h3>
+        <header className="prep-tile-head">
+          <h3>Время</h3>
+          <SegmentedTabs
+            label="Период времени"
+            value={timeScope}
+            onChange={setTimeScope}
+            className="prep-time-period"
+            tabs={[
+              { value: "today", label: "Сегодня" },
+              { value: "week", label: "Неделя" },
+            ]}
+          />
+        </header>
         <p className="prep-figure">
           <strong>{duration(today?.seconds ?? 0)}</strong>
           {budget === 0 ? <span>Сегодня отдых по расписанию · время сохранено</span> : budget != null ? (
@@ -127,10 +200,13 @@ export function Dashboard({
         <BarChart
           data={timeData}
           height={116}
-          ariaLabel="Время подготовки по дням"
-          emptyLabel="Занятий за период ещё не было"
+          ariaLabel={timeScope === "today" ? "Время подготовки сегодня по часам" : "Время подготовки по дням недели"}
+          emptyLabel={timeScope === "today" ? "Сегодня занятий ещё не было" : "Занятий за неделю ещё не было"}
         />
-        <p className="prep-chart-legend"><i className="is-fact" /> время <i className="is-budget" /> бюджет дня</p>
+        <p className="prep-chart-legend">
+          <i className="is-fact" /> время
+          {timeScope === "week" && <><i className="is-budget" /> бюджет дня</>}
+        </p>
         {budget == null && (
           <Link className="prep-tile-link" to={`/projects/${projectId}/settings`}>
             Задать дневной бюджет

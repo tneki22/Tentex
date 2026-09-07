@@ -10118,6 +10118,21 @@ button.wizard-back-projects {
   white-space: nowrap;
 }
 
+.workspace-timer-group.is-not-started {
+  gap: var(--space-3);
+}
+
+.workspace-timer-group.is-not-started > span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.workspace-timer-group.is-not-started .button {
+  min-height: 32px;
+  padding: 0 var(--space-3);
+}
+
 .workspace-note-popover {
   width: min(340px, calc(100vw - var(--space-6)));
 }

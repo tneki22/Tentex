@@ -97,6 +97,7 @@ def test_debt_action_changes_plan_and_undo_preserves_journal(session, mode):
     today = study_date(datetime.now(UTC), get_settings(session, project.id).config)
     old = PlanItem(id=uuid4(), unit_id=node.id, on_date=today - timedelta(days=1), pinned=True)
     initial = _apply(session, project.id, mode="manual", items=[old])
+    queue.start_queue(session, project.id)
     progress.record_opening(session, project.id, node.id)
     changed = _apply(
         session, project.id, mode=mode, include_pinned=True, start=today + timedelta(days=2)
@@ -125,7 +126,7 @@ def test_dismiss_does_not_require_a_daily_budget(session):
     assert not _apply(session, project.id, mode="dismiss").items
 
 
-def test_opening_completes_only_its_day_and_both_kinds_without_starting_timer(session):
+def test_opening_completes_only_its_started_day_and_both_kinds(session):
     project, node = _project(session)
     today = study_date(datetime.now(UTC), get_settings(session, project.id).config)
     items = [
@@ -138,11 +139,15 @@ def test_opening_completes_only_its_day_and_both_kinds_without_starting_timer(se
         ]
     ]
     _apply(session, project.id, mode="manual", items=items)
+    assert not progress.record_opening(session, project.id, node.id)
+    assert not reporting.overview(session, project.id).plan.completed_ids
+
+    queue.start_queue(session, project.id)
     progress.record_opening(session, project.id, node.id)
     progress.record_opening(session, project.id, node.id)
     view = reporting.overview(session, project.id)
     assert set(view.plan.completed_ids) == {items[1].id, items[2].id}
-    assert not view.day_started and view.summary.today_seconds == 0
+    assert view.day_started and view.summary.today_seconds == 0
     day = next(d for d in view.days if d.date == today)
     assert day.opened_new_count == day.opened_review_count == day.passed_count == 1
 
