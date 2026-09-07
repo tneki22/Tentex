@@ -1,5 +1,7 @@
 """Metadata.create_all не обнаруживает старые CHECK: нужна проверка настоящих миграций."""
 
+from uuid import UUID
+
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, select, text
@@ -27,11 +29,21 @@ def test_upgrade_populated_job_queue_accepts_preparation_and_preserves_old_rows(
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "migrations"))
     command.upgrade(config, "20260901_0031")
-    with Session(engine) as session:
-        job = BackgroundJob(kind=BackgroundJobKind.PARSE, checkpoint={"retained": True})
-        session.add(job)
-        session.commit()
-        job_id = job.id
+    # Строка старой схемы пишется голым SQL, а не через ORM: модель описывает
+    # сегодняшнюю таблицу, и на промежуточной ревизии в ней уже есть колонки,
+    # которых там ещё нет (`reviewed_at` появляется только в 0041).
+    job_id = UUID("1f1fb3cd63e549c0b34bb3e09123dc46")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO background_jobs "
+                "(id, kind, state, done, total, checkpoint, diagnostics, pause_requested, "
+                "created_at, updated_at) VALUES "
+                "(:id, 'parse', 'queued', 0, 0, '{\"retained\": true}', '[]', 0, "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ),
+            {"id": job_id.hex},
+        )
     command.upgrade(config, "head")
     with Session(engine) as session:
         assert session.get(BackgroundJob, job_id).checkpoint == {"retained": True}

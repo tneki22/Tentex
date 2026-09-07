@@ -303,6 +303,21 @@
   color: var(--tone-warning);
 }
 
+/* Готовое предложение, которое ждёт человека: счётчик становится акцентной
+   пилюлей. Знак постоянный, а не всплывающий, — всплывашку пропускает ровно
+   тот, кто ушёл с экрана и не вернулся, то есть тот, кому она и нужна. */
+.app-widget.has-review > svg {
+  color: var(--accent);
+}
+
+.app-widget-value.is-review {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: var(--weight-medium);
+}
+
 .app-widget-dot {
   flex: none;
   width: 6px;

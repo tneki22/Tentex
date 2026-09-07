@@ -18,8 +18,9 @@ import {
 import {
   ACTIVE_JOB_STATES,
   cancelBackgroundJob,
-  findActiveBackgroundJob,
+  findResumableBackgroundJob,
   getBackgroundJobResult,
+  resolveBackgroundJob,
 } from "../api/backgroundJobs";
 import { AiFailureNotice } from "../components/domain";
 import { useBackgroundJob } from "../hooks/useBackgroundJob";
@@ -196,7 +197,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
       return;
     }
     const controller = new AbortController();
-    void findActiveBackgroundJob("ai_import_repair", { projectId }, controller.signal)
+    void findResumableBackgroundJob("ai_import_repair", { projectId }, controller.signal)
       .then((active) => {
         if (!controller.signal.aborted && active) setJobId(active.id);
       })
@@ -276,6 +277,8 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
         expected_source_hash: runResult.source_hash,
         items: sanitizeItems(items),
       }, controller.signal);
+      // Задача доведена до конца: список принят, из «ждут проверки» уходит.
+      if (jobId) void resolveBackgroundJob(jobId).catch(() => undefined);
       onApplied(result);
       onOpenChange(false);
     } catch (caught) {

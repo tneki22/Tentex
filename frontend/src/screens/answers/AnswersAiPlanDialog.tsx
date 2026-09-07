@@ -13,8 +13,9 @@ import {
 import {
   ACTIVE_JOB_STATES,
   cancelBackgroundJob,
-  findActiveBackgroundJob,
+  findResumableBackgroundJob,
   getBackgroundJobResult,
+  resolveBackgroundJob,
 } from "../../api/backgroundJobs";
 import { AiFailureNotice } from "../../components/domain";
 import { useBackgroundJob } from "../../hooks/useBackgroundJob";
@@ -97,7 +98,7 @@ export function AnswersAiPlanDialog({
   useEffect(() => {
     if (!open) { setJobId(null); return; }
     const controller = new AbortController();
-    void findActiveBackgroundJob("ai_answer_sections", { projectId, materialId }, controller.signal)
+    void findResumableBackgroundJob("ai_answer_sections", { projectId, materialId }, controller.signal)
       .then((active) => { if (!controller.signal.aborted && active) setJobId(active.id); })
       .catch(() => undefined);
     return () => controller.abort();
@@ -156,6 +157,8 @@ export function AnswersAiPlanDialog({
         { runId: plan.run_id, expectedSourceHash: plan.source_hash, accepted: [...accepted] },
         controller.signal,
       );
+      // Задача доведена до конца: план применён, из «ждут проверки» уходит.
+      if (jobId) void resolveBackgroundJob(jobId).catch(() => undefined);
       onApplied(result);
       onOpenChange(false);
     } catch (caught) {

@@ -33,6 +33,9 @@ export interface BackgroundJobRead {
   subject: string;
   /** Чем читается материал: локальный движок или внешняя модель. У ролей ИИ пусто. */
   model_label: string;
+  /** Задача досчиталась, но её предложение ещё никто не принял и не убрал.
+   *  Считает сервер (`registry._needs_review`) — по виду задачи и `reviewed_at`. */
+  needs_review: boolean;
   stage: BackgroundJobStage | null;
   parser_mode: ParserMode | null;
   done: number;
@@ -43,6 +46,7 @@ export interface BackgroundJobRead {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  reviewed_at: string | null;
 }
 
 /** Ответ постановки в очередь: долгие операции больше не держат HTTP-запрос —
@@ -60,11 +64,18 @@ export const ACTIVE_JOB_STATES: ReadonlySet<BackgroundJobState> = new Set([
 const BACKGROUND_JOBS_PATH = "/api/background-jobs";
 
 export const listBackgroundJobs = (
-  filters: { activeOnly?: boolean; projectId?: string; materialId?: string } = {},
+  filters: {
+    activeOnly?: boolean;
+    /** Вместе с `activeOnly` — объединение корзин, а не пересечение. */
+    pendingReview?: boolean;
+    projectId?: string;
+    materialId?: string;
+  } = {},
   signal?: AbortSignal,
 ): Promise<BackgroundJobRead[]> => {
   const params = new URLSearchParams();
   if (filters.activeOnly) params.set("active_only", "true");
+  if (filters.pendingReview) params.set("pending_review", "true");
   if (filters.projectId) params.set("project_id", filters.projectId);
   if (filters.materialId) params.set("material_id", filters.materialId);
   const query = params.toString();
@@ -81,16 +92,30 @@ export const getBackgroundJob = (jobId: string, signal?: AbortSignal): Promise<B
 export const getBackgroundJobResult = <T>(jobId: string, signal?: AbortSignal): Promise<T> =>
   request(`${BACKGROUND_JOBS_PATH}/${encodeURIComponent(jobId)}/result`, { signal });
 
+/** Снять задачу с корзины «ждут проверки». Зовётся после применения плана и
+ *  когда результат убирают из панели не глядя; повторный вызов безвреден. */
+export const resolveBackgroundJob = (jobId: string): Promise<BackgroundJobRead> =>
+  request(`${BACKGROUND_JOBS_PATH}/${encodeURIComponent(jobId)}/resolve`, { method: "POST" });
+
 export const cancelBackgroundJob = (jobId: string): Promise<BackgroundJobRead> =>
   request(`${BACKGROUND_JOBS_PATH}/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
 
-/** Активная задача нужного вида для сущности — диалог при открытии подписывается
- *  на неё вместо пустого старта, если пользователь уже запускал операцию и ушёл. */
-export async function findActiveBackgroundJob(
+/** Задача нужного вида, к которой диалогу есть смысл вернуться при открытии:
+ *  идущая сейчас либо уже досчитавшаяся, но с неразобранным предложением.
+ *
+ *  Второй случай и есть починка потерянного результата: уход с экрана больше не
+ *  выбрасывает готовый план — открыв диалог заново, пользователь видит его,
+ *  а не платит модели второй раз за тот же вопрос. Самая свежая задача идёт
+ *  первой: список отсортирован по убыванию `created_at`.
+ */
+export async function findResumableBackgroundJob(
   kind: BackgroundJobKind,
   filters: { projectId?: string; materialId?: string },
   signal?: AbortSignal,
 ): Promise<BackgroundJobRead | null> {
-  const jobs = await listBackgroundJobs({ activeOnly: true, ...filters }, signal);
+  const jobs = await listBackgroundJobs(
+    { activeOnly: true, pendingReview: true, ...filters },
+    signal,
+  );
   return jobs.find((job) => job.kind === kind) ?? null;
 }

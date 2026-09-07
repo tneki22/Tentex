@@ -69,6 +69,7 @@ import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
 import { AnswerEditor } from "./answers/AnswerEditor";
 import { AnswerFileList, type AnswerFile } from "./answers/AnswerFileList";
 import { AnswerHeadingSuggestions } from "./answers/AnswerHeadingSuggestions";
+import { usePendingReviewJob } from "../hooks/usePendingReviewJob";
 import { AnswersAiPlanDialog } from "./answers/AnswersAiPlanDialog";
 import { AnswerSourceDialog } from "./answers/AnswerSourceDialog";
 
@@ -174,6 +175,15 @@ export function CoverageMap() {
       await refresh();
     },
   );
+  // Разметка ответов моделью досчиталась в фоне — открываем диалог с готовым
+  // планом сразу, а не оставляем его ждать в панели фоновых задач.
+  const answersReviewJob = usePendingReviewJob(
+    "ai_answer_sections",
+    { projectId, materialId: answersMaterial?.id },
+    Boolean(answersMaterial),
+  );
+
+  useEffect(() => { if (answersReviewJob) setAiPlanOpen(true); }, [answersReviewJob]);
 
   async function load(signal?: AbortSignal) {
     setLoading(true);

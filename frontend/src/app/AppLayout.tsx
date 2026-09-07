@@ -22,7 +22,13 @@ import { screenById } from "./screens";
 import { SCREEN_VIEWS } from "./views";
 import { ThemeToggle } from "./ThemeToggle";
 import { getAiSettings, type AiSettingsRead } from "../api/ai";
-import { cancelBackgroundJob, listBackgroundJobs, type BackgroundJobRead } from "../api/backgroundJobs";
+import {
+  ACTIVE_JOB_STATES,
+  cancelBackgroundJob,
+  listBackgroundJobs,
+  resolveBackgroundJob,
+  type BackgroundJobRead,
+} from "../api/backgroundJobs";
 import { TaskRow, type BackgroundTask, type TaskKind } from "../components/domain";
 
 const BACKGROUND_POLL_MS = 4000;
@@ -44,12 +50,22 @@ function backgroundJobPath(job: BackgroundJobRead): string | null {
     case "ai_preparation":
       return job.project_id ? `/projects/new?draft=${job.project_id}` : null;
     case "link_answers":
+    case "ai_answer_sections":
       return job.project_id && job.material_id
         ? `/projects/${job.project_id}/materials/${job.material_id}`
         : null;
     default:
       return null;
   }
+}
+
+/** Куда вести из корзины «ждут проверки»: тот же экран, но с номером задачи.
+ *  Экран по этому параметру открывает свой диалог сразу на готовом
+ *  предложении — иначе пользователь приходил бы на экран и гадал, что нажать.
+ *  Одна договорённость на все роли ИИ, а не вкладка в каждом разделе. */
+function backgroundJobReviewPath(job: BackgroundJobRead): string | null {
+  const path = backgroundJobPath(job);
+  return path ? `${path}?job=${job.id}` : null;
 }
 
 /** Имя файла или проекта; огрызок UUID — только если сервер не дал ничего. */
@@ -76,9 +92,54 @@ function toBackgroundTask(job: BackgroundJobRead): BackgroundTask {
     done: job.done,
     total: job.total,
     etaMinutes: perPage && left > 0 ? Math.ceil((left * perPage) / 60) : null,
-    state: job.state as BackgroundTask["state"],
+    state: job.needs_review ? "review" : (job.state as BackgroundTask["state"]),
     error: job.error ?? undefined,
   };
+}
+
+interface BackgroundJobGroupProps {
+  jobs: BackgroundJobRead[];
+  navigate: (path: string) => void;
+  onCancel?: (jobId: string) => void;
+  onDismiss?: (jobId: string) => void;
+}
+
+/**
+ * Группа строк в поповере фоновых задач: одинаковая и для идущих, и для тех,
+ * что ждут проверки, — различаются они содержимым строки и тем, куда ведёт клик.
+ *
+ * Строка целиком ведёт на экран задачи, но клик по кнопке внутри неё
+ * («Отменить», «Убрать») не должен ещё и переключать экран — клики,
+ * начавшиеся на вложенной кнопке, отсекаются.
+ */
+function BackgroundJobGroup({ jobs, navigate, onCancel, onDismiss }: BackgroundJobGroupProps) {
+  return (
+    <div className="popover-task-list">
+      {jobs.map((job) => {
+        const path = job.needs_review ? backgroundJobReviewPath(job) : backgroundJobPath(job);
+        return (
+          <div
+            key={job.id}
+            className={path ? "popover-task-row is-linked" : "popover-task-row"}
+            role={path ? "button" : undefined}
+            tabIndex={path ? 0 : undefined}
+            onClick={path ? (event) => {
+              if ((event.target as HTMLElement).closest("button")) return;
+              navigate(path);
+            } : undefined}
+            onKeyDown={path ? (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              if ((event.target as HTMLElement).closest("button")) return;
+              event.preventDefault();
+              navigate(path);
+            } : undefined}
+          >
+            <TaskRow task={toBackgroundTask(job)} onCancel={onCancel} onDismiss={onDismiss} />
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /**
@@ -114,7 +175,10 @@ export function AppLayout() {
   useEffect(() => {
     let active = true;
     const loadBackgroundJobs = () => {
-      void listBackgroundJobs({ activeOnly: true }).then((jobs) => {
+      // Обе корзины сразу: и то, что считается, и то, что уже досчиталось и
+      // ждёт человека. Вторая держится в панели до тех пор, пока предложение
+      // не приняли или не убрали, — раньше готовый результат просто исчезал.
+      void listBackgroundJobs({ activeOnly: true, pendingReview: true }).then((jobs) => {
         if (active) setBackgroundJobs(jobs);
       }).catch(() => undefined);
     };
@@ -129,7 +193,21 @@ export function AppLayout() {
   function cancelJob(jobId: string) {
     void cancelBackgroundJob(jobId)
       .then((updated) => setBackgroundJobs((current) => current.map((job) => job.id === updated.id ? updated : job)
-        .filter((job) => job.state === "queued" || job.state === "running" || job.state === "paused")))
+        .filter((job) => ACTIVE_JOB_STATES.has(job.state) || job.needs_review)))
+      .catch(() => undefined);
+  }
+
+  // Две корзины из одного списка: что считается и что уже посчитано, но ждёт
+  // человека. Строка не может быть в обеих — `needs_review` бывает только у
+  // завершённой задачи.
+  const reviewJobs = backgroundJobs.filter((job) => job.needs_review);
+  const runningJobs = backgroundJobs.filter((job) => ACTIVE_JOB_STATES.has(job.state));
+
+  /** Убрать готовое предложение из панели, не открывая. Результат остаётся на
+   *  сервере — уходит только напоминание о том, что его ждут. */
+  function dismissJob(jobId: string) {
+    void resolveBackgroundJob(jobId)
+      .then(() => setBackgroundJobs((current) => current.filter((job) => job.id !== jobId)))
       .catch(() => undefined);
   }
 
@@ -267,44 +345,36 @@ export function AppLayout() {
             <Popover
               title="Фоновые задачи"
               trigger={
-                <button type="button" className="app-widget">
+                <button type="button" className={reviewJobs.length > 0 ? "app-widget has-review" : "app-widget"}>
                   <Activity size={15} aria-hidden="true" />
                   <b className="nav-label">Фоновая задача</b>
-                  {backgroundJobs.length > 0 && <span className="app-widget-value">{backgroundJobs.length}</span>}
+                  {backgroundJobs.length > 0 && (
+                    <span className={reviewJobs.length > 0 ? "app-widget-value is-review" : "app-widget-value"}>
+                      {backgroundJobs.length}
+                    </span>
+                  )}
                 </button>
               }
             >
               {backgroundJobs.length === 0 ? (
                 <p className="popover-note">Фон свободен.</p>
               ) : (
-                <div className="popover-task-list">
-                  {backgroundJobs.map((job) => {
-                    const path = backgroundJobPath(job);
-                    // Строка целиком ведёт на экран задачи, но клик по кнопке
-                    // «Отменить» внутри TaskRow не должен ещё и переключать
-                    // экран — отсекаем клики, начавшиеся на вложенной кнопке.
-                    return (
-                      <div
-                        key={job.id}
-                        className={path ? "popover-task-row is-linked" : "popover-task-row"}
-                        role={path ? "button" : undefined}
-                        tabIndex={path ? 0 : undefined}
-                        onClick={path ? (event) => {
-                          if ((event.target as HTMLElement).closest("button")) return;
-                          navigate(path);
-                        } : undefined}
-                        onKeyDown={path ? (event) => {
-                          if (event.key !== "Enter" && event.key !== " ") return;
-                          if ((event.target as HTMLElement).closest("button")) return;
-                          event.preventDefault();
-                          navigate(path);
-                        } : undefined}
-                      >
-                        <TaskRow task={toBackgroundTask(job)} onCancel={cancelJob} />
-                      </div>
-                    );
-                  })}
-                </div>
+                <>
+                  {/* Ждущие идут первыми: это то, из-за чего панель вообще
+                      открывают — работа уже сделана и упирается в человека. */}
+                  {reviewJobs.length > 0 && (
+                    <section className="popover-task-group">
+                      <h4 className="popover-task-group-title">Ждут проверки</h4>
+                      <BackgroundJobGroup jobs={reviewJobs} navigate={navigate} onDismiss={dismissJob} />
+                    </section>
+                  )}
+                  {runningJobs.length > 0 && (
+                    <section className="popover-task-group">
+                      <h4 className="popover-task-group-title">Идут сейчас</h4>
+                      <BackgroundJobGroup jobs={runningJobs} navigate={navigate} onCancel={cancelJob} />
+                    </section>
+                  )}
+                </>
               )}
             </Popover>
 

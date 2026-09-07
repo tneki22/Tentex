@@ -35,7 +35,7 @@ import {
   type TargetOutcome,
 } from "../../api/projects";
 import { getAiSettings, isAiApiError, type AiSettingsRead } from "../../api/ai";
-import { findActiveBackgroundJob, getBackgroundJobResult } from "../../api/backgroundJobs";
+import { findResumableBackgroundJob, getBackgroundJobResult } from "../../api/backgroundJobs";
 import type { WizardDraftController } from "../../hooks/useWizardDraft";
 import { useBackgroundJob } from "../../hooks/useBackgroundJob";
 import { useProjectMaterials } from "../../hooks/useProjectMaterials";
@@ -618,7 +618,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     const projectId = controller.detail?.project.id;
     if (!projectId) return;
     const abort = new AbortController();
-    void findActiveBackgroundJob("ai_preparation", { projectId }, abort.signal)
+    void findResumableBackgroundJob("ai_preparation", { projectId }, abort.signal)
       .then((active) => {
         if (abort.signal.aborted || !active) return;
         setEstimatePending(true);

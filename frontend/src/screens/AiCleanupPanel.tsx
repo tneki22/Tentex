@@ -15,7 +15,7 @@ import {
   type PageCorrectionRead,
 } from "../api/materials";
 import { ProjectApiError } from "../api/projects";
-import { ACTIVE_JOB_STATES, cancelBackgroundJob, findActiveBackgroundJob, getBackgroundJobResult } from "../api/backgroundJobs";
+import { ACTIVE_JOB_STATES, cancelBackgroundJob, findResumableBackgroundJob, getBackgroundJobResult } from "../api/backgroundJobs";
 import { useBackgroundJob } from "../hooks/useBackgroundJob";
 import { AiFailureNotice } from "../components/domain";
 import {
@@ -141,7 +141,7 @@ export function AiCleanupPanel({
     // При открытии сверяемся с реестром: уборка этой страницы могла остаться
     // идти в фоне с прошлого раза, когда диалог был закрыт.
     const controller = new AbortController();
-    void findActiveBackgroundJob(
+    void findResumableBackgroundJob(
       "ai_cleanup",
       { materialId: material.id, projectId: projectId ?? undefined },
       controller.signal,

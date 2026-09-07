@@ -29,6 +29,9 @@ class BackgroundJobRead(ApiModel):
     # подставляет их отдельным шагом (`registry._read`).
     subject: str = ""
     model_label: str = ""
+    # Готовое предложение, которое ещё никто не принял и не убрал. Считается
+    # реестром по виду задачи и `reviewed_at` (`registry._needs_review`).
+    needs_review: bool = False
     # Стадии extract/segment и режим разбора осмысленны только у kind=parse.
     stage: ProcessingStage | None
     parser_mode: ParserMode | None
@@ -40,3 +43,4 @@ class BackgroundJobRead(ApiModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+    reviewed_at: datetime | None

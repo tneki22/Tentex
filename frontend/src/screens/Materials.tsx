@@ -57,6 +57,7 @@ import {
   ProjectNav,
   QualityBadge,
 } from "../components/domain";
+import { usePendingReviewJob } from "../hooks/usePendingReviewJob";
 import { AnswersAiPlanDialog } from "./answers/AnswersAiPlanDialog";
 import {
   Button,
@@ -1201,6 +1202,13 @@ function MaterialSurface() {
   const [removeOpen, setRemoveOpen] = useState(false);
   const [autoMatchOpen, setAutoMatchOpen] = useState(false);
   const [aiPlanOpen, setAiPlanOpen] = useState(false);
+  // Разметка ответов моделью досчиталась в фоне и ждёт человека — открываем
+  // диалог с готовым планом сразу, без поиска нужной кнопки на экране.
+  const answersReviewJob = usePendingReviewJob(
+    "ai_answer_sections",
+    { projectId, materialId },
+    Boolean(materialId),
+  );
   const [pageNumber, setPageNumber] = useState(1);
   const [page, setPage] = useState<MaterialPageRead | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -1252,6 +1260,8 @@ function MaterialSurface() {
   useEffect(() => {
     setViewMode(hasOriginal ? "original" : "text");
   }, [hasOriginal, material?.id]);
+
+  useEffect(() => { if (answersReviewJob) setAiPlanOpen(true); }, [answersReviewJob]);
 
   const treeResult = useMemo(() => {
     try { return buildProgramTree(project?.program.nodes ?? []); }

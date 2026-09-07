@@ -14,7 +14,13 @@ import {
   type ProgramGroupingRunRead,
   type ProgramNodeRead,
 } from "../api/projects";
-import { cancelBackgroundJob, findActiveBackgroundJob, getBackgroundJobResult, ACTIVE_JOB_STATES } from "../api/backgroundJobs";
+import {
+  ACTIVE_JOB_STATES,
+  cancelBackgroundJob,
+  findResumableBackgroundJob,
+  getBackgroundJobResult,
+  resolveBackgroundJob,
+} from "../api/backgroundJobs";
 import { useBackgroundJob } from "../hooks/useBackgroundJob";
 import { AiFailureNotice } from "../components/domain";
 import {
@@ -125,7 +131,7 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
     // для проекта — ушли и вернулись, задача всё это время шла в фоне.
     Promise.all([
       preflightProgramGrouping(projectId, controller.signal),
-      findActiveBackgroundJob("ai_grouping", { projectId }, controller.signal),
+      findResumableBackgroundJob("ai_grouping", { projectId }, controller.signal),
     ])
       .then(([value, active]) => {
         if (controller.signal.aborted) return;
@@ -207,6 +213,8 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
         expected_source_hash: runResult.source_hash,
         groups,
       }, controller.signal);
+      // Задача доведена до конца: предложение принято, из «ждут проверки» уходит.
+      if (jobId) void resolveBackgroundJob(jobId).catch(() => undefined);
       onApplied(result);
       onOpenChange(false);
     } catch (caught) {

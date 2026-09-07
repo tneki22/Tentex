@@ -805,6 +805,10 @@ class BackgroundJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Когда пользователь разобрал готовое предложение (принял или убрал). Пусто
+    # у задач, которые применяются сами, и у тех, чей результат ещё ждёт
+    # проверки — см. `background.registry.REVIEW_REQUIRED_KINDS`.
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ProgramNode(Base):

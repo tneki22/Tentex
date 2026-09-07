@@ -73,6 +73,7 @@ import {
 } from "./programTree";
 import { useBindings } from "../hooks/useBindings";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
+import { usePendingReviewJob } from "../hooks/usePendingReviewJob";
 import { AiGroupingDialog } from "./AiGroupingDialog";
 import { AiImportRepairDialog } from "./AiImportRepairDialog";
 
@@ -153,6 +154,13 @@ export function Program() {
   const [groupingNotice, setGroupingNotice] = useState(false);
   const [importRepairOpen, setImportRepairOpen] = useState(false);
   const [importRepairNotice, setImportRepairNotice] = useState(false);
+  // Готовое предложение модели ждёт человека — открываем его диалог сразу, а не
+  // оставляем пользователя на экране гадать, где искать результат.
+  const groupingReviewJob = usePendingReviewJob("ai_grouping", { projectId });
+  const importRepairReviewJob = usePendingReviewJob("ai_import_repair", { projectId });
+
+  useEffect(() => { if (groupingReviewJob) setGroupingOpen(true); }, [groupingReviewJob]);
+  useEffect(() => { if (importRepairReviewJob) setImportRepairOpen(true); }, [importRepairReviewJob]);
 
   async function load(signal?: AbortSignal) {
     setLoading(true);
