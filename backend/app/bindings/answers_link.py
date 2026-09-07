@@ -501,6 +501,61 @@ def apply_answers_link_undo(session: Session, project_id: UUID, data: dict) -> N
         answer.updated_at = now
 
 
+def apply_sections(
+    session: Session,
+    project_id: UUID,
+    material: Material,
+    label: str,
+    nodes: list[ProgramNode],
+    sections: list[_Section],
+    *,
+    target_title: str | None = None,
+) -> AnswersLinkResult:
+    """Привязать уже определённые разделы и заполнить эталоны — общий хвост
+
+    для разрешения неоднозначного заголовка и для применения плана,
+    размеченного моделью (срез F, ai_answer_sections). Оба пути добавляют
+    привязки к уже существующим, а не пересобирают файл целиком: в отличие от
+    `iter_link_answers_material`, здесь нет `_clear_answer_bindings` — иначе
+    заявка на один раздел стирала бы все остальные, уже привязанные ранее.
+    """
+    answer_node_ids = {
+        node_id
+        for section in sections
+        if section.bindable_fragments()
+        for node_id in section.node_ids
+    }
+    answers_before = _snapshot_answers(session, project_id, answer_node_ids)
+
+    linked_fragments = 0
+    created_ids: list[UUID] = []
+    for section in sections:
+        section_linked, section_created = _bind_section(session, project_id, material, section)
+        linked_fragments += section_linked
+        created_ids.extend(section_created)
+
+    outcomes = _fill_answers(session, project_id, material, label, sections)
+
+    if created_ids:
+        session.add(
+            ProjectActionLog(
+                project_id=project_id,
+                action_type="answers_link",
+                phase="active",
+                payload_version=1,
+                target_title=target_title or label,
+                inverse_data={
+                    "binding_ids": [str(value) for value in created_ids],
+                    "answers": answers_before,
+                },
+            )
+        )
+    session.flush()
+    return _build_link_result(
+        session, nodes, sections, linked_fragments=linked_fragments, outcomes=outcomes
+    )
+
+
 def _build_link_result(
     session: Session,
     nodes: list[ProgramNode],
@@ -819,39 +874,6 @@ def resolve_answers_heading(
         header_fragment_ids=set(detected.header_fragment_ids),
     )
     sections = _expand_duplicate_sections(nodes, [section])
-    answer_node_ids = {
-        item_node_id
-        for item in sections
-        if item.bindable_fragments()
-        for item_node_id in item.node_ids
-    }
-    answers_before = _snapshot_answers(session, project_id, answer_node_ids)
-    linked_fragments = 0
-    created_ids: list[UUID] = []
-    for item in sections:
-        item_linked, item_created = _bind_section(session, project_id, material, item)
-        linked_fragments += item_linked
-        created_ids.extend(item_created)
-    outcomes = _fill_answers(session, project_id, material, label, sections)
-    if created_ids:
-        session.add(
-            ProjectActionLog(
-                project_id=project_id,
-                action_type="answers_link",
-                phase="active",
-                payload_version=1,
-                target_title=node.title,
-                inverse_data={
-                    "binding_ids": [str(value) for value in created_ids],
-                    "answers": answers_before,
-                },
-            )
-        )
-    session.flush()
-    return _build_link_result(
-        session,
-        nodes,
-        sections,
-        linked_fragments=linked_fragments,
-        outcomes=outcomes,
+    return apply_sections(
+        session, project_id, material, label, nodes, sections, target_title=node.title
     )
