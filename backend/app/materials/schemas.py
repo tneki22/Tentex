@@ -304,6 +304,9 @@ class LibraryMaterialDetailRead(LibraryMaterialRead):
     task: ProcessingTaskRead | None
     retrieved_at: datetime | None
     updated_at: datetime
+    # Путь от корня проекта, а не абсолютный: инспектор — не про то, куда
+    # установлен Tentex на этой машине, а про то, где файл лежит внутри `data/`.
+    storage_path: str
 
 
 class LibraryMaterialAttachWrite(ApiModel):

@@ -230,6 +230,7 @@ export interface LibraryMaterialDetailRead extends LibraryMaterialRead {
   task: ProcessingTaskRead | null;
   retrieved_at: string | null;
   updated_at: string;
+  storage_path: string;
 }
 
 export interface LibrarySearchHit {

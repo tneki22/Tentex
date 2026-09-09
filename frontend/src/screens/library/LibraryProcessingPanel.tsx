@@ -1,12 +1,11 @@
 import { Pencil, Play, RotateCcw, Settings2, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
-import {
-  PARSER_MODE_TITLES,
-  type LibraryMaterialDetailRead,
-  type MaterialPageRead,
-  type ParserMode,
-  type ProcessingScope,
+import type {
+  LibraryMaterialDetailRead,
+  MaterialPageRead,
+  ParserMode,
+  ProcessingScope,
 } from "../../api/materials";
 import {
   getOcrSettings,
@@ -23,7 +22,6 @@ import {
   ErrorState,
   Field,
   RadioCards,
-  StatusBadge,
 } from "../../components/ui";
 
 const STAGE_LABEL: Record<string, string> = {
@@ -231,32 +229,12 @@ export function LibraryProcessingPanel({
     <div className="inspector-content">
       <header className="inspector-section-head">
         <h3>{presentation.processingTitle}</h3>
-        {material.parser_mode && prepared && (
-          <StatusBadge tone="neutral">
-            Режим «{PARSER_MODE_TITLES[material.parser_mode]}»
-          </StatusBadge>
-        )}
       </header>
-
-      <dl className="inspector-summary">
-        <div><dt>Страниц</dt><dd>{pageCount}</dd></div>
-        {material.capabilities.can_run_ocr && (
-          <div><dt>Сканов</dt><dd>{material.scan_page_count}</dd></div>
-        )}
-        {showOcrReview && <div><dt>Нужно проверить</dt><dd>{reviewPages}</dd></div>}
-      </dl>
 
       {material.parser_mode === "fast" && prepared && (
         <p className="inspector-note">
           «Быстро» распознаёт обычный текст. Формулы он не читает — сохраняет вырезом,
           чтобы они не потерялись; сверяйтесь с изображением.
-        </p>
-      )}
-
-      {material.parser_mode === "cloud" && prepared && (
-        <p className="inspector-note">
-          «Облако» прочитало страницы внешней моделью. Формулы приходят в LaTeX, но
-          модель может пересказать вместо того, чтобы переписать, — сверяйтесь с оригиналом.
         </p>
       )}
 

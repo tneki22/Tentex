@@ -395,6 +395,7 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
         task=task_read(latest_task(session, material_id)),
         retrieved_at=material.retrieved_at,
         updated_at=material.updated_at,
+        storage_path=f"data/storage/{material.storage_path}",
     )
 
 
@@ -1050,6 +1051,15 @@ def start_processing_core(
     task = latest_task(session, material_id)
     if task and task.state in ACTIVE_TASK_STATES:
         raise ProjectConflictError("Разбор уже запущен", code="material_processing_active")
+    if task and task.state == BackgroundJobState.FAILED:
+        # Неудачная попытка могла успеть записать часть страниц под свой номер
+        # ревизии, так и не зарегистрировав его: не убрать за ней — следующий
+        # номер займётся навсегда, а в «Версиях» появится незримый пропуск.
+        building = int(task.checkpoint.get("revision") or 0)
+        if building and building != material.active_parse_revision:
+            discard_building_revision(session, material_id, building)
+        session.delete(task)
+        session.flush()
     # Готовность движка спрашиваем у реестра распознавания, а не у сервиса
     # напрямую: там же считается статус на экране настроек, и разъехаться они
     # не могут. Для «Быстро» это в том числе проверка, что модели скачаны.

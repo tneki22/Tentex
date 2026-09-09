@@ -72,7 +72,7 @@ export function LibraryMaterialFilePanel({
             </div>
           )}
           <div><dt>Добавлен</dt><dd>{new Date(material.created_at).toLocaleDateString("ru-RU")}</dd></div>
-          <div><dt>Хранение</dt><dd>Локально, в папке установки</dd></div>
+          <div><dt>Хранение</dt><dd><code>{material.storage_path}</code></dd></div>
         </dl>
 
         <div className="inspector-actions">
