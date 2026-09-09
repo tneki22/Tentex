@@ -1,6 +1,6 @@
 # Глобальная рабочая область материала в Библиотеке
 
-> Фактический контракт, сделано 14.08.2026. Спецификация — `docs/superpowers/specs/2026-08-14-global-library-material-workspace-design.md`, план — `docs/superpowers/plans/2026-08-14-global-library-material-workspace.md`, экран — раздел «Библиотека» в `SCREENS.md`.
+> Фактический контракт, сделано 14.08.2026. Спецификация — `docs/superpowers/specs/2026-08-14-global-library-material-workspace-design.md`, план — `docs/superpowers/plans/2026-08-14-global-library-material-workspace.md`, экран — раздел «Библиотека» в `SCREENS.md`. Практический current guide по всем входам, запуску, storage, ревизиям и ошибкам — `../../LIBRARY_FILE_PROCESSING.md`; здесь сохраняется архитектура рабочей области и её датированные UI-дополнения.
 
 > **Обновлено 25.08.2026.** Для PDF и изображений исходным представлением остаётся
 > «Оригинал» и оно открывается по умолчанию. «Текст» — проверяемый производный слой на
@@ -44,7 +44,7 @@
 
 Миграция создаёт запись `imported` для каждой уже существующей пары `(material_id, revision)`, поэтому история есть и у материалов, разобранных до этой вертикали. У таких записей `summary` пустая — это честно, а не потеряно: сводку никто не считал.
 
-`material_fragments` получили `time_from` и `time_to`: границы сегмента у расшифровки аудио и субтитров. Проверки — оба значения неотрицательны и `time_to >= time_from`.
+`material_fragments` получили `time_from` и `time_to`: схема хранит границы сегмента, и аудио-parser их заполняет. YouTube-снимок содержит timestamps в Markdown, но текущий обычный текстовый parser не переносит их в эти поля. Проверки — оба значения неотрицательны и `time_to >= time_from`.
 
 **Что изменилось в жизненном цикле:** страницы и фрагменты прежней ревизии больше не удаляются после успешного разбора. `_drop_unbound_fragments` убран из воркера. Историческая версия удаляется только вместе с физическим материалом.
 
@@ -67,11 +67,18 @@
 | `GET` | `/api/materials/{id}/revisions` | История версий |
 | `POST` | `/api/materials/{id}/revisions/{revision}/restore` | Восстановить как новую версию |
 | `POST` | `/api/materials/{id}/processing` | Запуск с режимом и областью |
-| `POST` | `/api/materials/{id}/processing/{action}` | `pause · resume · retry` |
+| `POST` | `/api/materials/{id}/processing/{action}` | `pause · resume · retry · cancel` |
 | `PUT` | `/api/materials/{id}/pages/{page}` | Ручная правка новой версией |
 | `POST` | `/api/materials/{id}/pages/{page}/ai-cleanup/...` | Preflight, предложение и применение уборки без проекта |
 | `POST` | `/api/materials/{id}/source/refresh` | Новый снимок веб-страницы или субтитров |
 | `GET` | `/api/materials/{id}/delete-preview`, `DELETE /api/materials/{id}` | Последствия и физическое удаление |
+
+Typst — общий материал с `presentation_kind=typst`, но не OCR-разбор:
+`POST /api/materials/typst` создаёт нормализованный bundle и `BackgroundJob`
+`typst_compile`; `/materials/{id}/typst/build` и `/typst/files` управляют пересборкой и
+досылкой зависимостей, `/rendered?revision=` отдаёт PDF. Материал может перейти в
+`needs_input`, а прежний успешный PDF при обычном отказе компилятора сохраняется.
+Ограничения атомарности и истории — в `typst-materials.md`.
 
 Конкретные пути (`upload`, `text`, `external`, `delete-preview`, `revisions`, `search`, `source`, `processing`) объявлены раньше общего `/{material_id}`.
 
@@ -82,6 +89,7 @@
 `presentation_kind` выводится один раз на сервере, а не проверками MIME по фронтенду:
 
 ```
+typst   → source_kind == typst
 youtube → source_kind == youtube
 audio   → source_kind == audio или media_type audio/*
 web     → source_kind == url
@@ -229,7 +237,7 @@ python backend/scripts/check_library_workspace.py
 
 ## Что осталось за границей
 
-Реализации режимов «Учебник», «Облако», «Максимум» и «Эксперт» — это их этапы, здесь только честные карточки с причинами. Проходы 1 и 2, эмбеддинги, автоматические привязки, чат с документом, встроенный браузер, обязательное воспроизведение YouTube и постраничный рендер DOCX новой тяжёлой зависимостью в эту вертикаль не входят.
+Текущие режимы разбора — `fast` и `cloud`; облачный OCR реализован. GPU-режим «Учебник», «Максимум» и «Эксперт» сняты, история возврата — `docs/archive/gpu-ocr-textbook.md`. Проходы 1 и 2 учебных материалов, эмбеддинги, чат с документом, встроенный браузер, обязательное воспроизведение YouTube и постраничный рендер DOCX новой тяжёлой зависимостью в эту вертикаль не входят. Автосопоставление файла эталонных ответов реализовано отдельно и уже вызывается при публикации ревизии.
 
 
 ## Быстрый OCR и панель просмотра — 26.08.2026
