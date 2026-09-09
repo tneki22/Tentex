@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
@@ -141,18 +140,19 @@ async def add_typst_files(
 
 
 @router.get("/materials/{material_id}/rendered")
-def get_typst_rendered(material_id: UUID, session: SessionDependency) -> FileResponse:
-    """Отдаёт только последнюю полностью успешную сборку Typst."""
-    material = library.material_or_404(session, material_id)
-    row = session.get(TypstMaterial, material.id)
-    if row is None or not row.current_pdf_path:
-        raise ProjectDomainError(
-            "Собранный PDF пока недоступен", status=409, code="typst_preview_unavailable"
-        )
+def get_typst_rendered(
+    material_id: UUID, session: SessionDependency, revision: int | None = None
+) -> FileResponse:
+    """Отдаёт полностью успешную сборку Typst: текущую или выбранной версии."""
+    source = library.typst_rendered_source(session, material_id, revision=revision)
+    # inline: PDF открывается в просмотрщике внутри страницы. С заголовком
+    # attachment (умолчание FileResponse при filename) браузер вместо показа
+    # начинал загрузку, и во вкладке «Собранный документ» оставалась пустота.
     return FileResponse(
-        material_path(row.current_pdf_path),
-        media_type="application/pdf",
-        filename=f"{Path(material.original_name).stem}.pdf",
+        source.path,
+        media_type=source.media_type,
+        filename=source.filename,
+        content_disposition_type="inline",
     )
 
 

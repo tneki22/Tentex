@@ -2,6 +2,7 @@ import { Download, ExternalLink, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import {
+  libraryRenderedUrl,
   librarySourceUrl,
   type LibraryMaterialDetailRead,
   type MaterialPurpose,
@@ -83,8 +84,20 @@ export function LibraryMaterialFilePanel({
             href={librarySourceUrl(material.id)}
             download={material.original_name}
           >
-            <Download size={14} aria-hidden="true" /> Скачать исходник
+            <Download size={14} aria-hidden="true" />
+            {material.presentation_kind === "typst" ? "Скачать проект" : "Скачать исходник"}
           </a>
+          {/* У Typst исходник и читаемый документ — разные файлы: ZIP проекта
+              и PDF сборки. Оба нужны, поэтому обе ссылки стоят рядом. */}
+          {material.typst?.has_rendered_pdf && (
+            <a
+              className="secondary-button"
+              href={libraryRenderedUrl(material.id)}
+              download={`${material.original_name.replace(/\.typ$/i, "")}.pdf`}
+            >
+              <Download size={14} aria-hidden="true" /> Скачать PDF
+            </a>
+          )}
           {material.capabilities.can_refresh_source && (
             <Button variant="ghost" disabled={busy} onClick={() => setRefreshOpen(true)}>
               <RefreshCw size={14} aria-hidden="true" />

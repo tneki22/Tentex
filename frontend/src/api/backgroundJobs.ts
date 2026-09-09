@@ -5,6 +5,7 @@ import type { ParserMode } from "./materials";
  *  вызовы ИИ. Держать в синхроне с `BackgroundJobKind` в `backend/app/models.py`. */
 export type BackgroundJobKind =
   | "parse"
+  | "typst_compile"
   | "ai_grouping"
   | "ai_import_repair"
   | "ai_preparation"

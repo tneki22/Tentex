@@ -21,16 +21,17 @@ from app.db import SessionLocal, upgrade_database
 from app.logging_config import configure_logging
 from app.materials import library
 from app.materials import revisions as revision_registry
-from app.materials.parsers.base import ParsedElement, ParsedPage
+from app.materials.parsers.base import ParsedPage
 from app.materials.parsers.cloud_vlm import CloudRecognizer
-from app.materials.parsers.native import extract_outline, iter_pages
+from app.materials.parsers.native import extract_outline, iter_pages, text_layer_pages
 from app.materials.schemas import MaterialPurpose
 from app.materials.storage import material_path
 from app.materials.typst import (
+    CompileResult,
     compile_bundle,
     extract_bundle,
     missing_packages,
-    native_pdf_pages,
+    package_issues,
     source_chunks,
 )
 from app.models import (
@@ -113,6 +114,7 @@ def claim_job(session: Session, worker_id: str) -> BackgroundJob | None:
                 material.status = MaterialState.PROCESSING
                 material.outline = extract_outline(material_path(material.storage_path))
         elif job.kind == BackgroundJobKind.TYPST_COMPILE:
+            job.stage = ProcessingStage.EXTRACT
             material = session.get(Material, job.material_id)
             if material:
                 material.status = MaterialState.PROCESSING
@@ -381,22 +383,6 @@ def process_parse_job(session: Session, task: BackgroundJob) -> None:
             recognizer.close()
 
 
-def _typst_pages(pdf_path: Path) -> list[ParsedPage]:
-    """Превращает итоговый PDF в native-страницы, сознательно не вызывая OCR."""
-    return [
-        ParsedPage(
-            page_number=number,
-            width=width,
-            height=height,
-            markdown=text,
-            plain_text=text,
-            quality="native",
-            elements=(ParsedElement("paragraph", text, (0, 0, 1, 1)),) if text else (),
-        )
-        for number, width, height, text in native_pdf_pages(pdf_path)
-    ]
-
-
 def _mark_typst_input_needed(
     session: Session, task_id: UUID, issues: list[dict[str, object]]
 ) -> None:
@@ -413,8 +399,10 @@ def _mark_typst_input_needed(
         if row:
             row.issues = issues
         task.state = BackgroundJobState.COMPLETED
+        task.stage = ProcessingStage.COMPLETE
         task.done = task.total
         task.completed_at = utc_now()
+        task.updated_at = utc_now()
         task.lease_owner = None
         task.lease_expires_at = None
 
@@ -436,8 +424,74 @@ def _save_typst_chunks(
             )
 
 
+# Проблемы сборки, которые снимает сам пользователь, а не правка исходника.
+RESOLVABLE_TYPST_ISSUES = frozenset(("missing_file", "package"))
+
+
+def _mark_typst_failed(
+    session: Session,
+    task_id: UUID,
+    material_id: UUID,
+    message: str,
+    diagnostics: list[dict[str, object]],
+) -> None:
+    """Один путь падения на оба случая: и отказ компилятора, и сбой воркера.
+
+    Активная ревизия не трогается: неудачная сборка не должна отбирать у
+    пользователя тот PDF, который уже был собран.
+    """
+    with session.begin():
+        failed = session.get(BackgroundJob, task_id)
+        material = session.get(Material, material_id)
+        row = session.get(TypstMaterial, material_id)
+        if failed:
+            failed.state = BackgroundJobState.FAILED
+            failed.error = message
+            failed.lease_owner = None
+            failed.lease_expires_at = None
+            failed.updated_at = utc_now()
+        if material:
+            material.status = MaterialState.FAILED
+            material.error = message
+        if row:
+            row.issues = diagnostics
+
+
+def _register_typst_build(
+    session: Session,
+    material_id: UUID,
+    revision: int,
+    result: CompileResult,
+    render_path: str,
+    pages: int,
+) -> None:
+    """Отмечает уже активированную ревизию как собранную: PDF, версия, проблемы."""
+    with session.begin():
+        material = session.get(Material, material_id)
+        row = session.get(TypstMaterial, material_id)
+        revision_registry.require_revision(
+            session, material_id, revision
+        ).render_storage_path = render_path
+        if material:
+            material.status = MaterialState.READY
+            material.error = None
+            # До сборки числа страниц у Typst-проекта нет: оно появляется только
+            # вместе с PDF, а Библиотека показывает его в карточке.
+            material.page_count = pages
+        if row:
+            row.current_pdf_path = render_path
+            row.compiler_version = result.compiler_version
+            row.build_hash = hashlib.sha256(material_path(render_path).read_bytes()).hexdigest()
+            row.issues = result.diagnostics
+
+
 def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:
-    """Собирает Typst, затем нативно индексирует PDF и атомарно активирует ревизию."""
+    """Собрать Typst-проект и завести результат как обычную ревизию материала.
+
+    Порядок шагов не случайный: сначала проверяются пакеты (сеть без явного
+    разрешения не трогается), затем идёт сборка, и только полностью успешный
+    результат доходит до `_finish` — до него активная ревизия остаётся прежней.
+    """
     task_id, material_id = task.id, task.material_id
     if material_id is None:
         return
@@ -448,56 +502,39 @@ def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:
             return
         entrypoint = str(task.checkpoint.get("entrypoint") or row.entrypoint or "")
         storage_path = material.storage_path
+        allow_download = bool(task.checkpoint.get("download_packages"))
         packages = missing_packages(row.packages or [])
         session.rollback()
-        if packages and not bool(task.checkpoint.get("download_packages")):
-            _mark_typst_input_needed(
-                session,
-                task_id,
-                [
-                    {
-                        "kind": "package",
-                        "message": f"Нужен {item['name']} {item['version']}",
-                        **item,
-                    }
-                    for item in packages
-                ],
-            )
+        if packages and not allow_download:
+            _mark_typst_input_needed(session, task_id, package_issues(packages))
             return
+
         revision = revision_registry.max_revision(session, material_id) + 1
         session.rollback()
         with session.begin():
             current = session.get(BackgroundJob, task_id)
             assert current is not None
             current.checkpoint = {**current.checkpoint, "revision": revision, "selected_pages": []}
+
         bundle = material_path(storage_path)
-        result = compile_bundle(
-            bundle, entrypoint, allow_download=bool(task.checkpoint.get("download_packages"))
-        )
+        result = compile_bundle(bundle, entrypoint, allow_download=allow_download)
         if not result.ok:
-            needs_input = any(issue.get("kind") == "missing_file" for issue in result.diagnostics)
-            if needs_input:
+            # Нехватка файла или пакета — не поломка проекта, а вопрос к
+            # пользователю: он дошлёт картинку или разрешит загрузку и соберёт
+            # заново. Всё остальное — ошибка, которую чинят в исходнике.
+            if any(issue.get("kind") in RESOLVABLE_TYPST_ISSUES for issue in result.diagnostics):
                 _mark_typst_input_needed(session, task_id, result.diagnostics)
-                return
-            with session.begin():
-                failed = session.get(BackgroundJob, task_id)
-                material = session.get(Material, material_id)
-                row = session.get(TypstMaterial, material_id)
-                if failed:
-                    failed.state = BackgroundJobState.FAILED
-                    failed.error = str(
-                        result.diagnostics[0].get("message", "Сборка Typst не удалась")
-                    )
-                    failed.lease_owner = None
-                    failed.lease_expires_at = None
-                if material:
-                    material.status = MaterialState.FAILED
-                    material.error = failed.error if failed else "Сборка Typst не удалась"
-                if row:
-                    row.issues = result.diagnostics
+            else:
+                first = result.diagnostics[0] if result.diagnostics else {}
+                message = str(first.get("message") or "Сборка Typst не удалась")
+                _mark_typst_failed(session, task_id, material_id, message, result.diagnostics)
             return
+
         assert result.pdf_path is not None
-        pages = _typst_pages(result.pdf_path)
+        # Тот же разбор, что у обычного PDF: страница целиком одним абзацем
+        # оставляла материал без заголовков, а без них не работают ни блоки, ни
+        # автопривязка ответов. Владелец вырезов — хеш bundle, как у файлов.
+        pages = list(text_layer_pages(result.pdf_path, Path(storage_path).stem))
         with session.begin():
             material = session.get(Material, material_id)
             assert material is not None
@@ -512,39 +549,24 @@ def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:
         for page in pages:
             if not _save_page(session, task_id, page):
                 return
-        _finish(session, task_id)
-        target = Path("typst-rendered") / str(material_id) / f"{revision}.pdf"
-        destination = material_path(target.as_posix())
+
+        render_path = (Path("typst-rendered") / str(material_id) / f"{revision}.pdf").as_posix()
+        destination = material_path(render_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(result.pdf_path, destination)
+        # Растры страниц кэшируются по номеру: у обычного файла источник неизменен,
+        # а у Typst каждая сборка даёт новый PDF — без сброса просмотрщик показывал
+        # бы страницы прошлой версии.
+        shutil.rmtree(material_path(f"pages/{material_id}"), ignore_errors=True)
         _save_typst_chunks(session, material_id, revision, bundle, entrypoint, len(pages))
-        with session.begin():
-            material = session.get(Material, material_id)
-            row = session.get(TypstMaterial, material_id)
-            record = revision_registry.require_revision(session, material_id, revision)
-            record.render_storage_path = target.as_posix()
-            if material:
-                material.status = MaterialState.READY
-                material.error = None
-            if row:
-                row.current_pdf_path = target.as_posix()
-                row.compiler_version = result.compiler_version
-                row.build_hash = hashlib.sha256(destination.read_bytes()).hexdigest()
-                row.issues = result.diagnostics
+        _finish(session, task_id)
+        _register_typst_build(session, material_id, revision, result, render_path, len(pages))
     except Exception as error:
         session.rollback()
         log.exception("typst compile failed material=%s: %s", material_id, error)
-        with session.begin():
-            failed = session.get(BackgroundJob, task_id)
-            material = session.get(Material, material_id)
-            if failed:
-                failed.state = BackgroundJobState.FAILED
-                failed.error = "Внутренняя ошибка сборки Typst"
-                failed.lease_owner = None
-                failed.lease_expires_at = None
-            if material:
-                material.status = MaterialState.FAILED
-                material.error = "Внутренняя ошибка сборки Typst"
+        _mark_typst_failed(
+            session, task_id, material_id, f"Внутренняя ошибка сборки Typst: {error}", []
+        )
 
 
 def process_link_answers_job(session: Session, job: BackgroundJob) -> None:

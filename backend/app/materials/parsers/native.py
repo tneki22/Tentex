@@ -313,6 +313,20 @@ def _native_pdf_page(
     )
 
 
+def text_layer_pages(path: Path, owner: str = "") -> Iterator[ParsedPage]:
+    """Страницы PDF, у которого текстовый слой заведомо полный и точный.
+
+    Так читается PDF, который Tentex собрал сам (Typst): распознавать в нём
+    нечего, а разметчик стоит времени и модели. Разбор всё равно идёт через
+    общий `_native_pdf_page`, поэтому заголовки, списки и вырезы иллюстраций
+    получаются те же, что у обычного PDF, — а значит работают и блоки, и
+    привязки, и автопривязка ответов.
+    """
+    with fitz.open(path) as document:
+        for index, page in enumerate(document):
+            yield _native_pdf_page(page, index + 1, owner, ocr_images=False)
+
+
 def _bbox_overlap(
     inner: tuple[float, float, float, float], outer: tuple[float, float, float, float]
 ) -> float:

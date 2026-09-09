@@ -28,6 +28,10 @@ services:
     environment:
       TENTEX_DATA_DIR: /data
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
+    # Упавший воркер ничем себя не выдаёт: задачи просто остаются в очереди, и
+    # в интерфейсе это выглядит как бесконечная обработка. Перезапуск возвращает
+    # очередь к работе; настоящую причину всё равно видно в `docker compose logs`.
+    restart: unless-stopped
     depends_on:
       api:
         condition: service_healthy

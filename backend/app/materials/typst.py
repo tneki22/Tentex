@@ -17,7 +17,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-import pymupdf as fitz
 from fastapi import UploadFile
 
 from app.config import settings
@@ -115,10 +114,8 @@ def _write_normalized_zip(files: dict[str, bytes]) -> tuple[Path, str, int]:
     return path, data_hash, path.stat().st_size
 
 
-async def bundle_uploads(
-    uploads: list[UploadFile], paths: list[str], requested_entrypoint: str | None
-) -> Bundle:
-    """Собирает single/folder запрос в один архив, не доверяя именам браузера."""
+async def read_uploads(uploads: list[UploadFile], paths: list[str]) -> dict[str, bytes]:
+    """Читает загрузку в память по проверенным путям, не доверяя именам браузера."""
     if len(uploads) != len(paths) or not uploads:
         raise _invalid("Нужны согласованные файлы проекта и их относительные пути")
     files: dict[str, bytes] = {}
@@ -141,7 +138,14 @@ async def bundle_uploads(
     finally:
         for upload in uploads:
             await upload.close()
-    return _bundle_from_files(files, requested_entrypoint)
+    return files
+
+
+async def bundle_uploads(
+    uploads: list[UploadFile], paths: list[str], requested_entrypoint: str | None
+) -> Bundle:
+    """Собирает single/folder запрос в один архив."""
+    return _bundle_from_files(await read_uploads(uploads, paths), requested_entrypoint)
 
 
 async def bundle_zip(upload: UploadFile, requested_entrypoint: str | None) -> Bundle:
@@ -194,23 +198,19 @@ async def merge_bundle_files(
     paths: list[str],
     requested_entrypoint: str | None,
 ) -> Bundle:
-    """Добавляет ровно запрошенные зависимости, не переписывая Typst-исходники."""
-    if len(uploads) != len(paths) or not uploads:
-        raise _invalid("Нужны файлы и точные пути, которые они должны занять")
+    """Добавляет ровно запрошенные зависимости, не переписывая Typst-исходники.
+
+    Точка входа проверяется по объединённому набору, а не по одним новым
+    файлам: `main.typ` лежит в старом bundle, и проверка «до слияния»
+    отбивала бы каждое добавление недостающей картинки.
+    """
     with zipfile.ZipFile(bundle_path) as archive:
         files = {
             _safe_path(info.filename).as_posix(): archive.read(info)
             for info in archive.infolist()
             if not info.is_dir()
         }
-    incoming = await bundle_uploads(uploads, paths, requested_entrypoint)
-    try:
-        with zipfile.ZipFile(incoming.path) as archive:
-            for info in archive.infolist():
-                if not info.is_dir():
-                    files[_safe_path(info.filename).as_posix()] = archive.read(info)
-    finally:
-        incoming.path.unlink(missing_ok=True)
+    files |= await read_uploads(uploads, paths)
     return _bundle_from_files(files, requested_entrypoint)
 
 
@@ -227,6 +227,28 @@ def _bundle_from_files(files: dict[str, bytes], requested_entrypoint: str | None
     ]
     path, sha256, size = _write_normalized_zip(files)
     return Bundle(path, sha256, size, entrypoint, candidates, _packages_from_texts(texts))
+
+
+def bundle_packages(root: Path) -> list[dict[str, str]]:
+    """`@preview`-пакеты распакованного проекта — тем же разбором, что при загрузке."""
+    return _packages_from_texts(
+        path.read_text(encoding="utf-8", errors="replace") for path in root.rglob("*.typ")
+    )
+
+
+def entrypoint_candidates(bundle_path: Path) -> list[str]:
+    """Все `.typ` уже сохранённого проекта — из чего выбирать точку входа.
+
+    Читается из архива, а не из отдельной колонки: список нужен только пока
+    точка входа не выбрана, а лишнее поле в таблице разъезжается с содержимым
+    bundle при каждой досылке файлов.
+    """
+    with zipfile.ZipFile(bundle_path) as archive:
+        return sorted(
+            info.filename
+            for info in archive.infolist()
+            if not info.is_dir() and info.filename.lower().endswith(".typ")
+        )
 
 
 def store_bundle(bundle: Bundle) -> str:
@@ -264,8 +286,22 @@ def missing_packages(packages: list[dict[str, str]]) -> list[dict[str, str]]:
     ]
 
 
+def package_issues(packages: list[dict[str, str]]) -> list[dict[str, object]]:
+    """Недостающие пакеты в виде проблем материала — одна формулировка на всех."""
+    return [
+        {"kind": "package", "message": f"Нужен {item['name']} {item['version']}", **item}
+        for item in packages
+    ]
+
+
 def compile_bundle(bundle_path: Path, entrypoint: str, *, allow_download: bool) -> CompileResult:
-    """Собирает PDF в изолированном root; сеть разрешает только подтверждённый запуск."""
+    """Собирает PDF в изолированном root; сборку с загрузкой пакетов подтверждают явно.
+
+    `allow_download` — не переключатель сети: у CLI typst 0.15 режима «без сети»
+    нет. Это подтверждение вызывающего, и оно проверяется здесь же — недостающий
+    пакет без разрешения останавливает сборку до запуска компилятора, а не
+    надеется на то, что проверку не забудут на новом месте вызова.
+    """
     (settings.storage_dir / "tmp").mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         prefix="tentex-typst-", dir=settings.storage_dir / "tmp"
@@ -273,6 +309,8 @@ def compile_bundle(bundle_path: Path, entrypoint: str, *, allow_download: bool) 
         root = Path(raw) / "project"
         root.mkdir()
         extract_bundle(bundle_path, root)
+        if not allow_download and (blocked := missing_packages(bundle_packages(root))):
+            return CompileResult(False, None, package_issues(blocked), TYPST_COMPILER_VERSION)
         output = Path(raw) / "rendered.pdf"
         deps = Path(raw) / "deps.json"
         command = [
@@ -300,8 +338,6 @@ def compile_bundle(bundle_path: Path, entrypoint: str, *, allow_download: bool) 
             **os.environ,
             "TYPST_PACKAGE_CACHE_PATH": str(settings.typst_package_cache_dir),
         }
-        if not allow_download:
-            environment["TYPST_OFFLINE"] = "1"
         try:
             completed = subprocess.run(
                 command,
@@ -334,6 +370,14 @@ def compile_bundle(bundle_path: Path, entrypoint: str, *, allow_download: bool) 
         return CompileResult(True, final, diagnostics, TYPST_COMPILER_VERSION)
 
 
+def _relative_to_root(raw: str, root: Path) -> str | None:
+    """Путь диагностики относительно build-root; None — если он вне проекта."""
+    try:
+        return str(Path(raw).resolve().relative_to(root.resolve()))
+    except (ValueError, OSError):
+        return None
+
+
 def _diagnostics(stderr: str, root: Path) -> list[dict[str, object]]:
     issues: list[dict[str, object]] = []
     for raw in stderr.splitlines():
@@ -344,26 +388,25 @@ def _diagnostics(stderr: str, root: Path) -> list[dict[str, object]]:
         match = re.search(r"(.+\.typ):(\d+):(\d+)", line)
         issue: dict[str, object] = {"kind": kind, "message": line}
         if match:
-            issue |= {
-                "path": str(Path(match.group(1)).resolve().relative_to(root.resolve())),
-                "line": int(match.group(2)),
-                "column": int(match.group(3)),
-            }
+            # Typst показывает и файлы из кэша пакетов: они лежат вне build-root,
+            # и relative_to на них падает — тогда путь просто не уточняем.
+            relative = _relative_to_root(match.group(1), root)
+            issue |= {"line": int(match.group(2)), "column": int(match.group(3))}
+            if relative is not None:
+                issue["path"] = relative
         if "file not found" in line.lower():
             issue["kind"] = "missing_file"
+            # Typst пишет, где именно искал: этот путь и есть тот, под которым
+            # файл должен лечь в bundle. Без него интерфейсу нечего предложить,
+            # кроме «что-то не найдено».
+            searched = re.search(r"searched at (.+?)\)?$", line)
+            if searched:
+                raw = searched.group(1)
+                issue["missing_path"] = _relative_to_root(raw, root) or raw
         if "unknown font family" in line.lower():
             issue["kind"] = "missing_font"
         issues.append(issue)
     return issues
-
-
-def native_pdf_pages(pdf_path: Path) -> list[tuple[int, float, float, str]]:
-    """Текстовый слой PDF для FTS без запуска PaddleOCR ни при каких условиях."""
-    with fitz.open(pdf_path) as document:
-        return [
-            (index + 1, page.rect.width, page.rect.height, page.get_text("text").strip())
-            for index, page in enumerate(document)
-        ]
 
 
 def source_chunks(root: Path, entrypoint: str, page_count: int) -> list[dict[str, object]]:
@@ -390,7 +433,7 @@ def source_chunks(root: Path, entrypoint: str, page_count: int) -> list[dict[str
             *[index for index, line in enumerate(lines[1:], 1) if HEADING_RE.match(line)],
             len(lines),
         ]
-        for start, end in zip(starts, starts[1:], strict=True):
+        for start, end in zip(starts, starts[1:], strict=False):
             if start == end:
                 continue
             code = "".join(lines[start:end])

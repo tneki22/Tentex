@@ -107,20 +107,35 @@ def _disable_foreign_keys(dbapi_connection: object, _: object) -> None:
 
 
 def run_migrations_online() -> None:
+    """Прогнать миграции и вернуть engine приложению нетронутым.
+
+    `engine` здесь — тот же общий объект, что использует приложение:
+    `upgrade_database()` зовётся на старте api и воркера, и подписка на
+    `connect` пережила бы миграции. Тогда КАЖДОЕ последующее соединение
+    процесса открывалось бы с `PRAGMA foreign_keys=OFF`, и все `ON DELETE
+    CASCADE` молча переставали работать — так и оставались сироты в
+    `typst_materials` после удаления материала. Поэтому слушатель снимается,
+    а пул выбрасывается второй раз: соединения, открытые с прагмой OFF,
+    не должны вернуться в работу.
+    """
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     event.listen(engine, "connect", _disable_foreign_keys)
     # Соединения, взятые до подписки, прагму не увидят — выбрасываем пул.
     engine.dispose()
-    with engine.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            compare_type=True,
-            render_as_batch=True,
-            include_object=include_object,
-        )
-        with context.begin_transaction():
-            context.run_migrations()
+    try:
+        with engine.connect() as connection:
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                compare_type=True,
+                render_as_batch=True,
+                include_object=include_object,
+            )
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        event.remove(engine, "connect", _disable_foreign_keys)
+        engine.dispose()
 
 
 if context.is_offline_mode():

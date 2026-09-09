@@ -18,6 +18,7 @@
 | Экзаменационный чат | `exam-chat.md` | `check_exam_chat.py` |
 | Экзаменационный мастер | `exam-wizard-material-onboarding.md` | `check_stage5.py` |
 | Глобальная Библиотека | `global-library-material-workspace.md` | `check_library_workspace.py` |
+| Typst-материалы | `typst-materials.md` | `check_typst_material.py` |
 | Конспекты | `conspects.md` | pytest |
 | Карточки и сохраняемый сеанс | `cards.md` | pytest, миграции, typecheck/build |
 | Фоновые операции | `background-jobs.md` | pytest |

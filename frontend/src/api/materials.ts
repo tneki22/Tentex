@@ -242,11 +242,15 @@ export interface TypstIssueRead {
   path: string | null;
   line: number | null;
   column: number | null;
+  /** Куда компилятор ходил за файлом — туда же его и класть. */
+  missing_path: string | null;
 }
 
 export interface TypstMaterialRead {
   input_kind: "single" | "folder" | "zip";
   entrypoint: string | null;
+  /** Непусто, только пока точка входа не выбрана: из чего выбирать. */
+  entrypoint_candidates: string[];
   compiler_version: string | null;
   packages: Array<{ namespace: string; name: string; version: string }>;
   issues: TypstIssueRead[];
@@ -667,9 +671,23 @@ export async function uploadTypstMaterial(
   return getLibraryMaterial(started.material_id);
 }
 
+/** Дослать в проект недостающие файлы ровно по тем путям, где их искал Typst. */
+export async function addTypstFiles(
+  materialId: string,
+  files: File[],
+  targetPaths: string[],
+): Promise<TypstStartRead> {
+  const form = new FormData();
+  files.forEach((file, index) => {
+    form.append("files", file);
+    form.append("target_paths", targetPaths[index] ?? file.name);
+  });
+  return uploadFormWithProgress<TypstStartRead>(`${libraryPath(materialId)}/typst/files`, form);
+}
+
 export const buildTypstMaterial = (
   materialId: string,
-  command: { entrypoint?: string; download_packages: boolean; placeholder_images?: string[] },
+  command: { entrypoint?: string; download_packages: boolean },
 ): Promise<TypstStartRead> => request(`${libraryPath(materialId)}/typst/build`, {
   method: "POST",
   body: JSON.stringify(command),
@@ -726,7 +744,11 @@ export const librarySourceUrl = (materialId: string, revision?: number): string 
     ? `${libraryPath(materialId)}/source`
     : `${libraryPath(materialId)}/source?revision=${revision}`;
 
-export const libraryRenderedUrl = (materialId: string): string => `${libraryPath(materialId)}/rendered`;
+/** Собранный PDF Typst-проекта. Без версии — текущая сборка, как и у исходника. */
+export const libraryRenderedUrl = (materialId: string, revision?: number): string =>
+  revision === undefined
+    ? `${libraryPath(materialId)}/rendered`
+    : `${libraryPath(materialId)}/rendered?revision=${revision}`;
 
 export const searchLibraryMaterial = (
   materialId: string,

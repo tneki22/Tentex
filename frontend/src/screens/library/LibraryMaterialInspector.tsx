@@ -37,7 +37,8 @@ interface LibraryMaterialInspectorProps {
     page_to?: number;
   }) => void;
   onControl: (action: "pause" | "resume" | "retry" | "cancel") => void;
-  onTypstBuild: (downloadPackages: boolean) => void;
+  onTypstBuild: (downloadPackages: boolean, entrypoint?: string) => void;
+  onTypstAddFile: (file: File, targetPath: string) => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
   onConfirmPageReview: () => void;
@@ -67,6 +68,7 @@ export function LibraryMaterialInspector({
   onStart,
   onControl,
   onTypstBuild,
+  onTypstAddFile,
   onEditPage,
   onCleanupPage,
   onConfirmPageReview,
@@ -103,6 +105,7 @@ export function LibraryMaterialInspector({
               onStart={onStart}
               onControl={onControl}
               onTypstBuild={onTypstBuild}
+              onTypstAddFile={onTypstAddFile}
               onEditPage={onEditPage}
               onCleanupPage={onCleanupPage}
               onConfirmPageReview={onConfirmPageReview}

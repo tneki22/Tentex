@@ -125,7 +125,6 @@ class TypstBuildWrite(ApiModel):
 
     entrypoint: str | None = Field(default=None, max_length=240)
     download_packages: bool = False
-    placeholder_images: list[str] = Field(default_factory=list, max_length=50)
 
 
 class TypstIssueRead(ApiModel):
@@ -134,11 +133,15 @@ class TypstIssueRead(ApiModel):
     path: str | None = None
     line: int | None = None
     column: int | None = None
+    # Путь, под которым компилятор искал файл, — он же путь, куда его положить.
+    missing_path: str | None = None
 
 
 class TypstMaterialRead(ApiModel):
     input_kind: str
     entrypoint: str | None
+    # Заполняется только пока точка входа не выбрана: из чего выбирать.
+    entrypoint_candidates: list[str] = []
     compiler_version: str | None
     packages: list[dict[str, str]]
     issues: list[TypstIssueRead]

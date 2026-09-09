@@ -1274,10 +1274,22 @@ class Activity(Base):
         ),
         CheckConstraint("evidence_strength >= 0 AND evidence_strength <= 1", name="strength_range"),
         Index("ix_activities_project_node", "project_id", "program_node_id"),
+        # Частичный уникальный индекс: свободный ответ по теме заводится один раз,
+        # а карточек по той же теме сколько угодно. Живёт в базе с миграции 0039 —
+        # без объявления здесь `alembic check` считает его лишним и роняет CI.
+        Index(
+            "uq_activities_free_answer_node",
+            "project_id",
+            "program_node_id",
+            unique=True,
+            sqlite_where=sql_text("kind = 'free_answer'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    project_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    )
     program_node_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     kind: Mapped[ActivityKind] = mapped_column(enum_type(ActivityKind, "activity_kind"))
     evidence_strength: Mapped[float] = mapped_column(Float, default=1.0)

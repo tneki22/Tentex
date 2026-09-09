@@ -5,6 +5,7 @@ import { IconButton, Progress } from "../ui";
  *  Виды ИИ (ai_*, link_answers) — из `BackgroundJobKind` бэкенда (Ш1 плана). */
 export type TaskKind =
   | "parse"
+  | "typst_compile"
   | "ocr"
   | "pass1"
   | "pass2"
@@ -37,6 +38,7 @@ export interface BackgroundTask {
 
 const KIND_LABEL: Record<TaskKind, string> = {
   parse: "Разбор",
+  typst_compile: "Сборка Typst",
   ocr: "Распознавание",
   pass1: "Проход 1",
   pass2: "Проход 2",

@@ -163,14 +163,17 @@ def get_job(session: Session, job_id: UUID) -> BackgroundJobRead:
 def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:
     """Отменить задачу.
 
-    Разбор материала (`kind == parse`) отменяется через уже существующий
-    `library.control_task_core`: там же выбрасывается строящаяся ревизия и
-    восстанавливается статус материала — материал-специфичная логика, которую
-    здесь дублировать нельзя. У задач без этой логики (роли ИИ, привязка
-    ответов) путь короче: `queued` снимается сразу, а `running` получает
-    `pause_requested` и достаётся до конца сама воркером — досрочно оборвать
-    уже идущий вызов модели или расчёт нечем, но результат он всё равно
-    получит статус `cancelled`, а не `completed` (см. `app.ai.jobs`).
+    Работа над материалом (разбор и сборка Typst) отменяется через уже
+    существующий `library.control_task_core`: там же выбрасывается строящаяся
+    ревизия и восстанавливается статус материала — материал-специфичная логика,
+    которую здесь дублировать нельзя. Без неё отменённая задача оставляла
+    материал навсегда в «В очереди»: строка задачи снята, а статус нет.
+
+    У задач без этой логики (роли ИИ, привязка ответов) путь короче: `queued`
+    снимается сразу, а `running` получает `pause_requested` и достаётся до
+    конца сама воркером — досрочно оборвать уже идущий вызов модели или расчёт
+    нечем, но результат он всё равно получит статус `cancelled`, а не
+    `completed` (см. `app.ai.jobs`).
     """
     job = _job_or_404(session, job_id)
     # Чтение выше уже открыло транзакцию само (autobegin), а `session.begin()`
@@ -178,13 +181,16 @@ def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:
     # откат сбрасывает объект, и обращение к его полю открыло бы транзакцию
     # заново — ровно ту, которую мы и закрывали.
     kind, state, material_id = job.kind, job.state, job.material_id
+    material_scoped = kind in {BackgroundJobKind.PARSE, BackgroundJobKind.TYPST_COMPILE}
+    # Снимок до отмены: `control_task_core` удаляет строку задачи вместе со
+    # строящейся ревизией, и перечитывать её потом уже неоткуда.
+    snapshot = _read(session, job) if material_scoped else None
     session.rollback()
-    if kind == BackgroundJobKind.PARSE:
-        assert material_id is not None
+    if material_scoped:
+        assert material_id is not None and snapshot is not None
         with session.begin():
             library.control_task_core(session, material_id, "cancel")
-        session.expire_all()
-        return get_job(session, job_id)
+        return snapshot.model_copy(update={"state": BackgroundJobState.CANCELLED})
     if state == BackgroundJobState.QUEUED:
         with session.begin():
             job.state = BackgroundJobState.CANCELLED

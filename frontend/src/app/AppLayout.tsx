@@ -88,7 +88,8 @@ function toBackgroundTask(job: BackgroundJobRead): BackgroundTask {
     kind: job.kind as TaskKind,
     subject: backgroundJobSubject(job),
     detail: job.model_label,
-    unit: job.kind === "parse" ? "страниц" : "",
+    // Сборка Typst тоже считает страницы собранного PDF, а не абстрактные шаги.
+    unit: job.kind === "parse" || job.kind === "typst_compile" ? "страниц" : "",
     done: job.done,
     total: job.total,
     etaMinutes: perPage && left > 0 ? Math.ceil((left * perPage) / 60) : null,

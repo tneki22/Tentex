@@ -76,7 +76,7 @@ from app.materials.schemas import (
 )
 from app.materials.segmentation import build_blocks
 from app.materials.storage import material_path, store_revision_text, store_text, store_upload
-from app.materials.typst import Bundle, store_bundle
+from app.materials.typst import Bundle, entrypoint_candidates, store_bundle
 from app.models import (
     BackgroundJob,
     BackgroundJobKind,
@@ -133,7 +133,7 @@ def _capabilities(
     has_timeline: bool,
 ) -> LibraryMaterialCapabilities:
     return LibraryMaterialCapabilities(
-        can_compare=kind in {"pdf", "image", "document", "plain_text", "web"},
+        can_compare=kind in {"pdf", "image", "document", "plain_text", "web", "typst"},
         # У YouTube локального оригинала нет: материал — это сохранённая расшифровка.
         can_view_original=kind != "youtube",
         can_edit_text=material.active_parse_revision >= 1 and kind != "typst",
@@ -375,6 +375,11 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
         TypstMaterialRead(
             input_kind=typst_row.input_kind,
             entrypoint=typst_row.entrypoint,
+            entrypoint_candidates=(
+                []
+                if typst_row.entrypoint
+                else entrypoint_candidates(material_path(material.storage_path))
+            ),
             compiler_version=typst_row.compiler_version,
             packages=typst_row.packages or [],
             issues=[
@@ -384,6 +389,9 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
                     path=str(issue["path"]) if issue.get("path") is not None else None,
                     line=int(issue["line"]) if issue.get("line") is not None else None,
                     column=int(issue["column"]) if issue.get("column") is not None else None,
+                    missing_path=(
+                        str(issue["missing_path"]) if issue.get("missing_path") else None
+                    ),
                 )
                 for issue in typst_row.issues or []
             ],
@@ -575,7 +583,14 @@ def library_fragment_asset_path(session: Session, material_id: UUID, fragment_id
 
 def library_page_image_path(session: Session, material_id: UUID, page_number: int) -> Path:
     material = material_or_404(session, material_id)
-    source = material_path(material.storage_path)
+    # У Typst-проекта исходник — ZIP, а страницу человек видит в собранном PDF.
+    # Подмена источника здесь даёт просмотрщику ровно то же, что у обычного PDF:
+    # растр страницы, масштаб, области фрагментов и переходы по оглавлению.
+    source = (
+        typst_rendered_source(session, material_id).path
+        if material.source_kind == MaterialSourceKind.TYPST
+        else material_path(material.storage_path)
+    )
     if source.suffix.lower() in {".jpg", ".jpeg", ".png"}:
         return source
     if source.suffix.lower() != ".pdf":
@@ -613,6 +628,35 @@ def library_source(
     if not path.exists():
         raise ProjectNotFoundError("Файл источника не найден", code="material_source_missing")
     return SourceFile(path=path, media_type=material.media_type, filename=material.original_name)
+
+
+def typst_rendered_source(
+    session: Session, material_id: UUID, *, revision: int | None = None
+) -> SourceFile:
+    """Собранный PDF Typst-проекта — текущий либо принадлежащий версии.
+
+    Отдельно от `library_source`: у Typst исходник и то, что читает человек, —
+    разные файлы (ZIP проекта и PDF сборки), и подменять одно другим нельзя.
+    """
+    material = material_or_404(session, material_id)
+    row = session.get(TypstMaterial, material.id)
+    if row is None:
+        raise ProjectDomainError(
+            "Материал не является Typst-проектом", status=422, code="typst_bundle_invalid"
+        )
+    storage_path = row.current_pdf_path
+    if revision is not None:
+        record = revision_registry.get_revision(session, material_id, revision)
+        storage_path = record.render_storage_path if record else None
+    if not storage_path or not material_path(storage_path).exists():
+        raise ProjectConflictError(
+            "Собранный PDF пока недоступен", code="typst_preview_unavailable"
+        )
+    return SourceFile(
+        path=material_path(storage_path),
+        media_type="application/pdf",
+        filename=f"{Path(material.original_name).stem}.pdf",
+    )
 
 
 def list_library_revisions(session: Session, material_id: UUID) -> list[MaterialRevisionRead]:
@@ -886,6 +930,14 @@ def create_typst_material(
                 updated_at=utc_now(),
             )
             session.add(typst)
+        # Повторная загрузка того же проекта попадает в тот же материал (дедуп по
+        # хешу bundle). Заводить ей вторую сборку нельзя: обе пойдут по одному
+        # материалу и будут спорить за номер ревизии.
+        running = latest_task(session, material.id)
+        if running is not None and running.state in ACTIVE_TASK_STATES:
+            return read_library_material(session, material.id), running
+        if running is not None and running.state == BackgroundJobState.FAILED:
+            _discard_failed_task(session, material, running)
         material.status = MaterialState.QUEUED if bundle.entrypoint else MaterialState.NEEDS_INPUT
         job = BackgroundJob(
             material_id=material.id,
@@ -924,6 +976,13 @@ def queue_typst_build(
         )
     session.rollback()
     with session.begin():
+        # Та же защита, что у разбора (`start_processing_core`): «Собрать заново»
+        # при живой задаче заводило вторую и обе шли по одному материалу.
+        previous = latest_task(session, material_id)
+        if previous and previous.state in ACTIVE_TASK_STATES:
+            raise ProjectConflictError("Сборка уже идёт", code="material_processing_active")
+        if previous and previous.state == BackgroundJobState.FAILED:
+            _discard_failed_task(session, material, previous)
         material.status = MaterialState.QUEUED
         material.error = None
         typst.entrypoint = selected
@@ -1191,23 +1250,37 @@ def _selected_pages(session: Session, material: Material, command: ProcessingSta
     return list(range(command.page_from, command.page_to + 1))
 
 
+def _discard_failed_task(session: Session, material: Material, task: BackgroundJob) -> None:
+    """Убрать за упавшей задачей её недорегистрированную ревизию и саму строку.
+
+    Неудачная попытка могла успеть записать часть страниц под свой номер
+    ревизии, так и не зарегистрировав его: не убрать за ней — следующий номер
+    займётся навсегда, а в «Версиях» появится незримый пропуск.
+    """
+    building = int(task.checkpoint.get("revision") or 0)
+    if building and building != material.active_parse_revision:
+        discard_building_revision(session, material.id, building)
+    session.delete(task)
+    session.flush()
+
+
 def start_processing_core(
     session: Session, material_id: UUID, command: ProcessingStart
 ) -> BackgroundJob:
     """Поставить задачу разбора. Транзакцией управляет вызывающий."""
     material = material_or_404(session, material_id)
+    if material.source_kind == MaterialSourceKind.TYPST:
+        # У Typst-проекта нечего распознавать: страницы берутся из PDF, который
+        # собрал компилятор. Переделать материал заново — это «Собрать заново».
+        raise ProjectConflictError(
+            "Typst-проект пересобирается, а не разбирается заново",
+            code="material_processing_unsupported",
+        )
     task = latest_task(session, material_id)
     if task and task.state in ACTIVE_TASK_STATES:
         raise ProjectConflictError("Разбор уже запущен", code="material_processing_active")
     if task and task.state == BackgroundJobState.FAILED:
-        # Неудачная попытка могла успеть записать часть страниц под свой номер
-        # ревизии, так и не зарегистрировав его: не убрать за ней — следующий
-        # номер займётся навсегда, а в «Версиях» появится незримый пропуск.
-        building = int(task.checkpoint.get("revision") or 0)
-        if building and building != material.active_parse_revision:
-            discard_building_revision(session, material_id, building)
-        session.delete(task)
-        session.flush()
+        _discard_failed_task(session, material, task)
     # Готовность движка спрашиваем у реестра распознавания, а не у сервиса
     # напрямую: там же считается статус на экране настроек, и разъехаться они
     # не могут. Для «Быстро» это в том числе проверка, что модели скачаны.
@@ -1932,6 +2005,7 @@ def delete_library_materials(session: Session, material_ids: Sequence[UUID]) -> 
         sources.append(material_path(material.storage_path))
         directories.append((settings.storage_dir / "pages" / str(material_id)).resolve())
         directories.append((settings.storage_dir / "snapshots" / str(material_id)).resolve())
+        directories.append((settings.storage_dir / "typst-rendered" / str(material_id)).resolve())
 
     session.rollback()
     with session.begin():
@@ -1939,6 +2013,12 @@ def delete_library_materials(session: Session, material_ids: Sequence[UUID]) -> 
             material = material_or_404(session, material_id)
             session.execute(
                 delete(ProjectMaterial).where(ProjectMaterial.material_id == material_id)
+            )
+            # У `background_jobs` нет внешнего ключа на материал: без явного
+            # удаления задача удалённого файла остаётся в панели «Фоновые
+            # задачи» навсегда, а воркер ещё и берётся её выполнять.
+            session.execute(
+                delete(BackgroundJob).where(BackgroundJob.material_id == material_id)
             )
             delete_material_index(session, material_id)
             session.delete(material)

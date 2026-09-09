@@ -1,5 +1,5 @@
-import { Pencil, Play, RotateCcw, Settings2, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { FileUp, Pencil, Play, RotateCcw, Settings2, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import type {
   LibraryMaterialDetailRead,
@@ -112,7 +112,10 @@ interface LibraryProcessingPanelProps {
     page_to?: number;
   }) => void;
   onControl: (action: "pause" | "resume" | "retry" | "cancel") => void;
-  onTypstBuild: (downloadPackages: boolean) => void;
+  /** Поставить сборку: с разрешением на загрузку пакетов и, если её ещё нет, с точкой входа. */
+  onTypstBuild: (downloadPackages: boolean, entrypoint?: string) => void;
+  /** Дослать недостающий файл проекта по пути, который назвал компилятор. */
+  onTypstAddFile: (file: File, targetPath: string) => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
   onConfirmPageReview: () => void;
@@ -126,6 +129,7 @@ export function LibraryProcessingPanel({
   onStart,
   onControl,
   onTypstBuild,
+  onTypstAddFile,
   onEditPage,
   onCleanupPage,
   onConfirmPageReview,
@@ -196,13 +200,17 @@ export function LibraryProcessingPanel({
       : pageCount;
   const pagePrice = cloud?.price_per_page_usd ? Number(cloud.price_per_page_usd) : null;
 
+  // Досылка недостающего файла: путь известен заранее, выбор — только сам файл.
+  const missingFileInput = useRef<HTMLInputElement>(null);
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
+
   const backgroundTask: BackgroundTask | null = useMemo(() => {
     if (!task || task.state === "completed") return null;
     const left = Math.max(0, task.total - task.done);
     const perPage = task.parser_mode ? SECONDS_PER_PAGE[task.parser_mode] : 0;
     return {
       id: task.id,
-      kind: "parse",
+      kind: material.presentation_kind === "typst" ? "typst_compile" : "parse",
       subject: material.original_name,
       unit: "страниц",
       done: task.done,
@@ -230,6 +238,10 @@ export function LibraryProcessingPanel({
   if (material.presentation_kind === "typst") {
     const issues = material.typst?.issues ?? [];
     const packageRequired = issues.some((issue) => issue.kind === "package");
+    const entrypointCandidates = material.typst?.entrypoint_candidates ?? [];
+    const missingPaths = [...new Set(
+      issues.map((issue) => issue.missing_path).filter((path): path is string => Boolean(path)),
+    )];
     return (
       <div className="inspector-content">
         <header className="inspector-section-head"><h3>Сборка Typst</h3></header>
@@ -237,23 +249,102 @@ export function LibraryProcessingPanel({
           PDF собирается локально без системных шрифтов; текстовый поиск использует PDF,
           а модели получают исходный Typst-код.
         </p>
+
+        {/* Та же строка задачи, что у разбора: прогресс и отмена нужны сборке
+            ровно так же, иначе идущая работа выглядит как зависшая. */}
+        {backgroundTask && (
+          <TaskRow task={backgroundTask} onCancel={() => onControl("cancel")} />
+        )}
+
+        {material.error && (
+          <ErrorState title="Сборка не удалась" message={material.error}>
+            <p>Прошлая собранная версия осталась на месте.</p>
+          </ErrorState>
+        )}
+
         {issues.length > 0 && (
           <section className="inspector-section">
             <h4>Нужно внимание</h4>
             <ul className="inspector-list">
-              {issues.map((issue, index) => <li key={`${issue.kind}-${index}`}>{issue.message}</li>)}
+              {issues.map((issue, index) => (
+                <li key={`${issue.kind}-${index}`}>
+                  {issue.message}
+                  {issue.path && <code> {issue.path}{issue.line ? `:${issue.line}` : ""}</code>}
+                </li>
+              ))}
             </ul>
           </section>
         )}
-        {packageRequired && !readOnly && (
-          <Button disabled={busy} onClick={() => onTypstBuild(true)}>
-            Скачать пакет и продолжить
-          </Button>
+
+        {/* Файл кладётся ровно туда, где его искал компилятор, — путь известен
+            из диагностики, поэтому выбирать место руками не нужно. */}
+        {missingPaths.length > 0 && !readOnly && (
+          <section className="inspector-section">
+            <h4>Недостающие файлы</h4>
+            <ul className="inspector-list">
+              {missingPaths.map((path) => (
+                <li key={path}>
+                  <code>{path}</code>
+                  <Button
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => {
+                      setPendingPath(path);
+                      missingFileInput.current?.click();
+                    }}
+                  >
+                    <FileUp size={14} aria-hidden="true" /> Выбрать файл
+                  </Button>
+                </li>
+              ))}
+            </ul>
+            <input
+              ref={missingFileInput}
+              className="materials-file-input"
+              type="file"
+              tabIndex={-1}
+              aria-hidden="true"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file && pendingPath) onTypstAddFile(file, pendingPath);
+              }}
+            />
+          </section>
         )}
-        {!packageRequired && !readOnly && (
-          <Button variant="secondary" disabled={busy} onClick={() => onTypstBuild(false)}>
-            <RotateCcw size={14} aria-hidden="true" /> Собрать заново
-          </Button>
+
+        {/* Без точки входа собирать нечего: пока она не выбрана, кнопка сборки
+            бессмысленна, а список `.typ` — единственное осмысленное действие. */}
+        {entrypointCandidates.length > 0 && !readOnly && !running && (
+          <Field label="Точка входа" hint="С какого файла начинается документ">
+            <RadioCards
+              label="Точка входа Typst-проекта"
+              value=""
+              layout="rows"
+              onChange={(next) => onTypstBuild(false, next)}
+              options={entrypointCandidates.map((path) => ({
+                value: path,
+                title: path.split("/").pop() ?? path,
+                description: path,
+              }))}
+            />
+          </Field>
+        )}
+
+        {entrypointCandidates.length === 0 && !readOnly && !running && (
+          packageRequired ? (
+            <Button disabled={busy} onClick={() => onTypstBuild(true)}>
+              Скачать пакет и продолжить
+            </Button>
+          ) : (
+            <Button variant="secondary" disabled={busy} onClick={() => onTypstBuild(false)}>
+              <RotateCcw size={14} aria-hidden="true" /> Собрать заново
+            </Button>
+          )
+        )}
+
+        {material.typst?.compiler_version && (
+          <p className="inspector-note">Компилятор Typst {material.typst.compiler_version}</p>
         )}
       </div>
     );

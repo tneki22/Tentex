@@ -4,7 +4,6 @@ import type { CSSProperties } from "react";
 import {
   libraryFragmentAssetUrl,
   libraryPageImageUrl,
-  libraryRenderedUrl,
   librarySourceUrl,
   PARSER_MODE_TITLES,
   type LibraryMaterialDetailRead,
@@ -96,21 +95,17 @@ export function MaterialSourceView({
   }, [currentTime, kind]);
 
   switch (kind) {
+    // Typst показывается страницами собранного PDF, а не отдельным <iframe>:
+    // так работают и масштаб, и области фрагментов, и переходы по оглавлению.
     case "typst":
-      return material.typst?.has_rendered_pdf ? (
-        <div className="viewer-sheet-scroll" ref={scrollRef}>
-          <iframe
-            className="typst-rendered-document"
-            src={libraryRenderedUrl(material.id)}
-            title={`Собранный Typst-документ: ${material.original_name}`}
-          />
-        </div>
-      ) : (
-        <EmptyState title="Собранный документ пока недоступен">
-          Tentex собирает проект или ждёт недостающий файл.
-        </EmptyState>
-      );
-
+      if (!material.typst?.has_rendered_pdf) {
+        return (
+          <EmptyState title="Собранный документ пока недоступен">
+            Tentex собирает проект или ждёт недостающий файл.
+          </EmptyState>
+        );
+      }
+    // fallthrough
     case "pdf":
     case "image":
       return (

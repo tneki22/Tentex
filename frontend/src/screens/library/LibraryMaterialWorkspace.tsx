@@ -223,7 +223,7 @@ export function LibraryMaterialWorkspace() {
 
   useEffect(() => {
     if (!presentation || mode !== null) return;
-    setMode(detail?.presentation_kind === "typst" ? "source" : detail?.capabilities.can_compare ? presentation.defaultMode : "text");
+    setMode(detail?.capabilities.can_compare ? presentation.defaultMode : "text");
   }, [presentation, detail?.capabilities.can_compare, mode]);
 
   /* На узком окне половины не помещаются рядом, поэтому «Сравнение» там не
@@ -615,7 +615,8 @@ export function LibraryMaterialWorkspace() {
               page_to: command.page_to ?? null,
             })}
             onControl={(action) => void store.controlProcessing(action)}
-            onTypstBuild={(downloadPackages) => void store.buildTypst(downloadPackages)}
+            onTypstBuild={(downloadPackages, entrypoint) => void store.buildTypst(downloadPackages, entrypoint)}
+            onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
             onEditPage={openTextEditor}
             onCleanupPage={() => setCleanupOpen(true)}
             onConfirmPageReview={() => {
@@ -701,7 +702,8 @@ export function LibraryMaterialWorkspace() {
               page_to: command.page_to ?? null,
             })}
             onControl={(action) => void store.controlProcessing(action)}
-            onTypstBuild={(downloadPackages) => void store.buildTypst(downloadPackages)}
+            onTypstBuild={(downloadPackages, entrypoint) => void store.buildTypst(downloadPackages, entrypoint)}
+            onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
             onEditPage={openTextEditor}
             onCleanupPage={() => setCleanupOpen(true)}
             onConfirmPageReview={() => {
