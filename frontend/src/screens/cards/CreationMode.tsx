@@ -59,28 +59,32 @@ export function CreationMode({
   return (
     <div className="creation-mode">
       <PageHead
-        eyebrow="Ручное создание"
         title={path ? "Новая карточка" : "Создание карточек"}
         actions={path && <Button variant="ghost" onClick={() => setPath(null)}>К способам</Button>}
       />
       {!path ? (
-        <div className="creation-paths">
-          <button type="button" onClick={() => setPath("manual")}>
-            <PencilLine size={22} />
-            <strong>Вручную</strong>
-            <span>Лицевая и обратная стороны, подсказка и проверяемый источник.</span>
-          </button>
-          <button type="button" onClick={() => setPath("fragment")}>
-            <FileText size={22} />
-            <strong>Из фрагмента</strong>
-            <span>Откройте Материалы и нажмите «В карточку» у нужного Фрагмента.</span>
-          </button>
-          <button type="button" disabled aria-disabled="true">
-            <Sparkles size={22} />
-            <strong>С помощью ИИ</strong>
-            <span>Функция будет спроектирована позже.</span>
-          </button>
-        </div>
+        <>
+          <p className="creation-paths-lead">
+            Можно создать карточку из фрагмента в Материалах, вручную или с помощью ИИ.
+          </p>
+          <div className="creation-paths">
+            <button type="button" onClick={() => setPath("manual")}>
+              <PencilLine size={22} />
+              <strong>Вручную</strong>
+              <span>Лицевая и обратная стороны, подсказка и проверяемый источник.</span>
+            </button>
+            <button type="button" onClick={() => setPath("fragment")}>
+              <FileText size={22} />
+              <strong>Из фрагмента</strong>
+              <span>Откройте Материалы и нажмите «В карточку» у нужного Фрагмента.</span>
+            </button>
+            <button type="button" disabled aria-disabled="true">
+              <Sparkles size={22} />
+              <strong>С помощью ИИ</strong>
+              <span>Функция будет спроектирована позже.</span>
+            </button>
+          </div>
+        </>
       ) : path === "ai" ? (
         <section className="cards-ai-placeholder">
           <Sparkles size={24} />

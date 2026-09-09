@@ -479,7 +479,17 @@ def _today_units(
     config = get_settings(session, project_id).config
     today = study_date(datetime.now(UTC), config)
     by_id = {str(row.id): row for row in unit_rows}
-    items = sorted(plan.items, key=lambda item: (item.get("order", 0), str(item.get("id", ""))))
+    # Автоповтор (repetitions.due_items) не проставляет order — без запасного ключа
+    # по позиции в программе вопросы одного дня расходятся по UUID и выглядят как
+    # обратный порядок.
+    unit_order = {str(row.id): index for index, row in enumerate(unit_rows)}
+    items = sorted(
+        plan.items,
+        key=lambda item: (
+            item.get("order", 0),
+            unit_order.get(str(item.get("unit_id")), len(unit_rows)),
+        ),
+    )
     return plan_exists, [
         by_id[str(item["unit_id"])]
         for item in items

@@ -10,11 +10,12 @@ import {
   Button,
   Checkbox,
   Dialog,
+  Disclosure,
   EmptyState,
   PageHead,
   RadioCards,
   SegmentedTabs,
-  StatusBadge,
+  StackedColumns,
 } from "../../components/ui";
 
 interface RepetitionModeProps {
@@ -32,7 +33,12 @@ type Scope = CardSessionCreate["scope"];
 type Pace = CardSessionCreate["pace"];
 type Duration = "5" | "10" | "15" | "all";
 
-const GRADE_LABELS = ["Не вспомнил", "Частично", "Вспомнил", "Легко"];
+const GRADE_META: Array<{ label: string; token: string }> = [
+  { label: "Не вспомнил", token: "--tone-danger" },
+  { label: "Частично", token: "--tone-warning" },
+  { label: "Вспомнил", token: "--tone-success" },
+  { label: "Легко", token: "--accent" },
+];
 
 function plural(value: number, one: string, few: string, many: string): string {
   const mod100 = value % 100;
@@ -132,15 +138,13 @@ export function RepetitionMode(props: RepetitionModeProps) {
   }
 
   const hasToday = overview.today_units.length > 0;
-  const intro = hasToday
-    ? `На сегодня ${overview.today_units.length} ${plural(overview.today_units.length, "вопрос", "вопроса", "вопросов")}. По ним ${scopeCounts.today} ${plural(scopeCounts.today, "карточка", "карточки", "карточек")} — примерно ${overview.estimated_minutes} мин.`
-    : coverageStatus(overview);
+  const questionsWord = plural(overview.today_units.length, "вопрос", "вопроса", "вопросов");
+  const cardsWord = plural(scopeCounts.today, "карточка", "карточки", "карточек");
 
   return (
     <div className="repetition-mode">
       <PageHead
-        eyebrow="Карточки вместо повторения"
-        title="Повторение"
+        title="Карточки"
         actions={
           <Button onClick={overview.active_session ? onContinue : () => setDialogOpen(true)}>
             <Play size={15} />
@@ -150,7 +154,17 @@ export function RepetitionMode(props: RepetitionModeProps) {
       />
 
       <section className="repetition-intro" aria-labelledby="today-heading">
-        <h2 id="today-heading">{intro}</h2>
+        <h2 id="today-heading">
+          {hasToday ? (
+            <>
+              На сегодня <span className="repetition-figure">{overview.today_units.length} {questionsWord}</span>. По ним{" "}
+              <span className="repetition-figure">{scopeCounts.today} {cardsWord}</span> — примерно{" "}
+              <span className="repetition-figure">{overview.estimated_minutes} мин</span>.
+            </>
+          ) : (
+            coverageStatus(overview)
+          )}
+        </h2>
         {hasToday && <p className="repetition-coverage">{coverageStatus(overview)}</p>}
         {!overview.program_exists ? (
           <Button variant="secondary" onClick={() => window.location.assign(`/projects/${projectId}/program`)}>
@@ -165,9 +179,7 @@ export function RepetitionMode(props: RepetitionModeProps) {
           </>
         ) : !hasToday ? (
           <p>Можно потренировать сложные, выбранные или все активные карточки.</p>
-        ) : (
-          <p>Оценка уверенности помогает находить сложные карточки, но не меняет календарный план.</p>
-        )}
+        ) : null}
       </section>
 
       <section className="repetition-lanes">
@@ -182,15 +194,11 @@ export function RepetitionMode(props: RepetitionModeProps) {
                     className={selectedUnitId === row.unit.id ? "is-active" : ""}
                     onClick={() => setSelectedUnitId(row.unit.id)}
                   >
-                    <span className="repetition-queue-number">{index + 1}</span>
-                    <span className="repetition-queue-copy">
-                      <small>{row.unit.path.join(" · ") || (row.unit.kind === "ticket" ? "Билет" : "Вопрос")}</small>
+                    <span className="repetition-queue-top">
+                      <span className="repetition-queue-number">{index + 1}</span>
                       <strong>{row.unit.title}</strong>
                     </span>
-                    <span>{row.card_count} карт.</span>
-                    <StatusBadge tone={row.covered ? "success" : "neutral"}>
-                      {row.covered ? "есть" : "нет"}
-                    </StatusBadge>
+                    <span className="repetition-queue-count">{row.card_count} карт.</span>
                   </button>
                 </li>
               ))}
@@ -232,7 +240,7 @@ export function RepetitionMode(props: RepetitionModeProps) {
 
       <section className="cards-analytics">
         <header>
-          <div><BarChart3 size={17} /><div><h3>Уверенность</h3><p>{overview.analytics.observation_count} оценок в выборке</p></div></div>
+          <div><BarChart3 size={17} /><div><h3>Аналитика</h3><p>{overview.analytics.observation_count} оценок в выборке</p></div></div>
           <SegmentedTabs
             label="Период аналитики"
             value={String(period)}
@@ -241,20 +249,41 @@ export function RepetitionMode(props: RepetitionModeProps) {
           />
         </header>
         {overview.analytics.observation_count ? (
-          <div className="cards-confidence-grid">
-            {overview.analytics.distribution.map((bucket, index) => (
-              <div key={bucket.confidence}>
-                <span>{GRADE_LABELS[index]}</span>
-                <strong>{bucket.count}</strong>
-                <progress max={overview.analytics.observation_count} value={bucket.count} />
-              </div>
-            ))}
-            <div><span>Сложных карточек</span><strong>{overview.analytics.hard_card_count}</strong></div>
-            <div>
-              <span>Чаще всего 1–2</span>
-              <strong>{overview.analytics.hardest_unit?.title ?? "—"}</strong>
-              <small>{overview.analytics.hardest_observation_count} наблюдений</small>
-            </div>
+          <div className="cards-analytics-body">
+            <ul className="cards-analytics-legend">
+              {GRADE_META.map((grade) => (
+                <li key={grade.label}>
+                  <i style={{ background: `var(${grade.token})` }} />
+                  {grade.label}
+                </li>
+              ))}
+            </ul>
+            <StackedColumns
+              ariaLabel="Оценки уверенности по карточкам"
+              height={96}
+              data={overview.analytics.distribution.map((bucket, index) => ({
+                key: String(bucket.confidence),
+                label: GRADE_META[index].label,
+                segments: [{ value: bucket.count, token: GRADE_META[index].token }],
+                tooltip: `${GRADE_META[index].label}: ${bucket.count}`,
+              }))}
+            />
+            <Disclosure
+              className="cards-analytics-hard"
+              summary={`Сложные карточки (${overview.analytics.hard_card_count})`}
+            >
+              {overview.hard_cards.length ? (
+                <ul className="cards-analytics-hard-list">
+                  {overview.hard_cards.map((card) => (
+                    <li key={card.id}>
+                      <button type="button" onClick={() => onOpenBank(card.id)}>{card.front}</button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="cards-analytics-hard-empty">Сложных карточек нет.</p>
+              )}
+            </Disclosure>
           </div>
         ) : (
           <p className="cards-analytics-empty">Пока нет оценок. Аналитика появится после первого сеанса.</p>

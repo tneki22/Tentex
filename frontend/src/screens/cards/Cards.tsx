@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
 import type { CardSessionRead } from "../../api/cards";
-import { getProject } from "../../api/projects";
+import { getProject, type ModuleKey } from "../../api/projects";
 import { ProjectNav } from "../../components/domain";
 import { Button, ErrorState, LoadingState, StatusBadge, Tooltip } from "../../components/ui";
 import { useCardsOverview } from "../../hooks/useCardsOverview";
@@ -39,6 +39,7 @@ export function Cards() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [period, setPeriod] = useState<7 | 30>(7);
   const [projectName, setProjectName] = useState("Карточки проекта");
+  const [modules, setModules] = useState<ModuleKey[] | undefined>(undefined);
   const [session, setSession] = useState<CardSessionRead | null>(null);
   const mode = queryMode(searchParams.get("mode"));
   const inSession = searchParams.has("session");
@@ -47,7 +48,10 @@ export function Cards() {
   useEffect(() => {
     const controller = new AbortController();
     void getProject(projectId, controller.signal)
-      .then((detail) => setProjectName(detail.project.name ?? "Без названия"))
+      .then((detail) => {
+        setProjectName(detail.project.name ?? "Без названия");
+        setModules(detail.project.enabled_modules);
+      })
       .catch(() => undefined);
     return () => controller.abort();
   }, [projectId]);
@@ -127,6 +131,7 @@ export function Cards() {
         <ProjectNav
           projectId={projectId}
           active="cards"
+          modules={modules}
           counts={{ program: programCount, cards: overview?.active_card_count ?? 0 }}
           className="project-side-nav"
         />
