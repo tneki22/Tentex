@@ -45,7 +45,11 @@ function mathNode(source: string, displayMode: boolean, key: string): ReactNode 
       />
     );
   } catch {
-    return <code key={key}>{displayMode ? `$$${source}$$` : `$${source}$`}</code>;
+    return (
+      <code className={displayMode ? "workspace-reference-formula-fallback" : "workspace-reference-inline-fallback"} key={key}>
+        {displayMode ? `$$${source}$$` : `$${source}$`}
+      </code>
+    );
   }
 }
 

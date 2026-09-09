@@ -15,6 +15,8 @@ import {
   type PageCorrectionRead,
 } from "../api/materials";
 import { ProjectApiError } from "../api/projects";
+import { ACTIVE_JOB_STATES, cancelBackgroundJob, findResumableBackgroundJob, getBackgroundJobResult } from "../api/backgroundJobs";
+import { useBackgroundJob } from "../hooks/useBackgroundJob";
 import { AiFailureNotice } from "../components/domain";
 import {
   Button,
@@ -106,14 +108,17 @@ export function AiCleanupPanel({
   const [runResult, setRunResult] = useState<CleanupRunRead | null>(null);
   const [preview, setPreview] = useState("");
   const [originalSuggestion, setOriginalSuggestion] = useState("");
-  const [busy, setBusy] = useState<"preflight" | "run" | "apply" | null>(null);
+  const [busy, setBusy] = useState<"preflight" | "starting" | "apply" | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [compareTab, setCompareTab] = useState<"result" | "source">("result");
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const dirty = Boolean(runResult && preview !== originalSuggestion);
+  const { job, error: jobError } = useBackgroundJob(jobId);
+  const jobActive = Boolean(job && ACTIVE_JOB_STATES.has(job.state));
 
   const wasOpen = useRef(false);
 
@@ -132,10 +137,22 @@ export function AiCleanupPanel({
     setConfirmed(false);
     setConflict(false);
     setCompareTab("result");
-  }, [open]);
+    setJobId(null);
+    // При открытии сверяемся с реестром: уборка этой страницы могла остаться
+    // идти в фоне с прошлого раза, когда диалог был закрыт.
+    const controller = new AbortController();
+    void findResumableBackgroundJob(
+      "ai_cleanup",
+      { materialId: material.id, projectId: projectId ?? undefined },
+      controller.signal,
+    )
+      .then((active) => { if (!controller.signal.aborted && active) setJobId(active.id); })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [open, material.id, projectId]);
 
   useEffect(() => {
-    if (!open || busy === "run" || busy === "apply") return;
+    if (!open || busy === "starting" || busy === "apply" || jobActive) return;
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
@@ -161,7 +178,26 @@ export function AiCleanupPanel({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [open, projectId, material.id, page.id, page.page_number, instruction]);
+  }, [open, projectId, material.id, page.id, page.page_number, instruction, jobActive]);
+
+  // Закрытие панели задачу не отменяет — она живёт в очереди, и вернувшийся
+  // экран забирает её готовую уборку из реестра, а не зовёт модель заново.
+  useEffect(() => {
+    if (!job || job.state !== "completed" || runResult) return;
+    const controller = new AbortController();
+    void getBackgroundJobResult<CleanupRunRead>(job.id, controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setRunResult(result);
+        setPreview(result.suggestion.markdown);
+        setOriginalSuggestion(result.suggestion.markdown);
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) setError(caught);
+      });
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id, job?.state, runResult]);
 
   function requestClose() {
     if (dirty) {
@@ -177,24 +213,23 @@ export function AiCleanupPanel({
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
-    setBusy("run");
+    setBusy("starting");
     setError(null);
     setConflict(false);
+    setRunResult(null);
     try {
       const send = projectId === null
         ? (command: Parameters<typeof runLibraryPageCleanup>[2], signal: AbortSignal) =>
           runLibraryPageCleanup(material.id, page.page_number, command, signal)
         : (command: Parameters<typeof runLibraryPageCleanup>[2], signal: AbortSignal) =>
           runMaterialPageCleanup(projectId, material.id, page.page_number, command, signal);
-      const result = await send({
+      const { job_id } = await send({
         instruction,
         expected_revision: preflight.revision,
         expected_source_hash: preflight.source_hash,
         confirmed,
       }, controller.signal);
-      setRunResult(result);
-      setPreview(result.suggestion.markdown);
-      setOriginalSuggestion(result.suggestion.markdown);
+      setJobId(job_id);
     } catch (caught) {
       if (!controller.signal.aborted) setError(caught);
     } finally {
@@ -239,10 +274,11 @@ export function AiCleanupPanel({
     }
   }
 
+  /** Остановить значит отменить саму фоновую задачу (реестр), а не локальное
+   *  ожидание: панель больше ничего не ждёт синхронно. */
   function stop() {
-    abortRef.current?.abort();
-    setBusy(null);
-    setError(new DOMException("Ожидание остановлено пользователем", "AbortError"));
+    if (!job) return;
+    void cancelBackgroundJob(job.id).catch((caught) => setError(caught));
   }
 
   const aiFailure = describeAiFailure(error);
@@ -258,7 +294,7 @@ export function AiCleanupPanel({
         description={`${material.display_name}. Результат будет сохранён как новая ревизия; исходный файл не изменится.`}
         footer={<>
           <Button variant="ghost" onClick={requestClose}>Закрыть</Button>
-          {busy === "run" ? (
+          {jobActive ? (
             <Button variant="secondary" onClick={stop}><Square size={13} />Остановить</Button>
           ) : runResult ? (
             <>
@@ -282,14 +318,14 @@ export function AiCleanupPanel({
             <small>Пустая инструкция исправляет разрывы строк, пунктуацию, списки, заголовки и отступы — без новых фактов, удаления смысла и сокращения текста.</small>
           </label>
 
-          {busy === "preflight" && !preflightValue && <LoadingState label="Оцениваем состав и стоимость" />}
-          {preflightValue && (
+          {busy === "preflight" && !preflightValue && !jobId && <LoadingState label="Оцениваем состав и стоимость" />}
+          {preflightValue && !jobId && (
             <>
               <PreflightSummary value={preflightValue} />
               <Disclosure summary="Что отправим">
                 <div className="ai-manifest">
                   <p>Материал «{material.display_name}», страница {page.page_number}, {originalText.length.toLocaleString("ru-RU")} символов, пользовательская инструкция{instruction.trim() ? "" : " отсутствует"}.</p>
-                  <p><strong>Не отправляются:</strong> эталоны, привязки, другие страницы, материалы и история проекта.</p>
+                  <p><strong>Не отправляются:</strong> ответы, привязки, другие страницы, материалы и история проекта.</p>
                   <pre>{JSON.stringify(preflightValue.context_manifest, null, 2)}</pre>
                 </div>
               </Disclosure>
@@ -309,11 +345,12 @@ export function AiCleanupPanel({
               <Button variant="secondary" onClick={() => { onManualEdit(); onOpenChange(false); }}>Исправить текст вручную</Button>
             </>
           )}
-          {Boolean(error) && !aiFailure && !(error instanceof DOMException && error.name === "AbortError") && <p className="inline-error" role="alert">{error instanceof Error ? error.message : "Вызов не выполнен"}</p>}
-          {error instanceof DOMException && error.name === "AbortError" && <p className="ai-muted" role="status">Ожидание остановлено. Страница не изменена.</p>}
+          {Boolean(error) && !aiFailure && <p className="inline-error" role="alert">{error instanceof Error ? error.message : "Вызов не выполнен"}</p>}
+          {jobError && <p className="inline-error" role="alert">{jobError}</p>}
 
-          {busy === "run" && <LoadingState label="Модель готовит предложение; страницу пока не меняем" />}
-
+          {jobActive && <LoadingState label="Модель готовит предложение; страницу пока не меняем" />}
+          {job?.state === "failed" && <p className="inline-error" role="alert">{job.error ?? "Вызов не выполнен"}</p>}
+          {job?.state === "cancelled" && <p className="ai-muted" role="status">Остановлено. Страница не изменена.</p>}
           {runResult && (
             <section className="ai-cleanup-result">
               <header>

@@ -15,7 +15,15 @@ import {
   type RepairedItem,
   type RepairedQuestion,
 } from "../api/projects";
+import {
+  ACTIVE_JOB_STATES,
+  cancelBackgroundJob,
+  findResumableBackgroundJob,
+  getBackgroundJobResult,
+  resolveBackgroundJob,
+} from "../api/backgroundJobs";
 import { AiFailureNotice } from "../components/domain";
+import { useBackgroundJob } from "../hooks/useBackgroundJob";
 import { Button, Checkbox, ConfirmDialog, Dialog, Disclosure, IconButton, LoadingState, SegmentedTabs, StatusBadge } from "../components/ui";
 
 interface AiImportRepairDialogProps {
@@ -65,7 +73,6 @@ function validateItems(items: RepairedItem[], hasTickets: boolean): string {
       if (item.items.length === 0) return "В билете должен остаться хотя бы один пункт.";
       if (item.items.some((child) => !child.title.trim())) return "Формулировка вопроса или задачи не может быть пустой.";
     } else {
-      if (hasTickets) return "В формате билетов верхний уровень должен состоять только из билетов.";
       if (!item.title.trim()) return "Формулировка вопроса или задачи не может быть пустой.";
     }
   }
@@ -130,6 +137,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
   const [instruction, setInstruction] = useState("");
   const [preflight, setPreflight] = useState<ProgramImportRepairPreflightRead | null>(null);
   const [runResult, setRunResult] = useState<ProgramImportRepairRunRead | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
   const [items, setItems] = useState<RepairedItem[]>([]);
   const [dropped, setDropped] = useState<DroppedItem[]>([]);
   const [originalItems, setOriginalItems] = useState<RepairedItem[]>([]);
@@ -138,6 +146,8 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
   const [error, setError] = useState<unknown>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [conflict, setConflict] = useState(false);
+  const { job, error: jobError } = useBackgroundJob(jobId);
+  const jobActive = Boolean(job && ACTIVE_JOB_STATES.has(job.state));
   const [discardOpen, setDiscardOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const hasTickets = runResult?.has_tickets ?? preflight?.has_tickets ?? false;
@@ -178,6 +188,40 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
     return () => controller.abort();
   }, [open, projectId]);
 
+  // Пользователь мог запустить исправление и уйти с экрана: при открытии
+  // спрашиваем реестр, не идёт ли задача до сих пор, и подписываемся на неё
+  // вместо пустого старта.
+  useEffect(() => {
+    if (!open) {
+      setJobId(null);
+      return;
+    }
+    const controller = new AbortController();
+    void findResumableBackgroundJob("ai_import_repair", { projectId }, controller.signal)
+      .then((active) => {
+        if (!controller.signal.aborted && active) setJobId(active.id);
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [open, projectId]);
+
+  // Задача досчиталась — забрать готовое предложение из реестра, а не звать
+  // модель заново: повторный вызов стоил бы денег за уже сделанную работу.
+  useEffect(() => {
+    if (!job || job.state !== "completed" || runResult) return;
+    const controller = new AbortController();
+    void getBackgroundJobResult<ProgramImportRepairRunRead>(job.id, controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted) adoptResult(result);
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) setError(caught);
+      });
+    return () => controller.abort();
+  }, [job?.id, job?.state, runResult]);
+
+  // Закрытие диалога задачу НЕ отменяет: она живёт в очереди, и вернувшийся
+  // экран подхватит её результат. Обрывается только короткий запрос preflight.
   function requestClose() {
     if (dirty) {
       setDiscardOpen(true);
@@ -196,22 +240,27 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
     setError(null);
     setConflict(false);
     try {
-      const result = await runProgramImportRepair(projectId, {
+      const started = await runProgramImportRepair(projectId, {
         instruction,
         expected_program_revision: preflight.program_revision,
         expected_source_hash: preflight.source_hash,
         confirmed,
       }, controller.signal);
-      setRunResult(result);
-      setItems(result.items);
-      setDropped(result.dropped);
-      setOriginalItems(result.items);
-      setOriginalDropped(result.dropped);
+      setJobId(started.job_id);
     } catch (caught) {
       if (!controller.signal.aborted) setError(caught);
     } finally {
       if (!controller.signal.aborted) setBusy(null);
     }
+  }
+
+  /** Разложить пришедший результат в редактируемое предложение. */
+  function adoptResult(result: ProgramImportRepairRunRead) {
+    setRunResult(result);
+    setItems(result.items);
+    setDropped(result.dropped);
+    setOriginalItems(result.items);
+    setOriginalDropped(result.dropped);
   }
 
   async function applyRepair() {
@@ -228,6 +277,8 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
         expected_source_hash: runResult.source_hash,
         items: sanitizeItems(items),
       }, controller.signal);
+      // Задача доведена до конца: список принят, из «ждут проверки» уходит.
+      if (jobId) void resolveBackgroundJob(jobId).catch(() => undefined);
       onApplied(result);
       onOpenChange(false);
     } catch (caught) {
@@ -239,9 +290,8 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
   }
 
   function stop() {
-    abortRef.current?.abort();
-    setBusy(null);
-    setError(new DOMException("Ожидание остановлено пользователем", "AbortError"));
+    if (!jobId) return;
+    void cancelBackgroundJob(jobId).catch((caught) => setError(caught));
   }
 
   function updateQuestion(ticketIndex: number | null, itemIndex: number, updater: (item: RepairedQuestion) => RepairedQuestion) {
@@ -290,19 +340,33 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
   function restoreDropped(dropIndex: number) {
     const entry = dropped[dropIndex];
     if (!entry) return;
+    const context = preflight?.source_context ?? [];
+    const positions = context.filter((node) => node.node_type === "topic" || node.exam_kind === "ticket");
     const sourceIndex = entry.source_indices[0];
-    const sourceText = (sourceIndex && runResult?.source_texts[sourceIndex - 1]) || "";
-    const restored: RepairedQuestion = { kind: "question", title: sourceText, subpoints: [], source_indices: entry.source_indices };
-    setDropped(dropped.filter((_, index) => index !== dropIndex));
-    if (hasTickets) {
-      const firstTicketIndex = items.findIndex((item) => item.kind === "ticket");
-      if (firstTicketIndex === -1) return;
-      setItems(items.map((item, index) => index === firstTicketIndex && item.kind === "ticket"
-        ? { ...item, items: [...item.items, restored] }
-        : item));
-    } else {
-      setItems([...items, restored]);
+    const source = positions[sourceIndex - 1];
+    if (!source) return;
+    const question = (index: number): RepairedQuestion => {
+      const node = positions[index - 1];
+      return { kind: node.exam_kind === "task" ? "task" : "question", title: node.title,
+        subpoints: node.subpoints, source_indices: [index] };
+    };
+    if (source.exam_kind === "ticket") {
+      const childIndices = positions.flatMap((node, index) => node.parent_id === source.id ? [index + 1] : []);
+      const restoredIndices = new Set([sourceIndex, ...childIndices]);
+      setItems([...items, { kind: "ticket", title: source.title, source_indices: [sourceIndex], items: childIndices.map(question) }]);
+      setDropped(dropped.filter((item) => !item.source_indices.some((index) => restoredIndices.has(index))));
+      return;
     }
+    const parent = context.find((node) => node.id === source.parent_id);
+    const ticketIndex = items.findIndex((item) => item.kind === "ticket" && item.source_indices.some((index) => positions[index - 1]?.id === source.parent_id));
+    if (parent?.exam_kind === "ticket" && ticketIndex === -1) {
+      setError(new Error("Сначала верните билет целиком — вопрос принадлежит ему."));
+      return;
+    }
+    const restored = question(sourceIndex);
+    setDropped(dropped.filter((_, index) => index !== dropIndex));
+    setItems(ticketIndex === -1 ? [...items, restored] : items.map((item, index) =>
+      index === ticketIndex && item.kind === "ticket" ? { ...item, items: [...item.items, restored] } : item));
   }
 
   function questionEditorProps(ticketIndex: number | null, itemIndex: number, item: RepairedQuestion, label: string): QuestionEditorProps {
@@ -333,10 +397,10 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
         onOpenChange={(next) => next ? onOpenChange(true) : requestClose()}
         className="ai-consumer-dialog ai-import-repair-dialog"
         title="Исправить список вопросов"
-        description="Правит формулировки, расставляет подпункты и убирает лишние заголовки; число пунктов может измениться. Дерево изменится после применения."
+        description="Правит формулировки, расставляет подпункты и убирает лишние заголовки; число пунктов может измениться. Разделы и состав билетов сохраняются. Изменения применяются после проверки и доступны для отмены."
         footer={<>
           <Button variant="ghost" onClick={requestClose}>Закрыть</Button>
-          {busy === "run" ? <Button variant="secondary" onClick={stop}><Square size={13} />Остановить</Button>
+          {busy === "run" || jobActive ? <Button variant="secondary" onClick={stop}><Square size={13} />Остановить</Button>
             : runResult ? <Button disabled={busy !== null || Boolean(validationMessage) || conflict} onClick={() => void applyRepair()}>{busy === "apply" ? "Применяем…" : "Применить"}</Button>
               : <Button disabled={busy !== null || !preflight || (preflight.preflight.confirmation_required && !confirmed)} onClick={() => void runRepair()}><WandSparkles size={14} />Исправить</Button>}
         </>}
@@ -354,14 +418,16 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
 
           <Disclosure summary="Что отправим">
             <div className="ai-manifest">
-              <p>Текущие формулировки {nodes.length} пунктов программы, без id.</p>
-              <p><strong>Не отправляются:</strong> эталоны, ответы пользователя, материалы, привязки, конспекты и попытки.</p>
+              <p>Полное дерево программы: разделы, вопросы, задачи, билеты и подпункты, их id и пути. Для ответов — только наличие и число символов.</p>
+              <p><strong>Не отправляются:</strong> ответы, ответы пользователя, материалы, привязки, конспекты и попытки.</p>
+              {!preflight && <p>Полный состав появится после оценки запроса.</p>}
               <ol className="ai-question-manifest">
-                {nodes.map((node, index) => (
+                {(preflight?.source_context ?? []).map((node, index) => (
                   <li key={node.id}>
                     <code>#{index + 1}</code>
-                    <span>{node.exam_kind === "ticket" ? "Билет" : node.exam_kind === "task" ? "Задача" : node.exam_kind === "question" ? "Вопрос" : "Тема"}</span>
-                    <strong>{node.title}</strong>
+                    <span>{node.exam_kind === "ticket" ? "Билет" : node.exam_kind === "task" ? "Задача" : node.exam_kind === "question" ? "Вопрос" : node.node_type === "section" ? "Раздел" : node.node_type === "subpoint" ? "Подпункт" : "Тема"}</span>
+                    <strong>{[...node.path, node.title].join(" → ")}</strong>
+                    <small>{node.id}</small>
                   </li>
                 ))}
               </ol>
@@ -390,7 +456,10 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
           )}
           {Boolean(error) && !failure && !(error instanceof DOMException && error.name === "AbortError") && <p className="inline-error" role="alert">{error instanceof Error ? error.message : "Исправление не выполнено"}</p>}
           {error instanceof DOMException && error.name === "AbortError" && <p className="ai-muted" role="status">Ожидание остановлено. Программа не изменена.</p>}
-          {busy === "run" && <LoadingState label="Модель готовит исправление; программа пока не меняется" />}
+          {(busy === "run" || jobActive) && <LoadingState label="Модель готовит исправление; программа пока не меняется. Диалог можно закрыть — задача продолжится в фоне" />}
+          {jobError && <p className="inline-error" role="alert">{jobError}</p>}
+          {job?.state === "failed" && <p className="inline-error" role="alert">{job.error ?? "Исправление не выполнено"}</p>}
+          {job?.state === "cancelled" && <p className="ai-muted" role="status">Остановлено. Программа не изменена.</p>}
 
           {runResult && (
             <section className="ai-cleanup-result">
@@ -406,7 +475,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
               {hasTickets ? (
                 <ol className="ai-repair-ticket-list">
                   {items.map((ticket, ticketIndex) => {
-                    if (ticket.kind !== "ticket") return null;
+                    if (ticket.kind !== "ticket") return <QuestionEditor key={ticketIndex} {...questionEditorProps(null, ticketIndex, ticket, `${ticketIndex + 1}`)} />;
                     return (
                       <li key={ticketIndex} className="ai-repair-ticket">
                         <header>
@@ -439,7 +508,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
                     {dropped.map((entry, index) => (
                       <li key={index}>
                         <span>Позиция {entry.source_indices.join(", ")}: {entry.reason}</span>
-                        <Button variant="ghost" onClick={() => restoreDropped(index)}><RotateCcw size={13} />Вернуть как вопрос</Button>
+                        <Button variant="ghost" onClick={() => restoreDropped(index)}><RotateCcw size={13} />Вернуть пункт</Button>
                       </li>
                     ))}
                   </ul>

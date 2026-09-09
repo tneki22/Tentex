@@ -1,0 +1,53 @@
+{
+  "image": "page_15.jpg",
+  "width": 1800,
+  "height": 2400,
+  "page_corners_px": [
+    [
+      85,
+      265
+    ],
+    [
+      1515,
+      125
+    ],
+    [
+      1695,
+      2060
+    ],
+    [
+      310,
+      2320
+    ]
+  ],
+  "page_corners_normalized": [
+    [
+      0.047222,
+      0.110417
+    ],
+    [
+      0.841667,
+      0.052083
+    ],
+    [
+      0.941667,
+      0.858333
+    ],
+    [
+      0.172222,
+      0.966667
+    ]
+  ],
+  "order": [
+    "top_left",
+    "top_right",
+    "bottom_right",
+    "bottom_left"
+  ],
+  "variant_of_original_page": 8,
+  "defects": [
+    "perspective",
+    "dark_corner",
+    "vignette"
+  ]
+}

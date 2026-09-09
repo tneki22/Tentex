@@ -7,7 +7,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.projects.errors import ProjectDomainError
 
-AiModality = Literal["text", "speech"]
+# Единственное определение модальностей шлюза: по нему `resolve_model` ищет
+# модель по умолчанию (`AiSettings.default_<модальность>_model_id`), поэтому
+# новое значение здесь требует и столбца в настройках.
+AiModality = Literal["text", "speech", "vision"]
 CachePolicy = Literal["none", "exact", "content_hash"]
 
 
@@ -83,6 +86,17 @@ ROLE_SPECS = {
             {"max_output_tokens": 8000},
         ),
         AiRoleSpec(
+            "exam_answer_sections",
+            "Разметка файла ответов",
+            "Разносит разделы файла эталонных ответов по вопросам программы, когда "
+            "заголовки или нумерация разошлись со структурой документа.",
+            "text",
+            frozenset({"structured_output"}),
+            "exact",
+            "answer-sections-v1",
+            {"max_output_tokens": 6000, "temperature": 0},
+        ),
+        AiRoleSpec(
             "exam_preparation_estimate",
             "Оценка времени подготовки",
             "Предлагает реалистичную дневную нагрузку по сроку и объёму экзамена.",
@@ -91,6 +105,36 @@ ROLE_SPECS = {
             "exact",
             "preparation-estimate-v1",
             {"max_output_tokens": 700},
+        ),
+        AiRoleSpec(
+            "exam_preparation_phases",
+            "Блоки подготовки",
+            "Предлагает учебные блоки по программе и доступному времени.",
+            "text",
+            frozenset({"structured_output"}),
+            "exact",
+            "preparation-phases-v1",
+            {"max_output_tokens": 4000},
+        ),
+        AiRoleSpec(
+            "exam_preparation_distribution",
+            "Распределение подготовки",
+            "Распределяет целые билеты и вопросы по дням с проверкой ограничений.",
+            "text",
+            frozenset({"structured_output"}),
+            "exact",
+            "preparation-distribution-v1",
+            {"max_output_tokens": 8000},
+        ),
+        AiRoleSpec(
+            "exam_preparation_coach",
+            "Рекомендация дня",
+            "Связывает факты занятий с последствиями и следующим действием.",
+            "text",
+            frozenset({"structured_output"}),
+            "exact",
+            "preparation-coach-v1",
+            {"max_output_tokens": 1000},
         ),
         AiRoleSpec(
             "exam_chat_reply",
@@ -123,6 +167,19 @@ ROLE_SPECS = {
             "none",
             "chat-memory-v1",
             {"max_output_tokens": 1000},
+        ),
+        AiRoleSpec(
+            "material_page_recognition",
+            "Распознавание страницы",
+            "Читает страницу или вырез из неё картинкой и возвращает текст с формулами "
+            "в LaTeX. Работает в режиме распознавания «Облако».",
+            "vision",
+            frozenset({"image_input", "structured_output"}),
+            # Один и тот же вырез страницы не должен стоить дважды: повторный
+            # разбор материала и переразбор отдельных страниц попадают в кэш.
+            "content_hash",
+            "page-recognition-v1",
+            {"max_output_tokens": 8000, "temperature": 0},
         ),
         AiRoleSpec(
             "speech_transcription",

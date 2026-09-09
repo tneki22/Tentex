@@ -34,9 +34,9 @@ function progressText(progress: AnswersLinkProgress | null): string {
     return `Связываем страницы с вопросами: ${progress.phase_completed} из ${progress.phase_total}.`;
   }
   if (progress.phase === "importing") {
-    return `Обновляем эталоны: ${progress.phase_completed} из ${progress.phase_total}.`;
+    return `Обновляем ответы: ${progress.phase_completed} из ${progress.phase_total}.`;
   }
-  return "Проверяем, что эталоны доступны во всех зонах проекта.";
+  return "Проверяем, что ответы доступны во всех зонах проекта.";
 }
 
 function ResultMetrics({ result }: { result: AnswersLinkRead }) {
@@ -49,7 +49,7 @@ function ResultMetrics({ result }: { result: AnswersLinkRead }) {
   ].filter(([, value]) => Number(value) > 0) as [string, number][];
   if (metrics.length === 0) return <p className="answer-match-unchanged">Изменений не потребовалось.</p>;
   return (
-    <div className="answer-match-metrics" aria-label="Изменения эталонов">
+    <div className="answer-match-metrics" aria-label="Изменения ответов">
       {metrics.map(([label, value]) => (
         <span key={label}><strong>{value}</strong><small>{label}</small></span>
       ))}
@@ -61,7 +61,7 @@ function attentionText(result: AnswersLinkRead): string {
   const issues: string[] = [];
   if (result.unavailable_node_ids.length) {
     const count = result.unavailable_node_ids.length;
-    issues.push(`${count} ${plural(count, "эталон недоступен", "эталона недоступны", "эталонов недоступны")}`);
+    issues.push(`${count} ${plural(count, "ответ недоступен", "ответа недоступны", "ответов недоступны")}`);
   }
   if (result.suggestions.length) {
     const count = result.suggestions.length;
@@ -126,8 +126,8 @@ export function AnswerMatchStatus({
         <div>
           <strong>
             {complete
-              ? `Готово: эталоны доступны у ${result.available_node_ids.length} из ${result.expected_questions} вопросов`
-              : `Требуется проверка: сопоставлено ${result.matched_node_ids.length}, эталоны доступны у ${result.available_node_ids.length} из ${result.expected_questions}`}
+              ? `Готово: ответы доступны у ${result.available_node_ids.length} из ${result.expected_questions} вопросов`
+              : `Требуется проверка: сопоставлено ${result.matched_node_ids.length}, ответы доступны у ${result.available_node_ids.length} из ${result.expected_questions}`}
           </strong>
           {!complete && <p>{attentionText(result)}</p>}
         </div>

@@ -45,6 +45,7 @@ const STATUS_LABELS: Record<MaterialRead["status"], string> = {
   queued: "В очереди",
   processing: "Обрабатывается",
   paused: "На паузе",
+  needs_input: "Нужны файлы",
   ready: "Готов",
   failed: "Ошибка обработки",
 };

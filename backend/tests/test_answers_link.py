@@ -16,6 +16,7 @@ from app.bindings.answers_link import (
 from app.bindings.schemas import AnswersLinkRead
 from app.models import (
     Binding,
+    BindingStatus,
     BlockClass,
     ExamKind,
     MaterialBlock,
@@ -24,6 +25,7 @@ from app.models import (
     NodeType,
     PageQuality,
     ProgramNode,
+    ProjectActionLog,
     ProjectMaterial,
     ReferenceAnswer,
     ReferenceAnswerMatchMethod,
@@ -32,6 +34,7 @@ from app.models import (
     utc_now,
 )
 from app.projects.answers import put_reference_answer
+from app.projects.program import undo_last_project_action
 from app.projects.schemas import ReferenceAnswerWrite
 
 
@@ -360,6 +363,74 @@ def test_relink_restores_inactive_manual_tombstone(session: Session) -> None:
     assert result.available_node_ids == [nodes[0].id]
     assert result.unavailable_node_ids == []
     assert result.complete is True
+
+
+def test_undo_answers_link_removes_created_answers_and_bindings(session: Session) -> None:
+    project, nodes = _program(session, 1)
+    material = _answers_material(
+        session,
+        project,
+        [(nodes[0].title, [("Imported body", "paragraph", None)])],
+    )
+
+    link_answers_material(session, project.id, material.id)
+    session.commit()
+    action = session.scalar(
+        select(ProjectActionLog)
+        .where(ProjectActionLog.project_id == project.id)
+        .order_by(ProjectActionLog.sequence.desc())
+    )
+    assert action is not None and action.action_type == "answers_link"
+    action_sequence = action.sequence
+    session.commit()
+
+    undo_last_project_action(session, project.id, action_sequence)
+
+    assert session.get(ReferenceAnswer, (project.id, nodes[0].id)) is None
+    bindings = list(session.scalars(select(Binding).where(Binding.project_id == project.id)))
+    assert bindings and all(binding.status == BindingStatus.REMOVED for binding in bindings)
+
+
+def test_undo_answers_link_restores_previous_manual_tombstone(session: Session) -> None:
+    project, nodes = _program(session, 1)
+    material = _answers_material(
+        session,
+        project,
+        [(nodes[0].title, [("Imported body", "paragraph", None)])],
+    )
+    session.add(
+        ReferenceAnswer(
+            project_id=project.id,
+            program_node_id=nodes[0].id,
+            text="Old manual text",
+            origin_kind=ReferenceAnswerOrigin.MANUAL,
+            match_method=ReferenceAnswerMatchMethod.MANUAL,
+            is_confirmed=True,
+            is_active=False,
+            revision=3,
+        )
+    )
+    session.commit()
+
+    link_answers_material(session, project.id, material.id)
+    session.commit()
+    action = session.scalar(
+        select(ProjectActionLog)
+        .where(ProjectActionLog.project_id == project.id)
+        .order_by(ProjectActionLog.sequence.desc())
+    )
+    assert action is not None
+    action_sequence = action.sequence
+    session.commit()
+
+    undo_last_project_action(session, project.id, action_sequence)
+
+    restored = session.get(ReferenceAnswer, (project.id, nodes[0].id))
+    assert restored is not None
+    assert restored.text == "Old manual text"
+    assert restored.is_active is False
+    assert restored.is_confirmed is True
+    assert restored.revision == 3
 
 
 def test_relink_preserves_active_manual_answer(session: Session) -> None:

@@ -97,38 +97,6 @@ OCR_MODELS: tuple[OcrModelSpec, ...] = (
         min_ram_mb=4000,
         recommended=True,
     ),
-    OcrModelSpec(
-        key="textbook-formulas",
-        engine="textbook",
-        title="Формулы и структура страницы",
-        summary=(
-            "Размечает страницу, читает русский текст и переводит печатные формулы в LaTeX."
-        ),
-        good_for=(
-            "Единственный профиль «Учебник» для видеокарты с 8 ГБ: методички и "
-            "учебники с формулами."
-        ),
-        repos=(
-            ModelRepo("PaddlePaddle/PP-DocLayout_plus-L", 130 * MB),
-            ModelRepo("PaddlePaddle/PP-FormulaNet_plus-M", 624 * MB),
-            ModelRepo("PaddlePaddle/PP-OCRv5_server_det", 88 * MB),
-            ModelRepo("PaddlePaddle/eslav_PP-OCRv5_mobile_rec", 8 * MB),
-        ),
-        device="gpu",
-        languages="Русский, английский",
-        min_vram_mb=6000,
-        recommended_vram_mb=8000,
-        min_ram_mb=8000,
-        notes=(
-            "Связка: PP-DocLayout_plus-L размечает страницу и находит формулы отдельным "
-            "классом, PP-FormulaNet Plus M переводит их в LaTeX, PP-OCRv5 читает обычный текст.",
-            "Распознавание таблиц и диаграмм выключено: так профиль укладывается в 8 ГБ "
-            "видеопамяти. Таблица останется текстом, без сетки ячеек.",
-            "Обрабатывается одна страница и один фрагмент за раз. Перед запуском закройте "
-            "игры и программы, использующие видеокарту.",
-        ),
-        recommended=True,
-    ),
 )
 
 MODELS_BY_KEY: dict[str, OcrModelSpec] = {spec.key: spec for spec in OCR_MODELS}

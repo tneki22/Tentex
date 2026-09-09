@@ -2,16 +2,16 @@ import { Download, ExternalLink, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import {
+  libraryRenderedUrl,
   librarySourceUrl,
   type LibraryMaterialDetailRead,
   type MaterialPurpose,
-  type MaterialRevisionRead,
 } from "../../api/materials";
-import { Button, ConfirmDialog, Disclosure, StatusBadge } from "../../components/ui";
+import { Button, ConfirmDialog, Disclosure } from "../../components/ui";
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "список вопросов",
-  reference_answers: "эталонные ответы",
+  reference_answers: "ответы",
   study_source: "учебный источник",
 };
 
@@ -24,25 +24,20 @@ function sizeLabel(bytes: number): string {
 
 interface LibraryMaterialFilePanelProps {
   material: LibraryMaterialDetailRead;
-  revisions: MaterialRevisionRead[];
-  selectedRevision: number | null;
-  compareRevision: number | null;
   busy: boolean;
-  onSelectRevision: (revision: number | null) => void;
-  onCompareRevision: (revision: number | null) => void;
   onAddToProject: () => void;
   onRefreshSource: () => void;
   onDelete: () => void;
 }
 
+/**
+ * Вкладка «Файл»: сам файл, его подключения к проектам и удаление. Версий
+ * разбора здесь нет намеренно — они целиком живут в соседней вкладке
+ * «Версии», вместе со сравнением и восстановлением.
+ */
 export function LibraryMaterialFilePanel({
   material,
-  revisions,
-  selectedRevision,
-  compareRevision,
   busy,
-  onSelectRevision,
-  onCompareRevision,
   onAddToProject,
   onRefreshSource,
   onDelete,
@@ -78,7 +73,7 @@ export function LibraryMaterialFilePanel({
             </div>
           )}
           <div><dt>Добавлен</dt><dd>{new Date(material.created_at).toLocaleDateString("ru-RU")}</dd></div>
-          <div><dt>Хранение</dt><dd>Локально, в папке установки</dd></div>
+          <div><dt>Хранение</dt><dd><code>{material.storage_path}</code></dd></div>
         </dl>
 
         <div className="inspector-actions">
@@ -89,8 +84,20 @@ export function LibraryMaterialFilePanel({
             href={librarySourceUrl(material.id)}
             download={material.original_name}
           >
-            <Download size={14} aria-hidden="true" /> Скачать исходник
+            <Download size={14} aria-hidden="true" />
+            {material.presentation_kind === "typst" ? "Скачать проект" : "Скачать исходник"}
           </a>
+          {/* У Typst исходник и читаемый документ — разные файлы: ZIP проекта
+              и PDF сборки. Оба нужны, поэтому обе ссылки стоят рядом. */}
+          {material.typst?.has_rendered_pdf && (
+            <a
+              className="secondary-button"
+              href={libraryRenderedUrl(material.id)}
+              download={`${material.original_name.replace(/\.typ$/i, "")}.pdf`}
+            >
+              <Download size={14} aria-hidden="true" /> Скачать PDF
+            </a>
+          )}
           {material.capabilities.can_refresh_source && (
             <Button variant="ghost" disabled={busy} onClick={() => setRefreshOpen(true)}>
               <RefreshCw size={14} aria-hidden="true" />
@@ -98,71 +105,6 @@ export function LibraryMaterialFilePanel({
             </Button>
           )}
         </div>
-      </section>
-
-      <section className="inspector-section">
-        <h4>Версии разбора</h4>
-        <p className="inspector-note">
-          Каждый запуск «Быстро» или «Учебник» сохраняется отдельно. Откройте
-          одну версию либо сравните две версии текста на текущей странице.
-        </p>
-        {revisions.length === 0 ? (
-          <p className="inspector-note">Версии появятся после первой обработки.</p>
-        ) : (
-          <div className="revision-list" role="list">
-            {revisions.map((revision) => {
-              const openRevision = selectedRevision ?? material.active_parse_revision;
-              const isOpen = revision.revision === openRevision;
-              const isCompared = revision.revision === compareRevision;
-              const mode = revision.parser_mode === "textbook"
-                ? "Учебник"
-                : revision.parser_mode === "fast"
-                  ? "Быстро · гибридный OCR"
-                  : "Ручная или восстановленная версия";
-              return (
-                <div
-                  key={revision.revision}
-                  className={`revision-row ${isOpen ? "is-open" : ""} ${isCompared ? "is-compared" : ""}`.trim()}
-                  role="listitem"
-                >
-                  <span className="revision-head">
-                    <b>Версия {revision.revision}</b>
-                    {revision.is_current
-                      ? <StatusBadge tone="success">Текущая</StatusBadge>
-                      : isCompared
-                        ? <StatusBadge tone="info">Сравнение</StatusBadge>
-                        : isOpen && <StatusBadge tone="neutral">Открыта</StatusBadge>}
-                  </span>
-                  <span className="revision-origin">{mode}</span>
-                  <span className="revision-meta">
-                    {new Date(revision.created_at).toLocaleString("ru-RU", {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    })}
-                  </span>
-                  <div className="revision-inline-actions">
-                    <Button
-                      variant="ghost"
-                      disabled={isOpen}
-                      onClick={() => onSelectRevision(
-                        revision.revision === material.active_parse_revision ? null : revision.revision,
-                      )}
-                    >
-                      {isOpen ? "Открыта" : "Открыть"}
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      disabled={isOpen}
-                      onClick={() => onCompareRevision(isCompared ? null : revision.revision)}
-                    >
-                      {isCompared ? "Закрыть сравнение" : "Сравнить"}
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
       </section>
 
       <section className="inspector-section">

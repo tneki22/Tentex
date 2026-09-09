@@ -12,11 +12,15 @@ from sqlalchemy.orm import Session
 from app.ai.gateway import ModelGateway
 from app.ai.schemas import AiUsage
 from app.ai.settings import AiGatewayError
+from app.db import project_write_transaction
 from app.exam import chat as chat_service
 from app.exam.checking import CheckResult, RubricPoint, deterministic_check
 from app.exam.context import ChatContext, build_context
 from app.exam.judge import JudgeResult, judge_attempt
 from app.models import (
+    Activity,
+    ActivityKind,
+    ActivityOrigin,
     Attempt,
     AttemptOutcome,
     ChatMessage,
@@ -28,6 +32,7 @@ from app.models import (
     ReferenceAnswer,
     utc_now,
 )
+from app.preparation.evidence import synchronize_review
 from app.projects.answer_lifecycle import is_reference_answer_available
 from app.projects.errors import ProjectDomainError
 
@@ -38,6 +43,28 @@ AI_FALLBACK_CODES = {
     "ai_timeout",
     "ai_daily_limit",
 }
+
+
+def _free_answer_activity(session: Session, project_id: UUID, node_id: UUID) -> Activity:
+    """Reuse one activity per question so attempts form one evidence stream."""
+    activity = session.scalar(
+        select(Activity).where(
+            Activity.project_id == project_id,
+            Activity.program_node_id == node_id,
+            Activity.kind == ActivityKind.FREE_ANSWER,
+        )
+    )
+    if activity is None:
+        activity = Activity(
+            project_id=project_id,
+            program_node_id=node_id,
+            kind=ActivityKind.FREE_ANSWER,
+            evidence_strength=1.0,
+            origin=ActivityOrigin.EXAM_CHAT,
+        )
+        session.add(activity)
+        session.flush()
+    return activity
 
 
 @dataclass(frozen=True)
@@ -55,11 +82,7 @@ class AnswerResult:
 
 def _reference_revision(ctx: ChatContext) -> int | None:
     return next(
-        (
-            item.get("revision")
-            for item in ctx.manifest
-            if item.get("kind") == "reference_answer"
-        ),
+        (item.get("revision") for item in ctx.manifest if item.get("kind") == "reference_answer"),
         None,
     )
 
@@ -140,16 +163,12 @@ def _verdict_payload(
 def _require_attempt(session: Session, project_id: UUID, attempt_id: UUID) -> Attempt:
     attempt = session.get(Attempt, attempt_id)
     if attempt is None or attempt.project_id != project_id:
-        raise ProjectDomainError(
-            "Попытка не найдена", status=404, code="attempt_not_found"
-        )
+        raise ProjectDomainError("Попытка не найдена", status=404, code="attempt_not_found")
     return attempt
 
 
 def _answer_message(session: Session, attempt_id: UUID) -> ChatMessage | None:
-    return session.scalar(
-        select(ChatMessage).where(ChatMessage.attempt_id == attempt_id).limit(1)
-    )
+    return session.scalar(select(ChatMessage).where(ChatMessage.attempt_id == attempt_id).limit(1))
 
 
 def _save_grade(
@@ -178,7 +197,10 @@ def _save_grade(
         cached=cached,
         actual_model_id=actual_model_id,
     )
-    with session.begin():
+    with project_write_transaction(session, attempt.project_id):
+        existing = session.get(Grade, attempt.id)
+        if existing is not None:
+            return existing
         grade = Grade(
             attempt_id=attempt.id,
             outcome=outcome,
@@ -205,6 +227,7 @@ def _save_grade(
             )
         session.flush()
         session.refresh(grade)
+        synchronize_review(session, attempt)
     return grade
 
 
@@ -214,18 +237,17 @@ async def submit_answer(
     project_id: UUID,
     chat: ChatSession | UUID,
     text: str,
+    *,
+    answer_mode: str | None = None,
+    active_seconds: int | None = None,
 ) -> AnswerResult:
     chat_id = chat.id if isinstance(chat, ChatSession) else chat
-    with session.begin():
+    with project_write_transaction(session, project_id):
         chat_service._require_exam_project(session, project_id)
         chat_row = chat_service._require_session(session, project_id, chat_id)
-        node = chat_service._require_chat_node(
-            session, project_id, chat_row.program_node_id
-        )
+        node = chat_service._require_chat_node(session, project_id, chat_row.program_node_id)
         ctx = build_context(session, chat_row, for_judge=True)
-        source_only_answer = session.get(
-            ReferenceAnswer, (project_id, chat_row.program_node_id)
-        )
+        source_only_answer = session.get(ReferenceAnswer, (project_id, chat_row.program_node_id))
         if (
             is_reference_answer_available(source_only_answer)
             and source_only_answer.source_material_id is not None
@@ -238,13 +260,17 @@ async def submit_answer(
             )
         ordinal = (
             session.scalar(
-                select(func.count(Attempt.id)).where(
+                select(func.count(Attempt.id))
+                .join(Activity, Activity.id == Attempt.activity_id)
+                .where(
                     Attempt.project_id == project_id,
-                    Attempt.program_node_id == chat_row.program_node_id,
+                    Activity.program_node_id == chat_row.program_node_id,
+                    Activity.kind == ActivityKind.FREE_ANSWER,
                 )
             )
             or 0
         ) + 1
+        activity = _free_answer_activity(session, project_id, chat_row.program_node_id)
         snapshot = _context_snapshot(ctx)
         # Замораживаем выбранную модель вместе с persona/strictness: повторная
         # проверка судит той же моделью, что была выбрана на момент сдачи,
@@ -252,9 +278,11 @@ async def submit_answer(
         snapshot["model_override"] = chat_row.model_override
         attempt = Attempt(
             project_id=project_id,
-            program_node_id=chat_row.program_node_id,
+            activity_id=activity.id,
             ordinal=ordinal,
             text=text,
+            answer_mode=answer_mode,
+            active_seconds=active_seconds,
             persona=chat_row.persona,
             strictness=chat_row.strictness,
             context_snapshot=snapshot,
@@ -343,9 +371,7 @@ async def check_attempt(
     return _save_judged_grade(session, attempt, judged)
 
 
-def _save_judged_grade(
-    session: Session, attempt: Attempt, result: JudgeResult
-) -> Grade:
+def _save_judged_grade(session: Session, attempt: Attempt, result: JudgeResult) -> Grade:
     return _save_grade(
         session,
         attempt,
@@ -374,7 +400,7 @@ def set_self_assessment(
             status=422,
             code="self_assessment_unscored",
         )
-    with session.begin():
+    with project_write_transaction(session, project_id):
         chat_service._require_exam_project(session, project_id)
         attempt = _require_attempt(session, project_id, attempt_id)
         grade = session.get(Grade, attempt.id)
@@ -399,29 +425,28 @@ def set_self_assessment(
         grade.updated_at = utc_now()
         session.flush()
         session.refresh(grade)
+        synchronize_review(session, attempt)
     return grade
 
 
-def list_attempts(
-    session: Session, project_id: UUID, node_id: UUID
-) -> list[AttemptWithGrade]:
+def list_attempts(session: Session, project_id: UUID, node_id: UUID) -> list[AttemptWithGrade]:
     chat_service._require_exam_project(session, project_id)
     chat_service._require_chat_node(session, project_id, node_id)
     rows = session.execute(
         select(Attempt, Grade)
+        .join(Activity, Activity.id == Attempt.activity_id)
         .outerjoin(Grade, Grade.attempt_id == Attempt.id)
         .where(
             Attempt.project_id == project_id,
-            Attempt.program_node_id == node_id,
+            Activity.program_node_id == node_id,
+            Activity.kind == ActivityKind.FREE_ANSWER,
         )
         .order_by(Attempt.created_at.desc())
     )
     return [AttemptWithGrade(attempt, grade) for attempt, grade in rows]
 
 
-def get_attempt(
-    session: Session, project_id: UUID, attempt_id: UUID
-) -> AttemptWithGrade:
+def get_attempt(session: Session, project_id: UUID, attempt_id: UUID) -> AttemptWithGrade:
     chat_service._require_exam_project(session, project_id)
     attempt = _require_attempt(session, project_id, attempt_id)
     return AttemptWithGrade(attempt, session.get(Grade, attempt.id))

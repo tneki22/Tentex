@@ -915,7 +915,7 @@ function ModelsPanel({
       key={modelKey(model)}
       model={model}
       provider={selectedProvider}
-      busy={busy !== null}
+      busy={busy === modelKey(model)}
       focused={highlighted === modelKey(model)}
       testResult={tests[modelKey(model)] ?? null}
       onToggleFavorite={() => void toggleFavorite(model)}

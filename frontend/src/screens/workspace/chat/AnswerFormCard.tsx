@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef } from "react";
 import { RotateCcw, Send } from "lucide-react";
 import type { AnswerFormPayload } from "../../../api/chat";
-import { Button } from "../../../components/ui";
+import { Button, SegmentedTabs } from "../../../components/ui";
 
 function timeLabel(iso: string): string {
   return new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
@@ -36,6 +36,8 @@ interface ComposingAnswerCardProps {
   onSubmit: () => void;
   onCancel: () => void;
   busy: boolean;
+  answerMode: "memory" | "supported";
+  onAnswerModeChange: (value: "memory" | "supported") => void;
 }
 
 type AnswerFormCardProps = SubmittedAnswerCardProps | ComposingAnswerCardProps;
@@ -73,6 +75,7 @@ export function AnswerFormCard(props: AnswerFormCardProps) {
         <span className="chat-answer-ordinal">Попытка {ordinal}</span>
       </header>
       <p className="chat-answer-question">{question}</p>
+      <SegmentedTabs label="Как отвечаете" value={props.answerMode} onChange={props.onAnswerModeChange} tabs={[{value:"memory",label:"По памяти"},{value:"supported",label:"С опорой"}]} />
       <textarea
         ref={growRef}
         className="chat-answer-input"

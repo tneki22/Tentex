@@ -24,7 +24,10 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import (
+    text as sql_text,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.schema import conv
 
 from app.db import Base
@@ -159,6 +162,8 @@ class ReferenceAnswerMatchMethod(StrEnum):
     RESOLVED_TITLE = "resolved_title"
     # Номер раздела совпал с порядком вопросов; до проверки пользователем не подтверждаем.
     NUMBERED_ORDER = "numbered_order"
+    # Границу раздела указала модель по скелету документа (срез F), пользователь подтвердил план.
+    AI_SECTION = "ai_section"
 
 
 class MaterialState(StrEnum):
@@ -166,6 +171,7 @@ class MaterialState(StrEnum):
     QUEUED = "queued"
     PROCESSING = "processing"
     PAUSED = "paused"
+    NEEDS_INPUT = "needs_input"
     READY = "ready"
     FAILED = "failed"
 
@@ -176,11 +182,12 @@ class MaterialSourceKind(StrEnum):
     URL = "url"
     YOUTUBE = "youtube"
     AUDIO = "audio"
+    TYPST = "typst"
 
 
 class ParserMode(StrEnum):
     FAST = "fast"
-    TEXTBOOK = "textbook"
+    CLOUD = "cloud"
 
 
 class PageQuality(StrEnum):
@@ -207,14 +214,25 @@ class MaterialRevisionOrigin(StrEnum):
     RESTORE = "restore"
 
 
-class ProcessingTaskKind(StrEnum):
+class BackgroundJobKind(StrEnum):
+    """Вид фоновой операции. Одна очередь и один воркер на все — модель разбора
+    материала (Р3/Р4) поднята до общего реестра, а не заведена рядом с ним."""
+
     PARSE = "parse"
+    TYPST_COMPILE = "typst_compile"
+    AI_GROUPING = "ai_grouping"
+    AI_IMPORT_REPAIR = "ai_import_repair"
+    AI_PREPARATION = "ai_preparation"
+    AI_CLEANUP = "ai_cleanup"
+    LINK_ANSWERS = "link_answers"
+    AI_ANSWER_SECTIONS = "ai_answer_sections"
 
 
-class ProcessingTaskState(StrEnum):
+class BackgroundJobState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     PAUSED = "paused"
+    CANCELLED = "cancelled"
     FAILED = "failed"
     COMPLETED = "completed"
 
@@ -317,6 +335,48 @@ class GradeMethod(StrEnum):
     SEMANTIC = "semantic"
     AI_JUDGE = "ai_judge"
     SELF_ASSESSMENT = "self_assessment"
+
+
+class ActivityKind(StrEnum):
+    """Способ проверки знания; календарь не зависит от этого перечисления."""
+
+    FREE_ANSWER = "free_answer"
+    CARD = "card"
+
+
+class ActivityOrigin(StrEnum):
+    MANUAL = "manual"
+    FRAGMENT = "fragment"
+    EXAM_CHAT = "exam_chat"
+
+
+class CardState(StrEnum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+
+
+class CardSourceKind(StrEnum):
+    NONE = "none"
+    FRAGMENT = "fragment"
+    REFERENCE = "reference"
+
+
+class CardSessionState(StrEnum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class CardSessionPace(StrEnum):
+    CALM = "calm"
+    FAST = "fast"
+
+
+class CardSessionScope(StrEnum):
+    TODAY = "today"
+    HARD = "hard"
+    SELECTED = "selected"
+    ALL = "all"
 
 
 class Project(Base):
@@ -541,6 +601,13 @@ class MaterialPage(Base):
     markdown: Mapped[str] = mapped_column(Text, default="")
     quality: Mapped[PageQuality] = mapped_column(enum_type(PageQuality, "page_quality"))
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # NULL у страниц текстового слоя (`quality=native`) — распознавание им не
+    # требовалось. У скопированной без переразбора страницы (частичный запуск)
+    # переносится значение источника, а не режим текущей задачи: иначе версия
+    # приписывала бы соседним нетронутым страницам чужую модель.
+    parser_mode: Mapped[ParserMode | None] = mapped_column(
+        enum_type(ParserMode, "material_page_parser_mode"), nullable=True
+    )
     elements: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     diagnostics: Mapped[list[str]] = mapped_column(JSON, default=list)
     image_path: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -590,9 +657,7 @@ class MaterialBlock(Base):
 class MaterialFragment(Base):
     __tablename__ = "material_fragments"
     __table_args__ = (
-        UniqueConstraint(
-            "page_id", "sort_order", name="uq_material_fragments_page_order"
-        ),
+        UniqueConstraint("page_id", "sort_order", name="uq_material_fragments_page_order"),
         CheckConstraint(
             "sort_order >= 0",
             name=conv("ck_material_fragments_ck_material_fragments_sort_order_nonnegative"),
@@ -679,37 +744,106 @@ class MaterialRevision(Base):
     task_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     source_storage_path: Mapped[str | None] = mapped_column(String, nullable=True)
     source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    render_storage_path: Mapped[str | None] = mapped_column(String, nullable=True)
     scope: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
-class ProcessingTask(Base):
-    __tablename__ = "processing_tasks"
+class TypstMaterial(Base):
+    """Метаданные Typst-проекта, отделённые от общего материала.
+
+    В `Material` остаются общие поля Библиотеки, а здесь — только сведения,
+    нужные для воспроизводимой сборки и интерфейса разрешения зависимостей.
+    """
+
+    __tablename__ = "typst_materials"
+
+    material_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE"), primary_key=True
+    )
+    input_kind: Mapped[str] = mapped_column(String(16))
+    entrypoint: Mapped[str | None] = mapped_column(String, nullable=True)
+    compiler_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    build_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    packages: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list)
+    issues: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    current_pdf_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class TypstSourceChunk(Base):
+    """Неизменённый отрезок исходника Typst, передаваемый модели вместо PDF-текста."""
+
+    __tablename__ = "typst_source_chunks"
     __table_args__ = (
-        CheckConstraint(
-            "done >= 0 AND total >= 0 AND done <= total",
-            name=conv("ck_processing_tasks_ck_processing_tasks_progress_valid"),
-        ),
-        Index("ix_processing_tasks_state_created", "state", "created_at"),
-        Index("ix_processing_tasks_material_created", "material_id", "created_at"),
+        CheckConstraint("line_from > 0 AND line_to >= line_from", name="typst_chunk_line_range"),
+        Index("ix_typst_source_chunks_material_revision", "material_id", "revision", "sort_order"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     material_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE")
     )
-    kind: Mapped[ProcessingTaskKind] = mapped_column(
-        enum_type(ProcessingTaskKind, "processing_task_kind"), default=ProcessingTaskKind.PARSE
+    revision: Mapped[int] = mapped_column(Integer)
+    sort_order: Mapped[int] = mapped_column(Integer)
+    path: Mapped[str] = mapped_column(String)
+    line_from: Mapped[int] = mapped_column(Integer)
+    line_to: Mapped[int] = mapped_column(Integer)
+    source_text: Mapped[str] = mapped_column(Text)
+    source_hash: Mapped[str] = mapped_column(String(64))
+    page_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    diagnostic: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class BackgroundJob(Base):
+    """Единая очередь фоновых операций: разбор материала и вызовы ИИ вместе.
+
+    Одна ось состояний живёт здесь (`state`) — независимо от исхода конкретного
+    вызова модели, который остаётся в `AiRun.status` (там же `succeeded` и
+    `cached`, это бухгалтерский факт вызова, а не стадия жизненного цикла
+    задачи). `material_id`, `parser_mode` и `stage` осмысленны только у
+    `PARSE`: у ролей ИИ и у `LINK_ANSWERS` они пустые.
+    """
+
+    __tablename__ = "background_jobs"
+    __table_args__ = (
+        # Имя намеренно оставлено старым (таблица была processing_tasks):
+        # SQLite ненадёжно отражает имена CHECK-ограничений при пересборке
+        # таблицы в batch-режиме Alembic — попытка переименовать её при
+        # переносе на background_jobs ломает миграцию (см. 20260901_0031).
+        CheckConstraint(
+            "done >= 0 AND total >= 0 AND done <= total",
+            name=conv("ck_processing_tasks_ck_processing_tasks_progress_valid"),
+        ),
+        Index("ix_background_jobs_state_created", "state", "created_at"),
+        Index("ix_background_jobs_material_created", "material_id", "created_at"),
+        Index("ix_background_jobs_project_created", "project_id", "created_at"),
     )
-    state: Mapped[ProcessingTaskState] = mapped_column(
-        enum_type(ProcessingTaskState, "processing_task_state"),
-        default=ProcessingTaskState.QUEUED,
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    # Материал — только у разбора (PARSE). У ролей ИИ и у LINK_ANSWERS задача
+    # привязана к проекту (или ни к чему — глобальные операции Библиотеки).
+    material_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE"), nullable=True
     )
-    stage: Mapped[ProcessingStage] = mapped_column(
-        enum_type(ProcessingStage, "processing_stage"), default=ProcessingStage.QUEUED
+    project_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
     )
-    parser_mode: Mapped[ParserMode] = mapped_column(enum_type(ParserMode, "task_parser_mode"))
+    kind: Mapped[BackgroundJobKind] = mapped_column(
+        enum_type(BackgroundJobKind, "background_job_kind"), default=BackgroundJobKind.PARSE
+    )
+    state: Mapped[BackgroundJobState] = mapped_column(
+        enum_type(BackgroundJobState, "background_job_state"),
+        default=BackgroundJobState.QUEUED,
+    )
+    stage: Mapped[ProcessingStage | None] = mapped_column(
+        enum_type(ProcessingStage, "processing_stage"), nullable=True
+    )
+    parser_mode: Mapped[ParserMode | None] = mapped_column(
+        enum_type(ParserMode, "task_parser_mode"), nullable=True
+    )
     done: Mapped[int] = mapped_column(Integer, default=0)
     total: Mapped[int] = mapped_column(Integer, default=0)
     checkpoint: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
@@ -722,6 +856,10 @@ class ProcessingTask(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Когда пользователь разобрал готовое предложение (принял или убрал). Пусто
+    # у задач, которые применяются сами, и у тех, чей результат ещё ждёт
+    # проверки — см. `background.registry.REVIEW_REQUIRED_KINDS`.
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ProgramNode(Base):
@@ -912,9 +1050,7 @@ class ProjectActionLog(Base):
         ),
         CheckConstraint(
             "payload_version >= 1",
-            name=conv(
-                "ck_project_action_log_ck_project_action_log_payload_version_positive"
-            ),
+            name=conv("ck_project_action_log_ck_project_action_log_payload_version_positive"),
         ),
         Index(
             "ix_project_action_log_project_phase_undone_sequence",
@@ -988,6 +1124,15 @@ class AiSettings(Base):
         nullable=True,
     )
     default_speech_model_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Модель распознавания страниц режима «Облако». Отдельная от текстовой:
+    # принимать картинку умеет далеко не всякая модель, а выбирать её надо там
+    # же, где остальные — иначе один и тот же факт живёт в двух настройках.
+    default_vision_provider_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("ai_provider_connections.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    default_vision_model_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
@@ -1055,6 +1200,11 @@ class AiRun(Base):
     project_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
     )
+    # Заполняется только у вызовов, запущенных из очереди фоновых операций —
+    # прямой вызов гейтвея (например, экзаменационный чат) его не проставляет.
+    job_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("background_jobs.id", ondelete="SET NULL"), nullable=True
+    )
     provider_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("ai_provider_connections.id", ondelete="SET NULL"),
@@ -1112,34 +1262,146 @@ class AiCacheEntry(Base):
     hit_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
-class Attempt(Base):
-    __tablename__ = "attempts"
+class Activity(Base):
+    """Общая проверяемая активность связывает попытки с единицей программы."""
+
+    __tablename__ = "activities"
     __table_args__ = (
         ForeignKeyConstraint(
             ["project_id", "program_node_id"],
             ["program_nodes.project_id", "program_nodes.id"],
             ondelete="CASCADE",
         ),
+        CheckConstraint("evidence_strength >= 0 AND evidence_strength <= 1", name="strength_range"),
+        Index("ix_activities_project_node", "project_id", "program_node_id"),
+        # Частичный уникальный индекс: свободный ответ по теме заводится один раз,
+        # а карточек по той же теме сколько угодно. Живёт в базе с миграции 0039 —
+        # без объявления здесь `alembic check` считает его лишним и роняет CI.
+        Index(
+            "uq_activities_free_answer_node",
+            "project_id",
+            "program_node_id",
+            unique=True,
+            sqlite_where=sql_text("kind = 'free_answer'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    )
+    program_node_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    kind: Mapped[ActivityKind] = mapped_column(enum_type(ActivityKind, "activity_kind"))
+    evidence_strength: Mapped[float] = mapped_column(Float, default=1.0)
+    origin: Mapped[ActivityOrigin] = mapped_column(enum_type(ActivityOrigin, "activity_origin"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class Card(Base):
+    """Карточка хранит снимок источника, поэтому переживает удаление материала."""
+
+    __tablename__ = "cards"
+    __table_args__ = (
+        Index("ix_cards_project_state", "project_id", "state", "deleted_at"),
+        Index("ix_cards_source_fragment", "source_fragment_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    )
+    activity_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE"), unique=True
+    )
+    front: Mapped[str] = mapped_column(Text)
+    back: Mapped[str] = mapped_column(Text)
+    hint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_kind: Mapped[CardSourceKind] = mapped_column(
+        enum_type(CardSourceKind, "card_source_kind"), default=CardSourceKind.NONE
+    )
+    source_fragment_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("material_fragments.id", ondelete="SET NULL"), nullable=True
+    )
+    source_reference_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    state: Mapped[CardState] = mapped_column(
+        enum_type(CardState, "card_state"), default=CardState.ACTIVE
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    activity: Mapped[Activity] = relationship(lazy="joined")
+
+
+class CardSession(Base):
+    """Снимок очереди позволяет продолжить сеанс после перезапуска клиента."""
+
+    __tablename__ = "card_sessions"
+    __table_args__ = (
+        Index(
+            "uq_card_sessions_active_project",
+            "project_id",
+            unique=True,
+            sqlite_where=sql_text("state = 'active'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    )
+    scope: Mapped[CardSessionScope] = mapped_column(
+        enum_type(CardSessionScope, "card_session_scope")
+    )
+    selected_unit_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    pace: Mapped[CardSessionPace] = mapped_column(enum_type(CardSessionPace, "card_session_pace"))
+    limit_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    queue: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    active_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    state: Mapped[CardSessionState] = mapped_column(
+        enum_type(CardSessionState, "card_session_state"), default=CardSessionState.ACTIVE
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class Attempt(Base):
+    __tablename__ = "attempts"
+    __table_args__ = (
         CheckConstraint("ordinal >= 1", name="ordinal_positive"),
-        Index("ix_attempts_node_created", "project_id", "program_node_id", "created_at"),
+        Index("ix_attempts_activity_created", "activity_id", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
-    program_node_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    activity_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE")
+    )
     parent_attempt_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("attempts.id", ondelete="SET NULL"), nullable=True
     )
     ordinal: Mapped[int] = mapped_column(Integer)
-    text: Mapped[str] = mapped_column(Text)
-    persona: Mapped[ExaminerPersona] = mapped_column(
-        enum_type(ExaminerPersona, "examiner_persona")
+    answer_mode: Mapped[str | None] = mapped_column(String, nullable=True)
+    active_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    persona: Mapped[ExaminerPersona | None] = mapped_column(
+        enum_type(ExaminerPersona, "examiner_persona"), nullable=True
     )
-    strictness: Mapped[ExaminerStrictness] = mapped_column(
-        enum_type(ExaminerStrictness, "examiner_strictness")
+    strictness: Mapped[ExaminerStrictness | None] = mapped_column(
+        enum_type(ExaminerStrictness, "examiner_strictness"), nullable=True
     )
     context_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    activity: Mapped[Activity] = relationship(lazy="joined")
+
+    @property
+    def program_node_id(self) -> UUID | None:
+        """Совместимое публичное поле экзамена берётся из общей Activity."""
+        return self.activity.program_node_id
 
 
 class Grade(Base):
@@ -1151,14 +1413,15 @@ class Grade(Base):
             "self_assessment IS NULL OR self_assessment <> 'unscored'",
             name="self_assessment_scored",
         ),
+        CheckConstraint(
+            "confidence IS NULL OR confidence BETWEEN 1 AND 4", name="confidence_range"
+        ),
     )
 
     attempt_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("attempts.id", ondelete="CASCADE"), primary_key=True
     )
-    outcome: Mapped[AttemptOutcome] = mapped_column(
-        enum_type(AttemptOutcome, "attempt_outcome")
-    )
+    outcome: Mapped[AttemptOutcome] = mapped_column(enum_type(AttemptOutcome, "attempt_outcome"))
     method: Mapped[GradeMethod | None] = mapped_column(
         enum_type(GradeMethod, "grade_method"), nullable=True
     )
@@ -1169,6 +1432,7 @@ class Grade(Base):
     self_assessment: Mapped[AttemptOutcome | None] = mapped_column(
         enum_type(AttemptOutcome, "attempt_outcome"), nullable=True
     )
+    confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_run_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True
     )
@@ -1198,9 +1462,7 @@ class ChatSession(Base):
     # Показывается и используется памятью раздела только с итерации 2.
     section_scope_node_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     title: Mapped[str] = mapped_column(String)
-    mode: Mapped[ChatMode] = mapped_column(
-        enum_type(ChatMode, "chat_mode"), default=ChatMode.EXAM
-    )
+    mode: Mapped[ChatMode] = mapped_column(enum_type(ChatMode, "chat_mode"), default=ChatMode.EXAM)
     persona: Mapped[ExaminerPersona] = mapped_column(
         enum_type(ExaminerPersona, "examiner_persona"),
         default=ExaminerPersona.NEUTRAL_EXAMINER,
@@ -1223,9 +1485,7 @@ class ChatMessage(Base):
 
     __tablename__ = "chat_messages"
     __table_args__ = (
-        UniqueConstraint(
-            "session_id", "sequence", name="uq_chat_messages_session_id_sequence"
-        ),
+        UniqueConstraint("session_id", "sequence", name="uq_chat_messages_session_id_sequence"),
         CheckConstraint("sequence >= 1", name="sequence_positive"),
     )
 
@@ -1350,9 +1610,7 @@ class Conspect(Base):
             ["program_nodes.project_id", "program_nodes.id"],
             ondelete="CASCADE",
         ),
-        CheckConstraint(
-            "revision >= 1", name=conv("ck_conspects_ck_conspects_revision_positive")
-        ),
+        CheckConstraint("revision >= 1", name=conv("ck_conspects_ck_conspects_revision_positive")),
         Index("ix_conspects_project", "project_id"),
     )
 
@@ -1389,3 +1647,7 @@ class ConspectImage(Base):
     media_type: Mapped[str] = mapped_column(String)
     size_bytes: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+# Регистрация таблиц подсистемы для create_all и Alembic.
+from app.preparation import models as preparation_models  # noqa: E402,F401

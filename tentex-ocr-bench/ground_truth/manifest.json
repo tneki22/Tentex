@@ -1,0 +1,380 @@
+{
+  "benchmark": "Tentex OCR Bench v2",
+  "version": "2.0",
+  "description": "24 страницы для оценки OCR/VLM: сканы, телефонные фото с dewarp-разметкой, оглавление, нативный PDF с LaTeX-формулами и дополнительные учебные сценарии.",
+  "scan_pdf": "tentex_ocr_bench_scan.pdf",
+  "clean_pdf": "clean_master.pdf",
+  "metrics": {
+    "text_edit": "нормализованное расстояние редактирования текста",
+    "cdm": "точность формул (character/structure distance)",
+    "teds": "структурное сходство таблиц (Tree-Edit-Distance-based Similarity)",
+    "overall": "((1 - TextEdit) * 100 + CDM + TEDS) / 3"
+  },
+  "pages": [
+    {
+      "page": 1,
+      "file": "page_01.md",
+      "source": "учебник по матанализу",
+      "elements": [
+        "inline_math",
+        "display_math_numbered",
+        "bold_theorem",
+        "ordered_list"
+      ],
+      "difficulty": "easy",
+      "dpi": 300
+    },
+    {
+      "page": 2,
+      "file": "page_02.md",
+      "source": "учебник по теории вероятностей",
+      "elements": [
+        "inline_math",
+        "display_math_numbered",
+        "figure",
+        "table_with_math",
+        "margin_note"
+      ],
+      "difficulty": "medium",
+      "dpi": 300
+    },
+    {
+      "page": 3,
+      "file": "page_03.md",
+      "source": "учебник по физике",
+      "elements": [
+        "inline_math",
+        "display_math_numbered",
+        "figure_text_wrap",
+        "greek_letters"
+      ],
+      "difficulty": "medium",
+      "dpi": 300
+    },
+    {
+      "page": 4,
+      "file": "page_04.md",
+      "source": "научная статья, 2 колонки",
+      "elements": [
+        "two_column_layout",
+        "abstract",
+        "references",
+        "reading_order"
+      ],
+      "difficulty": "medium",
+      "dpi": 300
+    },
+    {
+      "page": 5,
+      "file": "page_05.md",
+      "source": "научная статья, эксперименты",
+      "elements": [
+        "display_math_numbered",
+        "bar_chart_figure",
+        "table",
+        "footnote"
+      ],
+      "difficulty": "medium",
+      "dpi": 300
+    },
+    {
+      "page": 6,
+      "file": "page_06.md",
+      "source": "учебник по дискретной математике",
+      "elements": [
+        "inline_math",
+        "display_math_numbered",
+        "graph_figure",
+        "adjacency_table",
+        "bold_italic_terms"
+      ],
+      "difficulty": "medium",
+      "dpi": 300
+    },
+    {
+      "page": 7,
+      "file": "page_07.md",
+      "source": "учебник по алгоритмам",
+      "elements": [
+        "inline_math",
+        "display_math_numbered",
+        "python_code_block",
+        "blackboard_bold"
+      ],
+      "difficulty": "medium",
+      "dpi": 300
+    },
+    {
+      "page": 8,
+      "file": "page_08.md",
+      "source": "учебник по матанализу",
+      "elements": [
+        "inline_math",
+        "display_math_numbered",
+        "table_of_integrals",
+        "improper_integrals"
+      ],
+      "difficulty": "hard",
+      "dpi": 300
+    },
+    {
+      "page": 9,
+      "file": "page_09.md",
+      "source": "учебник по матанализу, старое издание",
+      "elements": [
+        "inline_math",
+        "display_math_numbered",
+        "aligned_equations",
+        "footnote",
+        "severe_scan_degradation"
+      ],
+      "difficulty": "hard",
+      "dpi": 180
+    },
+    {
+      "page": 10,
+      "file": "page_10.md",
+      "source": "методичка, вопросы к экзамену",
+      "elements": [
+        "inline_math",
+        "ordered_list",
+        "table",
+        "margin_note",
+        "inline_code"
+      ],
+      "difficulty": "easy",
+      "dpi": 300
+    },
+    {
+      "page": 11,
+      "file": "page_11.md",
+      "source": "phone photo variant of page 1",
+      "modality": "phone_photo",
+      "variant_of": 1,
+      "elements": [
+        "perspective",
+        "keystone",
+        "shadow",
+        "dewarp_corners"
+      ],
+      "difficulty": "hard",
+      "text_layer": false
+    },
+    {
+      "page": 12,
+      "file": "page_12.md",
+      "source": "phone photo variant of page 3",
+      "modality": "phone_photo",
+      "variant_of": 3,
+      "elements": [
+        "perspective",
+        "uneven_light",
+        "glare",
+        "figure"
+      ],
+      "difficulty": "hard",
+      "text_layer": false
+    },
+    {
+      "page": 13,
+      "file": "page_13.md",
+      "source": "phone photo variant of page 5",
+      "modality": "phone_photo",
+      "variant_of": 5,
+      "elements": [
+        "strong_perspective",
+        "corner_shadow",
+        "glare",
+        "chart",
+        "table"
+      ],
+      "difficulty": "very_hard",
+      "text_layer": false
+    },
+    {
+      "page": 14,
+      "file": "page_14.md",
+      "source": "phone photo variant of page 7",
+      "modality": "phone_photo",
+      "variant_of": 7,
+      "elements": [
+        "mild_perspective",
+        "finger_occlusion",
+        "code_block"
+      ],
+      "difficulty": "hard",
+      "text_layer": false
+    },
+    {
+      "page": 15,
+      "file": "page_15.md",
+      "source": "phone photo variant of page 8",
+      "modality": "phone_photo",
+      "variant_of": 8,
+      "elements": [
+        "perspective",
+        "dark_corner",
+        "vignette",
+        "dense_math",
+        "table"
+      ],
+      "difficulty": "very_hard",
+      "text_layer": false
+    },
+    {
+      "page": 16,
+      "file": "page_16.md",
+      "source": "phone photo variant of page 10",
+      "modality": "phone_photo",
+      "variant_of": 10,
+      "elements": [
+        "perspective",
+        "uneven_light",
+        "broad_glare",
+        "camera_blur",
+        "table"
+      ],
+      "difficulty": "very_hard",
+      "text_layer": false
+    },
+    {
+      "page": 17,
+      "file": "page_17.md",
+      "source": "user-provided OS contents page 3",
+      "modality": "rasterized_toc",
+      "elements": [
+        "nested_contents",
+        "dot_leaders",
+        "page_numbers",
+        "wrapped_entries"
+      ],
+      "difficulty": "hard",
+      "text_layer": false
+    },
+    {
+      "page": 18,
+      "file": "page_18.md",
+      "source": "user-provided OS contents page 4",
+      "modality": "rasterized_toc",
+      "elements": [
+        "nested_contents_continuation",
+        "dot_leaders",
+        "page_numbers",
+        "mixed_latin"
+      ],
+      "difficulty": "hard",
+      "text_layer": false
+    },
+    {
+      "page": 19,
+      "file": "page_19.md",
+      "source": "Tectonic LaTeX: calculus",
+      "modality": "native_pdf",
+      "elements": [
+        "native_text_layer",
+        "display_math",
+        "fractions",
+        "integrals",
+        "limits",
+        "partial_derivatives"
+      ],
+      "difficulty": "medium",
+      "text_layer": true,
+      "images": 0
+    },
+    {
+      "page": 20,
+      "file": "page_20.md",
+      "source": "Tectonic LaTeX: linear algebra",
+      "modality": "native_pdf",
+      "elements": [
+        "native_text_layer",
+        "equation_system",
+        "matrices",
+        "determinant",
+        "norm"
+      ],
+      "difficulty": "hard",
+      "text_layer": true,
+      "images": 0
+    },
+    {
+      "page": 21,
+      "file": "page_21.md",
+      "source": "Tectonic LaTeX: probability",
+      "modality": "native_pdf",
+      "elements": [
+        "native_text_layer",
+        "expectation",
+        "variance",
+        "normal_density",
+        "Bayes",
+        "binomial"
+      ],
+      "difficulty": "hard",
+      "text_layer": true,
+      "images": 0
+    },
+    {
+      "page": 22,
+      "file": "page_22.md",
+      "source": "synthetic chemistry textbook",
+      "modality": "scanned_pdf",
+      "elements": [
+        "chemical_formula",
+        "charges",
+        "reversible_reaction",
+        "table"
+      ],
+      "difficulty": "hard",
+      "text_layer": false
+    },
+    {
+      "page": 23,
+      "file": "page_23.md",
+      "source": "synthetic problem book",
+      "modality": "scanned_pdf",
+      "elements": [
+        "nested_task",
+        "stepwise_solution",
+        "sign_table",
+        "display_math"
+      ],
+      "difficulty": "medium",
+      "text_layer": false
+    },
+    {
+      "page": 24,
+      "file": "page_24.md",
+      "source": "synthetic bibliography",
+      "modality": "scanned_pdf",
+      "elements": [
+        "bibliography",
+        "DOI",
+        "URL",
+        "ISBN",
+        "mixed_cyrillic_latin",
+        "abbreviation_table"
+      ],
+      "difficulty": "medium",
+      "text_layer": false
+    }
+  ],
+  "degradation": {
+    "pages_1_to_8_and_10": "dpi=300, jpeg_q=88, noise_sigma=3.0, rotate=0.0",
+    "page_9": "dpi=180, jpeg_q=62, noise_sigma=8.0, rotate=0.9deg, бумага (238,228,205), blur=0.8px",
+    "pages_11_to_16": "контролируемые phone-photo variants; точные углы в photo_geometry/page_XX.json",
+    "pages_17_to_18": "user-provided TOC rendered at 240 DPI, mild JPEG/noise/rotation",
+    "pages_19_to_21": "none; true Tectonic LaTeX PDF, native text layer, zero images",
+    "pages_22_to_24": "dpi=300, jpeg_q=88, noise_sigma=2.8"
+  },
+  "primary_pdf": "tentex_ocr_bench_v2_24p.pdf",
+  "page_count": 24,
+  "scenario_summary": {
+    "scanned_pages": 13,
+    "phone_photos": 6,
+    "table_of_contents": 2,
+    "native_latex_pdf": 3,
+    "reference_handwritten_photos_unscored": 3
+  }
+}

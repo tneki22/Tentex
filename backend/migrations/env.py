@@ -1,7 +1,7 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import CheckConstraint
+from sqlalchemy import CheckConstraint, event
 
 from app import models  # noqa: F401
 from app.config import settings
@@ -77,18 +77,65 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+
+def _disable_foreign_keys(dbapi_connection: object, _: object) -> None:
+    """Снять проверку внешних ключей на время миграции.
+
+    SQLite не умеет ALTER, поэтому `batch_alter_table` пересобирает таблицу
+    через DROP + CREATE + копирование строк. `app.db` включает
+    `PRAGMA foreign_keys=ON` на каждом соединении, а Alembic работает через
+    тот же engine — и при включённой проверке DROP любой таблицы, на которую
+    кто-то ссылается, падает с «FOREIGN KEY constraint failed». Вылезает это
+    только на базе с данными: на пустой ронять нечего, поэтому и тесты, и
+    прогон на чистой базе проходили мимо ошибки.
+
+    Слушатель вешается ПОСЛЕ того, что стоит в `app.db`, и на том же событии,
+    поэтому переопределяет прагму на каждом новом соединении. PRAGMA не
+    действует внутри транзакции, отсюда `autocommit` — тот же приём, что в
+    `app.db.configure_sqlite`.
+    """
+    previous_autocommit = dbapi_connection.autocommit
+    dbapi_connection.autocommit = True
+    try:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=OFF")
+        finally:
+            cursor.close()
+    finally:
+        dbapi_connection.autocommit = previous_autocommit
+
+
 def run_migrations_online() -> None:
+    """Прогнать миграции и вернуть engine приложению нетронутым.
+
+    `engine` здесь — тот же общий объект, что использует приложение:
+    `upgrade_database()` зовётся на старте api и воркера, и подписка на
+    `connect` пережила бы миграции. Тогда КАЖДОЕ последующее соединение
+    процесса открывалось бы с `PRAGMA foreign_keys=OFF`, и все `ON DELETE
+    CASCADE` молча переставали работать — так и оставались сироты в
+    `typst_materials` после удаления материала. Поэтому слушатель снимается,
+    а пул выбрасывается второй раз: соединения, открытые с прагмой OFF,
+    не должны вернуться в работу.
+    """
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    with engine.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            compare_type=True,
-            render_as_batch=True,
-            include_object=include_object,
-        )
-        with context.begin_transaction():
-            context.run_migrations()
+    event.listen(engine, "connect", _disable_foreign_keys)
+    # Соединения, взятые до подписки, прагму не увидят — выбрасываем пул.
+    engine.dispose()
+    try:
+        with engine.connect() as connection:
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                compare_type=True,
+                render_as_batch=True,
+                include_object=include_object,
+            )
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        event.remove(engine, "connect", _disable_foreign_keys)
+        engine.dispose()
 
 
 if context.is_offline_mode():

@@ -12,7 +12,7 @@ import { Button, Checkbox, ConfirmDialog, Field, Select, StatusBadge } from "../
 const PURPOSE_OPTIONS: Array<{ value: MaterialPurpose; label: string }> = [
   { value: "study_source", label: "Учебный источник" },
   { value: "exam_structure", label: "Список вопросов" },
-  { value: "reference_answers", label: "Эталонные ответы" },
+  { value: "reference_answers", label: "Ответы" },
 ];
 
 const ROLE_OPTIONS = [
@@ -27,6 +27,7 @@ const SOURCE_LABEL: Record<MaterialSourceKind, string> = {
   url: "Веб-страница",
   youtube: "YouTube-транскрипт",
   audio: "Аудиофайл",
+  typst: "Typst-проект",
 };
 
 const STATUS_LABEL: Record<MaterialRead["status"], string> = {
@@ -34,6 +35,7 @@ const STATUS_LABEL: Record<MaterialRead["status"], string> = {
   queued: "В очереди",
   processing: "Обрабатывается",
   paused: "На паузе",
+  needs_input: "Нужны файлы",
   ready: "Готов",
   failed: "Ошибка",
 };
@@ -46,6 +48,7 @@ const STATUS_TONE: Record<
   queued: "info",
   processing: "info",
   paused: "warning",
+  needs_input: "warning",
   ready: "success",
   failed: "danger",
 };
@@ -266,7 +269,7 @@ export function MaterialFileTab({
           <div><dt>Страницы</dt><dd>{material.page_count ?? "—"}</dd></div>
           <div><dt>Сканы</dt><dd>{material.scan_page_count}</dd></div>
           {material.parser_mode !== "fast" && <div><dt>Низкое качество</dt><dd>{material.ocr_low_page_count || "нет"}</dd></div>}
-          <div><dt>Режим разбора</dt><dd>{material.parser_mode === "fast" ? "Быстро" : material.parser_mode === "textbook" ? "Учебник" : "Не запускался"}</dd></div>
+          <div><dt>Режим разбора</dt><dd>{material.parser_mode === "fast" ? "Быстро" : "Не запускался"}</dd></div>
           <div><dt>Добавлен в проект</dt><dd>{dateLabel(material.attached_at)}</dd></div>
           <div><dt>Загружен</dt><dd>{dateLabel(material.created_at)}</dd></div>
           <div><dt>Изменён</dt><dd>{dateLabel(material.updated_at)}</dd></div>
@@ -314,7 +317,7 @@ export function MaterialFileTab({
       <ConfirmDialog
         open={replaceOpen}
         onOpenChange={setReplaceOpen}
-        title="Заменить файл эталонных ответов?"
+        title="Заменить файл с ответами?"
         confirmLabel="Заменить"
         onConfirm={() => {
           void save(true).then((result) => {
@@ -323,10 +326,10 @@ export function MaterialFileTab({
         }}
       >
         <p>
-          Сейчас эталонные ответы берутся из «{answersMaterial?.display_name}».
+          Сейчас ответы берутся из «{answersMaterial?.display_name}».
           С прежнего файла снимется это назначение, но сам файл останется в проекте.
         </p>
-        <p>Уже созданные эталоны и привязки сохранятся.</p>
+        <p>Уже созданные ответы и привязки сохранятся.</p>
       </ConfirmDialog>
     </div>
   );

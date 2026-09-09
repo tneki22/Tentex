@@ -16,6 +16,7 @@ from app.models import (
     MaterialRevisionOrigin,
     PageQuality,
     ParserMode,
+    utc_now,
 )
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
 
@@ -116,8 +117,6 @@ def test_restore_creates_next_revision_instead_of_rewinding(session: Session) ->
     )
     session.commit()
     library.update_library_page_text(session, material.id, 1, PageTextUpdate(text="Правка"))
-    material.parser_mode = ParserMode.TEXTBOOK
-    session.commit()
 
     detail = library.restore_revision(session, material.id, 1)
 
@@ -186,6 +185,37 @@ def test_processing_start_numbers_revision_above_history(session: Session) -> No
     assert task_checkpoint.checkpoint["source_revision"] == 1
     assert task_checkpoint.checkpoint["selected_pages"] == [1]
     assert task_checkpoint.total == 1
+
+
+def test_copied_page_keeps_its_own_recognition_mode(session: Session) -> None:
+    """Частичный переразбор (например, только страниц «нужно проверить») не
+    должен переписывать историю нетронутых страниц: они распознавались другим
+    режимом и обязаны сохранить его, а не унаследовать режим новой задачи."""
+    material = make_material(session, "a10")
+    page = MaterialPage(
+        id=uuid4(),
+        material_id=material.id,
+        revision=1,
+        page_number=2,
+        width=595,
+        height=842,
+        text="Распознано локально",
+        markdown="Распознано локально",
+        quality=PageQuality.OCR,
+        confidence=0.95,
+        parser_mode=ParserMode.FAST,
+        elements=[],
+        diagnostics=[],
+        created_at=utc_now(),
+    )
+    session.add(page)
+    session.flush()
+
+    # Страница переезжает в версию 2, которую строит облачная задача, — но
+    # сама страница облаком не читалась, поэтому её режим переехать не может.
+    copied = library.copy_page(session, page, revision=2)
+
+    assert copied.parser_mode == ParserMode.FAST
 
 
 def test_timed_fragments_survive_rebuild(session: Session) -> None:

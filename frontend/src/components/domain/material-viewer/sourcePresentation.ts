@@ -67,6 +67,15 @@ const PRESENTATIONS: Record<MaterialPresentationKind, Omit<MaterialPresentation,
     supportsOutline: false,
     supportsTimeline: true,
   },
+  typst: {
+    defaultMode: "source",
+    sourceLabel: "Собранный документ",
+    textLabel: "Текст для поиска",
+    processingTitle: "Сборка Typst",
+    supportsZoom: true,
+    supportsOutline: true,
+    supportsTimeline: false,
+  },
 };
 
 /**

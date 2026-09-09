@@ -16,12 +16,15 @@ from app.bindings.schemas import (
     NodeBindingSummary,
     ReindexResult,
     SearchHighlightRead,
+    SearchResponse,
+    SearchResultPageRead,
     SearchResultRead,
 )
 from app.marker_labels import material_image_label
 from app.materials.schemas import MaterialPurpose
 from app.models import (
     Binding,
+    BindingMechanism,
     BindingStatus,
     Material,
     MaterialBlock,
@@ -313,7 +316,10 @@ def restore_binding(session: Session, project_id: UUID, binding_id: UUID) -> Bin
 def remove_bindings_bulk(
     session: Session, project_id: UUID, command: BindingBulkRemoveWrite
 ) -> BindingChangeResult:
-    """Снять разом все активные привязки материала — на одной странице или во всём файле.
+    """Снять разом активные привязки материала — на одной странице или во всём файле.
+
+    С `program_node_id` очищается только один вопрос: предпросмотр источника
+    снимает то, что сам же и привязал, а не чужие связи на той же странице.
 
     Одна запись в журнале на всю операцию: undo (Ctrl+Z или кнопка в уведомлении)
     возвращает всю пачку разом, тем же механизмом, что и одиночное снятие.
@@ -334,6 +340,8 @@ def remove_bindings_bulk(
         )
         if command.page_number is not None:
             query = query.where(MaterialPage.page_number == command.page_number)
+        if command.program_node_id is not None:
+            query = query.where(Binding.program_node_id == command.program_node_id)
         rows = session.execute(query).all()
 
         touched_ids: list[UUID] = []
@@ -351,6 +359,10 @@ def remove_bindings_bulk(
         if touched_ids:
             label = (link.display_name if link else None) or material.original_name
             scope = f", стр. {command.page_number}" if command.page_number is not None else ""
+            if command.program_node_id is not None:
+                node = session.get(ProgramNode, command.program_node_id)
+                if node is not None:
+                    scope = f"{scope} → {node.title}"
             _record_action(
                 session,
                 project,
@@ -459,8 +471,8 @@ def _project_material_ids(
 ) -> list[UUID]:
     """Материалы, по которым имеет смысл искать формулировку вопроса.
 
-    Файл со списком вопросов (`exam_structure`) исключается: искать вопрос
-    по файлу вопросов бессмысленно — он вытесняет из выдачи ответы и учебники.
+    Служебные файлы вопросов и ответов исключаются: у них есть отдельные
+    поверхности, а в общей выдаче они вытесняют учебники и конспекты.
     Явный `material_id` — это поиск внутри открытого файла, там фильтр не нужен.
     """
     if material_id is not None:
@@ -469,10 +481,14 @@ def _project_material_ids(
             raise ProjectNotFoundError("Материал проекта не найден")
         return [material_id]
     links = session.scalars(select(ProjectMaterial).where(ProjectMaterial.project_id == project_id))
+    excluded_purposes = {
+        MaterialPurpose.EXAM_STRUCTURE.value,
+        MaterialPurpose.REFERENCE_ANSWERS.value,
+    }
     return [
         link.material_id
         for link in links
-        if MaterialPurpose.EXAM_STRUCTURE.value not in (link.purposes or [])
+        if excluded_purposes.isdisjoint(link.purposes or [])
     ]
 
 
@@ -484,12 +500,12 @@ def search_project_materials(
     material_id: UUID | None = None,
     node_id: UUID | None = None,
     limit: int = search_module.RESULT_LIMIT,
-) -> list[SearchResultRead]:
+) -> SearchResponse:
     project = session.get(Project, project_id)
     if project is None:
         raise ProjectNotFoundError()
     material_ids = _project_material_ids(session, project_id, material_id)
-    hits = search_module.search_fragments(session, material_ids, query, limit=limit)
+    outcome = search_module.search_fragments(session, material_ids, query, limit=limit)
 
     bound_fragment_ids: set[UUID] = set()
     if node_id is not None:
@@ -499,29 +515,50 @@ def search_project_materials(
                     Binding.project_id == project_id,
                     Binding.program_node_id == node_id,
                     Binding.status.in_(ACTIVE_STATUSES),
+                    Binding.mechanism != BindingMechanism.ANSWERS_FILE,
                 )
             )
         )
 
-    return [
+    results = [
         SearchResultRead(
             fragment_ids=hit.fragment_ids,
             material_id=hit.material_id,
             material_name=hit.material_name,
+            presentation_kind=hit.presentation_kind,
             block_id=hit.block_id,
             block_title=hit.block_title,
             page_from=hit.page_from,
             page_to=hit.page_to,
             quality=hit.quality,
             text=hit.text,
-            highlights=[
-                SearchHighlightRead(start=highlight.start, end=highlight.end)
-                for highlight in hit.highlights
-            ],
+            highlights=_highlight_reads(hit.highlights),
+            matched_forms=hit.matched_forms,
             already_bound=bool(bound_fragment_ids)
             and any(fragment_id in bound_fragment_ids for fragment_id in hit.fragment_ids),
+            pages=[
+                SearchResultPageRead(
+                    page_number=page.page_number,
+                    fragment_ids=page.fragment_ids,
+                    quality=page.quality,
+                    text=page.text,
+                    highlights=_highlight_reads(page.highlights),
+                    already_bound=bool(bound_fragment_ids)
+                    and any(
+                        fragment_id in bound_fragment_ids for fragment_id in page.fragment_ids
+                    ),
+                )
+                for page in hit.pages
+            ],
         )
-        for hit in hits
+        for hit in outcome.hits
+    ]
+    return SearchResponse(terms=outcome.terms, prefix=outcome.prefix, results=results)
+
+
+def _highlight_reads(highlights: Sequence[search_module.Highlight]) -> list[SearchHighlightRead]:
+    return [
+        SearchHighlightRead(start=highlight.start, end=highlight.end) for highlight in highlights
     ]
 
 

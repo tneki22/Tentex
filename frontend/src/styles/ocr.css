@@ -121,61 +121,6 @@
   line-height: var(--leading-snug);
 }
 
-/* Управление GPU-сервисом. */
-.ocr-service {
-  display: grid;
-  gap: var(--space-4);
-  padding: var(--space-5);
-  border-radius: var(--radius-lg);
-  background: var(--surface-sunken);
-}
-
-.ocr-service-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-}
-
-.ocr-service-head > div {
-  min-width: 0;
-}
-
-.ocr-service-head strong,
-.ocr-service-head small {
-  display: block;
-}
-
-.ocr-service-head small {
-  max-width: 62ch;
-  margin-top: var(--space-1);
-  color: var(--muted);
-  font-size: var(--text-sm);
-  line-height: var(--leading-relaxed);
-}
-
-/* Хвост журнала контейнера: сохраняем переносы, но не даём растянуть страницу. */
-.ocr-service-detail {
-  max-height: 12em;
-  margin: 0;
-  overflow: auto;
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: var(--leading-snug);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.ocr-advanced {
-  display: grid;
-  gap: var(--space-3);
-}
-
 .ocr-inline-field {
   display: flex;
   gap: var(--space-2);
@@ -295,8 +240,93 @@
 }
 
 @media (max-width: 900px) {
-  .ocr-model-head,
-  .ocr-service-head {
+  .ocr-model-head {
     flex-direction: column;
   }
+}
+
+/* ── Режим «Облако»: выбор внешней модели ──────────────────────────────────
+   Моделей, принимающих картинки, в каталоге провайдера сотни, поэтому список
+   с поиском, а не выпадашка: рядом с каждой строкой надо видеть цену и
+   причину отказа, в <option> они не помещаются. */
+.ocr-cloud-picker {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.ocr-cloud-picker .ocr-inline-field {
+  align-items: center;
+  padding-left: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.ocr-cloud-picker .ocr-inline-field input {
+  border: 0;
+  background: none;
+}
+
+.ocr-cloud-models {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 340px;
+  padding-right: var(--space-1);
+  overflow-y: auto;
+}
+
+.ocr-cloud-model {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--motion-fast), background-color var(--motion-fast);
+}
+
+.ocr-cloud-model:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+
+.ocr-cloud-model.is-selected {
+  border-color: var(--accent-edge);
+  background: var(--accent-wash);
+}
+
+/* Непригодная модель остаётся видимой: скрыть её — значит не объяснить отбор. */
+.ocr-cloud-model.is-refused {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.ocr-cloud-model-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.ocr-cloud-model small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.ocr-cloud-model em {
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  font-style: normal;
+}
+
+/* Цена — факт, а не оценка: она не красится ни в зелёный, ни в красный. */
+.ocr-cloud-price {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
 }

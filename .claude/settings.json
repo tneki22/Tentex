@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(npm run test:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm ci:*)",
+      "Bash(npm view:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python -m ruff:*)",
+      "Bash(pip index:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git worktree list:*)",
+      "Bash(npx ctx7@latest:*)",
+      "Bash(docker compose config:*)",
+      "Bash(docker compose build:*)",
+      "Bash(docker compose restart:*)",
+      "Bash(docker compose ps:*)",
+      "Bash(docker compose logs:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git reset:*)",
+      "Bash(git worktree remove:*)",
+      "Bash(npm install:*)",
+      "Bash(pip install:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./data/**)",
+      "Write(./virtex/**)",
+      "Edit(./virtex/**)"
+    ]
+  }
+}

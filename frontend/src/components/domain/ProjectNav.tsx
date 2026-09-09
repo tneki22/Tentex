@@ -12,6 +12,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import type { ModuleKey } from "../../api/projects";
 import { Tooltip } from "../ui";
+import { usePreparationInvitation } from "../../hooks/usePreparationInvitation";
 
 export type ProjectNavKey = "materials" | "program" | "answers" | "lessons" | "plan" | "cards" | "settings";
 
@@ -37,10 +38,10 @@ interface ProjectNavProps {
 /**
  * Единый список разделов проекта: одни и те же шесть пунктов от «Материалов»
  * до «Настроек» на всех экранах проекта, а не урезанный подбор по месту.
- * Исключение — экран Настроек: там своей боковой панели нет вовсе.
  */
 export function ProjectNav({ projectId, active, textbook = false, modules, counts = {}, className = "" }: ProjectNavProps) {
   const hasModule = (key: ModuleKey) => (modules ? modules.includes(key) : true);
+  const invite = usePreparationInvitation(projectId, !textbook && hasModule("plan"));
 
   const entries: NavEntry[] = [
     { key: "materials", to: `/projects/${projectId}/materials`, icon: Files, label: "Материалы" },
@@ -57,7 +58,7 @@ export function ProjectNav({ projectId, active, textbook = false, modules, count
       ? [{ key: "lessons" as const, to: `/projects/${projectId}/lessons`, icon: GraduationCap, label: "Уроки" }]
       : []),
     ...(!textbook && hasModule("plan")
-      ? [{ key: "plan" as const, to: `/projects/${projectId}/plan`, icon: CalendarDays, label: "План подготовки" }]
+      ? [{ key: "plan" as const, to: `/projects/${projectId}/plan`, icon: CalendarDays, label: "Моя подготовка" }]
       : []),
     ...(textbook
       ? [{
@@ -87,13 +88,13 @@ export function ProjectNav({ projectId, active, textbook = false, modules, count
         }
         if (entry.key === active) {
           return (
-            <span className="workspace-project-link is-active" key={entry.key}>
+            <span className={`workspace-project-link is-active${entry.key === "plan" && invite ? " is-inviting" : ""}`} key={entry.key}>
               <Icon size={15} /><span>{entry.label}</span>{count !== undefined && <small>{count}</small>}
             </span>
           );
         }
         return (
-          <Link className="workspace-project-link" to={entry.to} key={entry.key}>
+          <Link className={`workspace-project-link${entry.key === "plan" && invite ? " is-inviting" : ""}`} to={entry.to} key={entry.key}>
             <Icon size={15} /><span>{entry.label}</span>{count !== undefined && <small>{count}</small>}
           </Link>
         );

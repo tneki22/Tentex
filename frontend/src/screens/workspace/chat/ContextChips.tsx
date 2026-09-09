@@ -1,6 +1,9 @@
 import { FileQuestion, History, ListChecks, MessageSquareText, ScrollText } from "lucide-react";
+import { useState } from "react";
 import type { ChatContextFlags, ChatContextPreview } from "../../../api/chat";
-import { Popover, Switch } from "../../../components/ui";
+import { Disclosure, Popover, Switch } from "../../../components/ui";
+
+const CONTEXT_OPEN_KEY = "tentex:chat-context-open";
 
 function bytesLabel(bytes: number): string {
   return bytes < 1024 ? `${bytes} Б` : `${(bytes / 1024).toFixed(1)} КБ`;
@@ -21,7 +24,7 @@ interface ChipDef {
 const REASON_LABELS: Record<string, string> = {
   excluded_by_user: "Исключено вручную",
   profile_empty: "В профиле проекта эти поля не заполнены",
-  reference_missing: "У темы ещё нет эталонного ответа",
+  reference_missing: "У темы ещё нет ответа",
   not_implemented: "Пока не реализовано",
 };
 
@@ -33,6 +36,7 @@ interface ContextChipsProps {
 
 /** Тихая строка чипов над композером — заменяет прежнюю текстовую «В запрос уходит: ...». */
 export function ContextChips({ preview, contextFlags, onToggleFlag }: ContextChipsProps) {
+  const [open, setOpen] = useState(() => window.localStorage.getItem(CONTEXT_OPEN_KEY) === "1");
   if (!preview) return null;
   const byKind = new Map(preview.manifest.map((entry) => [entry.kind, entry]));
   const fragmentEntries = preview.manifest.filter((entry) => entry.kind === "fragment");
@@ -54,7 +58,7 @@ export function ContextChips({ preview, contextFlags, onToggleFlag }: ContextChi
       reason: profile?.reason ?? null,
     },
     {
-      key: "reference", icon: ScrollText, title: "Эталон", flagKey: "reference",
+      key: "reference", icon: ScrollText, title: "Ответ", flagKey: "reference",
       included: Boolean(reference?.included), bytes: reference?.bytes ?? 0, count: null,
       reason: reference?.reason ?? null,
     },
@@ -74,45 +78,56 @@ export function ContextChips({ preview, contextFlags, onToggleFlag }: ContextChi
       futureNote: "Появится вместе со сжатой памятью раздела",
     },
   ];
+  const includedCount = chips.filter((chip) => chip.included).length;
 
   return (
-    <div className="chat-context-chips" role="list" aria-label="Состав запроса">
-      {chips.map((chip) => (
-        <Popover
-          key={chip.key}
-          align="start"
-          side="top"
-          title={chip.title}
-          trigger={
-            <button
-              type="button"
-              role="listitem"
-              className={`chat-context-chip ${chip.included ? "is-included" : "is-excluded"}`}
-            >
-              <chip.icon size={13} aria-hidden="true" />
-              {chip.title}
-            </button>
-          }
-        >
-          <div className="chat-context-chip-detail">
-            {chip.included ? (
-              <p>Включено · {bytesLabel(chip.bytes)}</p>
-            ) : (
-              <p className="chat-context-chip-reason">
-                Не включено{chip.reason ? ` — ${REASON_LABELS[chip.reason] ?? chip.reason}` : ""}
-              </p>
-            )}
-            {chip.futureNote && <p className="chat-context-chip-future">{chip.futureNote}</p>}
-            {chip.flagKey && !chip.futureNote && (
-              <Switch
-                checked={contextFlags[chip.flagKey]}
-                onCheckedChange={(checked) => onToggleFlag(chip.flagKey as keyof ChatContextFlags, checked)}
-                label={contextFlags[chip.flagKey] ? "Включено в запрос" : "Исключено из запроса"}
-              />
-            )}
-          </div>
-        </Popover>
-      ))}
-    </div>
+    <Disclosure
+      summary={`Контекст · ${includedCount}`}
+      className="chat-context-disclosure"
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        window.localStorage.setItem(CONTEXT_OPEN_KEY, next ? "1" : "0");
+      }}
+    >
+      <div className="chat-context-chips" role="list" aria-label="Состав запроса">
+        {chips.map((chip) => (
+          <Popover
+            key={chip.key}
+            align="start"
+            side="top"
+            title={chip.title}
+            trigger={
+              <button
+                type="button"
+                role="listitem"
+                className={`chat-context-chip ${chip.included ? "is-included" : "is-excluded"}`}
+              >
+                <chip.icon size={13} aria-hidden="true" />
+                {chip.title}
+              </button>
+            }
+          >
+            <div className="chat-context-chip-detail">
+              {chip.included ? (
+                <p>Включено · {bytesLabel(chip.bytes)}</p>
+              ) : (
+                <p className="chat-context-chip-reason">
+                  Не включено{chip.reason ? ` — ${REASON_LABELS[chip.reason] ?? chip.reason}` : ""}
+                </p>
+              )}
+              {chip.futureNote && <p className="chat-context-chip-future">{chip.futureNote}</p>}
+              {chip.flagKey && !chip.futureNote && (
+                <Switch
+                  checked={contextFlags[chip.flagKey]}
+                  onCheckedChange={(checked) => onToggleFlag(chip.flagKey as keyof ChatContextFlags, checked)}
+                  label={contextFlags[chip.flagKey] ? "Включено в запрос" : "Исключено из запроса"}
+                />
+              )}
+            </div>
+          </Popover>
+        ))}
+      </div>
+    </Disclosure>
   );
 }

@@ -23,7 +23,10 @@ from app.ai.provider import (  # noqa: E402
     ProviderStreamEvent,
     ProviderUsage,
 )
-from app.bindings.search import reindex_material  # noqa: E402
+from app.bindings.search import (  # noqa: E402
+    create_fragment_search,
+    reindex_material,
+)
 from app.config import settings  # noqa: E402
 from app.db import Base  # noqa: E402
 from app.exam import attempts as attempt_service  # noqa: E402
@@ -481,16 +484,7 @@ def main() -> None:
         try:
             Base.metadata.create_all(engine)
             with engine.begin() as connection:
-                connection.exec_driver_sql(
-                    "CREATE VIRTUAL TABLE fragment_search USING fts5("
-                    "text, lemmas, fragment_id UNINDEXED, material_id UNINDEXED, "
-                    "tokenize = 'unicode61 remove_diacritics 2')"
-                )
-                connection.exec_driver_sql(
-                    "CREATE TABLE fragment_search_map ("
-                    "fragment_id TEXT PRIMARY KEY, material_id TEXT NOT NULL, "
-                    "rowid INTEGER NOT NULL)"
-                )
+                create_fragment_search(connection)
             with Session(engine, expire_on_commit=False) as session:
                 asyncio.run(_run(engine, session))
                 assert session.execute(text("PRAGMA foreign_key_check")).all() == []

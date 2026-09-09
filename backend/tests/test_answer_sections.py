@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from app.bindings.answer_sections import detect_sections
+from app.bindings.answer_sections import detect_sections, section_for_resolution
 from app.models import (
     MaterialFragment,
     NodeType,
@@ -93,6 +93,33 @@ def test_internal_numbered_list_cannot_move_alignment_backwards() -> None:
     assert nodes[0].id not in result.linked_node_ids
     tenth = next(section for section in result.sections if nodes[9].id in section.node_ids)
     assert internal.id in {fragment.id for fragment in tenth.fragments}
+
+
+def test_restarted_numbering_falls_back_to_text_match() -> None:
+    """Второй раздел файла нумерует ответы заново — номер указывает не туда, но текст точен."""
+    nodes = _nodes(11)
+    # "1." по счёту раздела указал бы на nodes[0], но дословный текст — вопрос nodes[10].
+    section_two_header = _fragment(f"1. {nodes[10].title}", 0, "heading")
+    section_two_body = _fragment("Ответ из второго раздела файла.", 1)
+
+    result = detect_sections(nodes, [(section_two_header, 20), (section_two_body, 20)])
+
+    assert nodes[0].id not in result.linked_node_ids
+    matched = next(section for section in result.sections if nodes[10].id in section.node_ids)
+    assert section_two_body.id in {fragment.id for fragment in matched.fragments}
+
+
+def test_section_for_resolution_matches_by_text_when_number_is_out_of_range() -> None:
+    nodes = _nodes(11)
+    heading = _fragment(f"5. {nodes[0].title}", 0, "heading")
+    body = _fragment("Текст ответа на найденный вопрос.", 1)
+    rows = [(heading, 1), (body, 1)]
+
+    section = section_for_resolution(nodes, rows, heading.id, nodes[0].id)
+
+    assert section is not None
+    assert section.node_ids == (nodes[0].id,)
+    assert body.id in {fragment.id for fragment in section.fragments}
 
 
 def test_image_only_answer_creates_empty_text_reference(session) -> None:

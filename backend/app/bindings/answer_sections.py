@@ -157,7 +157,10 @@ def _candidate_for_anchor(
         return None
     number = _number(fragment.text)
     if number is not None and not 1 <= number <= len(nodes):
-        return None
+        # Раздел файла начал нумерацию заново (второй, третий раздел ответов) —
+        # число не указывает ни на один узел программы, но заголовок остаётся
+        # заголовком: ищем его по смыслу вместо того, чтобы выбросить якорь целиком.
+        number = None
 
     choices: list[_Candidate] = []
     limit = min(len(rows), anchor + MAX_HEADER_FRAGMENTS)
@@ -206,6 +209,29 @@ def _candidate_for_anchor(
                     score >= NUMBERED_CONFIDENCE,
                 )
             )
+            if score < NUMBERED_CONFIDENCE and ranked:
+                # Номер разошёлся с деревом (раздел начал счёт заново) — пробуем
+                # тот же заголовок по смыслу, а не по позиции в списке вопросов.
+                collapsed = _collapse_duplicate_titles(ranked, nodes, node_index)
+                best = collapsed[0]
+                runner_up = collapsed[1].score if len(collapsed) > 1 else 0.0
+                choices.append(
+                    _Candidate(
+                        anchor,
+                        end,
+                        node_index[best.node_id],
+                        title,
+                        best.score,
+                        (
+                            ReferenceAnswerMatchMethod.EXACT_TITLE
+                            if best.score >= 0.999
+                            else ReferenceAnswerMatchMethod.FUZZY_TITLE
+                        ),
+                        ranked,
+                        best.score >= AUTO_THRESHOLD
+                        and best.score - runner_up >= CONFIDENT_MARGIN,
+                    )
+                )
             continue
         if not ranked:
             continue
@@ -259,6 +285,32 @@ def _monotonic_path(candidates: list[_Candidate]) -> list[_Candidate]:
     return max(best_paths, key=lambda item: item[0])[1]
 
 
+def _stop_anchors(
+    candidates: list[_Candidate], rows: list[tuple[MaterialFragment, int]]
+) -> list[int]:
+    """Якоря, на которых раздел обязан закончиться, даже не попав в путь.
+
+    Путь строится только из уверенных совпадений с деревом; заголовок раздела,
+    для которого в программе нет пары (следующий раздел файла, оглавление), в
+    путь не попадает и раньше срастался с предыдущим разделом до конца файла.
+    Уверенный по себе кандидат или правдоподобный заголовок (`element_kind ==
+    "heading"` при разумном сходстве с каким-то вопросом) границу означают.
+    Заголовок с нулевым сходством — внутренний подпункт ответа (см.
+    `test_links_numbered_answers_by_current_program_order`), а не начало
+    следующего раздела, и границу двигать не должен.
+    """
+    anchors = {
+        candidate.anchor
+        for candidate in candidates
+        if candidate.score >= AUTO_THRESHOLD
+        or (
+            rows[candidate.anchor][0].element_kind == "heading"
+            and candidate.score >= SUGGEST_THRESHOLD
+        )
+    }
+    return sorted(anchors)
+
+
 def detect_sections(
     nodes: list[ProgramNode],
     rows: list[tuple[MaterialFragment, int]],
@@ -285,9 +337,14 @@ def detect_sections(
         is not None
     ]
     path = _monotonic_path(candidates)
+    stop_anchors = _stop_anchors(candidates, rows)
     sections: list[DetectedSection] = []
     for position, boundary in enumerate(path):
-        end = path[position + 1].anchor if position + 1 < len(path) else len(rows)
+        next_path_anchor = path[position + 1].anchor if position + 1 < len(path) else len(rows)
+        next_stop_anchor = next(
+            (anchor for anchor in stop_anchors if anchor > boundary.anchor), len(rows)
+        )
+        end = min(next_path_anchor, max(next_stop_anchor, boundary.header_end))
         section_rows = rows[boundary.anchor:end]
         pages = [page for _fragment, page in section_rows]
         sections.append(
@@ -369,7 +426,10 @@ def section_for_resolution(
     if anchor is None:
         return None
     index = HeadingIndex((node.id, node.title) for node in nodes)
-    candidate = _candidate_for_anchor(rows, anchor, nodes, index, node_index, {})
+    question_signatures = tuple(_surface_signature(node.title) for node in nodes)
+    candidate = _candidate_for_anchor(
+        rows, anchor, nodes, index, node_index, {}, question_signatures
+    )
     if candidate is None:
         return None
     detected = detect_sections(nodes, rows)

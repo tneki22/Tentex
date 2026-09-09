@@ -73,6 +73,7 @@ import {
 } from "./programTree";
 import { useBindings } from "../hooks/useBindings";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
+import { usePendingReviewJob } from "../hooks/usePendingReviewJob";
 import { AiGroupingDialog } from "./AiGroupingDialog";
 import { AiImportRepairDialog } from "./AiImportRepairDialog";
 
@@ -153,6 +154,13 @@ export function Program() {
   const [groupingNotice, setGroupingNotice] = useState(false);
   const [importRepairOpen, setImportRepairOpen] = useState(false);
   const [importRepairNotice, setImportRepairNotice] = useState(false);
+  // Готовое предложение модели ждёт человека — открываем его диалог сразу, а не
+  // оставляем пользователя на экране гадать, где искать результат.
+  const groupingReviewJob = usePendingReviewJob("ai_grouping", { projectId });
+  const importRepairReviewJob = usePendingReviewJob("ai_import_repair", { projectId });
+
+  useEffect(() => { if (groupingReviewJob) setGroupingOpen(true); }, [groupingReviewJob]);
+  useEffect(() => { if (importRepairReviewJob) setImportRepairOpen(true); }, [importRepairReviewJob]);
 
   async function load(signal?: AbortSignal) {
     setLoading(true);
@@ -666,8 +674,8 @@ export function Program() {
 
   return (
     <div className="program-screen">
-      <aside className="program-project-panel">
-        <header className="program-project-title">
+      <aside className="project-side-panel">
+        <header className="project-side-title">
           <Tooltip label="Вернуться в рабочую область">
             <Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link>
           </Tooltip>
@@ -693,7 +701,7 @@ export function Program() {
             program: currentFlat.filter((node) => node.node_type !== "section").length,
             materials: materials.materials.length,
           }}
-          className="program-project-nav"
+          className="project-side-nav"
         />
       </aside>
 
@@ -757,7 +765,7 @@ export function Program() {
                 <Field label="Формулировка"><input ref={titleInput} value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} onBlur={() => { const title = titleDraft.trim(); if (title && title !== selected.title) void runCommand(updateProgramNode(projectId, selected.id, { expected_program_revision: detail.program.revision, title })); }} /></Field>
                 <SegmentedTabs label="Тип узла" value={nodeKind(selected, textbook)} onChange={(value) => changeKind(selected, value as AddKind)} tabs={(textbook ? [["section", "Раздел"], ["topic", "Тема"], ["subpoint", "Подпункт"]] : [["section", "Раздел"], ["ticket", "Билет"], ["question", "Вопрос"], ["task", "Задача"]]).map(([value, label]) => ({ value, label }))} />
                 <GoalLevelPicker label="узла" value={(selected.target_level ?? "understanding") as GoalLevelValue} onChange={(target) => void runCommand(setProgramTargetLevel(projectId, selected.id, { expected_program_revision: detail.program.revision, target_level: target as TargetOutcome, include_descendants: true }))} />
-                <section className="program-impact"><h3>Что связано</h3><dl><div><dt>Эталон</dt><dd>Статус доступен на Карте эталонов</dd></div><div><dt>Источник списка</dt><dd>{selected.origin_material_id ? materials.materials.find((item) => item.id === selected.origin_material_id)?.display_name ?? "Материал удалён" : "Добавлено вручную"}</dd></div><div><dt>Привязки</dt><dd>{(() => {
+                <section className="program-impact"><h3>Что связано</h3><dl><div><dt>Ответ</dt><dd>Статус доступен на Карте ответов</dd></div><div><dt>Источник списка</dt><dd>{selected.origin_material_id ? materials.materials.find((item) => item.id === selected.origin_material_id)?.display_name ?? "Материал удалён" : "Добавлено вручную"}</dd></div><div><dt>Привязки</dt><dd>{(() => {
                   const summary = bindingsSummaryByNode.get(selected.id);
                   if (!summary) return "Материал не привязан";
                   return `${summary.fragment_count} фрагм. из ${summary.material_count} ${summary.material_count === 1 ? "файла" : "файлов"}`;

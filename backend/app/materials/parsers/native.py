@@ -1,3 +1,4 @@
+import logging
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
@@ -12,9 +13,18 @@ from docx import Document
 from docx.text.paragraph import Paragraph
 from PIL import Image
 
-from app.materials.parsers import paddle_fast, textbook
+from app.materials.parsers import paddle_fast, raster, reading_order
 from app.materials.parsers.audio import parse_audio
-from app.materials.parsers.base import ElementKind, ParsedElement, ParsedPage, RecognitionSource
+from app.materials.parsers.base import (
+    IMAGE_PLACEHOLDER,
+    ElementKind,
+    PageRecognizer,
+    ParsedElement,
+    ParsedPage,
+    RecognitionSource,
+    RegionRequest,
+)
+from app.materials.parsers.cloud_vlm import wrap_bare_latex
 from app.materials.parsers.pdf_layout import parse_layout_page
 from app.materials.storage import store_material_asset
 from app.models import ParserMode
@@ -35,7 +45,12 @@ ENDS_SENTENCE_RE = re.compile(r"[.!?:;][\"»)\]]?$")
 HEADING_SIZE_RATIO = 1.15
 # Меньше — это логотипы, линейки и артефакты вёрстки, а не иллюстрации.
 MIN_IMAGE_SIDE = 40
-IMAGE_PLACEHOLDER = "[Изображение]"
+# Виды элементов, у которых оригинальная вырезка со страницы полезна сама по
+# себе: распознанному тексту формулы или схемы верить нельзя, и просмотрщик
+# показывает рядом исходник.
+CROPPED_KINDS = {"image", "formula", "table"}
+
+log = logging.getLogger("tentex.worker")
 
 
 def extract_outline(path: Path) -> list[dict[str, object]]:
@@ -208,9 +223,13 @@ def _image_element(
                 text = recognized.plain_text.strip()
                 confidence = recognized.confidence
                 recognition_source = "ocr"
-        except Exception:
-            # Исходный вырез остаётся полезным даже если OCR этой области не справился.
-            pass
+        except (OSError, RuntimeError, ValueError) as error:
+            # Исходный вырез остаётся полезным, даже если OCR этой области не
+            # справился, — но молчать об этом нельзя: иначе пропажа текста
+            # картинки выглядит как «так и было».
+            log.warning(
+                "OCR картинки не удался page=%s index=%s: %s", page_number, index, error
+            )
         finally:
             temporary_path.unlink(missing_ok=True)
     return ParsedElement(
@@ -294,6 +313,20 @@ def _native_pdf_page(
     )
 
 
+def text_layer_pages(path: Path, owner: str = "") -> Iterator[ParsedPage]:
+    """Страницы PDF, у которого текстовый слой заведомо полный и точный.
+
+    Так читается PDF, который Tentex собрал сам (Typst): распознавать в нём
+    нечего, а разметчик стоит времени и модели. Разбор всё равно идёт через
+    общий `_native_pdf_page`, поэтому заголовки, списки и вырезы иллюстраций
+    получаются те же, что у обычного PDF, — а значит работают и блоки, и
+    привязки, и автопривязка ответов.
+    """
+    with fitz.open(path) as document:
+        for index, page in enumerate(document):
+            yield _native_pdf_page(page, index + 1, owner, ocr_images=False)
+
+
 def _bbox_overlap(
     inner: tuple[float, float, float, float], outer: tuple[float, float, float, float]
 ) -> float:
@@ -340,7 +373,17 @@ def _merge_native_and_images(
             if duplicate
             else image
         )
-    return tuple(sorted((*native, *merged_images), key=lambda item: (item.bbox[1], item.bbox[0])))
+    return _in_reading_order((*native, *merged_images))
+
+
+def _in_reading_order(elements: tuple[ParsedElement, ...]) -> tuple[ParsedElement, ...]:
+    """Расставить элементы страницы в порядке чтения.
+
+    Сортировка «сверху вниз, слева направо» здесь была бы ошибкой: на статье в
+    две колонки она перемешивает колонки, ради чего и заведён `reading_order`.
+    """
+    order = reading_order.reading_order([element.bbox for element in elements])
+    return tuple(elements[index] for index in order)
 
 
 def _page_quality(
@@ -587,6 +630,239 @@ def _docx_page(path: Path, owner: str = "") -> ParsedPage:
     return ParsedPage(1, 1, 1, _markdown(elements), plain, "native", tuple(elements))
 
 
+def _page_indices(
+    document: fitz.Document, start_page: int, page_numbers: Sequence[int] | None
+) -> Iterator[int]:
+    """Какие страницы разбирать: продолжение с чекпоинта или явный список."""
+    if page_numbers is None:
+        yield from range(start_page - 1, len(document))
+        return
+    for page_number in page_numbers:
+        if start_page <= page_number <= len(document):
+            yield page_number - 1
+
+
+def _text_layer_page(
+    document: fitz.Document,
+    page: fitz.Page,
+    page_index: int,
+    owner: str,
+    mode: ParserMode,
+    params: OcrRuntimeParams,
+) -> ParsedPage:
+    """Страница с готовым текстовым слоем: разметка плюс картинки со страницы."""
+    legacy = _native_pdf_page(
+        page, page_index + 1, owner, ocr_images=mode == ParserMode.FAST, params=params
+    )
+    try:
+        parsed = parse_layout_page(document, page_index, owner)
+    except (ValueError, KeyError, RuntimeError) as error:
+        log.warning(
+            "разметка страницы %s не удалась, откат на текстовый слой: %s",
+            page_index + 1,
+            error,
+        )
+        quality, confidence = _page_quality(legacy.elements, params.quality_threshold)
+        return replace(
+            legacy,
+            quality=quality,
+            confidence=confidence,
+            diagnostics=(*legacy.diagnostics, "layout_fallback"),
+        )
+    # Схему разметчик теперь отдаёт сам (`picture`), а встроенный растр приходит
+    # из текстового слоя. На одной и той же иллюстрации это два описания одного
+    # объекта: без проверки перекрытия страница получала бы двойной фрагмент.
+    layout_pictures = tuple(
+        element.bbox for element in parsed.elements if element.kind == "image"
+    )
+    images = tuple(
+        element
+        for element in legacy.elements
+        if element.kind == "image"
+        and not any(_bbox_overlap(element.bbox, box) >= 0.6 for box in layout_pictures)
+    )
+    if not images:
+        return parsed
+    elements = _merge_native_and_images(parsed.elements, images)
+    quality, confidence = _page_quality(elements, params.quality_threshold)
+    return replace(
+        parsed,
+        markdown=_markdown(list(elements)),
+        quality=quality,
+        elements=elements,
+        confidence=confidence,
+    )
+
+
+def _render_page(page: fitz.Page, params: OcrRuntimeParams) -> tuple[bytes, float]:
+    """Растр страницы под распознавание и разрешение, с которым он снят."""
+    scale, dpi = raster.render_scale(page, params.raster_scale)
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+    return pixmap.tobytes("png"), dpi
+
+
+def _scanned_page(
+    page: fitz.Page,
+    page_index: int,
+    owner: str,
+    params: OcrRuntimeParams,
+    recognizer: PageRecognizer | None,
+) -> ParsedPage:
+    """Страница без текстового слоя: целиком во внешнюю модель или в локальный OCR."""
+    image, dpi = _render_page(page, params)
+    if recognizer is not None:
+        parsed = recognizer.recognize_page(
+            image, page_index + 1, page.rect.width, page.rect.height
+        )
+        parsed = _attach_region_assets(page, parsed, owner)
+        return replace(parsed, diagnostics=(*parsed.diagnostics, f"render_dpi:{dpi:.0f}"))
+    with NamedTemporaryFile(suffix=".png", delete=False) as temporary:
+        temporary.write(image)
+        temporary_path = Path(temporary.name)
+    try:
+        parsed = paddle_fast.parse_image(
+            temporary_path,
+            page_index + 1,
+            language=params.fast_language,
+            ocr_version=params.fast_model_id,
+            quality_threshold=params.quality_threshold,
+            owner=owner,
+        )
+        return replace(parsed, diagnostics=(*parsed.diagnostics, f"render_dpi:{dpi:.0f}"))
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _attach_region_assets(page: fitz.Page, parsed: ParsedPage, owner: str) -> ParsedPage:
+    """Вырезать со страницы то, что модель прочитала, но показать не может.
+
+    Прочитав страницу целиком, внешняя модель возвращает схему или график
+    одной фразой: «блок-схема конечного автомата». Самой картинки в ответе нет
+    и быть не может, поэтому в материале на её месте оставалась подпись без
+    изображения. Координаты у модели при этом есть — по ним страница и режется
+    локально, тем же вырезом, что уходит в модель в стратегии «Только то, что
+    не читается». Формула и таблица режутся заодно: их LaTeX и Markdown
+    просмотрщик показывает только тогда, когда они собираются, а оригинал
+    нужен всегда.
+    """
+    if not owner:
+        return parsed
+    elements = list(parsed.elements)
+    cropped = 0
+    for index, element in enumerate(elements):
+        if element.kind not in CROPPED_KINDS or element.asset_path or not element.bbox_reliable:
+            continue
+        name = f"p{parsed.page_number}-{element.kind}{index}.png"
+        image = raster.region_image(page, element.bbox)
+        elements[index] = replace(element, asset_path=store_material_asset(owner, name, image))
+        cropped += 1
+    if not cropped:
+        return parsed
+    return replace(
+        parsed,
+        elements=tuple(elements),
+        diagnostics=(*parsed.diagnostics, f"cloud_crops:{cropped}"),
+    )
+
+
+def _recognized_regions(
+    page: fitz.Page, parsed: ParsedPage, recognizer: PageRecognizer
+) -> ParsedPage:
+    """Дочитать внешней моделью только то, что текстовый слой не объясняет.
+
+    Смысл режима: текст страницы уже есть и он точен — платить за его повторное
+    распознавание незачем. Наружу уходят вырезы формул, схем и таблиц-картинок,
+    а на их место встаёт то, что модель прочитала, с пометкой источника `vl`.
+    """
+    targets = [
+        (index, element)
+        for index, element in enumerate(parsed.elements)
+        if element.kind in {"image", "formula"}
+    ]
+    if not targets:
+        return parsed
+    requests = [
+        RegionRequest(index=index, kind=element.kind, image=raster.region_image(page, element.bbox))
+        for index, element in targets
+    ]
+    answers = recognizer.recognize_regions(requests, parsed.page_number)
+    recognized = {answer.index: answer for answer in answers}
+    elements = list(parsed.elements)
+    for index, element in targets:
+        answer = recognized.get(index)
+        if answer is None or not answer.text.strip():
+            continue
+        text = answer.text.strip()
+        if answer.kind == "formula":
+            # Инструкция вырезов просит LaTeX без обрамления (крупная страница
+            # рядом уже даёт контекст, окружать $ там незачем) — обрамляем
+            # здесь сами, иначе формула вернётся в текст сырым LaTeX и KaTeX
+            # её не отрисует.
+            text = wrap_bare_latex(text)
+        elements[index] = replace(
+            element,
+            kind=answer.kind,
+            text=text,
+            confidence=answer.confidence,
+            recognition_source="vl",
+        )
+    updated = tuple(elements)
+    quality, confidence = _page_quality(updated)
+    return replace(
+        parsed,
+        elements=updated,
+        markdown=_markdown(list(updated)),
+        plain_text="\n".join(item.text for item in updated if item.kind != "image"),
+        quality=quality,
+        confidence=confidence,
+        diagnostics=(*parsed.diagnostics, f"cloud_regions:{len(requests)}"),
+    )
+
+
+def _pdf_pages(
+    path: Path,
+    mode: ParserMode,
+    start_page: int,
+    params: OcrRuntimeParams,
+    page_numbers: Sequence[int] | None,
+    owner: str,
+    recognizer: PageRecognizer | None,
+) -> Iterator[ParsedPage]:
+    """Постраничный разбор PDF: у каждой страницы своя ветка по наличию текста."""
+    document = fitz.open(path)
+    whole_page = mode == ParserMode.CLOUD and params.cloud_strategy == "page"
+    for page_index in _page_indices(document, start_page, page_numbers):
+        page = document[page_index]
+        if whole_page or not page.get_text("text").strip():
+            yield _scanned_page(page, page_index, owner, params, recognizer)
+            continue
+        parsed = _text_layer_page(document, page, page_index, owner, mode, params)
+        if recognizer is not None:
+            parsed = _recognized_regions(page, parsed, recognizer)
+        yield parsed
+
+
+def _photo_page(
+    path: Path,
+    params: OcrRuntimeParams,
+    owner: str,
+    recognizer: PageRecognizer | None,
+) -> ParsedPage:
+    """Отдельная картинка (снимок страницы или скан) как единственная страница."""
+    if recognizer is not None:
+        with Image.open(path) as image:
+            width, height = image.size
+        return recognizer.recognize_page(path.read_bytes(), 1, float(width), float(height))
+    return paddle_fast.parse_image(
+        path,
+        1,
+        language=params.fast_language,
+        ocr_version=params.fast_model_id,
+        quality_threshold=params.quality_threshold,
+        owner=owner,
+    )
+
+
 def iter_pages(
     path: Path,
     mode: ParserMode,
@@ -594,128 +870,26 @@ def iter_pages(
     *,
     params: OcrRuntimeParams | None = None,
     page_numbers: Sequence[int] | None = None,
+    recognizer: PageRecognizer | None = None,
 ) -> Iterator[ParsedPage]:
+    """Разобрать файл постранично выбранным режимом.
+
+    :param mode: режим распознавания; `CLOUD` работает только вместе с `recognizer`.
+    :param start_page: с какой страницы продолжать после чекпоинта воркера.
+    :param page_numbers: явный список страниц, когда переразбирается часть материала.
+    :param recognizer: порт внешней модели; `None` — разбор целиком локальный.
+    """
     params = params or OcrRuntimeParams()
     suffix = path.suffix.lower()
     # Имя файла материала — его sha256, поэтому оно же служит папкой для картинок.
     owner = path.stem
-    scale_matrix = fitz.Matrix(params.raster_scale, params.raster_scale)
     if suffix == ".pdf":
-        document = fitz.open(path)
-        page_indices = (
-            range(start_page - 1, len(document))
-            if page_numbers is None
-            else (
-                page_number - 1
-                for page_number in page_numbers
-                if start_page <= page_number <= len(document)
-            )
-        )
-        for page_index in page_indices:
-            page = document[page_index]
-            if mode == ParserMode.TEXTBOOK:
-                pixmap = page.get_pixmap(matrix=scale_matrix, alpha=False)
-                with NamedTemporaryFile(suffix=".png", delete=False) as temporary:
-                    temporary_path = Path(temporary.name)
-                try:
-                    pixmap.save(temporary_path)
-                    yield textbook.parse_image(
-                        temporary_path,
-                        page_index + 1,
-                        owner,
-                        base_url=params.textbook_base_url,
-                        timeout=params.textbook_timeout_seconds,
-                        quality_threshold=params.quality_threshold,
-                    )
-                finally:
-                    temporary_path.unlink(missing_ok=True)
-                continue
-            if page.get_text("text").strip():
-                try:
-                    parsed = parse_layout_page(document, page_index)
-                    legacy = _native_pdf_page(
-                        page,
-                        page_index + 1,
-                        owner,
-                        ocr_images=mode == ParserMode.FAST,
-                        params=params,
-                    )
-                    images = tuple(
-                        element for element in legacy.elements if element.kind == "image"
-                    )
-                    if images:
-                        elements = _merge_native_and_images(parsed.elements, images)
-                        quality, confidence = _page_quality(elements, params.quality_threshold)
-                        parsed = ParsedPage(
-                            page_number=parsed.page_number,
-                            width=parsed.width,
-                            height=parsed.height,
-                            markdown=_markdown(list(elements)),
-                            plain_text=parsed.plain_text,
-                            quality=quality,
-                            elements=elements,
-                            diagnostics=parsed.diagnostics,
-                            confidence=confidence,
-                        )
-                    yield parsed
-                except Exception:
-                    fallback = _native_pdf_page(
-                        page,
-                        page_index + 1,
-                        owner,
-                        ocr_images=mode == ParserMode.FAST,
-                        params=params,
-                    )
-                    quality, confidence = _page_quality(
-                        fallback.elements, params.quality_threshold
-                    )
-                    yield ParsedPage(
-                        page_number=fallback.page_number,
-                        width=fallback.width,
-                        height=fallback.height,
-                        markdown=fallback.markdown,
-                        plain_text=fallback.plain_text,
-                        quality=quality,
-                        elements=fallback.elements,
-                        diagnostics=(*fallback.diagnostics, "layout_fallback"),
-                        confidence=confidence,
-                    )
-                continue
-            pixmap = page.get_pixmap(matrix=scale_matrix, alpha=False)
-            with NamedTemporaryFile(suffix=".png", delete=False) as temporary:
-                temporary_path = Path(temporary.name)
-            try:
-                pixmap.save(temporary_path)
-                yield paddle_fast.parse_image(
-                    temporary_path,
-                    page_index + 1,
-                    language=params.fast_language,
-                    ocr_version=params.fast_model_id,
-                    quality_threshold=params.quality_threshold,
-                )
-            finally:
-                temporary_path.unlink(missing_ok=True)
+        yield from _pdf_pages(path, mode, start_page, params, page_numbers, owner, recognizer)
         return
     if start_page > 1:
         return
     if suffix in {".jpg", ".jpeg", ".png"}:
-        if mode == ParserMode.TEXTBOOK:
-            yield textbook.parse_image(
-                path,
-                1,
-                owner,
-                base_url=params.textbook_base_url,
-                timeout=params.textbook_timeout_seconds,
-                quality_threshold=params.quality_threshold,
-            )
-            return
-        yield paddle_fast.parse_image(
-            path,
-            1,
-            language=params.fast_language,
-            ocr_version=params.fast_model_id,
-            quality_threshold=params.quality_threshold,
-        )
+        yield _photo_page(path, params, owner, recognizer)
     elif suffix == ".docx":
         yield _docx_page(path, owner)
     elif suffix in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:

@@ -69,6 +69,8 @@ import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
 import { AnswerEditor } from "./answers/AnswerEditor";
 import { AnswerFileList, type AnswerFile } from "./answers/AnswerFileList";
 import { AnswerHeadingSuggestions } from "./answers/AnswerHeadingSuggestions";
+import { usePendingReviewJob } from "../hooks/usePendingReviewJob";
+import { AnswersAiPlanDialog } from "./answers/AnswersAiPlanDialog";
 import { AnswerSourceDialog } from "./answers/AnswerSourceDialog";
 
 type CoverageFilter = "all" | "with_answer" | "missing" | "needs_review" | "outside";
@@ -152,6 +154,7 @@ export function CoverageMap() {
   const [importResult, setImportResult] = useState<ReferenceAnswerImportResult | null>(null);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [autoMatchOpen, setAutoMatchOpen] = useState(false);
+  const [aiPlanOpen, setAiPlanOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<HeadingSuggestion[]>([]);
   const [attachments, setAttachments] = useState<ReferenceAnswerAttachment[]>([]);
@@ -172,6 +175,15 @@ export function CoverageMap() {
       await refresh();
     },
   );
+  // Разметка ответов моделью досчиталась в фоне — открываем диалог с готовым
+  // планом сразу, а не оставляем его ждать в панели фоновых задач.
+  const answersReviewJob = usePendingReviewJob(
+    "ai_answer_sections",
+    { projectId, materialId: answersMaterial?.id },
+    Boolean(answersMaterial),
+  );
+
+  useEffect(() => { if (answersReviewJob) setAiPlanOpen(true); }, [answersReviewJob]);
 
   async function load(signal?: AbortSignal) {
     setLoading(true);
@@ -462,21 +474,21 @@ export function CoverageMap() {
   }
   if (!detail) return null;
   if (detail.project.workspace_variant !== "exam") {
-    return <div className="screen"><EmptyState title="Эталоны нужны для экзаменационных вопросов"><p>Для проекта по учебнику эта карта появится вместе с учебными сценариями следующих этапов.</p><Link className="secondary-button" to={`/projects/${projectId}`}><ArrowLeft size={15} />В рабочую область</Link></EmptyState></div>;
+    return <div className="screen"><EmptyState title="Ответы нужны для экзаменационных вопросов"><p>Для проекта по учебнику эта карта появится вместе с учебными сценариями следующих этапов.</p><Link className="secondary-button" to={`/projects/${projectId}`}><ArrowLeft size={15} />В рабочую область</Link></EmptyState></div>;
   }
   if (!coverage) return null;
 
   return (
     <div className="program-screen coverage-screen">
-      <aside className="program-project-panel">
-        <header className="program-project-title"><Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong></header>
-        <section className="coverage-recent" aria-label="Последние изменённые ответы">
+      <aside className="project-side-panel">
+        <header className="project-side-title"><Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong></header>
+        <section className="project-recent" aria-label="Последние изменённые ответы">
           <header><span>Недавние ответы</span><small>{recentRows.length}</small></header>
-          <div className="coverage-recent-list">
+          <div className="project-recent-list">
             {recentRows.length === 0
               ? <p className="sidebar-empty">Пока ничего не сохраняли — здесь появятся последние правки в этой вкладке.</p>
               : recentRows.map((row) => (
-                <button type="button" className={`coverage-recent-item ${selectedId === row.node_id ? "is-active" : ""}`.trim()} key={row.node_id} onClick={() => setSelectedId(row.node_id)}>
+                <button type="button" className={`project-recent-item is-compact ${selectedId === row.node_id ? "is-active" : ""}`.trim()} key={row.node_id} onClick={() => setSelectedId(row.node_id)}>
                   <span>{numberByNodeId.get(row.node_id)}. {row.title}</span>
                   {row.answer_status && <ReferenceAnswerBadge status={row.answer_status} />}
                 </button>
@@ -488,7 +500,7 @@ export function CoverageMap() {
           active="answers"
           modules={detail.project.enabled_modules}
           counts={{ answers: `${coverage.totals.with_answer}/${coverage.totals.study_nodes}` }}
-          className="program-project-nav"
+          className="project-side-nav"
         />
       </aside>
 
@@ -506,7 +518,7 @@ export function CoverageMap() {
             </div>
           }
         />
-        {readOnly && <p className="inline-warning">Проект доступен только для чтения. Верните его в активные, чтобы менять эталоны.</p>}
+        {readOnly && <p className="inline-warning">Проект доступен только для чтения. Верните его в активные, чтобы менять ответы.</p>}
         {commandError && <p className="inline-error" role="alert">{commandError}</p>}
         {notice && <p className="coverage-notice" role="status">{notice}</p>}
         <AnswerMatchStatus
@@ -523,7 +535,7 @@ export function CoverageMap() {
           onDismiss={() => setSuggestions([])}
         />
 
-        <section className="coverage-summary" aria-label="Сводка по эталонам">
+        <section className="coverage-summary" aria-label="Сводка по ответам">
           <span><strong>{coverage.totals.with_answer}</strong> из {coverage.totals.study_nodes}<small>есть ответ</small></span>
           <span><strong>{coverage.totals.confirmed}</strong><small>подтверждены или добавлены вручную</small></span>
           <span><strong>{coverage.totals.needs_review}</strong><small>нужно проверить</small></span>
@@ -532,7 +544,7 @@ export function CoverageMap() {
 
         <div className="coverage-toolbar">
           <label><span className="sr-only">Поиск по вопросам</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти вопрос" /></label>
-          <label><span className="sr-only">Фильтр эталонов</span><select value={filter} onChange={(event) => setFilter(event.target.value as CoverageFilter)}><option value="all">Текущая программа</option><option value="with_answer">Есть ответ</option><option value="missing">Нет ответа</option><option value="needs_review">Нужно проверить</option><option value="outside">Вне текущей программы</option></select></label>
+          <label><span className="sr-only">Фильтр ответов</span><select value={filter} onChange={(event) => setFilter(event.target.value as CoverageFilter)}><option value="all">Текущая программа</option><option value="with_answer">Есть ответ</option><option value="missing">Нет ответа</option><option value="needs_review">Нужно проверить</option><option value="outside">Вне текущей программы</option></select></label>
           <SegmentedTabs
             label="Как показывать ответ"
             value={viewMode}
@@ -545,7 +557,7 @@ export function CoverageMap() {
         </div>
 
         <div className={`coverage-editor-grid ${viewMode === "scans" ? "is-scans" : ""}`.trim()}>
-          <section className="coverage-list" aria-label="Вопросы и эталоны">
+          <section className="coverage-list" aria-label="Вопросы и ответы">
             {shownRows.map((row) => {
               const study = isStudyRow(row);
               const number = numberByNodeId.get(row.node_id);
@@ -566,8 +578,8 @@ export function CoverageMap() {
             {shownRows.length === 0 && <EmptyState title="По этому фильтру ничего нет"><Button variant="secondary" onClick={() => { setFilter("all"); setQuery(""); }}>Сбросить фильтр</Button></EmptyState>}
           </section>
 
-          <aside className="coverage-inspector" aria-label="Эталонный ответ">
-            {!selectedRow ? <p>Выберите вопрос.</p> : slotLoading ? <LoadingState label="Загружаем эталон" /> : slot ? <>
+          <aside className="coverage-inspector" aria-label="Ответ">
+            {!selectedRow ? <p>Выберите вопрос.</p> : slotLoading ? <LoadingState label="Загружаем ответ" /> : slot ? <>
               <div className="coverage-inspector-head"><div><p className="eyebrow">{selectedRow.exam_kind === "task" ? "Задача" : "Вопрос"}</p><h2>{numberByNodeId.get(selectedRow.node_id)}. {selectedRow.title}</h2></div><ReferenceAnswerBadge status={slot.status} /></div>
               <p className="coverage-target-level">Целевой уровень: {GOAL_LEVELS.find((level) => level.value === selectedRow.target_level)?.label ?? "не задан"}</p>
               {slot.answer?.is_active && slot.answer.source_material_id && (
@@ -587,7 +599,7 @@ export function CoverageMap() {
               {slot.answer?.source_only && (
                 <p className="coverage-answer-origin" role="status">
                   Ответ находится в источнике. Текстовая проверка недоступна,
-                  пока здесь не появится текстовый эталон.
+                  пока здесь не появится текстовый ответ.
                 </p>
               )}
 
@@ -595,8 +607,8 @@ export function CoverageMap() {
                 <div className="answer-linked-pages-notice" role="status">
                   <ScanLine size={19} aria-hidden="true" />
                   <div>
-                    <strong>Связанные страницы найдены, но эталон ещё не создан.</strong>
-                    <p>Сопоставьте файл ответов ещё раз или добавьте эталон вручную.</p>
+                    <strong>Связанные страницы найдены, но ответ ещё не создан.</strong>
+                    <p>Сопоставьте файл ответов ещё раз или добавьте ответ вручную.</p>
                   </div>
                 </div>
               )}
@@ -609,7 +621,7 @@ export function CoverageMap() {
                       <ScanLine size={22} aria-hidden="true" />
                       <b>У этого вопроса нет страниц в документе</b>
                       <p>
-                        Страницы появляются у ответов из файла эталонных ответов и у вопросов
+                        Страницы появляются у ответов из файла с ответами и у вопросов
                         с ручной привязкой в Материалах. Текст ответа можно вписать ниже.
                       </p>
                       <Button variant="secondary" disabled={readOnly} onClick={openAnswersFile}>
@@ -620,7 +632,7 @@ export function CoverageMap() {
               )}
 
               <Field
-                label="Эталонный ответ"
+                label="Ответ"
                 required={viewMode === "text"}
                 hint={viewMode === "scans"
                    ? `Сверху — ${scanPageCount(linkedSourceGroups)} стр. оригинала. Здесь распознанный текст: его можно дополнить своими словами и картинками.`
@@ -678,7 +690,7 @@ export function CoverageMap() {
                   <Link className="coverage-primary-action is-secondary" to={`/projects/${projectId}?topic=${selectedRow.node_id}`}><FileText size={16} />Открыть вопрос в рабочей области</Link>
                 </Tooltip>
               </div>
-            </> : <ErrorState message="Не удалось загрузить эталон" />}
+            </> : <ErrorState message="Не удалось загрузить ответ" />}
           </aside>
         </div>
       </main>
@@ -686,7 +698,7 @@ export function CoverageMap() {
       <Dialog
         open={importOpen}
         onOpenChange={setImportOpen}
-        title="Импортировать эталонные ответы"
+        title="Импортировать ответы"
         description="Заголовок раздела должен точно совпасть с вопросом программы. Существующие ответы не перезаписываются."
         className="coverage-import-dialog"
         footer={<><Button variant="ghost" onClick={() => setImportOpen(false)}>Закрыть</Button><Button disabled={busy || !importText.trim()} onClick={() => void importAnswers()}>{busy ? "Импортируем…" : "Импортировать"}</Button></>}
@@ -712,13 +724,25 @@ export function CoverageMap() {
         open={autoMatchOpen}
         onOpenChange={setAutoMatchOpen}
         onRunHeadings={() => void answerMatch.run()}
+        onRunAi={() => setAiPlanOpen(true)}
         onImportText={() => { setImportResult(null); setImportOpen(true); }}
       />
+
+      {answersMaterial && (
+        <AnswersAiPlanDialog
+          open={aiPlanOpen}
+          projectId={projectId}
+          materialId={answersMaterial.id}
+          nodeNumberById={numberByNodeId}
+          onOpenChange={setAiPlanOpen}
+          onApplied={(result) => { setSuggestions(result.suggestions); void refresh(); }}
+        />
+      )}
 
       <LibraryMaterialPickerDialog
         open={libraryOpen}
         projectId={projectId}
-        title="Выбрать файл эталонных ответов"
+        title="Выбрать файл с ответами"
         purpose="reference_answers"
         onOpenChange={setLibraryOpen}
         onAttached={async () => {
@@ -727,7 +751,7 @@ export function CoverageMap() {
         }}
       />
 
-      <ConfirmDialog open={deleteOpen} onOpenChange={setDeleteOpen} title="Убрать эталонный ответ?" confirmLabel="Убрать ответ" destructive onConfirm={() => { if (selectedRow && slot?.answer) void run(() => deleteReferenceAnswer(projectId, selectedRow.node_id, slot.answer!.revision), "Ответ убран. Его можно добавить снова."); }}><p>Текст перестанет отображаться в рабочей области. Узел программы останется без изменений.</p></ConfirmDialog>
+      <ConfirmDialog open={deleteOpen} onOpenChange={setDeleteOpen} title="Убрать ответ?" confirmLabel="Убрать ответ" destructive onConfirm={() => { if (selectedRow && slot?.answer) void run(() => deleteReferenceAnswer(projectId, selectedRow.node_id, slot.answer!.revision), "Ответ убран. Его можно добавить снова."); }}><p>Текст перестанет отображаться в рабочей области. Узел программы останется без изменений.</p></ConfirmDialog>
     </div>
   );
 }

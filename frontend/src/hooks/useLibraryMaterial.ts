@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  addTypstFiles,
+  buildTypstMaterial,
   controlLibraryProcessing,
   getLibraryMaterial,
   getLibraryPage,
@@ -163,6 +165,16 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
   const controlProcessing = useCallback((action: "pause" | "resume" | "retry" | "cancel") =>
     run(() => controlLibraryProcessing(materialId, action)), [materialId, run]);
 
+  const addTypstFile = useCallback((file: File, targetPath: string) =>
+    run(() => addTypstFiles(materialId, [file], [targetPath])), [materialId, run]);
+
+  const buildTypst = useCallback((downloadPackages: boolean, entrypoint?: string) =>
+    run(() => buildTypstMaterial(
+      materialId,
+      { download_packages: downloadPackages, entrypoint },
+    )),
+  [materialId, run]);
+
   return {
     detail,
     revisions,
@@ -177,6 +189,8 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
     refreshDetail,
     startProcessing,
     controlProcessing,
+    buildTypst,
+    addTypstFile,
     run,
   };
 }

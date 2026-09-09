@@ -615,6 +615,31 @@
   white-space: nowrap;
 }
 
+.viewer-page-input {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.viewer-page-input input {
+  width: 2.5em;
+  padding: 0 var(--space-1);
+  text-align: center;
+  color: var(--ink);
+  background: var(--surface-sunken);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.viewer-page-input input:focus-visible {
+  background: var(--paper);
+  border-color: var(--accent-edge);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
 .viewer-search {
   display: flex;
   flex: 1 1 160px;
@@ -965,11 +990,25 @@
 
 .structured-figure .structured-image { margin: 0; }
 
-/* Тумблер «фото фрагментов» и режим фото+расшифровка. */
+/* Шапка подготовленного текста: режим слева, тумблер «фото фрагментов» справа. */
 .viewer-text-controls {
   display: flex;
-  justify-content: flex-end;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
   margin-block-end: var(--space-3);
+  padding-block-end: var(--space-2);
+  border-block-end: 1px solid var(--line);
+}
+
+.viewer-text-mode {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.viewer-text-mode b {
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .structured-page.with-crops .structured-fragment {
@@ -979,8 +1018,9 @@
   border-radius: var(--radius-sm);
 }
 
+/* Ширину задаёт сам компонент: она повторяет долю страницы, которую занимает
+   область, чтобы номер страницы не раздувался до размеров иллюстрации. */
 .structured-source-photo {
-  width: 100%;
   background-repeat: no-repeat;
   background-color: var(--surface-sunken);
   border: 1px solid var(--line);
@@ -1014,6 +1054,13 @@
 .structured-formula {
   overflow-x: auto;
   margin: var(--space-4) 0;
+}
+
+/* Выносная формула внутри абзаца: своя строка, но без отрыва от текста. */
+.structured-display-math {
+  display: block;
+  overflow-x: auto;
+  margin: var(--space-3) 0;
 }
 
 .structured-formula-fallback {
@@ -1860,6 +1907,10 @@
 .revision-origin {
   color: var(--ink-soft);
   font-size: var(--text-sm);
+}
+
+.revision-mode-note {
+  color: var(--faint);
 }
 
 .revision-meta {

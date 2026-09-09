@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
+from app.db import project_write_transaction
 from app.materials.schemas import MaterialPurpose
 from app.materials.storage import material_path, remove_storage_dir_if_empty
 from app.models import (
@@ -565,7 +566,7 @@ def delete_project(session: Session, project_id: UUID) -> None:
 def save_workspace_state(
     session: Session, project_id: UUID, command: WorkspaceStateWrite
 ) -> WorkspaceStateRead:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None:
             raise ProjectNotFoundError()

@@ -56,7 +56,7 @@ def _handle_search_project_materials(ctx: ToolContext, value: BaseModel) -> Base
 
     assert isinstance(value, MaterialSearchInput)
     node_id = value.node_id or ctx.chat.program_node_id
-    hits = search_project_materials(
+    found = search_project_materials(
         ctx.session,
         ctx.project_id,
         value.query,
@@ -64,7 +64,7 @@ def _handle_search_project_materials(ctx: ToolContext, value: BaseModel) -> Base
         limit=value.limit,
     )
     items = []
-    for hit in hits[: value.limit]:
+    for hit in found.results[: value.limit]:
         if not hit.fragment_ids:
             continue
         items.append(

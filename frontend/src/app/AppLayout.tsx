@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, NavLink, Outlet, useLocation } from "react-router";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import {
   Activity,
   CircleCheck,
@@ -22,6 +22,182 @@ import { screenById } from "./screens";
 import { SCREEN_VIEWS } from "./views";
 import { ThemeToggle } from "./ThemeToggle";
 import { getAiSettings, type AiSettingsRead } from "../api/ai";
+import {
+  ACTIVE_JOB_STATES,
+  cancelBackgroundJob,
+  listBackgroundJobs,
+  resolveBackgroundJob,
+  type BackgroundJobRead,
+} from "../api/backgroundJobs";
+import { TaskRow, type BackgroundTask, type TaskKind } from "../components/domain";
+
+const BACKGROUND_POLL_MS = 4000;
+
+/** Куда ведёт клик по строке — экран, где задача была вызвана. Опознаём по
+ *  тому, что у задачи заполнено (project_id/material_id), а не по факту её
+ *  вида: `parse` и `ai_cleanup` бывают и в проекте, и в общей Библиотеке. */
+function backgroundJobPath(job: BackgroundJobRead): string | null {
+  switch (job.kind) {
+    case "parse":
+    case "ai_cleanup":
+      if (!job.material_id) return null;
+      return job.project_id
+        ? `/projects/${job.project_id}/materials/${job.material_id}`
+        : `/library/${job.material_id}`;
+    case "ai_grouping":
+    case "ai_import_repair":
+      return job.project_id ? `/projects/${job.project_id}/program` : null;
+    case "ai_preparation":
+      return job.project_id ? `/projects/new?draft=${job.project_id}` : null;
+    case "link_answers":
+    case "ai_answer_sections":
+      return job.project_id && job.material_id
+        ? `/projects/${job.project_id}/materials/${job.material_id}`
+        : null;
+    default:
+      return null;
+  }
+}
+
+/** Куда вести из корзины «ждут проверки»: тот же экран, но с номером задачи.
+ *  Экран по этому параметру открывает свой диалог сразу на готовом
+ *  предложении — иначе пользователь приходил бы на экран и гадал, что нажать.
+ *  Одна договорённость на все роли ИИ, а не вкладка в каждом разделе. */
+function backgroundJobReviewPath(job: BackgroundJobRead): string | null {
+  const path = backgroundJobPath(job);
+  return path ? `${path}?job=${job.id}` : null;
+}
+
+/** Имя файла или проекта; огрызок UUID — только если сервер не дал ничего. */
+function backgroundJobSubject(job: BackgroundJobRead): string {
+  if (job.subject) return job.subject;
+  if (job.material_id) return `материал ${job.material_id.slice(0, 8)}`;
+  if (job.project_id) return `проект ${job.project_id.slice(0, 8)}`;
+  return "фоновая операция";
+}
+
+// Столько секунд уходит на страницу; та же оценка, что и в панели обработки
+// материала (`LibraryProcessingPanel`), измерена прогоном `tentex-ocr-bench`.
+const PARSE_SECONDS_PER_PAGE: Record<string, number> = { fast: 16, cloud: 19 };
+
+function toBackgroundTask(job: BackgroundJobRead): BackgroundTask {
+  const left = Math.max(0, job.total - job.done);
+  const perPage = PARSE_SECONDS_PER_PAGE[job.parser_mode ?? ""] ?? 0;
+  return {
+    id: job.id,
+    kind: job.kind as TaskKind,
+    subject: backgroundJobSubject(job),
+    detail: job.model_label,
+    // Сборка Typst тоже считает страницы собранного PDF, а не абстрактные шаги.
+    unit: job.kind === "parse" || job.kind === "typst_compile" ? "страниц" : "",
+    done: job.done,
+    total: job.total,
+    etaMinutes: perPage && left > 0 ? Math.ceil((left * perPage) / 60) : null,
+    state: job.needs_review ? "review" : (job.state as BackgroundTask["state"]),
+    error: job.error ?? undefined,
+  };
+}
+
+interface BackgroundJobGroupProps {
+  jobs: BackgroundJobRead[];
+  navigate: (path: string) => void;
+  onCancel?: (jobId: string) => void;
+  onDismiss?: (jobId: string) => void;
+}
+
+/**
+ * Группа строк в поповере фоновых задач: одинаковая и для идущих, и для тех,
+ * что ждут проверки, — различаются они содержимым строки и тем, куда ведёт клик.
+ *
+ * Строка целиком ведёт на экран задачи, но клик по кнопке внутри неё
+ * («Отменить», «Убрать») не должен ещё и переключать экран — клики,
+ * начавшиеся на вложенной кнопке, отсекаются.
+ */
+function BackgroundJobGroup({ jobs, navigate, onCancel, onDismiss }: BackgroundJobGroupProps) {
+  return (
+    <div className="popover-task-list">
+      {jobs.map((job) => {
+        const path = job.needs_review ? backgroundJobReviewPath(job) : backgroundJobPath(job);
+        return (
+          <div
+            key={job.id}
+            className={path ? "popover-task-row is-linked" : "popover-task-row"}
+            role={path ? "button" : undefined}
+            tabIndex={path ? 0 : undefined}
+            onClick={path ? (event) => {
+              if ((event.target as HTMLElement).closest("button")) return;
+              navigate(path);
+            } : undefined}
+            onKeyDown={path ? (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              if ((event.target as HTMLElement).closest("button")) return;
+              event.preventDefault();
+              navigate(path);
+            } : undefined}
+          >
+            <TaskRow task={toBackgroundTask(job)} onCancel={onCancel} onDismiss={onDismiss} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+interface BackgroundJobsWidgetProps {
+  backgroundJobs: BackgroundJobRead[];
+  reviewJobs: BackgroundJobRead[];
+  runningJobs: BackgroundJobRead[];
+  navigate: (path: string) => void;
+  onDismiss: (jobId: string) => void;
+  onCancel: (jobId: string) => void;
+}
+
+/** Кнопка и всплывашка «Фоновые задачи» в панели слева. Отдельным компонентом —
+ *  чтобы разметка кнопки и попапа не дублировалась там, где к ним обращаются. */
+function BackgroundJobsWidget({
+  backgroundJobs,
+  reviewJobs,
+  runningJobs,
+  navigate,
+  onDismiss,
+  onCancel,
+}: BackgroundJobsWidgetProps) {
+  return (
+    <Popover
+      title="Фоновые задачи"
+      trigger={
+        <button type="button" className={reviewJobs.length > 0 ? "app-widget has-review" : "app-widget"}>
+          <Activity size={15} aria-hidden="true" />
+          <b className="nav-label">Фоновая задача</b>
+          {backgroundJobs.length > 0 && (
+            <span className={reviewJobs.length > 0 ? "app-widget-value is-review" : "app-widget-value"}>
+              {backgroundJobs.length}
+            </span>
+          )}
+        </button>
+      }
+    >
+      {backgroundJobs.length === 0 ? (
+        <p className="popover-note">Фон свободен.</p>
+      ) : (
+        <>
+          {reviewJobs.length > 0 && (
+            <section className="popover-task-group">
+              <h4 className="popover-task-group-title">Ждут проверки</h4>
+              <BackgroundJobGroup jobs={reviewJobs} navigate={navigate} onDismiss={onDismiss} />
+            </section>
+          )}
+          {runningJobs.length > 0 && (
+            <section className="popover-task-group">
+              <h4 className="popover-task-group-title">Идут сейчас</h4>
+              <BackgroundJobGroup jobs={runningJobs} navigate={navigate} onCancel={onCancel} />
+            </section>
+          )}
+        </>
+      )}
+    </Popover>
+  );
+}
 
 /**
  * Оболочка: панель установки слева, полоса действий сверху, контент справа.
@@ -44,12 +220,53 @@ const HOME_PATH = screenById("projects").navPath;
 
 export function AppLayout() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === "1");
   const [scrolled, setScrolled] = useState(false);
   const [aiSnapshot, setAiSnapshot] = useState<AiSettingsRead | null>(null);
   const [aiSnapshotFailed, setAiSnapshotFailed] = useState(false);
+  const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJobRead[]>([]);
   const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const loadBackgroundJobs = () => {
+      // Обе корзины сразу: и то, что считается, и то, что уже досчиталось и
+      // ждёт человека. Вторая держится в панели до тех пор, пока предложение
+      // не приняли или не убрали, — раньше готовый результат просто исчезал.
+      void listBackgroundJobs({ activeOnly: true, pendingReview: true }).then((jobs) => {
+        if (active) setBackgroundJobs(jobs);
+      }).catch(() => undefined);
+    };
+    loadBackgroundJobs();
+    const timer = window.setInterval(loadBackgroundJobs, BACKGROUND_POLL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  function cancelJob(jobId: string) {
+    void cancelBackgroundJob(jobId)
+      .then((updated) => setBackgroundJobs((current) => current.map((job) => job.id === updated.id ? updated : job)
+        .filter((job) => ACTIVE_JOB_STATES.has(job.state) || job.needs_review)))
+      .catch(() => undefined);
+  }
+
+  // Две корзины из одного списка: что считается и что уже посчитано, но ждёт
+  // человека. Строка не может быть в обеих — `needs_review` бывает только у
+  // завершённой задачи.
+  const reviewJobs = backgroundJobs.filter((job) => job.needs_review);
+  const runningJobs = backgroundJobs.filter((job) => ACTIVE_JOB_STATES.has(job.state));
+
+  /** Убрать готовое предложение из панели, не открывая. Результат остаётся на
+   *  сервере — уходит только напоминание о том, что его ждут. */
+  function dismissJob(jobId: string) {
+    void resolveBackgroundJob(jobId)
+      .then(() => setBackgroundJobs((current) => current.filter((job) => job.id !== jobId)))
+      .catch(() => undefined);
+  }
 
   useEffect(() => {
     let active = true;
@@ -182,17 +399,14 @@ export function AppLayout() {
           </Disclosure>
 
           <div className="app-widgets" aria-label="Состояние установки">
-            <Popover
-              title="Фоновые задачи"
-              trigger={
-                <button type="button" className="app-widget">
-                  <Activity size={15} aria-hidden="true" />
-                  <b className="nav-label">Фоновая задача</b>
-                </button>
-              }
-            >
-              <p className="popover-note">Фон свободен.</p>
-            </Popover>
+            <BackgroundJobsWidget
+              backgroundJobs={backgroundJobs}
+              reviewJobs={reviewJobs}
+              runningJobs={runningJobs}
+              navigate={navigate}
+              onDismiss={dismissJob}
+              onCancel={cancelJob}
+            />
 
             <Popover
               title="Внешние модели"

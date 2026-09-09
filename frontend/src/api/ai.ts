@@ -219,6 +219,9 @@ export interface AiModelTestRead {
 export interface AiRunRead {
   id: string;
   project_id: string | null;
+  /** Заполнено, только если вызов пришёл из очереди фоновых операций (Ш4
+   *  плана) — по нему диалоги находят свою задачу среди чужих запусков. */
+  job_id: string | null;
   provider_id: string | null;
   provider_label_snapshot: string;
   role: string;
@@ -412,6 +415,7 @@ function filterQuery(filters: {
   from?: string;
   to?: string;
   groupBy?: "role" | "provider" | "model";
+  jobId?: string;
 }): string {
   const query = new URLSearchParams();
   if (filters.projectId) query.set("project_id", filters.projectId);
@@ -422,6 +426,7 @@ function filterQuery(filters: {
   if (filters.from) query.set("from", filters.from);
   if (filters.to) query.set("to", filters.to);
   if (filters.groupBy) query.set("group_by", filters.groupBy);
+  if (filters.jobId) query.set("job_id", filters.jobId);
   const value = query.toString();
   return value ? `?${value}` : "";
 }

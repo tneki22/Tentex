@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
+from app.bindings.search import create_fragment_search
 from app.config import settings
 from app.db import Base
 from app.models import (
@@ -46,15 +47,7 @@ def session(tmp_path: Path) -> Iterator[Session]:
 
     Base.metadata.create_all(engine)
     with engine.begin() as connection:
-        connection.exec_driver_sql(
-            "CREATE VIRTUAL TABLE fragment_search USING fts5("
-            "text, lemmas, fragment_id UNINDEXED, material_id UNINDEXED, "
-            "tokenize = 'unicode61 remove_diacritics 2')"
-        )
-        connection.exec_driver_sql(
-            "CREATE TABLE fragment_search_map ("
-            "fragment_id TEXT PRIMARY KEY, material_id TEXT NOT NULL, rowid INTEGER NOT NULL)"
-        )
+        create_fragment_search(connection)
     with Session(engine, expire_on_commit=False) as db_session:
         yield db_session
     engine.dispose()
@@ -149,7 +142,10 @@ def add_page_with_fragments(
     fragments: list[str],
     block_title: str | None = None,
     block_class: BlockClass = BlockClass.CONTENT,
+    block_id: UUID | None = None,
 ) -> PageFragments:
+    """Страница с фрагментами. `block_id` продлевает уже созданный блок на неё:
+    так собирается блок, разорванный между страницами."""
     page = MaterialPage(
         id=uuid4(),
         material_id=material.id,
@@ -166,17 +162,21 @@ def add_page_with_fragments(
     )
     db_session.add(page)
     db_session.flush()
-    block = MaterialBlock(
-        id=uuid4(),
-        material_id=material.id,
-        revision=revision,
-        sort_order=0,
-        title=block_title,
-        block_class=block_class,
-        page_from=page_number,
-        page_to=page_number,
-    )
-    db_session.add(block)
+    block = db_session.get(MaterialBlock, block_id) if block_id is not None else None
+    if block is None:
+        block = MaterialBlock(
+            id=uuid4(),
+            material_id=material.id,
+            revision=revision,
+            sort_order=0,
+            title=block_title,
+            block_class=block_class,
+            page_from=page_number,
+            page_to=page_number,
+        )
+        db_session.add(block)
+    else:
+        block.page_to = max(block.page_to, page_number)
     db_session.flush()
     fragment_ids: list[UUID] = []
     for order, text_value in enumerate(fragments):

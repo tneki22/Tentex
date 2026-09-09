@@ -3,25 +3,29 @@ import {
   CircleAlert,
   Download,
   ExternalLink,
-  Play,
   RefreshCw,
-  Square,
+  Search,
+  Settings2,
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import type { ParserMode } from "../api/materials";
 import {
   cancelOcrModel,
+  getOcrCloudModels,
   getOcrSettings,
   installOcrModel,
   removeOcrModel,
-  startOcrService,
-  stopOcrService,
+  updateOcrCloudSettings,
   updateOcrEngine,
   updateOcrSettings,
+  type OcrCloudModelRead,
+  type OcrCloudRead,
+  type OcrCloudSettingsWrite,
+  type OcrCloudStrategy,
   type OcrEngineRead,
   type OcrEngineWrite,
-  type OcrHardwareRead,
   type OcrModelRead,
   type OcrReadiness,
   type OcrSettingsRead,
@@ -32,10 +36,10 @@ import {
   Field,
   LoadingState,
   Progress,
+  RadioCards,
   SegmentedTabs,
   Select,
   StatusBadge,
-  Switch,
 } from "../components/ui";
 import type { StatusTone } from "../components/ui";
 import type { OcrSettingsSubsection } from "./Setup";
@@ -121,56 +125,6 @@ function EngineStatus({ engine }: { engine: OcrEngineRead }) {
 
 // ── Обзор ───────────────────────────────────────────────────────────────────
 
-function HardwarePanel({ hardware }: { hardware: OcrHardwareRead }) {
-  return (
-    <section className="ai-settings-group">
-      <header className="ai-group-head">
-        <div>
-          <h3>Ваш компьютер</h3>
-          <p>
-            От этого зависит, какие наборы моделей вам подойдут. Ниже, на вкладке
-            «Модели», рядом с каждым набором написано, влезает он сюда или нет.
-          </p>
-        </div>
-      </header>
-      <dl className="ocr-facts">
-        <div>
-          <dt>Ядер процессора</dt>
-          <dd>{hardware.cpu_cores ?? "неизвестно"}</dd>
-        </div>
-        <div>
-          <dt>Оперативная память</dt>
-          <dd>{formatMb(hardware.ram_mb)}</dd>
-        </div>
-        <div>
-          <dt>Свободно на диске</dt>
-          <dd>{formatMb(hardware.free_disk_mb)}</dd>
-        </div>
-        <div>
-          <dt>Видеокарта</dt>
-          <dd>{hardware.gpu ? hardware.gpu.name : "не найдена"}</dd>
-        </div>
-        <div>
-          <dt>Видеопамять</dt>
-          <dd>{hardware.gpu ? formatMb(hardware.gpu.vram_mb) : "—"}</dd>
-        </div>
-        <div>
-          <dt>Откуда узнали</dt>
-          <dd>{hardware.gpu ? hardware.gpu.source : "—"}</dd>
-        </div>
-      </dl>
-      {hardware.gpu === null && hardware.gpu_reason ? (
-        <StatusLine tone="warning" label="Видеокарту определить не удалось" detail={hardware.gpu_reason} />
-      ) : null}
-      {hardware.notes.map((note) => (
-        <p key={note} className="ai-muted">
-          {note}
-        </p>
-      ))}
-    </section>
-  );
-}
-
 function OverviewPanel({
   settings,
   onSettings,
@@ -219,10 +173,10 @@ function OverviewPanel({
           <SegmentedTabs
             label="Режим по умолчанию"
             value={settings.default_mode}
-            tabs={[
-              { value: "fast", label: "Быстро" },
-              { value: "textbook", label: "Учебник" },
-            ]}
+            tabs={settings.engines.map((engine) => ({
+              value: engine.mode,
+              label: engine.title,
+            }))}
             onChange={(value) => void setDefaultMode(value as ParserMode)}
           />
         </div>
@@ -251,8 +205,6 @@ function OverviewPanel({
           })}
         </div>
       </section>
-
-      <HardwarePanel hardware={settings.hardware} />
     </div>
   );
 }
@@ -393,103 +345,157 @@ function FastEngineCard({
   );
 }
 
-function ServiceControls({
-  engine,
-  onSettings,
-}: {
-  engine: OcrEngineRead;
-  onSettings: (settings: OcrSettingsRead) => void;
-}) {
-  const service = engine.service;
-  const [note, setNote] = useState<Note | null>(null);
-  const [busy, setBusy] = useState(false);
-  if (!service) return null;
+/**
+ * Стоимость страницы у моделей отличается в десятки раз, а в прайсе она
+ * записана за миллион токенов — сравнивать так невозможно. Приводим к тысяче
+ * страниц: столько же примерно в трёх учебниках.
+ */
+function formatPagePrice(value: string | null): string {
+  if (value === null) return "цена неизвестна";
+  const perThousand = Number(value) * 1000;
+  if (!Number.isFinite(perThousand)) return "цена неизвестна";
+  if (perThousand === 0) return "бесплатно";
+  const digits = perThousand < 1 ? 2 : perThousand < 10 ? 1 : 0;
+  return `≈ $${perThousand.toFixed(digits).replace(".", ",")} за 1000 страниц`;
+}
 
-  async function run(action: "start" | "stop") {
-    setBusy(true);
-    setNote({ text: action === "start" ? "Запускаем…" : "Останавливаем…", tone: "muted" });
-    try {
-      onSettings(await (action === "start" ? startOcrService() : stopOcrService()));
-      setNote(null);
-    } catch (caught) {
-      setNote({ text: errorText(caught, "Не получилось"), tone: "danger" });
-    } finally {
-      setBusy(false);
-    }
+/**
+ * Список моделей, которыми можно распознавать страницы.
+ *
+ * Непригодные не прячутся: рядом с каждой написано, чем именно она не подошла,
+ * иначе отбор выглядит произволом. Поиск нужен потому, что в каталоге
+ * OpenRouter таких моделей больше двух сотен.
+ */
+function CloudModelPicker({
+  models,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  models: OcrCloudModelRead[];
+  selected: string | null;
+  disabled: boolean;
+  onSelect: (model: OcrCloudModelRead) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const shown = needle
+    ? models.filter(
+        (model) =>
+          model.model_id.toLowerCase().includes(needle) ||
+          model.display_name.toLowerCase().includes(needle) ||
+          model.provider_label.toLowerCase().includes(needle)
+      )
+    : models;
+
+  if (models.length === 0) {
+    return (
+      <p className="inspector-note">
+        Ни одна добавленная модель не принимает изображения. Добавьте такую в
+        разделе «Модели» — там же поиск по каталогу провайдера.
+      </p>
+    );
   }
 
   return (
-    <div className="ocr-service">
-      <div className="ocr-service-head">
-        <div>
-          <strong>Сервис распознавания</strong>
-          <small>
-            Модель «Учебника» живёт в отдельном процессе с доступом к видеокарте.
-            Он занимает видеопамять, пока запущен, поэтому включается по кнопке.
-          </small>
+    <div className="ocr-cloud-picker">
+      <Field label="Модель распознавания" hint="Годные — сверху, у остальных написана причина">
+        <div className="ocr-inline-field">
+          <Search size={15} aria-hidden="true" />
+          <input
+            type="search"
+            value={query}
+            placeholder="Название или идентификатор"
+            onChange={(event) => setQuery(event.target.value)}
+          />
         </div>
-        <div className="ai-group-actions">
-          {service.can_start && (
-            <Button disabled={busy} onClick={() => void run("start")}>
-              <Play size={14} aria-hidden="true" /> Запустить сервис
-            </Button>
-          )}
-          {service.can_stop && (
-            <Button variant="secondary" disabled={busy} onClick={() => void run("stop")}>
-              <Square size={14} aria-hidden="true" /> Остановить
-            </Button>
-          )}
-        </div>
+      </Field>
+      <div className="ocr-cloud-models" role="listbox" aria-label="Модель распознавания">
+        {shown.map((model) => (
+          <button
+            key={`${model.provider_id}:${model.model_id}`}
+            type="button"
+            role="option"
+            aria-selected={model.model_id === selected}
+            className={`ocr-cloud-model${model.model_id === selected ? " is-selected" : ""}${
+              model.suitable ? "" : " is-refused"
+            }`}
+            disabled={disabled || !model.suitable}
+            onClick={() => onSelect(model)}
+          >
+            <span className="ocr-cloud-model-head">
+              <strong>{model.display_name}</strong>
+              {model.suitable ? (
+                <span className="ocr-cloud-price">{formatPagePrice(model.price_per_page_usd)}</span>
+              ) : (
+                <StatusBadge tone="neutral">{model.reason}</StatusBadge>
+              )}
+            </span>
+            <small>
+              {model.provider_label} · {model.model_id}
+            </small>
+            {model.recommended_note && <em>{model.recommended_note}</em>}
+          </button>
+        ))}
+        {shown.length === 0 && <p className="ai-muted">По запросу ничего не нашлось.</p>}
       </div>
-      {service.detail ? <pre className="ocr-service-detail">{service.detail}</pre> : null}
-      {engine.restart_required ? (
-        <StatusLine
-          tone="warning"
-          label="Настройки ждут перезапуска"
-          detail="Сервис читает настройки подключения при старте. Остановите и запустите его снова, чтобы применить изменения."
-        />
-      ) : null}
-      <StatusNote note={note} />
     </div>
   );
 }
 
-function TextbookEngineCard({
+/**
+ * Режим «Облако»: что уходит наружу, какой моделью читается и почём.
+ *
+ * Выбор модели сохраняется в настройках шлюза — там же ключи, лимиты и учёт
+ * стоимости, — поэтому экран не заводит второе место для того же факта.
+ */
+function CloudEngineCard({
   engine,
+  cloud,
   isFirst,
   onSettings,
 }: {
   engine: OcrEngineRead;
+  cloud: OcrCloudRead;
   isFirst: boolean;
   onSettings: (settings: OcrSettingsRead) => void;
 }) {
-  const [advanced, setAdvanced] = useState(false);
-  const [serviceUrl, setServiceUrl] = useState(String(engine.extra.service_url ?? ""));
-  const [timeoutSeconds, setTimeoutSeconds] = useState(String(engine.extra.timeout_seconds ?? ""));
-  const [connectionNote, setConnectionNote] = useState<Note | null>(null);
+  const [models, setModels] = useState<OcrCloudModelRead[] | null>(null);
+  const [note, setNote] = useState<Note | null>(null);
+  const [pending, setPending] = useState(false);
 
-  async function saveConnection() {
-    setConnectionNote({ text: "Сохраняем…", tone: "muted" });
+  useEffect(() => {
+    const controller = new AbortController();
+    getOcrCloudModels(controller.signal)
+      .then(setModels)
+      .catch(() => {
+        if (!controller.signal.aborted) setModels([]);
+      });
+    return () => controller.abort();
+  }, [cloud.model_id]);
+
+  async function save(patch: Partial<OcrCloudSettingsWrite>) {
+    setPending(true);
+    setNote({ text: "Сохраняем…", tone: "muted" });
     try {
-      const next = await updateOcrEngine(
-        "textbook",
-        engineWrite(engine, {
-          extra: {
-            ...engine.extra,
-            service_url: serviceUrl.trim() || undefined,
-            timeout_seconds: timeoutSeconds.trim() ? Number(timeoutSeconds) : undefined,
-          },
+      onSettings(
+        await updateOcrCloudSettings({
+          provider_id: cloud.provider_id,
+          model_id: cloud.model_id,
+          strategy: cloud.strategy,
+          ...patch,
         })
       );
-      onSettings(next);
-      setConnectionNote({ text: "Сохранено", tone: "success" });
+      setNote({ text: "Сохранено", tone: "success" });
     } catch (caught) {
-      setConnectionNote({ text: errorText(caught, "Не сохранено"), tone: "danger" });
+      setNote({ text: errorText(caught, "Не сохранено"), tone: "danger" });
+    } finally {
+      setPending(false);
     }
   }
 
   return (
-    <section className={`ai-settings-group${isFirst ? " is-first" : ""}`} id="ocr-engine-textbook">
+    <section className={`ai-settings-group${isFirst ? " is-first" : ""}`} id="ocr-engine-cloud">
       <header className="ai-group-head">
         <div>
           <h3>{engine.title}</h3>
@@ -498,69 +504,54 @@ function TextbookEngineCard({
       </header>
       <p className="ai-muted">{engine.trade_off}</p>
       <EngineStatus engine={engine} />
-      <StatusLine
-        tone="info"
-        label="Один профиль для 8 ГБ"
-        detail="PP-DocLayout_plus-L размечает страницу и находит формулы отдельным классом, PP-FormulaNet переводит их в LaTeX, PP-OCRv5 читает текст. Распознавание сетки таблиц выключено, чтобы не занять видеопамять."
-      />
-      <ServiceControls engine={engine} onSettings={onSettings} />
 
-      <div className="ocr-advanced">
-        <Switch
-          label="Показать настройки подключения"
-          checked={advanced}
-          onCheckedChange={setAdvanced}
-        />
-        {advanced && (
-          <>
-            <p className="ai-muted">
-              Нужны только если сервис запущен не на этом компьютере или занимает
-              другой порт. Обычно менять их не требуется.
-            </p>
-            <div className="ai-form-grid compact">
-              <Field label="Адрес сервиса" hint="Действует сразу после сохранения">
-                <input
-                  type="text"
-                  value={serviceUrl}
-                  placeholder="http://127.0.0.1:8090"
-                  onChange={(event) => setServiceUrl(event.target.value)}
-                />
-              </Field>
-              <Field label="Ждать ответа, секунд" hint="Действует сразу после сохранения">
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={timeoutSeconds}
-                  placeholder="180"
-                  onChange={(event) => setTimeoutSeconds(event.target.value)}
-                />
-              </Field>
-            </div>
-            <div className="ai-group-actions">
-              <Button variant="secondary" onClick={() => void saveConnection()}>
-                Сохранить подключение
-              </Button>
-              <StatusNote note={connectionNote} />
-            </div>
-          </>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function StaticEngineCard({ engine, isFirst }: { engine: OcrEngineRead; isFirst: boolean }) {
-  return (
-    <section className={`ai-settings-group${isFirst ? " is-first" : ""}`}>
-      <header className="ai-group-head">
-        <div>
-          <h3>{engine.title}</h3>
-          <p>{engine.description}</p>
-        </div>
-      </header>
-      <p className="ai-muted">{engine.trade_off}</p>
-      <EngineStatus engine={engine} />
+      {!cloud.external_models_enabled ? (
+        <p className="inspector-note">
+          <Link to="/setup?section=ai">
+            <Settings2 size={14} aria-hidden="true" /> Открыть параметры моделей
+          </Link>
+        </p>
+      ) : (
+        <>
+          <RadioCards
+            className="ocr-cloud-strategies"
+            label="Что отправлять наружу"
+            layout="rows"
+            value={cloud.strategy}
+            options={cloud.strategies.map((item) => ({
+              value: item.value,
+              title: item.title,
+              description: item.hint,
+            }))}
+            onChange={(next) => void save({ strategy: next as OcrCloudStrategy })}
+          />
+          <CloudModelPicker
+            models={models ?? []}
+            selected={cloud.model_id}
+            disabled={pending}
+            onSelect={(model) =>
+              void save({ provider_id: model.provider_id, model_id: model.model_id })
+            }
+          />
+          {cloud.model_id && (
+            <dl className="ocr-facts">
+              <div>
+                <dt>Провайдер</dt>
+                <dd>{cloud.provider_label || "не указан"}</dd>
+              </div>
+              <div>
+                <dt>Стоимость разбора</dt>
+                <dd>{formatPagePrice(cloud.price_per_page_usd)}</dd>
+              </div>
+            </dl>
+          )}
+          <p className="inspector-warning" role="note">
+            Страницы и вырезы уходят на сервер провайдера. Учебник с чужими данными или
+            закрытую методичку туда отправлять не стоит.
+          </p>
+        </>
+      )}
+      <StatusNote note={note} />
     </section>
   );
 }
@@ -576,17 +567,20 @@ function EnginesPanel({
     <div className="ai-panel-stack">
       {settings.engines.map((engine, index) => {
         const isFirst = index === 0;
-        if (engine.mode === "fast") {
+        if (engine.mode === "cloud") {
           return (
-            <FastEngineCard key={engine.mode} engine={engine} isFirst={isFirst} onSettings={onSettings} />
+            <CloudEngineCard
+              key={engine.mode}
+              engine={engine}
+              cloud={settings.cloud}
+              isFirst={isFirst}
+              onSettings={onSettings}
+            />
           );
         }
-        if (engine.mode === "textbook") {
-          return (
-            <TextbookEngineCard key={engine.mode} engine={engine} isFirst={isFirst} onSettings={onSettings} />
-          );
-        }
-        return <StaticEngineCard key={engine.mode} engine={engine} isFirst={isFirst} />;
+        return (
+          <FastEngineCard key={engine.mode} engine={engine} isFirst={isFirst} onSettings={onSettings} />
+        );
       })}
     </div>
   );
@@ -818,10 +812,12 @@ function ModelsPanel({
 
 // ── Качество ────────────────────────────────────────────────────────────────
 
+// Значение — не зум, а требуемое разрешение картинки страницы: 150 точек на
+// дюйм за единицу. Ниже 300 мелкий шрифт и индексы в формулах теряются.
 const RASTER_SCALE_OPTIONS = [
-  { value: "1.5", label: "Пониже, быстрее" },
-  { value: "2", label: "Обычный" },
-  { value: "3", label: "Повыше, медленнее" },
+  { value: "1.5", label: "225 точек на дюйм — быстрее" },
+  { value: "2", label: "300 точек на дюйм — обычный" },
+  { value: "3", label: "450 точек на дюйм — мелкий шрифт" },
 ];
 
 function QualityPanel({

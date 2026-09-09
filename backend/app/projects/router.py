@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
+from app.background.schemas import BackgroundJobStartRead
 from app.db import get_session
 from app.projects import answers, import_repair, preparation_ai, program, program_ai, service
 from app.projects.schemas import (
@@ -281,15 +282,16 @@ async def preflight_program_grouping(
 
 @projects.post(
     "/{project_id}/program/ai-grouping",
-    response_model=program_ai.ProgramGroupingRunRead,
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def run_program_grouping(
     project_id: UUID,
     command: program_ai.ProgramGroupingRunWrite,
     session: SessionDependency,
     gateway: GatewayDependency,
-) -> program_ai.ProgramGroupingRunRead:
-    return await program_ai.run(session, gateway, project_id, command)
+) -> BackgroundJobStartRead:
+    return await program_ai.start(session, gateway, project_id, command)
 
 
 @projects.post(
@@ -319,15 +321,16 @@ async def preflight_preparation_estimate(
 
 @projects.post(
     "/{project_id}/preparation-estimate",
-    response_model=preparation_ai.PreparationEstimateRunRead,
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def run_preparation_estimate(
     project_id: UUID,
     command: preparation_ai.PreparationEstimateRunWrite,
     session: SessionDependency,
     gateway: GatewayDependency,
-) -> preparation_ai.PreparationEstimateRunRead:
-    return await preparation_ai.run(session, gateway, project_id, command)
+) -> BackgroundJobStartRead:
+    return await preparation_ai.start(session, gateway, project_id, command)
 
 
 @projects.post(
@@ -344,15 +347,16 @@ async def preflight_program_import_repair(
 
 @projects.post(
     "/{project_id}/program/ai-import-repair",
-    response_model=import_repair.ProgramRepairRunRead,
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def run_program_import_repair(
     project_id: UUID,
     command: import_repair.ProgramRepairRunWrite,
     session: SessionDependency,
     gateway: GatewayDependency,
-) -> import_repair.ProgramRepairRunRead:
-    return await import_repair.run_program_repair(session, gateway, project_id, command)
+) -> BackgroundJobStartRead:
+    return await import_repair.start_program_repair(session, gateway, project_id, command)
 
 
 @projects.post(

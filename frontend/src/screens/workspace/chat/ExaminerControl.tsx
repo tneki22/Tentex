@@ -19,11 +19,11 @@ const STRICTNESS_TABS: Array<{ value: ExaminerStrictness; label: string }> = [
   { value: "strict", label: "Строго" },
 ];
 
-function personaLabel(value: ExaminerPersona): string {
+export function personaLabel(value: ExaminerPersona): string {
   return PERSONA_OPTIONS.find((option) => option.value === value)?.title ?? value;
 }
 
-function strictnessLabel(value: ExaminerStrictness): string {
+export function strictnessLabel(value: ExaminerStrictness): string {
   return STRICTNESS_TABS.find((option) => option.value === value)?.label ?? value;
 }
 
@@ -60,6 +60,7 @@ export function ExaminerControl({ session, error, onChange }: ExaminerControlPro
       onOpenChange={setOpen}
       align="end"
       title="Экзаменатор"
+      className="chat-examiner-popover"
       trigger={
         <button type="button" className="chat-examiner-control-trigger">
           <GraduationCap size={14} aria-hidden="true" />
@@ -103,7 +104,7 @@ export function ExaminerControl({ session, error, onChange }: ExaminerControlPro
         </div>
         <p className="chat-examiner-control-note">
           Изменения действуют только на будущие ответы. Персона меняет тон, строгость — допустимые
-          упущения; факты и эталон не меняются ни от чего из этого.
+          упущения; факты и ответ не меняются ни от чего из этого.
         </p>
         {error && <p className="inline-error" role="alert">{error}</p>}
       </div>

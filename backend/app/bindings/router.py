@@ -3,11 +3,14 @@ from collections.abc import Iterator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.bindings import answers_link, service
+from app.ai.dependencies import get_model_gateway
+from app.ai.gateway import ModelGateway
+from app.background.schemas import BackgroundJobStartRead
+from app.bindings import answers_ai, answers_link, service
 from app.bindings.schemas import (
     AnswersHeadingResolveWrite,
     AnswersLinkProgressRead,
@@ -18,17 +21,18 @@ from app.bindings.schemas import (
     BindingFragmentRead,
     NodeBindingSummary,
     ReindexResult,
-    SearchResultRead,
+    SearchResponse,
 )
 from app.db import SessionLocal, get_session
 from app.models import BindingStatus
 from app.projects.errors import ProjectDomainError
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["bindings"])
 
 
-@router.get("/search", response_model=list[SearchResultRead])
+@router.get("/search", response_model=SearchResponse)
 def search_materials(
     project_id: UUID,
     session: SessionDependency,
@@ -36,7 +40,7 @@ def search_materials(
     material_id: UUID | None = None,
     node_id: UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 50,
-) -> list[SearchResultRead]:
+) -> SearchResponse:
     return service.search_project_materials(
         session, project_id, q, material_id=material_id, node_id=node_id, limit=limit
     )
@@ -49,13 +53,15 @@ def reindex_material(
     return service.reindex_material(session, project_id, material_id)
 
 
-@router.post("/materials/{material_id}/link-answers", response_model=AnswersLinkRead)
+@router.post(
+    "/materials/{material_id}/link-answers",
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def link_answers(
     project_id: UUID, material_id: UUID, session: SessionDependency
-) -> AnswersLinkRead:
-    with session.begin():
-        result = answers_link.link_answers_material(session, project_id, material_id)
-    return AnswersLinkRead.model_validate(result, from_attributes=True)
+) -> BackgroundJobStartRead:
+    return answers_link.start_link_answers(session, project_id, material_id)
 
 
 def _answer_link_frame(event: str, payload: dict[str, object]) -> str:
@@ -115,6 +121,49 @@ def resolve_answers_heading(
             command.anchor_fragment_id,
             command.program_node_id,
         )
+    return AnswersLinkRead.model_validate(result, from_attributes=True)
+
+
+@router.post(
+    "/materials/{material_id}/link-answers/ai/preflight",
+    response_model=answers_ai.AnswersAiPreflightRead,
+)
+async def preflight_link_answers_ai(
+    project_id: UUID,
+    material_id: UUID,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> answers_ai.AnswersAiPreflightRead:
+    return await answers_ai.preflight_answers_ai(session, gateway, project_id, material_id)
+
+
+@router.post(
+    "/materials/{material_id}/link-answers/ai",
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_link_answers_ai(
+    project_id: UUID,
+    material_id: UUID,
+    command: answers_ai.AnswersAiRunWrite,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> BackgroundJobStartRead:
+    return await answers_ai.start_answers_ai(session, gateway, project_id, material_id, command)
+
+
+@router.post(
+    "/materials/{material_id}/link-answers/ai/apply",
+    response_model=AnswersLinkRead,
+)
+def apply_link_answers_ai(
+    project_id: UUID,
+    material_id: UUID,
+    command: answers_ai.AnswersAiApplyWrite,
+    session: SessionDependency,
+) -> AnswersLinkRead:
+    with session.begin():
+        result = answers_ai.apply_answers_ai(session, project_id, material_id, command)
     return AnswersLinkRead.model_validate(result, from_attributes=True)
 
 

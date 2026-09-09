@@ -8,7 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.ai.router import router as ai_router
+from app.background.router import router as background_router
 from app.bindings.router import router as bindings_router
+from app.cards.router import router as cards_router
 from app.config import settings
 from app.conspects.router import router as conspects_router
 from app.db import SessionLocal, upgrade_database
@@ -16,6 +18,7 @@ from app.exam.router import router as exam_router
 from app.logging_config import configure_logging
 from app.materials.router import router as materials_router
 from app.ocr.router import router as ocr_router
+from app.preparation.router import router as preparation_router
 from app.projects.demo import seed_demo_project
 from app.projects.errors import ProjectDomainError
 from app.projects.router import router as projects_router
@@ -114,10 +117,13 @@ def create_app() -> FastAPI:
     app.include_router(projects_router)
     app.include_router(materials_router)
     app.include_router(bindings_router)
+    app.include_router(cards_router)
     app.include_router(conspects_router)
     app.include_router(ai_router)
     app.include_router(ocr_router)
     app.include_router(exam_router)
+    app.include_router(background_router)
+    app.include_router(preparation_router)
     return app
 
 

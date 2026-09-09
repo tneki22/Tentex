@@ -4,10 +4,8 @@ import {
   FileSearch,
   FolderOpen,
   GraduationCap,
-  Inbox,
   Layers,
   Library,
-  ListChecks,
   ListTree,
   PanelsTopLeft,
   Palette,
@@ -19,8 +17,11 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 /**
- * Пятнадцать проектных и два глобальных экрана из §21 требований
- * плюс служебная витрина UI-кита.
+ * Экраны из §21 требований плюс служебная витрина UI-кита: двенадцать проектных,
+ * три глобальных (Библиотека, Рабочая область материала, Параметры) и витрина.
+ * Маршруты «Покрытие», «Очередь предложений» и «Инбокс» удалены 01.09.2026 —
+ * они не имели ни компонента, ни эндпоинта. Аналитический экран здесь один:
+ * `coverage-map`, подписанный «Ответы».
  * Это единственный список экранов в проекте: навигация, роутинг и заглушки
  * строятся отсюда. Добавляешь экран — добавляешь строку здесь.
  *
@@ -87,16 +88,6 @@ export const SCREENS: ScreenMeta[] = [
     depth: "полностью",
   },
   {
-    id: "coverage",
-    path: "/projects/:projectId/coverage",
-    navPath: "/projects/:projectId/coverage",
-    title: "Покрытие",
-    summary: "Два таба: «Пробелы» и «Неразобранное».",
-    group: "Проект",
-    icon: Target,
-    depth: "полностью",
-  },
-  {
     id: "program",
     path: "/projects/:projectId/program",
     navPath: "/projects/:projectId/program",
@@ -126,16 +117,6 @@ export const SCREENS: ScreenMeta[] = [
     group: "Материал",
     icon: FileSearch,
     depth: "полностью",
-  },
-  {
-    id: "suggestions",
-    path: "/projects/:projectId/suggestions",
-    navPath: "/projects/:projectId/suggestions",
-    title: "Очередь предложений",
-    summary: "Быстрый разбор неоднозначных привязок клавиатурой.",
-    group: "Материал",
-    icon: ListChecks,
-    depth: "эскизом",
   },
   {
     id: "lessons",
@@ -171,20 +152,10 @@ export const SCREENS: ScreenMeta[] = [
     id: "plan",
     path: "/projects/:projectId/plan",
     navPath: "/projects/:projectId/plan",
-    title: "План подготовки",
+    title: "Моя подготовка",
     summary: "Календарь до дедлайна: первичный проход, повторения, резерв и прогноз готовности.",
     group: "Занятия",
     icon: CalendarDays,
-    depth: "эскизом",
-  },
-  {
-    id: "inbox",
-    path: "/projects/:projectId/inbox",
-    navPath: "/projects/:projectId/inbox",
-    title: "Инбокс",
-    summary: "Что прислали через бота.",
-    group: "Занятия",
-    icon: Inbox,
     depth: "эскизом",
   },
   {
@@ -246,3 +217,4 @@ export function screenById(id: string): ScreenMeta {
   if (!screen) throw new Error(`Экран «${id}» не описан в SCREENS`);
   return screen;
 }
+

@@ -1,0 +1,269 @@
+/** Активное время учитывается в одной видимой вкладке; таймер не зависит от рендеров React. */
+import { useEffect, useRef, useState } from "react";
+import { preparation, errorText, type Interval } from "../api/preparation";
+import {
+  acknowledgeIntervals,
+  bufferInterval,
+  pendingIntervals,
+} from "./studyTimeBuffer";
+const IDLE_MS = 5 * 60_000;
+const HEARTBEAT_MS = 30_000;
+const TICK_MS = 1000;
+const SESSION_KEY = "tentex-study-session";
+const sessionId = () => {
+  let id = sessionStorage.getItem(SESSION_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem(SESSION_KEY, id);
+  }
+  return id;
+};
+
+export interface StudyTrackingOptions {
+  enabled?: boolean;
+  studyDate?: string;
+  initialSeconds?: number;
+}
+
+/** Считает активное время, сохраняя итог вопроса при переходах между разделами. */
+export function useStudyTracking(
+  projectId: string,
+  nodeId: string | null,
+  kind: Interval["kind"],
+  options: StudyTrackingOptions = {},
+) {
+  const { enabled = true, studyDate = "", initialSeconds = 0 } = options;
+  const [paused, setPaused] = useState(false);
+  const [state, setState] = useState("Ожидание");
+  const [seconds, setSeconds] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const counterKey = `tentex-study-total:${projectId}:${studyDate}:${nodeId}`;
+  const seededKey = useRef("");
+  useEffect(() => {
+    if (!enabled || !nodeId || !studyDate) {
+      setState("Учебный день не начат");
+      return;
+    }
+    const saved = Number(sessionStorage.getItem(counterKey) ?? 0);
+    setSeconds((current) => {
+      const baseline = Math.max(initialSeconds, saved);
+      return seededKey.current === counterKey ? Math.max(current, baseline) : baseline;
+    });
+    seededKey.current = counterKey;
+  }, [counterKey, enabled, initialSeconds, nodeId, studyDate]);
+  useEffect(() => {
+    if (!enabled || !nodeId) return;
+    const opened = () => {
+      if (!document.hidden) void preparation.opened(projectId, nodeId).catch(caught => setError(errorText(caught)));
+    };
+    opened();
+    document.addEventListener("visibilitychange", opened);
+    const timer = window.setInterval(opened, 60_000);
+    return () => { document.removeEventListener("visibilitychange", opened); window.clearInterval(timer); };
+  }, [projectId, nodeId, enabled]);
+  const answerSeconds = useRef(0);
+  const answerKey = `tentex-answer-time:${projectId}:${studyDate}:${nodeId}`;
+  useEffect(() => {
+    answerSeconds.current = Number(sessionStorage.getItem(answerKey) ?? 0);
+  }, [answerKey]);
+  const flushRef = useRef<() => Promise<void>>(async () => undefined);
+  const answerReset = () => {
+    const value = Math.floor(answerSeconds.current);
+    answerSeconds.current = 0;
+    sessionStorage.removeItem(answerKey);
+    return value;
+  };
+  useEffect(() => {
+    if (!enabled || !nodeId) return;
+    let stopped = false;
+    let ownsLock = false;
+    let lockRequested = false;
+    let release: (() => void) | undefined;
+    let lastActivity = Date.now();
+    let lastTick = Date.now();
+    let started: number | null = null;
+    let intervalId: string | null = null;
+    let lastHeartbeat = Date.now();
+    let sending = false;
+    let chain = Promise.resolve();
+    const report = (caught: unknown) => {
+      setError(errorText(caught));
+    };
+    const journalKey = `tentex-study-open:${sessionId()}:${projectId}`;
+    const makeInterval = (start: number, end: number): Interval => ({
+      id: intervalId ?? crypto.randomUUID(), session_id: sessionId(), node_id: nodeId, kind,
+      started_at: new Date(start).toISOString(),
+      ended_at: new Date(Math.min(end, start + IDLE_MS)).toISOString(),
+    });
+    const clearJournal = (id: string) => {
+      const raw = localStorage.getItem(journalKey);
+      if (raw && (JSON.parse(raw) as Interval).id === id) localStorage.removeItem(journalKey);
+    };
+    try {
+      const raw = localStorage.getItem(journalKey);
+      if (raw) {
+        const recovered = JSON.parse(raw) as Interval;
+        chain = chain.then(async () => {
+          const pending = await pendingIntervals(projectId);
+          if (!pending.some((item) => item.id === recovered.id)) await bufferInterval(projectId, recovered);
+          clearJournal(recovered.id);
+        });
+      }
+    } catch (caught) { report(caught); }
+    const active = () =>
+      !stopped &&
+      !paused &&
+      document.visibilityState === "visible" &&
+      document.hasFocus() &&
+      Date.now() - lastActivity < IDLE_MS;
+    const persist = (end: number) => {
+      if (started === null) return;
+      const start = started;
+      started = null;
+      if (end <= start) return;
+      const interval = makeInterval(start, end);
+      intervalId = null;
+      try { localStorage.setItem(journalKey, JSON.stringify(interval)); } catch (caught) { report(caught); }
+      chain = chain.catch(report).then(async () => {
+        await bufferInterval(projectId, interval);
+        clearJournal(interval.id);
+      });
+      void chain.catch(report);
+    };
+    async function send() {
+      if (sending) return;
+      sending = true;
+      try {
+        await chain;
+        const rows = await pendingIntervals(projectId);
+        for (let offset = 0; offset < rows.length; offset += 200) {
+          const result = await preparation.time(
+            projectId,
+            rows.slice(offset, offset + 200),
+          );
+          await acknowledgeIntervals([
+            ...result.accepted_ids,
+            ...(result.ignored_ids ?? []),
+          ]);
+        }
+        if (!stopped) setError(null);
+      } catch (caught) {
+        report(caught);
+      } finally {
+        sending = false;
+      }
+    }
+    async function flush() {
+      persist(Date.now());
+      await send();
+    }
+    flushRef.current = flush;
+    const touch = () => {
+      lastActivity = Date.now();
+    };
+    function tick() {
+      const now = Date.now();
+      const elapsed = Math.min(now - lastTick, TICK_MS * 2);
+      lastTick = now;
+      if (!active()) {
+        persist(Math.min(now, lastActivity + IDLE_MS));
+        release?.();
+        release = undefined;
+        ownsLock = false;
+        setState(
+          paused
+            ? "Пауза"
+            : now - lastActivity >= IDLE_MS
+              ? "Пауза: нет активности"
+              : "Пауза: окно не активно",
+        );
+      } else if (ownsLock) {
+        if (started === null) { started = now; intervalId = crypto.randomUUID(); }
+        if (now > started) {
+          try { localStorage.setItem(journalKey, JSON.stringify(makeInterval(started, now))); }
+          catch (caught) { report(caught); }
+        }
+        setState("Время учитывается");
+        setSeconds((value) => {
+          const next = value + elapsed / 1000;
+          sessionStorage.setItem(counterKey, String(next));
+          return next;
+        });
+        if (kind === "answer") {
+          answerSeconds.current += elapsed / 1000;
+          sessionStorage.setItem(answerKey, String(answerSeconds.current));
+        }
+      } else if (!lockRequested) {
+        if (!navigator.locks) {
+          setError(
+            "Браузер не поддерживает учёт в одной вкладке. Добавьте время вручную.",
+          );
+          return;
+        }
+        lockRequested = true;
+        void navigator.locks
+          .request(
+            "tentex-study-active-tab",
+            { ifAvailable: true },
+            async (lock) => {
+              if (!lock || !active()) return;
+              ownsLock = true;
+              await new Promise<void>((resolve) => {
+                release = resolve;
+              });
+            },
+          )
+          .catch(report)
+          .finally(() => {
+            lockRequested = false;
+          });
+        setState("Ожидание активной вкладки");
+      }
+      if (now - lastHeartbeat >= HEARTBEAT_MS) {
+        lastHeartbeat = now;
+        void flush();
+      }
+    }
+    const hide = () => {
+      if (!document.hasFocus() || document.hidden) {
+        persist(Date.now());
+        release?.();
+        release = undefined;
+        ownsLock = false;
+        void send();
+      }
+    };
+    const events = ["pointerdown", "pointermove", "keydown", "scroll"] as const;
+    events.forEach((event) =>
+      window.addEventListener(event, touch, { passive: true }),
+    );
+    window.addEventListener("blur", hide);
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", hide);
+    window.addEventListener("online", send);
+    const timer = window.setInterval(tick, TICK_MS);
+    tick();
+    void send();
+    return () => {
+      stopped = true;
+      persist(Date.now());
+      release?.();
+      void send();
+      clearInterval(timer);
+      events.forEach((event) => window.removeEventListener(event, touch));
+      window.removeEventListener("blur", hide);
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", hide);
+      window.removeEventListener("online", send);
+    };
+  }, [answerKey, counterKey, projectId, nodeId, kind, enabled, paused]);
+  return {
+    state,
+    seconds: Math.floor(seconds),
+    paused,
+    setPaused,
+    error,
+    retry: () => flushRef.current(),
+    answerReset,
+  };
+}

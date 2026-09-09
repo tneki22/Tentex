@@ -1,13 +1,12 @@
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { RadioGroup } from "radix-ui";
 import {
   ArrowLeft,
   CalendarDays,
   Check,
   Flag,
-  Puzzle,
   Save,
   Target,
 } from "lucide-react";
@@ -16,6 +15,7 @@ import {
   ProjectApiError,
   updateProjectSettings,
 } from "../api/projects";
+import { ProjectNav } from "../components/domain";
 import type {
   ExamFormat,
   GoalPassportWrite,
@@ -29,16 +29,15 @@ import type {
   StudyFormat,
   TargetOutcome,
 } from "../api/projects";
-import { PROJECT_ICONS, ProjectChip } from "../components/domain";
-import type { ProjectColor } from "../components/domain";
+import { PROJECT_ICONS } from "../components/domain";
 import {
   Button,
   Card,
+  Dialog,
   ErrorState,
   Field,
   LoadingState,
   PageHead,
-  Switch,
   Tooltip,
 } from "../components/ui";
 
@@ -49,7 +48,6 @@ interface SettingsForm {
     icon: ProjectIconName | null;
     color: number | null;
     deadline: string;
-    enabled_modules: ModuleKey[];
   };
   goal: Omit<GoalPassportWrite, "minutes_per_day" | "days_per_week" | "session_minutes" | "expected_item_count" | "exam_time"> & {
     minutes_per_day: string;
@@ -70,15 +68,6 @@ const ICON_OPTIONS: Array<{ value: ProjectIconName; label: string }> = [
   { value: "globe", label: "Мир" },
   { value: "scale", label: "Право" },
   { value: "flask", label: "Химия" },
-];
-
-const MODULES: Array<{ key: ModuleKey; label: string; hint: string }> = [
-  { key: "plan", label: "План подготовки", hint: "Распределяет работу по сроку и дневному бюджету" },
-  { key: "lessons", label: "Уроки", hint: "Создание и изучение уроков по темам программы" },
-  { key: "cards", label: "Карточки", hint: "Банк карточек и короткие проверки" },
-  { key: "repetitions", label: "Интервальные повторения", hint: "Возвращает материал по расписанию SM-2" },
-  { key: "oral_answers", label: "Устные ответы", hint: "Практика ответа вслух" },
-  { key: "sql", label: "SQL-практика", hint: "Задачи в локальной учебной базе" },
 ];
 
 const PURPOSE_OPTIONS: Array<{ value: GoalPurpose; label: string }> = [
@@ -131,7 +120,6 @@ function formFromDetail(detail: ProjectDetail): SettingsForm {
       icon: detail.project.icon,
       color: detail.project.color,
       deadline: text(detail.project.deadline),
-      enabled_modules: [...detail.project.enabled_modules],
     },
     goal: {
       subject: goal?.subject ?? null,
@@ -166,8 +154,10 @@ function nullableNumber(value: string): number | null {
   return value === "" ? null : Number(value);
 }
 
-function commandFromForm(form: SettingsForm): ProjectSettingsCommand {
-  const selectedModules = new Set(form.project.enabled_modules);
+function commandFromForm(
+  form: SettingsForm,
+  enabledModules: ModuleKey[],
+): ProjectSettingsCommand {
   return {
     project: {
       name: form.project.name.trim(),
@@ -175,7 +165,9 @@ function commandFromForm(form: SettingsForm): ProjectSettingsCommand {
       icon: form.project.icon,
       color: form.project.color,
       deadline: form.project.deadline || null,
-      enabled_modules: MODULES.map((module) => module.key).filter((key) => selectedModules.has(key)),
+      // Настройки проекта больше не управляют доступностью разделов. Поле пока
+      // требуется существующим контрактом API, поэтому сохраняем его как есть.
+      enabled_modules: enabledModules,
     },
     goal_passport: {
       subject: nullableText(form.goal.subject),
@@ -238,8 +230,13 @@ function statusLabel(detail: ProjectDetail): string {
   return "Активный проект";
 }
 
+function formatDateTime(value: string): string {
+  return new Date(value).toLocaleString("ru-RU", { dateStyle: "medium", timeStyle: "short" });
+}
+
 export function ProjectSettings() {
   const { projectId = "" } = useParams();
+  const navigate = useNavigate();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [form, setForm] = useState<SettingsForm | null>(null);
   const [baseline, setBaseline] = useState<SettingsForm | null>(null);
@@ -249,6 +246,7 @@ export function ProjectSettings() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [exitDialogOpen, setExitDialogOpen] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -303,13 +301,16 @@ export function ProjectSettings() {
     changeForm((current) => ({ ...current, goal: { ...current.goal, [key]: value } }));
   }
 
-  async function save() {
-    if (!form || !detail || readOnly || !dirty || !valid || saving) return;
+  async function save(): Promise<boolean> {
+    if (!form || !detail || readOnly || !dirty || !valid || saving) return false;
     setSaving(true);
     setSaveError("");
     setSaved(false);
     try {
-      const updated = await updateProjectSettings(projectId, commandFromForm(form));
+      const updated = await updateProjectSettings(
+        projectId,
+        commandFromForm(form, detail.project.enabled_modules),
+      );
       const nextDetail = {
         ...detail,
         project: updated.project,
@@ -320,10 +321,27 @@ export function ProjectSettings() {
       setForm(nextForm);
       setBaseline(nextForm);
       setSaved(true);
+      return true;
     } catch (error: unknown) {
       setSaveError(requestErrorMessage(error));
+      return false;
     } finally {
       setSaving(false);
+    }
+  }
+
+  function returnToWorkspace() {
+    if (dirty) {
+      setExitDialogOpen(true);
+      return;
+    }
+    navigate(`/projects/${projectId}`);
+  }
+
+  async function saveAndReturn() {
+    if (await save()) {
+      setExitDialogOpen(false);
+      navigate(`/projects/${projectId}`);
     }
   }
 
@@ -347,27 +365,36 @@ export function ProjectSettings() {
     );
   }
 
-  const previewColor = form.project.color as ProjectColor;
-
   return (
-    <div className="screen project-settings-screen">
-      <PageHead
-        title="Настройки проекта"
-        lead="Параметры этого проекта, его паспорт цели и доступные учебные модули."
-        leading={
+    <div className="program-screen settings-screen">
+      <aside className="project-side-panel">
+        <header className="project-side-title">
           <Tooltip label="Вернуться в рабочую область">
-            <Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область">
+            <button type="button" className="workspace-back-button" onClick={returnToWorkspace} aria-label="Вернуться в рабочую область">
               <ArrowLeft size={15} />
-            </Link>
+            </button>
           </Tooltip>
-        }
-      >
-        {form.project.icon && form.project.color !== null && (
-          <div className="settings-project-identity">
-            <ProjectChip icon={form.project.icon} color={previewColor} size="sm" />
-          </div>
-        )}
-      </PageHead>
+          <strong>{detail.project.name}</strong>
+        </header>
+        <section className="settings-recent" aria-label="Последние изменения">
+          <header><span>Последние изменения</span></header>
+          <ul className="settings-recent-list">
+            <li><span>Проект</span><time dateTime={detail.project.updated_at}>{formatDateTime(detail.project.updated_at)}</time></li>
+            {detail.goal_passport && (
+              <li><span>Паспорт цели</span><time dateTime={detail.goal_passport.updated_at}>{formatDateTime(detail.goal_passport.updated_at)}</time></li>
+            )}
+          </ul>
+        </section>
+        <ProjectNav
+          projectId={projectId}
+          active="settings"
+          modules={detail.project.enabled_modules}
+          className="project-side-nav"
+        />
+      </aside>
+
+      <main className="program-main settings-main">
+      <PageHead title="Настройки" />
 
       {readOnly && (
         <Card className="settings-readonly" >
@@ -542,39 +569,35 @@ export function ProjectSettings() {
             </Card>
           )}
 
-          <Card className="settings-section">
-            <h2><Puzzle size={17} aria-hidden="true" /> Модули</h2>
-            <p className="settings-section-lead">Выключение скрывает модуль из интерфейса, но не удаляет накопленные данные.</p>
-            <div className="settings-modules">
-              {MODULES.map((module) => (
-                <Switch
-                  key={module.key}
-                  checked={form.project.enabled_modules.includes(module.key)}
-                  onCheckedChange={(checked) => updateProject(
-                    "enabled_modules",
-                    checked
-                      ? [...form.project.enabled_modules, module.key]
-                      : form.project.enabled_modules.filter((key) => key !== module.key),
-                  )}
-                  label={module.label}
-                  hint={module.hint}
-                  disabled={readOnly || saving}
-                />
-              ))}
-            </div>
-          </Card>
         </fieldset>
 
         <div className="settings-actions">
           <span className="settings-save-state" role="status" aria-live="polite">
             {saving ? "Сохраняем…" : saved ? "Сохранено" : dirty ? "Есть несохранённые изменения" : ""}
           </span>
-          <Button type="submit" disabled={readOnly || !dirty || !valid || saving}>
-            <Save size={15} aria-hidden="true" /> Сохранить изменения
+          <Button className="settings-save-button" type="submit" disabled={readOnly || !dirty || !valid || saving}>
+            <Save size={17} aria-hidden="true" /> Сохранить изменения
           </Button>
         </div>
         {saveError && <p className="settings-save-error" role="alert">{saveError}</p>}
       </form>
+      </main>
+
+      <Dialog
+        open={exitDialogOpen}
+        onOpenChange={setExitDialogOpen}
+        title="Сохранить изменения?"
+        description="Вы изменили настройки проекта. Сохраните их перед возвратом в рабочую область."
+        footer={
+          <>
+            <Button variant="ghost" disabled={saving} onClick={() => setExitDialogOpen(false)}>Остаться</Button>
+            <Button variant="secondary" disabled={saving} onClick={() => navigate(`/projects/${projectId}`)}>Не сохранять</Button>
+            <Button disabled={!valid || saving} onClick={() => void saveAndReturn()}>
+              <Save size={15} aria-hidden="true" /> {saving ? "Сохраняем…" : "Сохранить и вернуться"}
+            </Button>
+          </>
+        }
+      />
     </div>
   );
 }

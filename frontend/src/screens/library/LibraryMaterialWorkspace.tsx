@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import {
+  PARSER_MODE_TITLES,
   confirmLibraryPageReview,
   deleteLibraryMaterial,
   getLibraryPage,
@@ -43,7 +44,7 @@ import { editablePageText, PageTextEditor } from "./PageTextEditor";
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "список вопросов",
-  reference_answers: "эталонные ответы",
+  reference_answers: "ответы",
   study_source: "учебный источник",
 };
 
@@ -52,6 +53,7 @@ const STATUS_LABEL: Record<string, { label: string; tone: "neutral" | "info" | "
   queued: { label: "В очереди", tone: "info" },
   processing: { label: "Обрабатывается", tone: "info" },
   paused: { label: "На паузе", tone: "warning" },
+  needs_input: { label: "Нужны файлы", tone: "warning" },
   ready: { label: "Готов", tone: "success" },
   failed: { label: "Ошибка", tone: "danger" },
 };
@@ -200,6 +202,7 @@ export function LibraryMaterialWorkspace() {
         pageNumber: hit.page_number,
         text: hit.text,
         blockTitle: hit.block_title,
+        matchedForms: hit.matched_forms,
       }));
     },
     [materialId, selectedRevision],
@@ -355,11 +358,7 @@ export function LibraryMaterialWorkspace() {
     : false;
   const revisionLabel = (revision: number) => {
     const row = store.revisions.find((item) => item.revision === revision);
-    const modeLabel = row?.parser_mode === "textbook"
-      ? "Учебник"
-      : row?.parser_mode === "fast"
-        ? "Быстро"
-        : "правка";
+    const modeLabel = row?.parser_mode ? PARSER_MODE_TITLES[row.parser_mode] : "правка";
     return `Версия ${revision} · ${modeLabel}`;
   };
   const comparisonLabels = isVersionComparison && compareRevision !== null
@@ -406,7 +405,7 @@ export function LibraryMaterialWorkspace() {
             material={detail}
             parserMode={store.revisions.find((item) => item.revision === primaryRevision)?.parser_mode ?? detail.parser_mode}
             page={page}
-            query={search.query}
+            terms={search.forms}
             focusedFragmentId={focusedFragmentId}
             currentTime={currentTime}
             onSeek={setCurrentTime}
@@ -417,7 +416,7 @@ export function LibraryMaterialWorkspace() {
             page={page}
             pageNumber={activePage}
             revision={selectedRevision}
-            query={search.query}
+            terms={search.forms}
             zoom={view.effectiveZoom}
             showRegions={view.showRegions}
             focusedFragmentId={focusedFragmentId}
@@ -451,7 +450,7 @@ export function LibraryMaterialWorkspace() {
               material={detail}
               parserMode={store.revisions.find((item) => item.revision === compareRevision)?.parser_mode ?? detail.parser_mode}
               page={comparisonPage}
-              query={search.query}
+              terms={search.forms}
               focusedFragmentId={null}
               currentTime={currentTime}
               onSeek={setCurrentTime}
@@ -463,7 +462,7 @@ export function LibraryMaterialWorkspace() {
             material={detail}
             parserMode={store.revisions.find((item) => item.revision === primaryRevision)?.parser_mode ?? detail.parser_mode}
             page={page}
-            query={search.query}
+            terms={search.forms}
             focusedFragmentId={focusedFragmentId}
             currentTime={currentTime}
             onSeek={setCurrentTime}
@@ -616,6 +615,8 @@ export function LibraryMaterialWorkspace() {
               page_to: command.page_to ?? null,
             })}
             onControl={(action) => void store.controlProcessing(action)}
+            onTypstBuild={(downloadPackages, entrypoint) => void store.buildTypst(downloadPackages, entrypoint)}
+            onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
             onEditPage={openTextEditor}
             onCleanupPage={() => setCleanupOpen(true)}
             onConfirmPageReview={() => {
@@ -701,6 +702,8 @@ export function LibraryMaterialWorkspace() {
               page_to: command.page_to ?? null,
             })}
             onControl={(action) => void store.controlProcessing(action)}
+            onTypstBuild={(downloadPackages, entrypoint) => void store.buildTypst(downloadPackages, entrypoint)}
+            onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
             onEditPage={openTextEditor}
             onCleanupPage={() => setCleanupOpen(true)}
             onConfirmPageReview={() => {
@@ -730,7 +733,7 @@ export function LibraryMaterialWorkspace() {
         }
       />
 
-      {page && (
+      {page && detail.presentation_kind !== "typst" && (
         <AiCleanupPanel
           open={cleanupOpen}
           projectId={null}
@@ -782,7 +785,7 @@ export function LibraryMaterialWorkspace() {
             </li>
           ))}
           {deletePreview?.reference_answer_count ? (
-            <li>Эталонов из файла: {deletePreview.reference_answer_count}. Текст сохранится, источник станет недоступен.</li>
+            <li>Ответов из файла: {deletePreview.reference_answer_count}. Текст сохранится, источник станет недоступен.</li>
           ) : null}
           {deletePreview?.binding_count ? (
             <li>Привязок к фрагментам: {deletePreview.binding_count}. Они уйдут вместе с файлом.</li>

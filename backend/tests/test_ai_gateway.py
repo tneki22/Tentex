@@ -94,18 +94,23 @@ def _invalid_json_completion() -> ProviderCompletion:
     )
 
 
+# Паузы между повторами в тестах нулевые: проверяется число попыток, а не
+# умение ждать. С боевыми паузами набор простаивал бы десятки секунд.
+NO_WAIT = (0.0, 0.0, 0.0)
+
+
 @pytest.mark.asyncio
 async def test_invalid_structured_output_is_not_cached(session: Session, ai_config: str) -> None:
     del ai_config
-    # Оба ответа невалидны: одна попытка самоисправления не спасает, вызов
-    # проваливается после ровно двух обращений к транспорту.
-    fake = FakeTransport(completions=[_invalid_json_completion(), _invalid_json_completion()])
+    # Все ответы невалидны: попытки самоисправления не спасают, и вызов
+    # проваливается, исчерпав ровно отведённое число обращений к транспорту.
+    fake = FakeTransport(completions=[_invalid_json_completion() for _ in range(4)])
     with pytest.raises(ProjectDomainError) as caught:
-        await ModelGateway(session, fake).complete(_request())
+        await ModelGateway(session, fake, NO_WAIT).complete(_request())
     assert caught.value.code == "ai_invalid_structured_output"
     assert session.scalar(select(AiCacheEntry)) is None
     assert session.scalar(select(AiRun.status)) == "failed"
-    assert fake.complete_calls == 2
+    assert fake.complete_calls == 4
 
 
 @pytest.mark.asyncio
@@ -114,7 +119,7 @@ async def test_retries_once_on_invalid_json_then_succeeds(
 ) -> None:
     del ai_config
     fake = FakeTransport(completions=[_invalid_json_completion(), _completion()])
-    result = await ModelGateway(session, fake).complete(_request())
+    result = await ModelGateway(session, fake, NO_WAIT).complete(_request())
     assert result.value.answer == "ok"
     assert fake.complete_calls == 2
     retry_messages = fake.complete_requests[1]["messages"]
@@ -124,19 +129,28 @@ async def test_retries_once_on_invalid_json_then_succeeds(
 
 
 @pytest.mark.asyncio
-async def test_retries_once_on_retryable_provider_error_then_succeeds(
-    session: Session, ai_config: str
+@pytest.mark.parametrize(
+    "provider_code",
+    ["ai_provider_unavailable", "ai_rate_limited", "ai_timeout", "ai_empty_response"],
+)
+async def test_retries_on_retryable_provider_error_then_succeeds(
+    session: Session, ai_config: str, provider_code: str
 ) -> None:
     del ai_config
+    # Три подряд временных отказа и успех с четвёртой попытки: ровно тот
+    # случай, ради которого повторы и заведены — общий пул дешёвой модели
+    # отдаёт 429 несколько запросов подряд, а потом отпускает.
     fake = FakeTransport(
         completions=[
-            ProviderError("ai_provider_unavailable", "temporary routing hiccup"),
+            ProviderError(provider_code, "temporary hiccup"),
+            ProviderError(provider_code, "temporary hiccup"),
+            ProviderError(provider_code, "temporary hiccup"),
             _completion(),
         ]
     )
-    result = await ModelGateway(session, fake).complete(_request())
+    result = await ModelGateway(session, fake, NO_WAIT).complete(_request())
     assert result.value.answer == "ok"
-    assert fake.complete_calls == 2
+    assert fake.complete_calls == 4
     assert session.scalar(select(AiRun.status)) == "succeeded"
 
 
@@ -145,8 +159,8 @@ async def test_retries_once_on_retryable_provider_error_then_succeeds(
     ("provider_code", "expected_status", "retryable"),
     [
         ("ai_invalid_credentials", 401, False),
-        ("ai_rate_limited", 429, False),
-        ("ai_timeout", 504, False),
+        ("ai_rate_limited", 429, True),
+        ("ai_timeout", 504, True),
         ("ai_provider_unavailable", 503, True),
     ],
 )
@@ -158,20 +172,17 @@ async def test_provider_errors_are_normalized(
     retryable: bool,
 ) -> None:
     del ai_config
-    # Второй элемент в очереди только нужен, если код ретраится — иначе он
-    # останется невостребованным, вызов проваливается на первой же попытке.
+    # Очередь заполнена под все попытки; невостребованные элементы остаются в
+    # ней, если код не ретраится и вызов проваливается на первой же попытке.
     fake = FakeTransport(
-        completions=[
-            ProviderError(provider_code, "provider detail"),
-            ProviderError(provider_code, "provider detail"),
-        ]
+        completions=[ProviderError(provider_code, "provider detail") for _ in range(4)]
     )
     with pytest.raises(ProjectDomainError) as caught:
-        await ModelGateway(session, fake).complete(_request())
+        await ModelGateway(session, fake, NO_WAIT).complete(_request())
     assert caught.value.code == provider_code
     assert caught.value.status == expected_status
     assert session.scalar(select(AiRun.error_code)) == provider_code
-    assert fake.complete_calls == (2 if retryable else 1)
+    assert fake.complete_calls == (4 if retryable else 1)
 
 
 @pytest.mark.asyncio

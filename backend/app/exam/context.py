@@ -10,7 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.bindings.service import list_bindings
+from app.materials.context import material_context
 from app.models import (
+    BindingMechanism,
     ChatMessage,
     ChatSession,
     ExamFormat,
@@ -113,10 +115,16 @@ def _sha256(text: str) -> str:
 
 
 def bound_fragments(session: Session, project_id: UUID, node_id: UUID) -> list[FragmentSnippet]:
-    bindings = list_bindings(session, project_id, node_id=node_id)
+    bindings = [
+        binding
+        for binding in list_bindings(session, project_id, node_id=node_id)
+        if binding.mechanism != BindingMechanism.ANSWERS_FILE
+    ]
     fragments: list[FragmentSnippet] = []
     for binding in bindings[:MAX_FRAGMENTS]:
-        text = binding.text[:FRAGMENT_CHARS]
+        # Для Typst это exact-code с locator, а не испорченная формула из PDF.
+        text = material_context(session, binding.material_id, binding.page_number, binding.text)
+        text = text[:FRAGMENT_CHARS]
         fragments.append(
             FragmentSnippet(
                 fragment_id=binding.fragment_id,

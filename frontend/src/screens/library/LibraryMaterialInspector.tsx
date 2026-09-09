@@ -37,6 +37,8 @@ interface LibraryMaterialInspectorProps {
     page_to?: number;
   }) => void;
   onControl: (action: "pause" | "resume" | "retry" | "cancel") => void;
+  onTypstBuild: (downloadPackages: boolean, entrypoint?: string) => void;
+  onTypstAddFile: (file: File, targetPath: string) => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
   onConfirmPageReview: () => void;
@@ -65,6 +67,8 @@ export function LibraryMaterialInspector({
   onCompareRevision,
   onStart,
   onControl,
+  onTypstBuild,
+  onTypstAddFile,
   onEditPage,
   onCleanupPage,
   onConfirmPageReview,
@@ -100,6 +104,8 @@ export function LibraryMaterialInspector({
               readOnly={readOnly}
               onStart={onStart}
               onControl={onControl}
+              onTypstBuild={onTypstBuild}
+              onTypstAddFile={onTypstAddFile}
               onEditPage={onEditPage}
               onCleanupPage={onCleanupPage}
               onConfirmPageReview={onConfirmPageReview}
@@ -110,20 +116,17 @@ export function LibraryMaterialInspector({
               material={material}
               revisions={revisions}
               selected={selectedRevision}
+              compared={compareRevision}
               busy={busy}
               onSelect={onSelectRevision}
+              onCompare={onCompareRevision}
               onRestore={onRestore}
             />
           </Tabs.Content>
           <Tabs.Content value="file">
             <LibraryMaterialFilePanel
               material={material}
-              revisions={revisions}
-              selectedRevision={selectedRevision}
-              compareRevision={compareRevision}
               busy={busy}
-              onSelectRevision={onSelectRevision}
-              onCompareRevision={onCompareRevision}
               onAddToProject={onAddToProject}
               onRefreshSource={onRefreshSource}
               onDelete={onDelete}

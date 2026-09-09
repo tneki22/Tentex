@@ -1,4 +1,7 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useWorkspaceStudyTracking } from "../hooks/useWorkspaceStudyTracking";
+import { StudyTimer } from "./preparation/StudyTimer";
+import { StudyQueue } from "./preparation/StudyQueue";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
@@ -20,7 +23,6 @@ import {
   Search,
   Tag,
   Target,
-  Unlink,
   X,
 } from "lucide-react";
 import type { BindingFragmentRead } from "../api/bindings";
@@ -76,13 +78,15 @@ import {
   flattenProgramTree,
   type ProgramTreeNode,
 } from "./programTree";
-import { StudioPanel } from "./StudioPanel";
 import { usePersonalMarks } from "../hooks/usePersonalMarks";
 import { useAnswerViewMode } from "../hooks/useAnswerViewMode";
 import { ExamChatPanel } from "./workspace/chat/ExamChatPanel";
 import { AttemptHistory } from "./workspace/AttemptHistory";
 import { ReferenceAnswerContent, type ReferenceAnswerMedia } from "./workspace/ReferenceAnswerContent";
 import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
+import { BoundSourceReader } from "./workspace/BoundSourceReader";
+import { SourcePreviewDialog } from "./workspace/SourcePreviewDialog";
+import { toSourcePlaces, type SourcePlace } from "./workspace/sourcePlaces";
 import type { ConspectEditorHandle } from "../components/domain/ConspectEditor";
 
 // Прямой динамический импорт файла, а не барреля components/domain: так Milkdown
@@ -129,7 +133,7 @@ function allowedTabs(project: Pick<ProjectRead, "workspace_variant" | "enabled_m
 }
 
 function tabLabel(tab: WorkspaceTab, textbook: boolean): string {
-  if (tab === "source") return textbook ? "Источник" : "Материал";
+  if (tab === "source") return textbook ? "Источник" : "Источники";
   return {
     answer: "Ответ",
     lesson: "Урок",
@@ -165,6 +169,21 @@ function answerDotClass(status: ReferenceAnswerStatus | undefined): string {
 
 function isStudyNode(node: ProgramNodeRead): boolean {
   return STUDY_TYPES.has(node.node_type) && node.is_in_current_program && !node.is_archived;
+}
+
+function ancestorSectionIds(nodes: ProgramNodeRead[], nodeId: string | null): string[] {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const sectionIds: string[] = [];
+  let current = nodeId ? nodesById.get(nodeId) : undefined;
+
+  while (current?.parent_id) {
+    const parent = nodesById.get(current.parent_id);
+    if (!parent) break;
+    if (parent.node_type === "section") sectionIds.push(parent.id);
+    current = parent;
+  }
+
+  return sectionIds;
 }
 
 function renderHighlighted(text: string, highlights: SearchHighlightRead[]): ReactNode {
@@ -222,12 +241,20 @@ function sanitizeLayout(
       };
     }
   }
+  const groupWeights = finalGroups.length === 1
+    ? [1]
+    : finalGroups.map((_, index) => source?.group_weights[index] && source.group_weights[index] > 0 ? source.group_weights[index] : 1);
+  const expandedNodeIds = new Set([
+    ...(source?.expanded_node_ids ??
+      visibleNodes.filter((node) => node.node_type === "section").map((node) => node.id)),
+    ...ancestorSectionIds(visibleNodes, selected),
+  ]);
   return {
     selected_node_id: selected,
-    expanded_node_ids: [...new Set(source?.expanded_node_ids ?? visibleNodes.filter((node) => node.node_type === "section").map((node) => node.id))].filter((id) => currentIds.has(id)),
+    expanded_node_ids: [...expandedNodeIds].filter((id) => currentIds.has(id)),
     tree_width: Math.round(Math.min(460, Math.max(260, source?.tree_width ?? 320))),
     groups: finalGroups,
-    group_weights: finalGroups.map((_, index) => source?.group_weights[index] && source.group_weights[index] > 0 ? source.group_weights[index] : 1),
+    group_weights: groupWeights,
   };
 }
 
@@ -250,7 +277,6 @@ export function ProjectWorkspace() {
   const [attemptsReloadKey, setAttemptsReloadKey] = useState(0);
   const [coverage, setCoverage] = useState<CoverageMapRead | null>(null);
   const [query, setQuery] = useState("");
-  const [studioExpanded, setStudioExpanded] = useState(false);
   const [activeGroupId, setActiveGroupId] = useState(DEFAULT_LAYOUT.groups[0].id);
   const { marks, setMark } = usePersonalMarks(projectId);
   const { mode: answerViewMode, setMode: setAnswerViewMode } = useAnswerViewMode(projectId);
@@ -261,9 +287,15 @@ export function ProjectWorkspace() {
   const [sourceResults, setSourceResults] = useState<SearchResultRead[]>([]);
   const [sourceSearching, setSourceSearching] = useState(false);
   const [sourceSearched, setSourceSearched] = useState(false);
+  const [sourceTerms, setSourceTerms] = useState<string[]>([]);
   const [sourceBusy, setSourceBusy] = useState(false);
   const [sourceNotice, setSourceNotice] = useState("");
+  /** Скрытые места живут только в сессии: это уборка выдачи, а не решение о
+   *  материале, и записывать её в базу нечего. */
+  const [hiddenPlaces, setHiddenPlaces] = useState<Set<string>>(new Set());
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
   const sourceSearchInput = useRef<HTMLInputElement>(null);
+  const sourceSearchRef = useRef<AbortController | null>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   const resizeReadyRef = useRef(false);
   const layoutRef = useRef<WorkspaceLayout>(DEFAULT_LAYOUT);
@@ -282,7 +314,7 @@ export function ProjectWorkspace() {
       setLayout(sanitized);
       resizeReadyRef.current = false;
       if (JSON.stringify(sanitized) !== JSON.stringify(next.workspace_state?.layout)) {
-        await saveWorkspaceState(projectId, sanitized);
+        enqueueSave(sanitized);
       }
       if (next.project.workspace_variant === "exam") {
         getCoverageMap(projectId, signal).then(setCoverage).catch(() => undefined);
@@ -348,10 +380,23 @@ export function ProjectWorkspace() {
   const flat = useMemo(() => flattenProgramTree(treeResult.tree), [treeResult.tree]);
   const studyNodes = flat.filter(isStudyNode);
   const selected = studyNodes.find((node) => node.id === layout.selected_node_id) ?? null;
+  const [answeringForTracking, setAnsweringForTracking] = useState(false);
+  const focusedTab = layout.groups.find(group => group.id === activeGroupId)?.active_tab;
+  const trackingKind = focusedTab === "chat" ? (answeringForTracking ? "answer" : "chat") : focusedTab === "conspect" ? "conspect" : focusedTab === "source" ? "material" : "reading";
+  const study = useWorkspaceStudyTracking(projectId, selected?.id ?? null, trackingKind, Boolean(selected) && detail?.project.workspace_variant === "exam" && (detail?.project.status === "active" || detail?.project.status === "draft"));
+  const tracking = study.tracking;
   const selectedIndex = selected ? studyNodes.findIndex((node) => node.id === selected.id) : -1;
   const textbook = detail?.project.workspace_variant === "textbook";
   const availableTabs = allowedTabs(detail?.project ?? null);
   const filteredTree = useMemo(() => filterProgramTree(treeResult.tree, query), [treeResult.tree, query]);
+
+  useEffect(() => {
+    if (loading || !selected) return;
+    document
+      .querySelector<HTMLElement>(".workspace-question-tree .workspace-question-row.is-active")
+      ?.scrollIntoView({ block: "center", inline: "nearest" });
+  }, [loading, selected?.id]);
+
   const answerStatusByNode = useMemo(() => {
     const map = new Map<string, ReferenceAnswerStatus>();
     for (const row of coverage?.rows ?? []) {
@@ -374,7 +419,7 @@ export function ProjectWorkspace() {
       .then(setAnswerSlot)
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setAnswerError(error instanceof Error ? error.message : "Не удалось загрузить эталон");
+          setAnswerError(error instanceof Error ? error.message : "Не удалось загрузить ответ");
         }
       })
       .finally(() => {
@@ -396,18 +441,56 @@ export function ProjectWorkspace() {
     return () => controller.abort();
   }, [projectId, selected?.id, textbook]);
 
+  /**
+   * Поиск материала по формулировке вопроса.
+   *
+   * Устаревший запрос отменяется: при быстром переключении вопросов ответ на
+   * предыдущий приходил после текущего и подменял выдачу.
+   */
+  const runSourceSearch = useCallback(async (nodeId: string, query: string) => {
+    if (!query.trim()) return;
+    sourceSearchRef.current?.abort();
+    const controller = new AbortController();
+    sourceSearchRef.current = controller;
+    setSourceSearching(true);
+    setSourceNotice("");
+    try {
+      const found = await searchProjectMaterials(
+        projectId,
+        query,
+        { nodeId },
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      setSourceResults(found.results);
+      setSourceTerms(found.terms);
+      setSourceSearched(true);
+    } catch (caught) {
+      if (controller.signal.aborted) return;
+      setSourceNotice(caught instanceof Error ? caught.message : "Поиск не выполнен");
+    } finally {
+      if (!controller.signal.aborted) setSourceSearching(false);
+    }
+  }, [projectId]);
+
   useEffect(() => {
     if (!selected || textbook) {
       setSourceBindings([]);
       setSourceResults([]);
       setSourceSearched(false);
+      setSourceTerms([]);
       return;
     }
     setSourceQuery(selected.title);
     setSourceResults([]);
     setSourceSearched(false);
+    setSourceTerms([]);
     setSourceNotice("");
     setSourceBindings([]);
+    setHiddenPlaces(new Set());
+    setPreviewKey(null);
+    // Смысл продукта — открыл вопрос и сразу видишь, где про это в учебниках.
+    void runSourceSearch(selected.id, selected.title);
     const controller = new AbortController();
     setSourceBindingsLoading(true);
     listBindings(projectId, { nodeId: selected.id }, controller.signal)
@@ -415,39 +498,46 @@ export function ProjectWorkspace() {
       .catch(() => undefined)
       .finally(() => { if (!controller.signal.aborted) setSourceBindingsLoading(false); });
     return () => controller.abort();
-  }, [projectId, selected?.id, textbook]);
+  }, [projectId, selected?.id, selected?.title, textbook, runSourceSearch]);
 
-  async function runSourceSearch() {
-    if (!selected || !sourceQuery.trim()) return;
-    setSourceSearching(true);
-    setSourceNotice("");
-    try {
-      const results = await searchProjectMaterials(projectId, sourceQuery, { nodeId: selected.id });
-      setSourceResults(results);
-      setSourceSearched(true);
-    } catch (caught) {
-      setSourceNotice(caught instanceof Error ? caught.message : "Поиск не выполнен");
-    } finally {
-      setSourceSearching(false);
-    }
+
+  /** Привязки вопроса и выдача — один источник правды на вкладку и на окно
+   *  предпросмотра: «уже привязано» считается из `sourceBindings`, а не из
+   *  локальных флажков, которые разъезжались бы после действий в окне. */
+  function addSourceBindings(created: BindingFragmentRead[]) {
+    setSourceBindings((current) => [
+      ...current,
+      ...created.filter((binding) => !current.some((existing) => existing.id === binding.id)),
+    ]);
+    void bindings.refreshSummary();
   }
 
-  async function bindSourceCandidate(result: SearchResultRead) {
+  function dropSourceBindings(bindingIds: string[]) {
+    if (bindingIds.length > 0) {
+      const removed = new Set(bindingIds);
+      setSourceBindings((current) => current.filter((binding) => !removed.has(binding.id)));
+    }
+    void bindings.refreshSummary();
+    if (selected) void reloadSourceBindings(selected.id);
+  }
+
+  function reloadSourceBindings(nodeId: string) {
+    return listBindings(projectId, { nodeId })
+      .then(setSourceBindings)
+      .catch(() => undefined);
+  }
+
+  async function bindSourcePlace(place: SourcePlace) {
     if (!selected) return;
     setSourceBusy(true);
     try {
       const created = await createBindings(projectId, {
         program_node_id: selected.id,
-        fragment_ids: result.fragment_ids,
+        fragment_ids: place.fragmentIds,
         mechanism: "search",
       });
-      setSourceBindings((current) => [
-        ...current,
-        ...created.bindings.filter((binding) => !current.some((existing) => existing.id === binding.id)),
-      ]);
-      setSourceResults((current) => current.map((item) => item === result ? { ...item, already_bound: true } : item));
-      setSourceNotice("Фрагмент привязан.");
-      void bindings.refreshSummary();
+      addSourceBindings(created.bindings);
+      setSourceNotice(`Привязано со стр. ${place.pageNumber}: ${created.bindings.length}.`);
     } catch (caught) {
       setSourceNotice(caught instanceof Error ? caught.message : "Не удалось привязать фрагмент");
     } finally {
@@ -460,9 +550,6 @@ export function ProjectWorkspace() {
     try {
       await removeBinding(projectId, bindingId);
       setSourceBindings((current) => current.filter((binding) => binding.id !== bindingId));
-      setSourceResults((current) => current.map((item) => item.fragment_ids.includes(
-        sourceBindings.find((binding) => binding.id === bindingId)?.fragment_id ?? "",
-      ) ? { ...item, already_bound: false } : item));
       setSourceNotice("Привязка снята.");
       void bindings.refreshSummary();
     } catch (caught) {
@@ -560,7 +647,9 @@ export function ProjectWorkspace() {
     persist((latest) => ({
       ...latest,
       groups: latest.groups.filter((group) => group.id !== groupId),
-      group_weights: latest.group_weights.filter((_, itemIndex) => itemIndex !== index),
+      group_weights: groups.length === 1
+        ? [1]
+        : latest.group_weights.filter((_, itemIndex) => itemIndex !== index),
     }));
     if (activeGroupId === groupId) setActiveGroupId(groups[Math.min(index, groups.length - 1)]?.id ?? DEFAULT_LAYOUT.groups[0].id);
   }
@@ -601,6 +690,8 @@ export function ProjectWorkspace() {
         <ExamChatPanel
           projectId={projectId}
           node={selected}
+          onAnsweringChange={setAnsweringForTracking}
+          takeAnswerSeconds={tracking.answerReset}
           onAttemptsChanged={() => setAttemptsReloadKey((value) => value + 1)}
         />
       );
@@ -640,17 +731,19 @@ export function ProjectWorkspace() {
       return <div className="workspace-empty-panel"><FileText size={28} /><h2>Ответ пока не создан</h2><p>Учебные ответы появятся вместе со сценариями занятий.</p></div>;
     }
     if (!selected) {
-      return <div className="workspace-empty-copy"><BookOpen size={26} /><h2>Выберите вопрос</h2><p>Эталон и история попыток появятся после выбора вопроса слева.</p></div>;
+      return <div className="workspace-empty-copy"><BookOpen size={26} /><h2>Выберите вопрос</h2><p>Ответ и история попыток появятся после выбора вопроса слева.</p></div>;
     }
     let referenceContent: ReactNode;
-    if (answerLoading) referenceContent = <LoadingState label="Загружаем эталон" />;
-    else if (answerError) referenceContent = <ErrorState title="Эталон не загрузился" message={answerError} />;
+    if (answerLoading) referenceContent = <LoadingState label="Загружаем ответ" />;
+    else if (answerError) referenceContent = <ErrorState title="Ответ не загрузился" message={answerError} />;
     else if (answerSlot?.answer?.is_active) {
       const answer = answerSlot.answer;
       const source = answer.source_label ? `Источник: ${answer.source_label}` : answer.origin_kind === "manual" ? "Добавлен вручную" : "Импортирован";
       const match = answer.match_method === "exact_title"
         ? `Сопоставлен по заголовку${answer.matched_title ? `: ${answer.matched_title}` : ""}`
-        : "Сопоставлен вручную";
+        : answer.match_method === "ai_section"
+          ? "Размечен моделью"
+          : "Сопоставлен вручную";
       const media: ReferenceAnswerMedia[] = [
         ...sourceBindings
           .filter((binding) => ["image", "table"].includes(binding.element_kind))
@@ -675,8 +768,6 @@ export function ProjectWorkspace() {
       const linkedSourceGroups = answerScanGroups(answer, sourceBindings);
       referenceContent = (
         <article className="workspace-reference-answer">
-          <header><ReferenceAnswerBadge status={answerSlot.status} /><span>{source} · {match}</span></header>
-          <h2>{selected.title}</h2>
           <SegmentedTabs
             className="workspace-reference-mode"
             label="Как показывать ответ"
@@ -707,15 +798,21 @@ export function ProjectWorkspace() {
               sourceMaterialId={answer.source_material_id}
             />
           )}
-          <Link to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть и изменить эталон</Link>
+          <footer className="workspace-reference-footer">
+            <Link to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть и изменить ответ</Link>
+            <div className="workspace-reference-meta">
+              <ReferenceAnswerBadge status={answerSlot.status} />
+              <span>{source} · {match}</span>
+            </div>
+          </footer>
         </article>
       );
     } else if (sourceBindings.length > 0) {
       referenceContent = (
         <div className="workspace-empty-copy is-answer-reference">
           <BookOpen size={26} />
-          <h2>Для вопроса есть связанные материалы, но нет эталонного ответа</h2>
-          <p>Откройте «Ответы», чтобы создать или сопоставить эталон.</p>
+          <h2>Для вопроса есть связанные материалы, но нет ответа</h2>
+          <p>Откройте «Ответы», чтобы создать или сопоставить ответ.</p>
           <Link className="secondary-button" to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть ответы</Link>
         </div>
       );
@@ -724,8 +821,8 @@ export function ProjectWorkspace() {
         <div className="workspace-empty-copy is-answer-reference">
           <BookOpen size={26} />
           <h2>Ответ пока не найден</h2>
-          <p>Добавьте эталон вручную или импортируйте общий текст с ответами.</p>
-          <Link className="secondary-button" to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть эталоны</Link>
+          <p>Добавьте ответ вручную или импортируйте общий текст с ответами.</p>
+          <Link className="secondary-button" to={`/projects/${projectId}/coverage-map?topic=${selected.id}`}>Открыть ответы</Link>
         </div>
       );
     }
@@ -748,42 +845,53 @@ export function ProjectWorkspace() {
     if (!selected) {
       return <div className="workspace-empty-copy"><FileText size={26} /><h2>Выберите тему</h2><p>Материал появится после выбора темы слева.</p></div>;
     }
+    // Привязки файла эталонных ответов (mechanism "answers_file") уже показаны
+    // во вкладке «Ответ» как страницы/медиа эталона — здесь это другая сущность.
+    const topicSourceBindings = sourceBindings.filter((binding) => binding.mechanism !== "answers_file");
+    // Выдача группируется по странице: «стр. 71–75» из блочной группировки не
+    // отвечает на вопрос, где именно совпало, и открывать там нечего.
+    const visiblePlaces = toSourcePlaces(sourceResults)
+      .filter((place) => !hiddenPlaces.has(place.key));
+    const boundFragmentIds = new Set(topicSourceBindings.map((binding) => binding.fragment_id));
+    const isPlaceBound = (place: SourcePlace) => place.fragmentIds
+      .every((fragmentId) => boundFragmentIds.has(fragmentId));
+    const previewPlace = previewKey
+      ? visiblePlaces.find((place) => place.key === previewKey) ?? null
+      : null;
     return (
       <div className="workspace-source-tab">
-        {sourceNotice && <p className="workspace-source-tab-notice" role="status">{sourceNotice}</p>}
-        {sourceBindingsLoading ? <LoadingState label="Загружаем привязки" /> : sourceBindings.length > 0 ? (
-          <ul className="workspace-source-tab-list">
-            {sourceBindings.map((binding) => (
-              <li key={binding.id}>
-                <Link to={`/projects/${projectId}/materials/${binding.material_id}?page=${binding.page_number}&focus=${binding.fragment_id}`}>
-                  <p>{binding.text.length > 160 ? `${binding.text.slice(0, 160)}…` : binding.text}</p>
-                  <small>{binding.material_name} · стр. {binding.page_number}</small>
-                </Link>
-                <QualityBadge quality={binding.quality} />
-                <IconButton
-                  label="Это не по теме"
-                  disabled={sourceBusy}
-                  onClick={() => void unbindSourceBinding(binding.id)}
-                >
-                  <Unlink size={14} />
-                </IconButton>
-              </li>
-            ))}
-          </ul>
+        {sourceBindingsLoading ? <LoadingState label="Загружаем привязки" /> : topicSourceBindings.length > 0 ? (
+          <BoundSourceReader
+            projectId={projectId}
+            nodeId={selected.id}
+            bindings={topicSourceBindings}
+            busy={sourceBusy}
+            onUnbind={(bindingId) => void unbindSourceBinding(bindingId)}
+          />
         ) : (
           <div className="workspace-empty-copy">
             <FileText size={26} />
             <h2>Для этого вопроса материал ещё не привязан</h2>
-            <p>Найдите подходящий фрагмент в материалах проекта или откройте Материалы, чтобы привязать вручную.</p>
+            <p>Подходящие места найдены ниже — привяжите нужное. Или откройте Материалы, чтобы выбрать фрагмент вручную.</p>
             <div className="workspace-source-tab-empty-actions">
-              <Button onClick={() => sourceSearchInput.current?.focus()}>Найти в материалах</Button>
+              <Button
+                disabled={sourceSearching || !sourceQuery.trim()}
+                onClick={() => selected && void runSourceSearch(selected.id, sourceQuery)}
+              >
+                Искать ещё раз
+              </Button>
               <Link className="secondary-button" to={`/projects/${projectId}/materials`}>Открыть материалы</Link>
             </div>
           </div>
         )}
+        {topicSourceBindings.length > 0 && (
+          <p className="workspace-source-tab-search-lead">
+            Найти и привязать ещё
+          </p>
+        )}
         <form
           className="workspace-source-tab-search"
-          onSubmit={(event) => { event.preventDefault(); void runSourceSearch(); }}
+          onSubmit={(event) => { event.preventDefault(); if (selected) void runSourceSearch(selected.id, sourceQuery); }}
         >
           <label>
             <Search size={14} />
@@ -798,24 +906,43 @@ export function ProjectWorkspace() {
           </label>
           <Button type="submit" disabled={sourceSearching || !sourceQuery.trim()}>Найти</Button>
         </form>
+        {sourceTerms.length > 0 && !sourceSearching && (
+          <p className="workspace-source-tab-terms">
+            Искали по: {sourceTerms.join(" · ")}
+          </p>
+        )}
+        {sourceNotice && (
+          <p className="workspace-source-tab-notice" role="status">{sourceNotice}</p>
+        )}
         {sourceSearching && <LoadingState label="Ищем" />}
         {sourceSearched && !sourceSearching && (
-          sourceResults.length > 0 ? (
+          visiblePlaces.length > 0 ? (
+            <>
+            <p className="workspace-source-tab-count" role="status">
+              Найдено мест: {visiblePlaces.length}
+            </p>
             <ul className="workspace-source-tab-results">
-              {sourceResults.map((result) => {
-                const alreadyBound = result.already_bound
-                  || sourceBindings.some((binding) => result.fragment_ids.includes(binding.fragment_id));
+              {visiblePlaces.map((place) => {
+                const alreadyBound = isPlaceBound(place);
                 return (
-                  <li key={result.fragment_ids.join(",")}>
-                    <p>{renderHighlighted(result.text, result.highlights)}</p>
-                    <small>
-                      {result.material_name} · стр. {result.page_from === result.page_to ? result.page_from : `${result.page_from}–${result.page_to}`}
-                    </small>
-                    <QualityBadge quality={result.quality} />
+                  <li key={place.key}>
+                    <button
+                      type="button"
+                      className="workspace-source-tab-result-copy"
+                      onClick={() => setPreviewKey(place.key)}
+                    >
+                      <p>{renderHighlighted(place.text, place.highlights)}</p>
+                      <small>
+                        {place.materialName} · стр. {place.pageNumber}
+                        {" · "}
+                        {place.fragmentIds.length} совпад.
+                      </small>
+                    </button>
+                    <QualityBadge quality={place.quality} />
                     <Button
                       variant="secondary"
                       disabled={alreadyBound || sourceBusy}
-                      onClick={() => void bindSourceCandidate(result)}
+                      onClick={() => void bindSourcePlace(place)}
                     >
                       {alreadyBound ? "Уже привязано" : "Привязать"}
                     </Button>
@@ -823,7 +950,23 @@ export function ProjectWorkspace() {
                 );
               })}
             </ul>
+            </>
           ) : <p className="workspace-list-empty">Ничего не найдено.</p>
+        )}
+        {previewPlace && selected && (
+          <SourcePreviewDialog
+            projectId={projectId}
+            node={{ id: selected.id, number: selected.number, title: selected.title }}
+            places={visiblePlaces}
+            activeKey={previewPlace.key}
+            terms={sourceTerms}
+            bindings={topicSourceBindings}
+            onActiveKeyChange={setPreviewKey}
+            onBound={addSourceBindings}
+            onUnbound={dropSourceBindings}
+            onHidePlace={(key) => setHiddenPlaces((current) => new Set(current).add(key))}
+            onClose={() => setPreviewKey(null)}
+          />
         )}
       </div>
     );
@@ -921,12 +1064,14 @@ export function ProjectWorkspace() {
   const deadline = daysUntil(detail.project.deadline);
   const editorGroups = layout.groups;
   const editorWeights = layout.group_weights;
-  const editorColumns = editorGroups
-    .map((_, index) => `${editorWeights[index] ?? 1}fr${index < editorGroups.length - 1 ? " 10px" : ""}`)
-    .join(" ");
+  const editorColumns = editorGroups.length === 1
+    ? "minmax(0, 1fr)"
+    : editorGroups
+      .map((_, index) => `minmax(0, ${editorWeights[index] ?? 1}fr)${index < editorGroups.length - 1 ? " 10px" : ""}`)
+      .join(" ");
 
   return (
-    <div className={`project-workspace ${textbook ? "is-textbook" : "is-exam"} ${studioExpanded ? "is-studio-expanded" : "is-studio-collapsed"}`} style={{ "--workspace-tree-width": `${layout.tree_width}px` } as CSSProperties}>
+    <div className={`project-workspace ${textbook ? "is-textbook" : "is-exam"}`} style={{ "--workspace-tree-width": `${layout.tree_width}px` } as CSSProperties}>
       <aside className="workspace-tree-panel">
         <header className="workspace-tree-head"><div className={`workspace-tree-title ${textbook ? "is-textbook" : ""}`}><Link className="workspace-back-button" to="/projects" aria-label="К проектам"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong>{deadline !== null && <span className={`workspace-project-deadline is-${deadlineTone(deadline)}`} aria-label={deadline >= 0 ? `${deadline} дней до дедлайна` : `Дедлайн прошёл ${Math.abs(deadline)} дней назад`}><b>{deadline >= 0 ? deadline : Math.abs(deadline)}</b><small>{deadline >= 0 ? "дней" : "прошло"}</small></span>}</div></header>
         <div className="workspace-tree-tools"><label className="workspace-tree-search"><Search size={15} /><span className="sr-only">{textbook ? "Поиск по темам" : "Поиск по вопросам"}</span><input type="search" placeholder={textbook ? "Найти тему" : "Найти вопрос"} value={query} onChange={(event) => setQuery(event.target.value)} />{query && <button type="button" onClick={() => setQuery("")} aria-label="Очистить поиск"><X size={14} /></button>}</label><Tooltip label="Фильтры появятся вместе с разбором материалов"><span><IconButton label="Фильтры" disabled><Filter size={15} /></IconButton></span></Tooltip></div>
@@ -945,15 +1090,15 @@ export function ProjectWorkspace() {
       />
 
       <main className="workspace-main">
-        <header className="workspace-question-bar"><div className="workspace-question-heading"><h1>{selected.title}</h1></div><div className="workspace-question-actions">{(textbook || (!sourceBindingsLoading && sourceBindings.length === 0)) && <div className={`workspace-material-notice ${textbook ? "is-textbook" : ""}`}><BookOpen size={15} /><span>{textbook ? "Материал появится после разбора" : "Ответы ещё не добавлены"}</span></div>}<div className="workspace-question-nav" aria-label="Переход между темами"><IconButton label="Предыдущая тема" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><ChevronLeft size={15} /></IconButton><span>{selectedIndex + 1} из {studyNodes.length}</span><IconButton label="Следующая тема" disabled={selectedIndex >= studyNodes.length - 1} onClick={() => selectRelative(1)}><ChevronRight size={15} /></IconButton></div><IconButton label="Разделить рабочую область" disabled={editorGroups.length >= 3} onClick={addPanel}><PanelsTopLeft size={15} /></IconButton></div></header>
-        <div className="workspace-save-status" aria-live="polite">{saveError && <p className="inline-error" role="alert">{saveError}</p>}</div>
+        <header className="workspace-question-bar"><div className="workspace-question-heading"><h1>{selected.title}</h1></div><div className="workspace-question-actions">{(textbook || (!sourceBindingsLoading && sourceBindings.length === 0)) && <div className={`workspace-material-notice ${textbook ? "is-textbook" : ""}`}><BookOpen size={15} /><span>{textbook ? "Материал появится после разбора" : "Ответы ещё не добавлены"}</span></div>}{!textbook && <StudyTimer study={study} />}<div className="workspace-question-nav" aria-label="Переход между темами"><IconButton label="Предыдущая тема" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><ChevronLeft size={15} /></IconButton><span>{selectedIndex + 1} из {studyNodes.length}</span><IconButton label="Следующая тема" disabled={selectedIndex >= studyNodes.length - 1} onClick={() => selectRelative(1)}><ChevronRight size={15} /></IconButton></div><IconButton label="Разделить рабочую область" disabled={editorGroups.length >= 3} onClick={addPanel}><PanelsTopLeft size={15} /></IconButton></div></header>
+        <div className="workspace-save-status">        <StudyQueue projectId={projectId} nodeId={selected?.id ?? null} onSelect={id => void selectNode(id)} />
+<div aria-live="polite">{saveError && <p className="inline-error" role="alert">{saveError}</p>}</div></div>
         <div className="workspace-editor-grid" ref={editorGridRef} style={{ gridTemplateColumns: editorColumns }}>
           {editorGroups.map((group, index) => {
             return <div className="workspace-editor-fragment" key={group.id}><section className={`workspace-editor-group ${activeGroupId === group.id ? "is-active" : ""}`.trim()} aria-label={`Рабочая зона ${index + 1}`} onClick={() => setActiveGroupId(group.id)}><div className="workspace-tabbar"><div className="workspace-tabs" role="tablist" aria-label={`Вкладки рабочей зоны ${index + 1}`}>{group.tabs.map((tab) => { const TabIcon = TAB_ICONS[tab]; const label = tabLabel(tab, Boolean(textbook)); return <div className={`workspace-tab ${group.active_tab === tab ? "is-active" : ""}`.trim()} key={tab}><button type="button" role="tab" aria-selected={group.active_tab === tab} onClick={() => setActiveTab(group.id, tab)}><TabIcon size={14} /><span>{label}</span></button><button type="button" className="workspace-tab-close" aria-label={`Закрыть вкладку «${label}»`} onClick={() => closeTab(group.id, tab)}><X size={13} /></button></div>; })}</div><div className="workspace-tabbar-actions">{openMenu(group.id, true)}{editorGroups.length > 1 && group.tabs.length === 0 && <IconButton label="Закрыть пустую рабочую зону" onClick={() => closePanel(group.id)}><PanelRightClose size={15} /></IconButton>}</div></div><div className="workspace-panel-content">{group.active_tab ? renderTabContent(group.active_tab) : <div className="workspace-empty-panel"><Plus size={28} /><h2>Рабочая зона пока пустая</h2><p>{textbook ? "Откройте здесь источник, конспект, историю или чат." : "Откройте здесь ответ, материал, конспект или чат."}</p><div>{openMenu(group.id)}{editorGroups.length > 1 && <Button variant="ghost" onClick={() => closePanel(group.id)}>Закрыть зону</Button>}</div></div>}</div></section>{index < editorGroups.length - 1 && <PanelResizeHandle className="workspace-panel-resize" label={`Изменить ширину рабочих зон ${index + 1} и ${index + 2}`} value={((layout.group_weights[index] ?? 1) / ((layout.group_weights[index] ?? 1) + (layout.group_weights[index + 1] ?? 1))) * 100} min={20} max={80} onDelta={(delta) => resizePanels(index, delta)} onReset={() => updateLayout((current) => ({ ...current, group_weights: current.groups.map(() => 1) }))} />}</div>;
           })}
         </div>
       </main>
-      <StudioPanel expanded={studioExpanded} onExpandedChange={setStudioExpanded} modelsEnabled={false} sourceCount={null} topicTitle={selected.title} />
     </div>
   );
 }

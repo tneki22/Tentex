@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { MaterialFragmentRead } from "../../../api/materials";
+import { highlight } from "./StructuredPage";
 
 /** «01:02:03» для длинного и «12:34» для короткого — часы без нужды не пишем. */
 export function formatTime(seconds: number): string {
@@ -15,7 +16,7 @@ interface TimedTranscriptProps {
   fragments: MaterialFragmentRead[];
   /** Текущее время воспроизведения: по нему подсвечивается сегмент. */
   currentTime?: number;
-  query?: string;
+  terms?: string[];
   onSeek(seconds: number): void;
   emptyHint?: string;
 }
@@ -27,7 +28,7 @@ interface TimedTranscriptProps {
 export function TimedTranscript({
   fragments,
   currentTime = 0,
-  query = "",
+  terms = [],
   onSeek,
   emptyHint = "У этого источника пока нет расшифровки.",
 }: TimedTranscriptProps) {
@@ -67,24 +68,10 @@ export function TimedTranscript({
             onClick={() => onSeek(fragment.time_from ?? 0)}
           >
             <span className="timed-stamp">{formatTime(fragment.time_from ?? 0)}</span>
-            <span className="timed-text">{highlightSegment(fragment.text, query)}</span>
+            <span className="timed-text">{highlight(fragment.text, terms)}</span>
           </button>
         );
       })}
     </div>
-  );
-}
-
-function highlightSegment(text: string, query: string) {
-  const needle = query.trim().toLocaleLowerCase("ru");
-  if (!needle) return text;
-  const index = text.toLocaleLowerCase("ru").indexOf(needle);
-  if (index < 0) return text;
-  return (
-    <>
-      {text.slice(0, index)}
-      <mark>{text.slice(index, index + needle.length)}</mark>
-      {text.slice(index + needle.length)}
-    </>
   );
 }

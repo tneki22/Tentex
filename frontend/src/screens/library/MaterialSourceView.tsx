@@ -5,6 +5,7 @@ import {
   libraryFragmentAssetUrl,
   libraryPageImageUrl,
   librarySourceUrl,
+  PARSER_MODE_TITLES,
   type LibraryMaterialDetailRead,
   type MaterialPageRead,
   type ParserMode,
@@ -48,7 +49,7 @@ interface MaterialSourceViewProps {
   page: MaterialPageRead | null;
   pageNumber: number;
   revision: number | null;
-  query: string;
+  terms: string[];
   zoom: number;
   showRegions: boolean;
   focusedFragmentId: string | null;
@@ -68,7 +69,7 @@ export function MaterialSourceView({
   page,
   pageNumber,
   revision,
-  query,
+  terms,
   zoom,
   showRegions,
   focusedFragmentId,
@@ -94,6 +95,17 @@ export function MaterialSourceView({
   }, [currentTime, kind]);
 
   switch (kind) {
+    // Typst показывается страницами собранного PDF, а не отдельным <iframe>:
+    // так работают и масштаб, и области фрагментов, и переходы по оглавлению.
+    case "typst":
+      if (!material.typst?.has_rendered_pdf) {
+        return (
+          <EmptyState title="Собранный документ пока недоступен">
+            Tentex собирает проект или ждёт недостающий файл.
+          </EmptyState>
+        );
+      }
+    // fallthrough
     case "pdf":
     case "image":
       return (
@@ -131,7 +143,7 @@ export function MaterialSourceView({
               <StructuredPage
                 showOcrReview={material.parser_mode !== "fast"}
                 page={page}
-                query={query}
+                terms={terms}
                 assetUrl={(fragmentId) => libraryFragmentAssetUrl(material.id, fragmentId)}
                 focusedFragmentId={focusedFragmentId}
                 className="is-document"
@@ -200,7 +212,7 @@ interface MaterialTextViewProps {
   material: LibraryMaterialDetailRead;
   parserMode?: ParserMode | null;
   page: MaterialPageRead | null;
-  query: string;
+  terms: string[];
   focusedFragmentId: string | null;
   currentTime: number;
   onSeek: (seconds: number) => void;
@@ -219,7 +231,7 @@ export function MaterialTextView({
   material,
   parserMode = material.parser_mode,
   page,
-  query,
+  terms,
   focusedFragmentId,
   currentTime,
   onSeek,
@@ -231,13 +243,10 @@ export function MaterialTextView({
   // Фотографии фрагментов есть только там, где страница — растр (PDF, скан).
   const canShowPhotos = allowSourcePhotos
     && (material.presentation_kind === "pdf" || material.presentation_kind === "image");
-  // По умолчанию «Учебник» показывает фото с расшифровкой под ними; выбор запоминается.
-  const [showPhotos, setShowPhotos] = useState<boolean>(() => {
-    const stored = localStorage.getItem(SOURCE_PHOTO_KEY);
-    if (stored === "on") return true;
-    if (stored === "off") return false;
-    return parserMode === "textbook";
-  });
+  // Фото под расшифровкой по умолчанию скрыты; выбор запоминается.
+  const [showPhotos, setShowPhotos] = useState<boolean>(
+    () => localStorage.getItem(SOURCE_PHOTO_KEY) === "on",
+  );
 
   function togglePhotos(next: boolean) {
     setShowPhotos(next);
@@ -263,7 +272,7 @@ export function MaterialTextView({
         <TimedTranscript
           fragments={page.fragments}
           currentTime={currentTime}
-          query={query}
+          terms={terms}
           onSeek={(seconds) => {
             if (material.presentation_kind === "youtube" && material.source_url) {
               window.open(
@@ -279,21 +288,36 @@ export function MaterialTextView({
       </div>
     );
   }
+  // У текстового слоя (`native`) распознавания не было вовсе — режим версии
+  // тут ни при чём, даже если сама версия сделана «Облаком»: тем режимом
+  // читались только отсканированные страницы. У страницы, перенесённой в
+  // версию без переразбора (частичный запуск), свой режим важнее режима
+  // версии — так соседняя пересобранная страница не подменяет его собой.
+  const pageMode = page?.quality === "native" ? null : (page?.parser_mode ?? parserMode ?? null);
   return (
     <div className="viewer-pane-scroll" style={{ "--viewer-text-zoom": zoom } as CSSProperties}>
-      {canShowPhotos && (
+      {/* Режим написан один раз наверху, а не подписью под каждым блоком:
+          он один на всю страницу, и повторять его нечего. */}
+      {(parserMode || canShowPhotos) && (
         <div className="viewer-text-controls">
-          <Switch
-            label="Фото фрагментов с расшифровкой"
-            checked={showPhotos}
-            onCheckedChange={togglePhotos}
-          />
+          <span className="viewer-text-mode">
+            {pageMode
+              ? <>Распознано режимом <b>«{PARSER_MODE_TITLES[pageMode]}»</b></>
+              : "Текст без распознавания"}
+          </span>
+          {canShowPhotos && (
+            <Switch
+              label="Фото фрагментов с расшифровкой"
+              checked={showPhotos}
+              onCheckedChange={togglePhotos}
+            />
+          )}
         </div>
       )}
       <StructuredPage
         showOcrReview={parserMode !== "fast"}
         page={page}
-        query={query}
+        terms={terms}
         assetUrl={(fragmentId) => libraryFragmentAssetUrl(material.id, fragmentId)}
         focusedFragmentId={focusedFragmentId}
         pageImageUrl={canShowPhotos ? libraryPageImageUrl(material.id, page.page_number) : undefined}

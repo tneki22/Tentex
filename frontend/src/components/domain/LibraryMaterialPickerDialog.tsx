@@ -23,7 +23,7 @@ import {
 const PURPOSE_OPTIONS: Array<{ value: MaterialPurpose; label: string; description: string }> = [
   { value: "study_source", label: "Учебный источник", description: "Материал, по которому занимаются" },
   { value: "exam_structure", label: "Список вопросов", description: "Из него собирается программа экзамена" },
-  { value: "reference_answers", label: "Эталонные ответы", description: "Такой файл у проекта один" },
+  { value: "reference_answers", label: "Ответы", description: "Такой файл у проекта один" },
 ];
 
 const ROLE_OPTIONS: Array<{ value: SourceRole; label: string }> = [
@@ -38,6 +38,7 @@ const STATUS_LABEL: Record<LibraryMaterialRead["status"], string> = {
   queued: "В очереди",
   processing: "Обрабатывается",
   paused: "На паузе",
+  needs_input: "Нужны файлы",
   failed: "Ошибка обработки",
 };
 
@@ -47,6 +48,7 @@ const SOURCE_LABEL: Record<LibraryMaterialRead["source_kind"], string> = {
   url: "Веб-страница",
   youtube: "YouTube",
   audio: "Аудио",
+  typst: "Typst",
 };
 
 const STATUS_ORDER: Record<LibraryMaterialRead["status"], number> = {
@@ -54,6 +56,7 @@ const STATUS_ORDER: Record<LibraryMaterialRead["status"], number> = {
   processing: 1,
   queued: 1,
   paused: 1,
+  needs_input: 2,
   ready_to_process: 2,
   failed: 3,
 };
@@ -354,7 +357,7 @@ export function LibraryMaterialPickerDialog({
       <ConfirmDialog
         open={replaceOpen}
         onOpenChange={setReplaceOpen}
-        title="Заменить файл эталонных ответов?"
+        title="Заменить файл с ответами?"
         confirmLabel="Заменить"
         onConfirm={async () => {
           if (!onReplaceAnswers || !(await onReplaceAnswers())) throw new Error("replacement_cancelled");
@@ -362,10 +365,10 @@ export function LibraryMaterialPickerDialog({
         }}
       >
         <p>
-          Сейчас эталонные ответы берутся из «{answersMaterial?.display_name}».
+          Сейчас ответы берутся из «{answersMaterial?.display_name}».
           Прежний файл останется в проекте как учебный источник.
         </p>
-        <p>Уже заполненные эталоны и привязки сохранятся.</p>
+        <p>Уже заполненные ответы и привязки сохранятся.</p>
       </ConfirmDialog>
     </>
   );

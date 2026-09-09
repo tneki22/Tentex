@@ -19,10 +19,13 @@ from uuid import UUID, uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.background.schemas import BackgroundJobStartRead
 from app.bindings import answer_sections
 from app.marker_labels import material_image_label
 from app.materials.schemas import ExamMaterialSlot, MaterialPurpose
 from app.models import (
+    BackgroundJob,
+    BackgroundJobKind,
     Binding,
     BindingMechanism,
     BindingStatus,
@@ -39,6 +42,7 @@ from app.models import (
     ProjectStatus,
     ReferenceAnswer,
     ReferenceAnswerMatchMethod,
+    ReferenceAnswerOrigin,
     WorkspaceVariant,
     utc_now,
 )
@@ -395,6 +399,163 @@ def _fill_answers(
     return outcomes
 
 
+def _snapshot_answers(
+    session: Session, project_id: UUID, node_ids: set[UUID]
+) -> list[dict]:
+    """Состояние эталонов до автопривязки — чтобы undo мог вернуть не только
+
+    привязки, но и переписанный текст. Отсутствие ответа тоже снимок: undo
+    обязан удалить эталон, которого до операции не было.
+    """
+    if not node_ids:
+        return []
+    existing = {
+        answer.program_node_id: answer
+        for answer in session.scalars(
+            select(ReferenceAnswer).where(
+                ReferenceAnswer.project_id == project_id,
+                ReferenceAnswer.program_node_id.in_(node_ids),
+            )
+        )
+    }
+    snapshots: list[dict] = []
+    for node_id in node_ids:
+        answer = existing.get(node_id)
+        if answer is None:
+            snapshots.append({"node_id": str(node_id), "absent": True})
+            continue
+        snapshots.append(
+            {
+                "node_id": str(node_id),
+                "text": answer.text,
+                "origin_kind": answer.origin_kind.value,
+                "match_method": answer.match_method.value,
+                "matched_title": answer.matched_title,
+                "is_confirmed": answer.is_confirmed,
+                "is_active": answer.is_active,
+                "revision": answer.revision,
+                "source_label": answer.source_label,
+                "source_material_id": (
+                    str(answer.source_material_id) if answer.source_material_id else None
+                ),
+                "source_page_from": answer.source_page_from,
+                "source_page_to": answer.source_page_to,
+            }
+        )
+    return snapshots
+
+
+def apply_answers_link_undo(session: Session, project_id: UUID, data: dict) -> None:
+    """Откатить и привязки, и текст эталонов из снимка в `inverse_data`."""
+    now = utc_now()
+    for raw_id in data.get("binding_ids", []):
+        binding = session.get(Binding, UUID(raw_id))
+        if binding is None or binding.project_id != project_id:
+            raise ProjectConflictError(
+                "Привязка для отмены не найдена", code="binding_undo_missing"
+            )
+        binding.status = BindingStatus.REMOVED
+        binding.updated_at = now
+    for snapshot in data.get("answers", []):
+        node_id = UUID(snapshot["node_id"])
+        answer = session.get(ReferenceAnswer, (project_id, node_id))
+        if snapshot.get("absent"):
+            if answer is not None:
+                session.delete(answer)
+            continue
+        source_material_id = (
+            UUID(snapshot["source_material_id"]) if snapshot["source_material_id"] else None
+        )
+        if answer is None:
+            session.add(
+                ReferenceAnswer(
+                    project_id=project_id,
+                    program_node_id=node_id,
+                    text=snapshot["text"],
+                    origin_kind=ReferenceAnswerOrigin(snapshot["origin_kind"]),
+                    match_method=ReferenceAnswerMatchMethod(snapshot["match_method"]),
+                    matched_title=snapshot["matched_title"],
+                    is_confirmed=snapshot["is_confirmed"],
+                    is_active=snapshot["is_active"],
+                    revision=snapshot["revision"],
+                    source_label=snapshot["source_label"],
+                    source_material_id=source_material_id,
+                    source_page_from=snapshot["source_page_from"],
+                    source_page_to=snapshot["source_page_to"],
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            continue
+        answer.text = snapshot["text"]
+        answer.origin_kind = ReferenceAnswerOrigin(snapshot["origin_kind"])
+        answer.match_method = ReferenceAnswerMatchMethod(snapshot["match_method"])
+        answer.matched_title = snapshot["matched_title"]
+        answer.is_confirmed = snapshot["is_confirmed"]
+        answer.is_active = snapshot["is_active"]
+        answer.revision = snapshot["revision"]
+        answer.source_label = snapshot["source_label"]
+        answer.source_material_id = source_material_id
+        answer.source_page_from = snapshot["source_page_from"]
+        answer.source_page_to = snapshot["source_page_to"]
+        answer.updated_at = now
+
+
+def apply_sections(
+    session: Session,
+    project_id: UUID,
+    material: Material,
+    label: str,
+    nodes: list[ProgramNode],
+    sections: list[_Section],
+    *,
+    target_title: str | None = None,
+) -> AnswersLinkResult:
+    """Привязать уже определённые разделы и заполнить эталоны — общий хвост
+
+    для разрешения неоднозначного заголовка и для применения плана,
+    размеченного моделью (срез F, ai_answer_sections). Оба пути добавляют
+    привязки к уже существующим, а не пересобирают файл целиком: в отличие от
+    `iter_link_answers_material`, здесь нет `_clear_answer_bindings` — иначе
+    заявка на один раздел стирала бы все остальные, уже привязанные ранее.
+    """
+    answer_node_ids = {
+        node_id
+        for section in sections
+        if section.bindable_fragments()
+        for node_id in section.node_ids
+    }
+    answers_before = _snapshot_answers(session, project_id, answer_node_ids)
+
+    linked_fragments = 0
+    created_ids: list[UUID] = []
+    for section in sections:
+        section_linked, section_created = _bind_section(session, project_id, material, section)
+        linked_fragments += section_linked
+        created_ids.extend(section_created)
+
+    outcomes = _fill_answers(session, project_id, material, label, sections)
+
+    if created_ids:
+        session.add(
+            ProjectActionLog(
+                project_id=project_id,
+                action_type="answers_link",
+                phase="active",
+                payload_version=1,
+                target_title=target_title or label,
+                inverse_data={
+                    "binding_ids": [str(value) for value in created_ids],
+                    "answers": answers_before,
+                },
+            )
+        )
+    session.flush()
+    return _build_link_result(
+        session, nodes, sections, linked_fragments=linked_fragments, outcomes=outcomes
+    )
+
+
 def _build_link_result(
     session: Session,
     nodes: list[ProgramNode],
@@ -553,6 +714,14 @@ def iter_link_answers_material(
         phase_total=len(nodes),
     )
 
+    answer_node_ids = {
+        node_id
+        for section in sections
+        if section.bindable_fragments()
+        for node_id in section.node_ids
+    }
+    answers_before = _snapshot_answers(session, project_id, answer_node_ids)
+
     _clear_answer_bindings(session, project_id, material.id)
     linked_fragments = 0
     created_ids: list[UUID] = []
@@ -587,11 +756,14 @@ def iter_link_answers_material(
         session.add(
             ProjectActionLog(
                 project_id=project_id,
-                action_type="binding_create",
+                action_type="answers_link",
                 phase="active",
                 payload_version=1,
                 target_title=label,
-                inverse_data={"binding_ids": [str(value) for value in created_ids]},
+                inverse_data={
+                    "binding_ids": [str(value) for value in created_ids],
+                    "answers": answers_before,
+                },
             )
         )
     session.flush()
@@ -644,6 +816,30 @@ def link_answers_material(
     return result
 
 
+def start_link_answers(
+    session: Session, project_id: UUID, material_id: UUID
+) -> BackgroundJobStartRead:
+    """Поставить привязку ответов в очередь вместо синхронного ожидания (Ш4 плана).
+
+    В отличие от ролей ИИ здесь нет предпросмотра стоимости: `link_answers_material`
+    не обращается к шлюзу моделей вовсе, это локальный расчёт по заголовкам —
+    достаточно синхронной проверки применимости перед постановкой в очередь.
+    """
+    _require_answers_material(session, project_id, material_id)
+    session.rollback()
+    with session.begin():
+        job = BackgroundJob(
+            kind=BackgroundJobKind.LINK_ANSWERS,
+            project_id=project_id,
+            material_id=material_id,
+            checkpoint={},
+        )
+        session.add(job)
+        session.flush()
+        job_id = job.id
+    return BackgroundJobStartRead(job_id=job_id)
+
+
 def resolve_answers_heading(
     session: Session,
     project_id: UUID,
@@ -678,29 +874,6 @@ def resolve_answers_heading(
         header_fragment_ids=set(detected.header_fragment_ids),
     )
     sections = _expand_duplicate_sections(nodes, [section])
-    linked_fragments = 0
-    created_ids: list[UUID] = []
-    for item in sections:
-        item_linked, item_created = _bind_section(session, project_id, material, item)
-        linked_fragments += item_linked
-        created_ids.extend(item_created)
-    outcomes = _fill_answers(session, project_id, material, label, sections)
-    if created_ids:
-        session.add(
-            ProjectActionLog(
-                project_id=project_id,
-                action_type="binding_create",
-                phase="active",
-                payload_version=1,
-                target_title=node.title,
-                inverse_data={"binding_ids": [str(value) for value in created_ids]},
-            )
-        )
-    session.flush()
-    return _build_link_result(
-        session,
-        nodes,
-        sections,
-        linked_fragments=linked_fragments,
-        outcomes=outcomes,
+    return apply_sections(
+        session, project_id, material, label, nodes, sections, target_title=node.title
     )

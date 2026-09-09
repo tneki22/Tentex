@@ -7,8 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
+from app.background.schemas import BackgroundJobStartRead
 from app.db import get_session
-from app.materials import ai_cleanup, library, service
+from app.materials import ai_cleanup, library, service, typst
 from app.materials.schemas import (
     ExamCompositeDraftImportResult,
     ExamCompositeDraftImportWrite,
@@ -37,8 +38,11 @@ from app.materials.schemas import (
     ProcessingStart,
     SourceRefreshResult,
     TextMaterialCreate,
+    TypstBuildWrite,
+    TypstStartRead,
 )
-from app.models import SourceRole
+from app.materials.storage import material_path
+from app.models import SourceRole, TypstMaterial
 from app.projects.errors import ProjectDomainError
 from app.projects.schemas import ProgramChangeResult
 
@@ -65,6 +69,95 @@ async def upload_library_material(
     session: SessionDependency, file: Annotated[UploadFile, File()]
 ) -> LibraryMaterialDetailRead:
     return await library.create_library_upload(session, file)
+
+
+@router.post(
+    "/materials/typst", response_model=TypstStartRead, status_code=status.HTTP_202_ACCEPTED
+)
+async def upload_typst_material(
+    session: SessionDependency,
+    input_kind: Annotated[str, Form()],
+    file: Annotated[UploadFile | None, File()] = None,
+    files: Annotated[list[UploadFile] | None, File()] = None,
+    paths: Annotated[list[str] | None, Form()] = None,
+    entrypoint: Annotated[str | None, Form()] = None,
+) -> TypstStartRead:
+    """Принимает один `.typ`, дерево браузера или ZIP и сразу ставит сборку."""
+    display_name: str | None = None
+    if input_kind == "zip":
+        if file is None:
+            raise ProjectDomainError(
+                "Для ZIP нужен файл архива", status=422, code="typst_bundle_invalid"
+            )
+        display_name = file.filename
+        bundle = await typst.bundle_zip(file, entrypoint)
+    elif input_kind in {"single", "folder"}:
+        selected = files or ([file] if file else [])
+        selected_paths = paths or ([file.filename or "main.typ"] if file else [])
+        if input_kind == "folder":
+            display_name = typst.folder_display_name(selected_paths)
+        bundle = await typst.bundle_uploads(selected, selected_paths, entrypoint)
+    else:
+        raise ProjectDomainError(
+            "Тип загрузки Typst не поддерживается", status=422, code="typst_bundle_invalid"
+        )
+    _, job = library.create_typst_material(session, bundle, input_kind, display_name)
+    return TypstStartRead(material_id=job.material_id, job_id=job.id)
+
+
+@router.post("/materials/{material_id}/typst/build", response_model=TypstStartRead)
+def build_typst_material(
+    material_id: UUID, command: TypstBuildWrite, session: SessionDependency
+) -> TypstStartRead:
+    """Повторяет сборку после выбора entrypoint или явного разрешения пакетов."""
+    job = library.queue_typst_build(
+        session,
+        material_id,
+        entrypoint=command.entrypoint,
+        download_packages=command.download_packages,
+    )
+    return TypstStartRead(material_id=material_id, job_id=job.id)
+
+
+@router.post("/materials/{material_id}/typst/files", response_model=TypstStartRead)
+async def add_typst_files(
+    material_id: UUID,
+    session: SessionDependency,
+    files: Annotated[list[UploadFile], File()],
+    target_paths: Annotated[list[str], Form()],
+) -> TypstStartRead:
+    """Кладёт недостающие зависимости только под подтверждёнными путями проекта."""
+    row = session.get(TypstMaterial, material_id)
+    material = library.material_or_404(session, material_id)
+    if row is None:
+        raise ProjectDomainError(
+            "Материал не является Typst-проектом", status=422, code="typst_bundle_invalid"
+        )
+    bundle = await typst.merge_bundle_files(
+        material_path(material.storage_path), files, target_paths, row.entrypoint
+    )
+    library.replace_typst_bundle(session, material_id, bundle)
+    job = library.queue_typst_build(
+        session, material_id, entrypoint=row.entrypoint, download_packages=False
+    )
+    return TypstStartRead(material_id=material_id, job_id=job.id)
+
+
+@router.get("/materials/{material_id}/rendered")
+def get_typst_rendered(
+    material_id: UUID, session: SessionDependency, revision: int | None = None
+) -> FileResponse:
+    """Отдаёт полностью успешную сборку Typst: текущую или выбранной версии."""
+    source = library.typst_rendered_source(session, material_id, revision=revision)
+    # inline: PDF открывается в просмотрщике внутри страницы. С заголовком
+    # attachment (умолчание FileResponse при filename) браузер вместо показа
+    # начинал загрузку, и во вкладке «Собранный документ» оставалась пустота.
+    return FileResponse(
+        source.path,
+        media_type=source.media_type,
+        filename=source.filename,
+        content_disposition_type="inline",
+    )
 
 
 @router.post(
@@ -134,9 +227,7 @@ def search_material(
     revision: int | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> LibrarySearchResult:
-    return library.search_library_material(
-        session, material_id, q, revision=revision, limit=limit
-    )
+    return library.search_library_material(session, material_id, q, revision=revision, limit=limit)
 
 
 @router.get("/materials/{material_id}/source")
@@ -215,7 +306,8 @@ async def preflight_library_page_cleanup(
 
 @router.post(
     "/materials/{material_id}/pages/{page_number}/ai-cleanup",
-    response_model=ai_cleanup.CleanupRunRead,
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def run_library_page_cleanup(
     material_id: UUID,
@@ -223,8 +315,8 @@ async def run_library_page_cleanup(
     command: ai_cleanup.CleanupRunWrite,
     session: SessionDependency,
     gateway: GatewayDependency,
-) -> ai_cleanup.CleanupRunRead:
-    return await ai_cleanup.run(session, gateway, None, material_id, page_number, command)
+) -> BackgroundJobStartRead:
+    return await ai_cleanup.start(session, gateway, None, material_id, page_number, command)
 
 
 @router.post(
@@ -240,9 +332,7 @@ def apply_library_page_cleanup(
     return ai_cleanup.apply(session, None, material_id, page_number, command)
 
 
-@router.get(
-    "/materials/{material_id}/fragments/{fragment_id}/asset", response_class=FileResponse
-)
+@router.get("/materials/{material_id}/fragments/{fragment_id}/asset", response_class=FileResponse)
 def get_library_fragment_asset(
     material_id: UUID, fragment_id: UUID, session: SessionDependency
 ) -> FileResponse:
@@ -441,7 +531,8 @@ async def preflight_material_page_cleanup(
 
 @router.post(
     "/projects/{project_id}/materials/{material_id}/pages/{page_number}/ai-cleanup",
-    response_model=ai_cleanup.CleanupRunRead,
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def run_material_page_cleanup(
     project_id: UUID,
@@ -450,8 +541,8 @@ async def run_material_page_cleanup(
     command: ai_cleanup.CleanupRunWrite,
     session: SessionDependency,
     gateway: GatewayDependency,
-) -> ai_cleanup.CleanupRunRead:
-    return await ai_cleanup.run(session, gateway, project_id, material_id, page_number, command)
+) -> BackgroundJobStartRead:
+    return await ai_cleanup.start(session, gateway, project_id, material_id, page_number, command)
 
 
 @router.post(

@@ -1,0 +1,258 @@
+/* Примитивы диаграмм. Порядок блоков — как в src/components/ui/chart. */
+
+.chart {
+  position: relative;
+  width: 100%;
+  min-height: var(--space-6);
+}
+
+.chart svg {
+  display: block;
+  overflow: visible;
+}
+
+/* --- Общие части осей --- */
+
+.chart-baseline {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.chart-grid {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+}
+
+.chart-axis-label {
+  fill: var(--chart-axis);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-target {
+  stroke: var(--chart-plan);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.chart-target-label {
+  fill: var(--muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--faint);
+  font-size: var(--text-sm);
+  pointer-events: none;
+}
+
+/* Значение под курсором показывается строкой, а не всплывашкой поверх фигур:
+   на плотной карточке она перекрывала бы соседние столбцы. */
+.chart-readout {
+  margin: var(--space-2) 0 0;
+  min-height: 1lh;
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- BarChart --- */
+
+.chart-bar {
+  fill: var(--chart-fact);
+  transition: fill var(--ease-fast);
+}
+
+.chart-bar-over {
+  fill: var(--chart-over);
+}
+
+.chart-bar-ghost {
+  fill: none;
+  stroke: var(--accent-edge);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+
+.chart-bar-rest {
+  fill: var(--line-strong);
+}
+
+.chart-bar-group {
+  cursor: default;
+}
+
+.chart-bar-group.is-clickable {
+  cursor: pointer;
+}
+
+.chart-bar-group:hover .chart-bar {
+  fill: var(--accent-hover);
+}
+
+.chart-bar-group.is-current .chart-bar {
+  fill: var(--chart-fact);
+}
+
+/* --- StackedBar --- */
+
+.stacked-bar {
+  display: flex;
+  width: 100%;
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: var(--surface-sunken);
+}
+
+.stacked-bar.is-large {
+  height: var(--space-3);
+}
+
+.stacked-bar i {
+  display: block;
+  height: 100%;
+  transition: width var(--ease);
+}
+
+/* --- LineChart --- */
+
+.chart-line {
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-line.is-dashed {
+  stroke-dasharray: 5 4;
+  opacity: 0.65;
+}
+
+.chart-area {
+  fill: var(--chart-fact-wash);
+  stroke: none;
+}
+
+.chart-ceiling {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.chart-marker {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.chart-marker-label {
+  fill: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.chart-crosshair {
+  stroke: var(--accent-edge);
+  stroke-width: 1;
+}
+
+/* Отставание от экзамена — факт календаря, поэтому клин штрихуется,
+   а вывод всё равно написан словами под графиком. */
+.chart-overrun {
+  fill: color-mix(in srgb, var(--tone-warning) 12%, transparent);
+}
+
+/* --- HeatGrid --- */
+
+.heat-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-2);
+  align-items: start;
+}
+
+.heat-grid-days {
+  display: grid;
+  grid-template-rows: 16px repeat(7, 12px);
+  gap: 3px;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  line-height: 12px;
+}
+
+.heat-grid-weeks {
+  display: flex;
+  gap: var(--space-3);
+  overflow-x: auto;
+  padding-bottom: var(--space-1);
+}
+
+.heat-grid-week {
+  display: grid;
+  grid-template-rows: 16px repeat(7, 12px);
+  gap: 3px;
+}
+
+.heat-cell {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-xs);
+}
+
+.heat-week-label { font-size: 9px; color: var(--faint); white-space: nowrap; }
+.heat-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.heat-cell.is-blank {
+  background: transparent !important;
+}
+
+.heat-cell.is-future {
+  background: transparent !important;
+  border: 1px solid var(--line);
+}
+
+.heat-cell.is-rest {
+  background: transparent !important;
+  border: 1px dashed var(--line-strong);
+}
+
+.heat-cell.is-exam {
+  background: var(--accent-wash-strong) !important;
+  border: 1px solid var(--accent);
+}
+
+.heat-grid-legend {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.heat-grid-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.heat-grid-legend i:first-of-type {
+  margin-left: var(--space-1);
+}
+
+.heat-grid-legend i:last-of-type {
+  margin-right: var(--space-1);
+}
+
+/* Индивидуальные бюджеты видны за фактом даже при нулевом времени. */
+.chart-day-budget { fill: var(--accent-wash); stroke: var(--chart-plan); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-series-legend { display: flex; flex-wrap: wrap; gap: var(--space-5); margin-top: var(--space-3); color: var(--muted); font-size: var(--text-xs); }
+.chart-series-legend span { display: inline-flex; align-items: center; gap: var(--space-2); }
+.chart-series-legend i { width: var(--space-5); border-top: 2px solid; }
+.chart-bar-group:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }

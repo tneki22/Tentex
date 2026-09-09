@@ -5,12 +5,12 @@ import {
   Minimize2,
   Pencil,
   ScanLine,
-  Search,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { IconButton, SegmentedTabs, Tooltip } from "../../ui";
+import { DocumentSearchField } from "./DocumentSearchField";
 import type { MaterialPresentation, MaterialViewMode, ViewerZoom } from "./types";
 
 export interface ViewerToolbarProps {
@@ -72,23 +72,6 @@ export function ViewerToolbar({
   onToggleRegions,
   onToggleFullscreen,
 }: ViewerToolbarProps) {
-  const searchInput = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      const typing = event.target instanceof HTMLElement
-        && (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA");
-      if (typing) return;
-      if (event.key === "/" || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f")) {
-        event.preventDefault();
-        searchInput.current?.focus();
-        searchInput.current?.select();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
   const tabs = versionComparison
     ? [{ value: "compare" as const, label: `${versionComparison.left} ↔ ${versionComparison.right}` }]
     : [
@@ -118,7 +101,7 @@ export function ViewerToolbar({
             >
               <ChevronLeft size={15} />
             </IconButton>
-            <span aria-live="polite">{page} / {pageCount}</span>
+            <PageNumberInput page={page} pageCount={pageCount} onPageChange={onPageChange} />
             <IconButton
               label="Следующая страница"
               disabled={page >= pageCount}
@@ -129,23 +112,13 @@ export function ViewerToolbar({
           </div>
         )}
 
-        <label className={`viewer-search ${searching ? "is-busy" : ""}`.trim()}>
-          <Search size={14} aria-hidden="true" />
-          <span className="sr-only">Найти в материале</span>
-          <input
-            ref={searchInput}
-            type="search"
-            value={query}
-            placeholder="Найти в материале"
-            onChange={(event) => onQueryChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              onQuerySubmit?.(event.shiftKey ? -1 : 1);
-            }}
-          />
-          {matchLabel && <span className="viewer-search-count">{matchLabel}</span>}
-        </label>
+        <DocumentSearchField
+          query={query}
+          matchLabel={matchLabel}
+          searching={searching}
+          onQueryChange={onQueryChange}
+          onQuerySubmit={onQuerySubmit}
+        />
         </>}
 
         {presentation.supportsZoom && (
@@ -222,5 +195,50 @@ export function ViewerToolbar({
         {panelTools}
       </div>
     </div>
+  );
+}
+
+export function PageNumberInput({
+  page,
+  pageCount,
+  onPageChange,
+}: {
+  page: number;
+  pageCount: number;
+  onPageChange(page: number): void;
+}) {
+  const [draft, setDraft] = useState(String(page));
+
+  useEffect(() => {
+    setDraft(String(page));
+  }, [page]);
+
+  const commit = () => {
+    const parsed = Number.parseInt(draft, 10);
+    const clamped = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), pageCount) : page;
+    if (clamped !== page) onPageChange(clamped);
+    setDraft(String(clamped));
+  };
+
+  return (
+    <span className="viewer-page-input">
+      <input
+        type="text"
+        inputMode="numeric"
+        aria-label="Номер страницы"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value.replace(/[^0-9]/g, ""))}
+        onFocus={(event) => event.target.select()}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+            event.currentTarget.blur();
+          }
+        }}
+      />
+      <span>/ {pageCount}</span>
+    </span>
   );
 }

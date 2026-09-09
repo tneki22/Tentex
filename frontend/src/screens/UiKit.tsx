@@ -382,6 +382,34 @@ export function UiKit() {
               onPause={() => undefined}
               onCancel={() => undefined}
             />
+            {/* Роль ИИ: единиц обхода нет, поэтому ни счётчика, ни полосы —
+                вместо выдуманного «0 из 0» состояние словами. */}
+            <TaskRow
+              task={{
+                id: "demo-ai",
+                kind: "ai_answer_sections",
+                subject: "РК 2.pdf",
+                unit: "",
+                done: 0,
+                total: 0,
+                etaMinutes: null,
+                state: "running",
+              }}
+              onCancel={() => undefined}
+            />
+            <TaskRow
+              task={{
+                id: "demo-review",
+                kind: "ai_grouping",
+                subject: "Базы данных",
+                unit: "",
+                done: 0,
+                total: 0,
+                etaMinutes: null,
+                state: "review",
+              }}
+              onDismiss={() => undefined}
+            />
           </Popover>
           <Button variant="secondary" onClick={() => setDialog(true)}>
             Диалог
@@ -557,7 +585,7 @@ export function UiKit() {
         <h2>Сопоставление ответов</h2>
         <p className="kit-hint">
           Один и тот же статус используется в Материалах и Ответах. Полоса отражает
-          серверные контрольные точки, а итог отдельно показывает совпадения и доступные эталоны.
+          серверные контрольные точки, а итог отдельно показывает совпадения и доступные ответы.
         </p>
         <div className="kit-grid">
           <AnswerMatchStatus

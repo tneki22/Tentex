@@ -98,9 +98,12 @@ def run() -> None:
             assert status == 200
 
             start = time.monotonic()
-            status, hits = request(server, "GET", f"{search_path}?q={quote('транзакция')}")
+            status, found = request(server, "GET", f"{search_path}?q={quote('транзакция')}")
             elapsed_ms = (time.monotonic() - start) * 1000
-            assert status == 200 and len(hits) >= 1, hits
+            assert status == 200, found
+            hits = found["results"]
+            assert len(hits) >= 1, found
+            assert "транзакция" in found["terms"], found["terms"]
             assert elapsed_ms < SEARCH_BUDGET_MS, (
                 f"поиск занял {elapsed_ms:.1f} мс (бюджет {SEARCH_BUDGET_MS})"
             )
@@ -260,7 +263,7 @@ def run() -> None:
                 "GET",
                 f"/api/projects/{project_id}/search?q={quote('транзакция')}",
             )
-            assert status == 200 and len(search_after_restart) >= 1, search_after_restart
+            assert status == 200 and len(search_after_restart["results"]) >= 1, search_after_restart
             print(f"после перезапуска API: {len(after_restart)} активных привязок, поиск работает")
         finally:
             server_restarted.stop()

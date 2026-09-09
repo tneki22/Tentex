@@ -1,0 +1,38 @@
+---
+source: контролируемая фотография исходной страницы 7
+page_number: 14
+modality: phone_photo
+variant_of: page_07.md
+defects: mild_perspective, finger_occlusion, page_shadow
+dewarp_geometry: ../photo_geometry/page_14.json
+---
+
+# § 5.3. Алгоритм Дейкстры
+
+Пусть задан взвешенный орграф $G = (V, E)$ с неотрицательной весовой функцией $w: E \to \mathbb{R}_{+}$. Алгоритм Дейкстры (Dijkstra's algorithm, 1959) находит кратчайшие расстояния от фиксированной вершины $s$ до всех остальных. Основой служит релаксация рёбер:
+
+$$d(v) = \min_{(u, v) \in E}\ (d(u) + w(u, v)). \tag{5.4}$$
+
+На каждой итерации из множества необработанных вершин выбирается вершина с минимальным текущим расстоянием; для эффективного извлечения минимума используется очередь с приоритетом (priority queue), обычно реализуемая через двоичную кучу (binary heap). Ниже приведена реализация на языке Python с использованием модуля `heapq`.
+
+```python
+import heapq
+
+def dijkstra(graph, start):
+    dist = {v: float('inf') for v in graph}
+    dist[start] = 0
+    queue = [(0, start)]
+    while queue:
+        d, u = heapq.heappop(queue)
+        if d > dist[u]:
+            continue          # устаревшая запись в куче
+        for v, w in graph[u]:
+            if dist[u] + w < dist[v]:
+                dist[v] = dist[u] + w
+                heapq.heappush(queue, (dist[v], v))
+    return dist
+```
+
+Сложность алгоритма с двоичной кучей равна $O((|V| + |E|) \log |V|)$. Условие неотрицательности весов существенно: при отрицательных рёбрах жадный выбор перестаёт быть корректным и применяется алгоритм Беллмана — Форда (Bellman–Ford), имеющий сложность $O(|V| \cdot |E|)$.
+
+**Замечание.** Если все веса равны единице, кратчайшие пути находит обычный обход в ширину (breadth-first search, BFS) за время $O(|V| + |E|)$.

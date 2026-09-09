@@ -1,9 +1,9 @@
-import { useRef, useState } from "react";
-import { BookOpenCheck, MessageSquare, Search, Send } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { BookOpenCheck, MessageSquare, Search } from "lucide-react";
 import type { ProgramNodeRead } from "../../../api/projects";
 import { Button, EmptyState, ErrorState, LoadingState } from "../../../components/ui";
 import { AnswerFormCard } from "./AnswerFormCard";
-import { ChatComposer, type ChatComposerHandle } from "./ChatComposer";
+import { ChatComposer } from "./ChatComposer";
 import { ChatHeader } from "./ChatHeader";
 import { ChatTimeline } from "./ChatTimeline";
 import { ContextChips } from "./ContextChips";
@@ -15,6 +15,8 @@ interface ExamChatPanelProps {
   projectId: string;
   node: ProgramNodeRead | null;
   onAttemptsChanged?: () => void;
+  onAnsweringChange?: (value: boolean) => void;
+  takeAnswerSeconds?: () => number;
 }
 
 function nextOrdinal(messages: { payload_kind: string }[]): number {
@@ -53,14 +55,16 @@ function MaterialSearchPrompt({
   );
 }
 
-export function ExamChatPanel({ projectId, node, onAttemptsChanged }: ExamChatPanelProps) {
+export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringChange, takeAnswerSeconds }: ExamChatPanelProps) {
   const chat = useExamChat({ projectId, node, onAttemptsChanged });
   const [answering, setAnswering] = useState(false);
+  const [answerMode, setAnswerMode] = useState<"memory" | "supported">("memory");
+  useEffect(() => { onAnsweringChange?.(answering); return () => onAnsweringChange?.(false); }, [answering, onAnsweringChange]);
+  useEffect(() => { setAnswering(false); setAnswerDraft(""); takeAnswerSeconds?.(); }, [node?.id]);
   const [answerDraft, setAnswerDraft] = useState("");
   const [searching, setSearching] = useState(false);
   const [toolBusy, setToolBusy] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const composerRef = useRef<ChatComposerHandle | null>(null);
 
   if (!node) {
     return <EmptyState title="Выберите вопрос слева" icon={<MessageSquare size={26} />}><p>Чат откроется для выбранного вопроса.</p></EmptyState>;
@@ -106,7 +110,6 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged }: ExamChatPa
   return (
     <div className="exam-chat-panel">
       <ChatHeader
-        question={node.title}
         sessions={chat.sessions}
         activeSessionId={chat.activeSessionId}
         session={chat.session}
@@ -128,13 +131,10 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged }: ExamChatPa
         <>
           {isEmpty ? (
             <div className="chat-empty-invite">
-              <p>Выберите действие или задайте вопрос</p>
+              <p>Выберите действие или напишите сообщение</p>
               <div className="chat-empty-actions">
                 <Button onClick={() => { setAnswerDraft(""); setAnswering(true); }}>
                   <BookOpenCheck size={14} />Сдать ответ
-                </Button>
-                <Button variant="secondary" onClick={() => composerRef.current?.focus()}>
-                  <Send size={14} />Задать вопрос
                 </Button>
                 <Button variant="secondary" onClick={() => setSearching(true)}>
                   <Search size={14} />Найти в материалах
@@ -167,8 +167,10 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged }: ExamChatPa
               question={node.title}
               ordinal={nextOrdinal(chat.messages)}
               value={answerDraft}
+              answerMode={answerMode}
+              onAnswerModeChange={setAnswerMode}
               onChange={setAnswerDraft}
-              onSubmit={() => { void chat.submitAnswer(answerDraft); setAnswering(false); }}
+              onSubmit={() => { void chat.submitAnswer(answerDraft, { answer_mode: answerMode, active_seconds: takeAnswerSeconds?.() ?? null }); setAnswering(false); }}
               onCancel={() => setAnswering(false)}
               busy={chat.submittingAnswer}
             />
@@ -180,7 +182,6 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged }: ExamChatPa
             />
           ) : (
             <ChatComposer
-              ref={composerRef}
               value={chat.draft}
               onChange={chat.setDraft}
               onSend={() => void chat.sendMessage()}

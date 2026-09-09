@@ -35,3 +35,4 @@ export { StatusBadge } from "./StatusBadge";
 export type { StatusTone } from "./StatusBadge";
 export { Switch } from "./Switch";
 export { Tooltip, TooltipProvider } from "./Tooltip";
+export * from "./chart";

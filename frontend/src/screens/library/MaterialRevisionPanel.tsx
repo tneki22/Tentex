@@ -3,9 +3,16 @@ import { useState } from "react";
 import type {
   LibraryMaterialDetailRead,
   MaterialRevisionRead,
+  ParserMode,
   RevisionOrigin,
 } from "../../api/materials";
 import { Button, ConfirmDialog, StatusBadge } from "../../components/ui";
+
+/** Чем сделана версия: не только название режима, но и чем он читал страницу. */
+const REVISION_MODE_LABEL: Record<ParserMode, string> = {
+  fast: "Быстро · локальный OCR",
+  cloud: "Облако · внешняя модель",
+};
 
 const ORIGIN_LABEL: Record<RevisionOrigin, string> = {
   imported: "Первичная обработка",
@@ -36,6 +43,19 @@ function originText(revision: MaterialRevisionRead): string {
   return base;
 }
 
+/** Частичный запуск: часть страниц пришла нетронутой из родителя и хранит
+    свой собственный режим — версия целиком его в себе не несёт. */
+function isPartialRerun(revision: MaterialRevisionRead): boolean {
+  const summary = revision.summary as Record<string, number | undefined>;
+  return (
+    revision.origin === "parse"
+    && typeof summary.changed_pages === "number"
+    && typeof summary.page_count === "number"
+    && summary.changed_pages > 0
+    && summary.changed_pages < summary.page_count
+  );
+}
+
 function summaryText(revision: MaterialRevisionRead): string {
   const summary = revision.summary as Record<string, number | undefined>;
   const parts: string[] = [];
@@ -49,17 +69,28 @@ interface MaterialRevisionPanelProps {
   material: LibraryMaterialDetailRead;
   revisions: MaterialRevisionRead[];
   selected: number | null;
+  /** Вторая версия сцены сравнения; `null` — сравнение выключено. */
+  compared?: number | null;
   busy: boolean;
   onSelect: (revision: number | null) => void;
+  /** Не передан — кнопки «Сравнить» нет: сцена сравнения живёт только в Библиотеке. */
+  onCompare?: (revision: number | null) => void;
   onRestore: (revision: number) => void;
 }
 
+/**
+ * Вкладка «Версии»: вся история разбора в одном месте — открыть, сравнить с
+ * текущей, восстановить. Прежде тот же список дублировался во вкладке «Файл»,
+ * и «Сравнить» жило только там, вдали от истории.
+ */
 export function MaterialRevisionPanel({
   material,
   revisions,
   selected,
+  compared = null,
   busy,
   onSelect,
+  onCompare,
   onRestore,
 }: MaterialRevisionPanelProps) {
   const [confirm, setConfirm] = useState<number | null>(null);
@@ -79,29 +110,42 @@ export function MaterialRevisionPanel({
   return (
     <div className="inspector-content">
       <p className="inspector-note">
-        Версии не перезаписывают друг друга. Прежнюю можно открыть для чтения и
-        восстановить как новую — номера при этом только растут.
+        Версии не перезаписывают друг друга. Прежнюю можно открыть для чтения,
+        сравнить с текущей на открытой странице или восстановить как новую —
+        номера при этом только растут.
       </p>
 
       <div className="revision-list" role="list">
         {revisions.map((revision) => {
           const isOpen = (selected ?? current) === revision.revision;
+          const isCompared = revision.revision === compared;
+          const mode = revision.parser_mode
+            ? REVISION_MODE_LABEL[revision.parser_mode]
+            : "Ручная или восстановленная версия";
+          const partial = isPartialRerun(revision);
           return (
-            <button
-              type="button"
+            <div
               role="listitem"
               key={revision.revision}
-              className={`revision-row ${isOpen ? "is-open" : ""}`.trim()}
+              className={`revision-row ${isOpen ? "is-open" : ""} ${isCompared ? "is-compared" : ""}`.trim()}
               aria-current={isOpen ? "true" : undefined}
-              onClick={() => onSelect(revision.revision === current ? null : revision.revision)}
             >
               <span className="revision-head">
                 <b>Версия {revision.revision}</b>
                 {revision.revision === current
                   ? <StatusBadge tone="success">Текущая</StatusBadge>
-                  : isOpen && <StatusBadge tone="info">Открыта</StatusBadge>}
+                  : isCompared
+                    ? <StatusBadge tone="info">Сравнение</StatusBadge>
+                    : isOpen && <StatusBadge tone="info">Открыта</StatusBadge>}
               </span>
-              <span className="revision-origin">{originText(revision)}</span>
+              <span className="revision-origin">
+                {originText(revision)} · {mode}
+                {partial && (
+                  <span className="revision-mode-note" title="Остальные страницы этой версии не переразбирались и сохранили режим версии, из которой их скопировали.">
+                    {" "}· остальные страницы — прежним режимом
+                  </span>
+                )}
+              </span>
               <span className="revision-meta">
                 {new Date(revision.created_at).toLocaleString("ru-RU", {
                   dateStyle: "medium",
@@ -109,7 +153,25 @@ export function MaterialRevisionPanel({
                 })}
                 {summaryText(revision) ? ` · ${summaryText(revision)}` : ""}
               </span>
-            </button>
+              <div className="revision-inline-actions">
+                <Button
+                  variant="ghost"
+                  disabled={isOpen}
+                  onClick={() => onSelect(revision.revision === current ? null : revision.revision)}
+                >
+                  {isOpen ? "Открыта" : "Открыть"}
+                </Button>
+                {onCompare && (
+                  <Button
+                    variant="secondary"
+                    disabled={isOpen}
+                    onClick={() => onCompare(isCompared ? null : revision.revision)}
+                  >
+                    {isCompared ? "Закрыть сравнение" : "Сравнить"}
+                  </Button>
+                )}
+              </div>
+            </div>
           );
         })}
       </div>

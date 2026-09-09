@@ -10,10 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.ai.gateway import AiTextRequest, ModelGateway
 from app.ai.schemas import AiMessage, AiPreflight, AiUsage
+from app.background.schemas import BackgroundJobStartRead
 from app.materials import library
 from app.materials.schemas import PageCorrectionRead, PageTextUpdate
 from app.models import (
     AiRun,
+    BackgroundJob,
+    BackgroundJobKind,
     Material,
     MaterialPage,
     MaterialRevisionOrigin,
@@ -147,7 +150,9 @@ def _snapshot(
     )
 
 
-def _request(snapshot: PageSnapshot, instruction: str, confirmed: bool) -> AiTextRequest:
+def _request(
+    snapshot: PageSnapshot, instruction: str, confirmed: bool, job_id: UUID | None = None
+) -> AiTextRequest:
     instruction = instruction.strip()
     instruction_hash = hashlib.sha256(instruction.encode()).hexdigest()
     manifest = [
@@ -193,6 +198,7 @@ def _request(snapshot: PageSnapshot, instruction: str, confirmed: bool) -> AiTex
             "instruction_hash": instruction_hash,
         },
         confirmed=confirmed,
+        job_id=job_id,
     )
 
 
@@ -224,10 +230,14 @@ async def run(
     material_id: UUID,
     page_number: int,
     command: CleanupRunWrite,
+    *,
+    job_id: UUID | None = None,
 ) -> CleanupRunRead:
     snapshot = _snapshot(session, project_id, material_id, page_number)
     _check_snapshot(snapshot, command.expected_revision, command.expected_source_hash)
-    result = await gateway.complete(_request(snapshot, command.instruction, command.confirmed))
+    result = await gateway.complete(
+        _request(snapshot, command.instruction, command.confirmed, job_id)
+    )
     return CleanupRunRead(
         run_id=result.run_id,
         material_id=material_id,
@@ -241,6 +251,37 @@ async def run(
         actual_model_id=result.actual_model_id,
         cached=result.cached,
     )
+
+
+async def start(
+    session: Session,
+    gateway: ModelGateway,
+    project_id: UUID | None,
+    material_id: UUID,
+    page_number: int,
+    command: CleanupRunWrite,
+) -> BackgroundJobStartRead:
+    """Поставить уборку страницы в очередь вместо ожидания ответа в запросе.
+
+    `page_number` не хранится в `background_jobs` отдельной колонкой — страница
+    не общая деталь для всех видов задач, только для этой, поэтому она лежит
+    в `checkpoint` рядом с самой командой.
+    """
+    snapshot = _snapshot(session, project_id, material_id, page_number)
+    _check_snapshot(snapshot, command.expected_revision, command.expected_source_hash)
+    await gateway.preflight_confirmed(_request(snapshot, command.instruction, command.confirmed))
+    session.rollback()
+    with session.begin():
+        job = BackgroundJob(
+            kind=BackgroundJobKind.AI_CLEANUP,
+            project_id=project_id,
+            material_id=material_id,
+            checkpoint={"command": command.model_dump(mode="json"), "page_number": page_number},
+        )
+        session.add(job)
+        session.flush()
+        job_id = job.id
+    return BackgroundJobStartRead(job_id=job_id)
 
 
 def apply(

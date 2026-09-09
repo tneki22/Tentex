@@ -1,3 +1,4 @@
+import { QualityControl } from "../../preparation/QualityControl";
 import type { AttemptOutcome, ChatMessageRead } from "../../../api/chat";
 import { AnswerFormCard } from "./AnswerFormCard";
 import { Markdown } from "./Markdown";
@@ -48,13 +49,13 @@ export function TypedMessage({
 
   if (payload.kind === "verdict" && message.grade_attempt_id) {
     return (
-      <VerdictCard
+      <><VerdictCard
         verdict={payload.data}
         answer={answerText}
         attemptId={message.grade_attempt_id}
         onSelfAssessment={onSelfAssessment}
         headingRef={headingRef}
-      />
+      /><QualityControl projectId={projectId} attemptId={message.grade_attempt_id} /></>
     );
   }
 

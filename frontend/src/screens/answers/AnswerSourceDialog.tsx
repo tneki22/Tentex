@@ -9,6 +9,7 @@ const STATUS_COPY: Record<MaterialState, string> = {
   queued: "Файл в очереди на разбор.",
   processing: "Разбираем файл.",
   paused: "Разбор на паузе.",
+  needs_input: "Нужны файлы проекта или выбор точки входа.",
   ready: "Файл разобран.",
   failed: "Разбор не удался.",
 };
@@ -58,7 +59,7 @@ export function AnswerSourceDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={pending ? "Файл ответов ещё разбирается" : "Файл эталонных ответов"}
+      title={pending ? "Файл ответов ещё разбирается" : "Файл с ответами"}
       description={pending
         ? "Сопоставление запустится само, как только текст будет готов."
         : "Один файл со всеми ответами: из него автоматика разложит их по вопросам."}

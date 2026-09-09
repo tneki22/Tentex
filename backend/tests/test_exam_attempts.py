@@ -211,15 +211,15 @@ async def test_broken_judge_keeps_attempt_without_grade(
         actual_model_id="test/structured-model",
         usage=ProviderUsage(),
     )
-    # Гейтвей даёт одну попытку самоисправиться; судья ломается оба раза,
+    # Шлюз даёт несколько попыток самоисправиться; судья ломается на каждой,
     # так что ai_invalid_structured_output не входит в AI_FALLBACK_CODES
     # и всё равно всплывает наверх, а не тихо подменяется запасной оценкой.
-    fake = FakeTransport(completions=[broken_completion, broken_completion])
+    fake = FakeTransport(completions=[broken_completion for _ in range(4)])
 
     with pytest.raises(ProjectDomainError) as caught:
         await attempt_service.submit_answer(
             session,
-            ModelGateway(session, fake),
+            ModelGateway(session, fake, (0.0, 0.0, 0.0)),
             project.id,
             chat.id,
             "Ответ, который надо сохранить.",

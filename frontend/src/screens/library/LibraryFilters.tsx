@@ -3,7 +3,7 @@ import type { MaterialPresentationKind } from "../../api/materials";
 import { Button, Select } from "../../components/ui";
 
 export type LibraryKindFilter = "all" | MaterialPresentationKind;
-export type LibraryStatusFilter = "all" | "ready" | "processing" | "paused" | "failed";
+export type LibraryStatusFilter = "all" | "ready" | "processing" | "paused" | "needs_input" | "failed";
 export type LibraryQualityFilter = "all" | "needs_review";
 export type LibraryUsageFilter = "all" | "attached" | "unattached";
 export type LibrarySort = "updated_desc" | "name_asc" | "created_desc";
@@ -35,6 +35,7 @@ const KINDS: Array<{ value: LibraryKindFilter; label: string }> = [
   { value: "web", label: "Веб-страницы" },
   { value: "youtube", label: "YouTube" },
   { value: "audio", label: "Аудио" },
+  { value: "typst", label: "Typst" },
 ];
 
 const STATUSES: Array<{ value: LibraryStatusFilter; label: string }> = [
@@ -42,6 +43,7 @@ const STATUSES: Array<{ value: LibraryStatusFilter; label: string }> = [
   { value: "ready", label: "Готовы" },
   { value: "processing", label: "Обрабатываются" },
   { value: "paused", label: "На паузе" },
+  { value: "needs_input", label: "Нужны файлы" },
   { value: "failed", label: "С ошибкой" },
 ];
 

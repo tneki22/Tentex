@@ -44,6 +44,7 @@ from app.materials.schemas import (
 )
 from app.materials.storage import material_path
 from app.models import (
+    BackgroundJob,
     ExamFormat,
     ExamKind,
     GoalPassport,
@@ -52,7 +53,6 @@ from app.models import (
     MaterialPage,
     MaterialState,
     NodeType,
-    ProcessingTask,
     Project,
     ProjectMaterial,
     ProjectStatus,
@@ -96,7 +96,7 @@ def _link(session: Session, project_id: UUID, material_id: UUID) -> ProjectMater
     return link
 
 
-def _read(link: ProjectMaterial, material: Material, task: ProcessingTask | None) -> MaterialRead:
+def _read(link: ProjectMaterial, material: Material, task: BackgroundJob | None) -> MaterialRead:
     purposes = [purpose for purpose in link.purposes if purpose in PURPOSE_VALUES]
     return MaterialRead(
         id=material.id,

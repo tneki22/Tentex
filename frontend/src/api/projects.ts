@@ -1,3 +1,5 @@
+import type { BackgroundJobStartRead } from "./backgroundJobs";
+
 export type ProjectStatus = "draft" | "active" | "archived" | "completed";
 export type WorkspaceVariant = "exam" | "textbook";
 export type TemplateKey = "exam" | "textbook" | "free";
@@ -279,7 +281,22 @@ export interface PreparationEstimateRunRead {
   cached: boolean;
 }
 
+export interface ProgramRepairContextNode {
+  id: string;
+  parent_id: string | null;
+  node_type: string;
+  exam_kind: string | null;
+  title: string;
+  path: string[];
+  sort_order: number;
+  target_level: string | null;
+  subpoints: string[];
+  has_answer: boolean;
+  answer_chars: number;
+}
+
 export interface ProgramImportRepairPreflightRead {
+  source_context: ProgramRepairContextNode[];
   program_revision: number;
   source_hash: string;
   node_count: number;
@@ -347,7 +364,13 @@ export interface ReferenceAnswerRead {
   program_node_id: string;
   text: string;
   origin_kind: "manual" | "import";
-  match_method: "manual" | "exact_title";
+  match_method:
+    | "manual"
+    | "exact_title"
+    | "fuzzy_title"
+    | "resolved_title"
+    | "numbered_order"
+    | "ai_section";
   matched_title: string | null;
   is_confirmed: boolean;
   is_active: boolean;
@@ -718,7 +741,7 @@ export const runProgramGrouping = (
     confirmed: boolean;
   },
   signal?: AbortSignal,
-): Promise<ProgramGroupingRunRead> => request(`${projectPath(projectId)}/program/ai-grouping`, {
+): Promise<BackgroundJobStartRead> => request(`${projectPath(projectId)}/program/ai-grouping`, {
   method: "POST",
   body: JSON.stringify(command),
   signal,
@@ -753,7 +776,7 @@ export const runPreparationEstimate = (
   projectId: string,
   command: PreparationEstimateInput & { expected_input_hash: string; confirmed: boolean },
   signal?: AbortSignal,
-): Promise<PreparationEstimateRunRead> => request(`${projectPath(projectId)}/preparation-estimate`, {
+): Promise<BackgroundJobStartRead> => request(`${projectPath(projectId)}/preparation-estimate`, {
   method: "POST",
   body: JSON.stringify(command),
   signal,
@@ -778,7 +801,7 @@ export const runProgramImportRepair = (
     confirmed: boolean;
   },
   signal?: AbortSignal,
-): Promise<ProgramImportRepairRunRead> => request(`${projectPath(projectId)}/program/ai-import-repair`, {
+): Promise<BackgroundJobStartRead> => request(`${projectPath(projectId)}/program/ai-import-repair`, {
   method: "POST",
   body: JSON.stringify(command),
   signal,

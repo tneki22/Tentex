@@ -23,7 +23,13 @@ from fastapi import UploadFile
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.orm import Session
 
-from app.bindings.search import delete_material_index, reindex_material, search_fragments
+from app.bindings.search import (
+    delete_material_index,
+    matched_forms,
+    matches_query,
+    reindex_material,
+    search_fragments,
+)
 from app.bindings.service import (
     affected_projects_preview,
     binding_count_for_materials,
@@ -32,9 +38,13 @@ from app.bindings.service import (
 from app.config import settings
 from app.materials import revisions as revision_registry
 from app.materials.external import fetch_web_page, fetch_youtube_transcript
-from app.materials.lexicon import index_text, query_terms
+from app.materials.lexicon import index_text, prefix_term, query_terms
 from app.materials.parsers.base import ParsedElement, ParsedPage
 from app.materials.parsers.native import inspect, parse_text_page
+from app.materials.presentation import (
+    MaterialPresentationKind,
+    presentation_kind,
+)
 from app.materials.schemas import (
     BlockRead,
     ExamMaterialSlot,
@@ -49,7 +59,6 @@ from app.materials.schemas import (
     LibraryTextMaterialCreate,
     LibraryUsageRead,
     MaterialDeletePreview,
-    MaterialPresentationKind,
     MaterialPurpose,
     MaterialRevisionRead,
     MaterialsDeletePreview,
@@ -62,10 +71,16 @@ from app.materials.schemas import (
     ProcessingStart,
     ProcessingTaskRead,
     SourceRefreshResult,
+    TypstIssueRead,
+    TypstMaterialRead,
 )
 from app.materials.segmentation import build_blocks
 from app.materials.storage import material_path, store_revision_text, store_text, store_upload
+from app.materials.typst import Bundle, entrypoint_candidates, store_bundle
 from app.models import (
+    BackgroundJob,
+    BackgroundJobKind,
+    BackgroundJobState,
     BlockClass,
     Material,
     MaterialBlock,
@@ -76,30 +91,24 @@ from app.models import (
     MaterialState,
     PageQuality,
     ProcessingStage,
-    ProcessingTask,
-    ProcessingTaskKind,
-    ProcessingTaskState,
     Project,
     ProjectMaterial,
     ProjectStatus,
     ReferenceAnswer,
     SourceRole,
+    TypstMaterial,
     utc_now,
 )
 from app.ocr import settings as ocr_settings
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
 
 ACTIVE_TASK_STATES = {
-    ProcessingTaskState.QUEUED,
-    ProcessingTaskState.RUNNING,
-    ProcessingTaskState.PAUSED,
+    BackgroundJobState.QUEUED,
+    BackgroundJobState.RUNNING,
+    BackgroundJobState.PAUSED,
 }
 PURPOSE_VALUES = {purpose.value for purpose in MaterialPurpose}
 AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
-DOCUMENT_MEDIA_TYPES = {
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/msword",
-}
 TEXT_MEDIA_TYPES = {"text/plain", "text/markdown", "text/x-markdown"}
 # Оглавление из заголовков имеет смысл, пока его можно прочитать глазами.
 RECOGNIZED_OUTLINE_LIMIT = 400
@@ -116,24 +125,6 @@ def material_or_404(session: Session, material_id: UUID) -> Material:
     return material
 
 
-def presentation_kind(material: Material) -> MaterialPresentationKind:
-    """Один производный вид вместо проверок MIME по всему фронтенду."""
-    if material.source_kind == MaterialSourceKind.YOUTUBE:
-        return "youtube"
-    if material.source_kind == MaterialSourceKind.AUDIO or material.media_type.startswith("audio/"):
-        return "audio"
-    if material.source_kind == MaterialSourceKind.URL:
-        return "web"
-    if material.media_type == "application/pdf":
-        return "pdf"
-    if material.media_type.startswith("image/"):
-        return "image"
-    if material.media_type in DOCUMENT_MEDIA_TYPES:
-        return "document"
-    # Неизвестный формат сюда не доходит: загрузка отклоняет его в storage.
-    return "plain_text"
-
-
 def _capabilities(
     material: Material,
     kind: MaterialPresentationKind,
@@ -142,10 +133,10 @@ def _capabilities(
     has_timeline: bool,
 ) -> LibraryMaterialCapabilities:
     return LibraryMaterialCapabilities(
-        can_compare=kind in {"pdf", "image", "document", "plain_text", "web"},
+        can_compare=kind in {"pdf", "image", "document", "plain_text", "web", "typst"},
         # У YouTube локального оригинала нет: материал — это сохранённая расшифровка.
         can_view_original=kind != "youtube",
-        can_edit_text=material.active_parse_revision >= 1,
+        can_edit_text=material.active_parse_revision >= 1 and kind != "typst",
         can_run_ocr=kind in {"pdf", "image"},
         can_refresh_source=kind in {"web", "youtube"},
         has_outline=has_outline,
@@ -195,30 +186,43 @@ def _outline(session: Session, material: Material) -> tuple[list[OutlineItem], O
 # ── Задачи ──────────────────────────────────────────────────────────────────
 
 
-def latest_task(session: Session, material_id: UUID) -> ProcessingTask | None:
+def latest_task(session: Session, material_id: UUID) -> BackgroundJob | None:
+    """Последняя задача подготовки материала, но не любая фоновая задача.
+
+    `background_jobs.material_id` теперь общий и для уборки текста ИИ: без
+    фильтра по `kind` сюда попала бы и она, а `ProcessingTaskRead` ждёт от
+    задачи разбора обязательные `stage`/`parser_mode`, которых у уборки нет.
+    Typst-сборка добавлена явно: она тоже показывает прогресс в этой панели.
+    """
     return session.scalar(
-        select(ProcessingTask)
-        .where(ProcessingTask.material_id == material_id)
-        .order_by(desc(ProcessingTask.created_at))
+        select(BackgroundJob)
+        .where(
+            BackgroundJob.material_id == material_id,
+            BackgroundJob.kind.in_((BackgroundJobKind.PARSE, BackgroundJobKind.TYPST_COMPILE)),
+        )
+        .order_by(desc(BackgroundJob.created_at))
         .limit(1)
     )
 
 
-def task_read(task: ProcessingTask | None) -> ProcessingTaskRead | None:
+def task_read(task: BackgroundJob | None) -> ProcessingTaskRead | None:
     return ProcessingTaskRead.model_validate(task) if task else None
 
 
 def latest_tasks_by_material(
     session: Session, material_ids: list[UUID]
-) -> dict[UUID, ProcessingTask]:
+) -> dict[UUID, BackgroundJob]:
     """Одним запросом вместо `latest_task` на каждый материал (Р7, аудит N+1)."""
     if not material_ids:
         return {}
-    latest: dict[UUID, ProcessingTask] = {}
+    latest: dict[UUID, BackgroundJob] = {}
     for task in session.scalars(
-        select(ProcessingTask)
-        .where(ProcessingTask.material_id.in_(material_ids))
-        .order_by(ProcessingTask.material_id, desc(ProcessingTask.created_at))
+        select(BackgroundJob)
+        .where(
+            BackgroundJob.material_id.in_(material_ids),
+            BackgroundJob.kind.in_((BackgroundJobKind.PARSE, BackgroundJobKind.TYPST_COMPILE)),
+        )
+        .order_by(BackgroundJob.material_id, desc(BackgroundJob.created_at))
     ):
         latest.setdefault(task.material_id, task)
     return latest
@@ -366,6 +370,36 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
     aggregate = library_aggregates(session, [material]).get(material.id, EMPTY_LIBRARY_AGGREGATE)
     outline, outline_source = _outline(session, material)
     kind = presentation_kind(material)
+    typst_row = session.get(TypstMaterial, material.id)
+    typst = (
+        TypstMaterialRead(
+            input_kind=typst_row.input_kind,
+            entrypoint=typst_row.entrypoint,
+            entrypoint_candidates=(
+                []
+                if typst_row.entrypoint
+                else entrypoint_candidates(material_path(material.storage_path))
+            ),
+            compiler_version=typst_row.compiler_version,
+            packages=typst_row.packages or [],
+            issues=[
+                TypstIssueRead(
+                    kind=str(issue.get("kind", "compile")),
+                    message=str(issue.get("message", "Неизвестная проблема Typst")),
+                    path=str(issue["path"]) if issue.get("path") is not None else None,
+                    line=int(issue["line"]) if issue.get("line") is not None else None,
+                    column=int(issue["column"]) if issue.get("column") is not None else None,
+                    missing_path=(
+                        str(issue["missing_path"]) if issue.get("missing_path") else None
+                    ),
+                )
+                for issue in typst_row.issues or []
+            ],
+            has_rendered_pdf=bool(typst_row.current_pdf_path),
+        )
+        if typst_row
+        else None
+    )
     return LibraryMaterialDetailRead(
         **library_read(material, aggregate).model_dump(),
         presentation_kind=kind,
@@ -396,6 +430,8 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
         task=task_read(latest_task(session, material_id)),
         retrieved_at=material.retrieved_at,
         updated_at=material.updated_at,
+        storage_path=f"data/storage/{material.storage_path}",
+        typst=typst,
     )
 
 
@@ -414,7 +450,7 @@ def _resolve_revision(
     увидел бы половину разбора и решил, что материал испорчен.
     """
     if task_id is not None:
-        task = session.get(ProcessingTask, task_id)
+        task = session.get(BackgroundJob, task_id)
         current = latest_task(session, material.id)
         if (
             task is None
@@ -464,6 +500,7 @@ def _page_read(session: Session, page: MaterialPage) -> PageRead:
         markdown=page.markdown,
         quality=page.quality,
         confidence=page.confidence,
+        parser_mode=page.parser_mode,
         reviewed_at=page.reviewed_at,
         diagnostics=page.diagnostics,
         fragments=[
@@ -546,7 +583,14 @@ def library_fragment_asset_path(session: Session, material_id: UUID, fragment_id
 
 def library_page_image_path(session: Session, material_id: UUID, page_number: int) -> Path:
     material = material_or_404(session, material_id)
-    source = material_path(material.storage_path)
+    # У Typst-проекта исходник — ZIP, а страницу человек видит в собранном PDF.
+    # Подмена источника здесь даёт просмотрщику ровно то же, что у обычного PDF:
+    # растр страницы, масштаб, области фрагментов и переходы по оглавлению.
+    source = (
+        typst_rendered_source(session, material_id).path
+        if material.source_kind == MaterialSourceKind.TYPST
+        else material_path(material.storage_path)
+    )
     if source.suffix.lower() in {".jpg", ".jpeg", ".png"}:
         return source
     if source.suffix.lower() != ".pdf":
@@ -586,6 +630,35 @@ def library_source(
     return SourceFile(path=path, media_type=material.media_type, filename=material.original_name)
 
 
+def typst_rendered_source(
+    session: Session, material_id: UUID, *, revision: int | None = None
+) -> SourceFile:
+    """Собранный PDF Typst-проекта — текущий либо принадлежащий версии.
+
+    Отдельно от `library_source`: у Typst исходник и то, что читает человек, —
+    разные файлы (ZIP проекта и PDF сборки), и подменять одно другим нельзя.
+    """
+    material = material_or_404(session, material_id)
+    row = session.get(TypstMaterial, material.id)
+    if row is None:
+        raise ProjectDomainError(
+            "Материал не является Typst-проектом", status=422, code="typst_bundle_invalid"
+        )
+    storage_path = row.current_pdf_path
+    if revision is not None:
+        record = revision_registry.get_revision(session, material_id, revision)
+        storage_path = record.render_storage_path if record else None
+    if not storage_path or not material_path(storage_path).exists():
+        raise ProjectConflictError(
+            "Собранный PDF пока недоступен", code="typst_preview_unavailable"
+        )
+    return SourceFile(
+        path=material_path(storage_path),
+        media_type="application/pdf",
+        filename=f"{Path(material.original_name).stem}.pdf",
+    )
+
+
 def list_library_revisions(session: Session, material_id: UUID) -> list[MaterialRevisionRead]:
     material = material_or_404(session, material_id)
     return [
@@ -620,20 +693,24 @@ def search_library_material(
     material = material_or_404(session, material_id)
     limit = max(1, min(SEARCH_LIMIT_MAX, limit))
     target = material.active_parse_revision if revision is None else revision
+    terms = query_terms(query)
     if not query.strip() or target == 0:
-        return LibrarySearchResult(query=query, revision=target, hits=[])
+        return LibrarySearchResult(query=query, revision=target, terms=terms, hits=[])
     if target != material.active_parse_revision:
         revision_registry.require_revision(session, material_id, target)
         return LibrarySearchResult(
             query=query,
             revision=target,
+            terms=terms,
             hits=_scan_revision(session, material_id, target, query, limit),
         )
 
     # BM25 группирует совпадения по блоку; в просмотрщике полезнее список мест,
     # поэтому каждое совпадение раскрывается в свои фрагменты с номерами страниц.
     hits: list[LibrarySearchHit] = []
-    for hit in search_fragments(session, [material_id], query, limit=limit):
+    outcome = search_fragments(session, [material_id], query, limit=limit)
+    term_set = set(outcome.terms)
+    for hit in outcome.hits:
         for fragment_id in hit.fragment_ids:
             fragment = session.get(MaterialFragment, fragment_id)
             page = session.get(MaterialPage, fragment.page_id) if fragment else None
@@ -647,20 +724,22 @@ def search_library_material(
                     bbox=list(fragment.bbox),
                     text=fragment.text,
                     rank=float(len(hits)),
+                    matched_forms=matched_forms(fragment.text, term_set, outcome.prefix),
                 )
             )
             if len(hits) >= limit:
                 break
         if len(hits) >= limit:
             break
-    return LibrarySearchResult(query=query, revision=target, hits=hits)
+    return LibrarySearchResult(query=query, revision=target, terms=outcome.terms, hits=hits)
 
 
 def _scan_revision(
     session: Session, material_id: UUID, revision: int, query: str, limit: int
 ) -> list[LibrarySearchHit]:
     terms = set(query_terms(query))
-    if not terms:
+    prefix = prefix_term(query)
+    if not (terms or prefix):
         return []
     rows = session.execute(
         select(MaterialFragment, MaterialPage.page_number, MaterialBlock.title)
@@ -674,10 +753,9 @@ def _scan_revision(
     ).all()
     hits: list[LibrarySearchHit] = []
     for fragment, page_number, block_title in rows:
-        lemmas = set(index_text(fragment.text).split())
-        matched = len(terms & lemmas)
-        if not matched:
+        if not matches_query(fragment.text, terms, prefix):
             continue
+        matched = len(terms & set(index_text(fragment.text).split()))
         hits.append(
             LibrarySearchHit(
                 fragment_id=fragment.id,
@@ -686,6 +764,7 @@ def _scan_revision(
                 bbox=list(fragment.bbox),
                 text=fragment.text,
                 rank=float(len(terms) - matched),
+                matched_forms=matched_forms(fragment.text, terms, prefix),
             )
         )
         if len(hits) >= limit * 4:
@@ -813,6 +892,144 @@ async def create_library_upload(session: Session, upload: UploadFile) -> Library
         material = register_uploaded_material(session, uploaded)
         material_id = material.id
     return read_library_material(session, material_id)
+
+
+def create_typst_material(
+    session: Session, bundle: Bundle, input_kind: str, display_name: str | None = None
+) -> tuple[LibraryMaterialDetailRead, BackgroundJob]:
+    """Регистрирует bundle и ставит единственную автоматическую сборку Typst.
+
+    `display_name` — имя загруженного архива или папки браузера: материал
+    называется по нему, а не по точке входа, иначе любой проект в архиве
+    показывался бы в Библиотеке как «main.typ» независимо от своего названия.
+    """
+    storage_path = store_bundle(bundle)
+    session.rollback()
+    with session.begin():
+        material = _existing_or_new(
+            session,
+            sha256=bundle.sha256,
+            original_name=(
+                display_name
+                or (Path(bundle.entrypoint).name if bundle.entrypoint else "Typst-проект.zip")
+            ),
+            storage_path=storage_path,
+            media_type="application/zip",
+            source_kind=MaterialSourceKind.TYPST,
+            size_bytes=bundle.size_bytes,
+            page_count=None,
+            estimated_seconds=1,
+        )
+        typst = session.get(TypstMaterial, material.id)
+        if typst is None:
+            typst = TypstMaterial(
+                material_id=material.id,
+                input_kind=input_kind,
+                entrypoint=bundle.entrypoint,
+                packages=bundle.packages,
+                issues=(
+                    []
+                    if bundle.entrypoint
+                    else [{"kind": "entrypoint", "message": "Выберите точку входа", "path": None}]
+                ),
+                current_pdf_path=None,
+                updated_at=utc_now(),
+            )
+            session.add(typst)
+        # Повторная загрузка того же проекта попадает в тот же материал (дедуп по
+        # хешу bundle). Заводить ей вторую сборку нельзя: обе пойдут по одному
+        # материалу и будут спорить за номер ревизии.
+        running = latest_task(session, material.id)
+        if running is not None and running.state in ACTIVE_TASK_STATES:
+            return read_library_material(session, material.id), running
+        if running is not None and running.state == BackgroundJobState.FAILED:
+            _discard_failed_task(session, material, running)
+        material.status = MaterialState.QUEUED if bundle.entrypoint else MaterialState.NEEDS_INPUT
+        job = BackgroundJob(
+            material_id=material.id,
+            kind=BackgroundJobKind.TYPST_COMPILE,
+            state=(
+                BackgroundJobState.QUEUED if bundle.entrypoint else BackgroundJobState.COMPLETED
+            ),
+            stage=ProcessingStage.QUEUED if bundle.entrypoint else ProcessingStage.COMPLETE,
+            done=0 if bundle.entrypoint else 1,
+            total=1,
+            checkpoint={"entrypoint": bundle.entrypoint, "download_packages": False},
+            diagnostics=[],
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        session.add(job)
+        session.flush()
+        material_id = material.id
+    return read_library_material(session, material_id), job
+
+
+def queue_typst_build(
+    session: Session, material_id: UUID, *, entrypoint: str | None, download_packages: bool
+) -> BackgroundJob:
+    """Перезапускает сборку, не изменяя активную ревизию до полного успеха."""
+    material = material_or_404(session, material_id)
+    typst = session.get(TypstMaterial, material_id)
+    if typst is None:
+        raise ProjectDomainError(
+            "Материал не является Typst-проектом", status=422, code="typst_bundle_invalid"
+        )
+    selected = entrypoint or typst.entrypoint
+    if not selected:
+        raise ProjectDomainError(
+            "Выберите точку входа Typst", status=422, code="typst_entrypoint_required"
+        )
+    session.rollback()
+    with session.begin():
+        # Та же защита, что у разбора (`start_processing_core`): «Собрать заново»
+        # при живой задаче заводило вторую и обе шли по одному материалу.
+        previous = latest_task(session, material_id)
+        if previous and previous.state in ACTIVE_TASK_STATES:
+            raise ProjectConflictError("Сборка уже идёт", code="material_processing_active")
+        if previous and previous.state == BackgroundJobState.FAILED:
+            _discard_failed_task(session, material, previous)
+        material.status = MaterialState.QUEUED
+        material.error = None
+        typst.entrypoint = selected
+        job = BackgroundJob(
+            material_id=material_id,
+            kind=BackgroundJobKind.TYPST_COMPILE,
+            state=BackgroundJobState.QUEUED,
+            stage=ProcessingStage.QUEUED,
+            total=1,
+            checkpoint={"entrypoint": selected, "download_packages": download_packages},
+            diagnostics=[],
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        session.add(job)
+        session.flush()
+    return job
+
+
+def replace_typst_bundle(session: Session, material_id: UUID, bundle: Bundle) -> None:
+    """Обновляет исходный bundle перед сборкой, оставляя прошлую PDF-ревизию активной."""
+    material_or_404(session, material_id)
+    session.rollback()
+    with session.begin():
+        material = material_or_404(session, material_id)
+        existing = session.scalar(select(Material.id).where(Material.sha256 == bundle.sha256))
+        if existing is not None and existing != material_id:
+            raise ProjectConflictError(
+                "Такой Typst-проект уже есть в Библиотеке", code="typst_bundle_invalid"
+            )
+        row = session.get(TypstMaterial, material_id)
+        if row is None:
+            raise ProjectDomainError(
+                "Материал не является Typst-проектом", status=422, code="typst_bundle_invalid"
+            )
+        material.sha256 = bundle.sha256
+        material.storage_path = store_bundle(bundle)
+        material.size_bytes = bundle.size_bytes
+        row.entrypoint = bundle.entrypoint
+        row.packages = bundle.packages
+        row.issues = []
 
 
 def create_library_text(
@@ -1036,14 +1253,37 @@ def _selected_pages(session: Session, material: Material, command: ProcessingSta
     return list(range(command.page_from, command.page_to + 1))
 
 
+def _discard_failed_task(session: Session, material: Material, task: BackgroundJob) -> None:
+    """Убрать за упавшей задачей её недорегистрированную ревизию и саму строку.
+
+    Неудачная попытка могла успеть записать часть страниц под свой номер
+    ревизии, так и не зарегистрировав его: не убрать за ней — следующий номер
+    займётся навсегда, а в «Версиях» появится незримый пропуск.
+    """
+    building = int(task.checkpoint.get("revision") or 0)
+    if building and building != material.active_parse_revision:
+        discard_building_revision(session, material.id, building)
+    session.delete(task)
+    session.flush()
+
+
 def start_processing_core(
     session: Session, material_id: UUID, command: ProcessingStart
-) -> ProcessingTask:
+) -> BackgroundJob:
     """Поставить задачу разбора. Транзакцией управляет вызывающий."""
     material = material_or_404(session, material_id)
+    if material.source_kind == MaterialSourceKind.TYPST:
+        # У Typst-проекта нечего распознавать: страницы берутся из PDF, который
+        # собрал компилятор. Переделать материал заново — это «Собрать заново».
+        raise ProjectConflictError(
+            "Typst-проект пересобирается, а не разбирается заново",
+            code="material_processing_unsupported",
+        )
     task = latest_task(session, material_id)
     if task and task.state in ACTIVE_TASK_STATES:
         raise ProjectConflictError("Разбор уже запущен", code="material_processing_active")
+    if task and task.state == BackgroundJobState.FAILED:
+        _discard_failed_task(session, material, task)
     # Готовность движка спрашиваем у реестра распознавания, а не у сервиса
     # напрямую: там же считается статус на экране настроек, и разъехаться они
     # не могут. Для «Быстро» это в том числе проверка, что модели скачаны.
@@ -1061,10 +1301,10 @@ def start_processing_core(
         scope |= {"page_from": command.page_from, "page_to": command.page_to}
     if command.scope == "needs_review":
         scope |= {"pages": pages}
-    task = ProcessingTask(
+    task = BackgroundJob(
         material_id=material_id,
-        kind=ProcessingTaskKind.PARSE,
-        state=ProcessingTaskState.QUEUED,
+        kind=BackgroundJobKind.PARSE,
+        state=BackgroundJobState.QUEUED,
         stage=ProcessingStage.QUEUED,
         parser_mode=command.parser_mode,
         done=0,
@@ -1089,15 +1329,15 @@ def start_processing_core(
     return task
 
 
-def control_task_core(session: Session, material_id: UUID, action: str) -> ProcessingTask:
+def control_task_core(session: Session, material_id: UUID, action: str) -> BackgroundJob:
     material = material_or_404(session, material_id)
     task = latest_task(session, material_id)
     if task is None:
         raise ProjectNotFoundError("Задача разбора не найдена", code="material_task_not_found")
-    if action == "pause" and task.state == ProcessingTaskState.RUNNING:
+    if action == "pause" and task.state == BackgroundJobState.RUNNING:
         task.pause_requested = True
-    elif action == "resume" and task.state == ProcessingTaskState.PAUSED:
-        task.state = ProcessingTaskState.QUEUED
+    elif action == "resume" and task.state == BackgroundJobState.PAUSED:
+        task.state = BackgroundJobState.QUEUED
         task.pause_requested = False
         task.lease_owner = None
         task.lease_expires_at = None
@@ -1119,8 +1359,8 @@ def control_task_core(session: Session, material_id: UUID, action: str) -> Proce
         material.error = None
         session.flush()
         return task
-    elif action == "retry" and task.state == ProcessingTaskState.FAILED:
-        task.state = ProcessingTaskState.QUEUED
+    elif action == "retry" and task.state == BackgroundJobState.FAILED:
+        task.state = BackgroundJobState.QUEUED
         task.error = None
         task.lease_owner = None
         task.lease_expires_at = None
@@ -1210,6 +1450,7 @@ def copy_page(session: Session, page: MaterialPage, revision: int) -> MaterialPa
         markdown=page.markdown,
         quality=page.quality,
         confidence=page.confidence,
+        parser_mode=page.parser_mode,
         elements=list(page.elements),
         diagnostics=list(page.diagnostics),
         image_path=page.image_path,
@@ -1767,6 +2008,7 @@ def delete_library_materials(session: Session, material_ids: Sequence[UUID]) -> 
         sources.append(material_path(material.storage_path))
         directories.append((settings.storage_dir / "pages" / str(material_id)).resolve())
         directories.append((settings.storage_dir / "snapshots" / str(material_id)).resolve())
+        directories.append((settings.storage_dir / "typst-rendered" / str(material_id)).resolve())
 
     session.rollback()
     with session.begin():
@@ -1774,6 +2016,12 @@ def delete_library_materials(session: Session, material_ids: Sequence[UUID]) -> 
             material = material_or_404(session, material_id)
             session.execute(
                 delete(ProjectMaterial).where(ProjectMaterial.material_id == material_id)
+            )
+            # У `background_jobs` нет внешнего ключа на материал: без явного
+            # удаления задача удалённого файла остаётся в панели «Фоновые
+            # задачи» навсегда, а воркер ещё и берётся её выполнять.
+            session.execute(
+                delete(BackgroundJob).where(BackgroundJob.material_id == material_id)
             )
             delete_material_index(session, material_id)
             session.delete(material)

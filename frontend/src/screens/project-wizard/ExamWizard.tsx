@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { preparationHeuristics } from "../../api/generated/preparationHeuristics";
 import { Brain, Calculator, CalendarDays, Check, ClipboardCheck, FileCheck2, FileText, Files, LibraryBig, ListChecks, Pencil, Sparkles, TicketCheck, Upload } from "lucide-react";
 import {
   controlMaterialProcessing,
@@ -27,13 +28,16 @@ import {
   type ProgramNodeRead,
   type ProjectDetail,
   type PreparationEstimateInput,
+  type PreparationEstimateRunRead,
   type PreparationEstimatePreflightRead,
   type StartingLevel,
   type StudyFormat,
   type TargetOutcome,
 } from "../../api/projects";
 import { getAiSettings, isAiApiError, type AiSettingsRead } from "../../api/ai";
+import { findResumableBackgroundJob, getBackgroundJobResult } from "../../api/backgroundJobs";
 import type { WizardDraftController } from "../../hooks/useWizardDraft";
+import { useBackgroundJob } from "../../hooks/useBackgroundJob";
 import { useProjectMaterials } from "../../hooks/useProjectMaterials";
 import { Button, Card, Checkbox, Dialog, Field, IconButton, LoadingState, PageHead, RadioCards, SegmentedTabs, Tooltip } from "../../components/ui";
 import type { RadioCardOption } from "../../components/ui";
@@ -223,10 +227,10 @@ function getPreparationForecast(form: ExamForm, itemCount: number) {
   const deadline = new Date(`${form.deadline}T${form.examTime || "23:59"}:00`);
   const daysLeft = Math.max(1, Math.ceil((deadline.getTime() - Date.now()) / 86_400_000));
   const minutes = positive(form.minutesPerDay) ?? 0;
-  const minutesPerItem = form.format === "tickets" ? 50 : form.format === "questions_tasks" ? 36 : 30;
-  const startMultiplier: Record<StartingLevel, number> = { beginner: 1.35, familiar: 1, refreshing: 0.75 };
-  const goalMultiplier: Record<TargetOutcome, number> = { awareness: 0.6, understanding: 0.8, application: 1, mastery: 1.25 };
-  const practiceMultiplier = form.studyFormat === "practice" ? 1.1 : 1;
+  const minutesPerItem = preparationHeuristics.minutes[form.format === "tickets" ? "ticket" : form.format === "questions_tasks" ? "task" : "question"];
+  const startMultiplier = preparationHeuristics.starting_level;
+  const goalMultiplier = preparationHeuristics.target_level;
+  const practiceMultiplier = form.studyFormat === "practice" ? preparationHeuristics.practice_multiplier : 1;
   const ratio = (daysLeft * minutes) / (Math.max(1, itemCount) * minutesPerItem * startMultiplier[form.startingLevel] * goalMultiplier[form.targetOutcome] * practiceMultiplier);
 
   if (ratio < 0.35) return { title: "будет очень тяжело", text: "времени заметно меньше, чем требует выбранная цель." };
@@ -392,6 +396,15 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     input: PreparationEstimateInput;
   } | null>(null);
   const [preparationSuggestion, setPreparationSuggestion] = useState<PreparationSuggestion | null>(null);
+  const [preparationJobId, setPreparationJobId] = useState<string | null>(null);
+  // Снимок «на чём считали»: study_days/items_per_day/review_day_reserved не
+  // зависят от модели (см. build_schedule на бэкенде), их достаточно взять из
+  // того же preflight, что запускал задачу — заново спрашивать не нужно.
+  const [preparationContext, setPreparationContext] = useState<{
+    preview: PreparationEstimatePreflightRead;
+    input: PreparationEstimateInput;
+  } | null>(null);
+  const { job: preparationJob } = useBackgroundJob(preparationJobId);
   const initializedKey = useRef<string | null>(null);
   const projectMaterials = useProjectMaterials(controller.detail?.project.id);
   const programItemCount = (controller.detail?.program.nodes ?? []).filter((node) => node.node_type !== "section").length;
@@ -599,6 +612,71 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     }
   }, [form, preparationSuggestion, programItemCount]);
 
+  useEffect(() => {
+    // При заходе на шаг сверяемся с реестром: оценка нагрузки могла остаться
+    // идти в фоне с прошлого раза, если мастер был закрыт до её завершения.
+    const projectId = controller.detail?.project.id;
+    if (!projectId) return;
+    const abort = new AbortController();
+    void findResumableBackgroundJob("ai_preparation", { projectId }, abort.signal)
+      .then((active) => {
+        if (abort.signal.aborted || !active) return;
+        setEstimatePending(true);
+        setPreparationJobId(active.id);
+      })
+      .catch(() => undefined);
+    return () => abort.abort();
+  }, [controller.detail?.project.id]);
+
+  useEffect(() => {
+    if (!preparationJob || preparationJob.state === "queued" || preparationJob.state === "running" || preparationJob.state === "paused") {
+      return;
+    }
+    if (preparationJob.state === "failed") {
+      setEstimateError(new Error(preparationJob.error ?? "Не удалось получить оценку"));
+      setEstimatePending(false);
+      setPreparationJobId(null);
+      return;
+    }
+    if (preparationJob.state === "cancelled") {
+      setEstimatePending(false);
+      setPreparationJobId(null);
+      return;
+    }
+    const controller = new AbortController();
+    void getBackgroundJobResult<PreparationEstimateRunRead>(preparationJob.id, controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted) applyPreparationJobResult(result);
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) setEstimateError(caught);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setEstimatePending(false);
+          setPreparationJobId(null);
+        }
+      });
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preparationJob?.id, preparationJob?.state]);
+
+  function applyPreparationJobResult(result: PreparationEstimateRunRead) {
+    if (!preparationContext) return;
+    const { preview, input } = preparationContext;
+    setForm((current) => ({ ...current, minutesPerDay: String(result.minutes_per_day) }));
+    setPreparationSuggestion({
+      inputKey: preparationInputKey(form, input.item_count),
+      minutesPerDay: result.minutes_per_day,
+      studyDays: preview.study_days,
+      itemsPerDay: preview.items_per_day,
+      reviewDayReserved: preview.review_day_reserved,
+      rationale: result.rationale,
+      cached: result.cached,
+    });
+    setEstimateConfirmation(null);
+  }
+
   function preparationInput(): PreparationEstimateInput | null {
     const itemCount = positive(form.expectedCount) ?? programItemCount;
     if (!form.deadline || !form.format || itemCount <= 0) return null;
@@ -615,6 +693,9 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     };
   }
 
+  /** Запускает фоновую задачу и возвращается сразу с job_id — `estimatePending`
+   *  остаётся true до тех пор, пока задача не завершится (см. эффект выше),
+   *  а не до ответа этого запроса, как было при синхронном вызове. */
   async function applyPreparationEstimate(
     preview: PreparationEstimatePreflightRead,
     input: PreparationEstimateInput,
@@ -625,25 +706,15 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     setEstimatePending(true);
     setEstimateError(null);
     try {
-      const result = await runPreparationEstimate(projectId, {
+      const { job_id } = await runPreparationEstimate(projectId, {
         ...input,
         expected_input_hash: preview.input_hash,
         confirmed,
       });
-      setForm((current) => ({ ...current, minutesPerDay: String(result.minutes_per_day) }));
-      setPreparationSuggestion({
-        inputKey: preparationInputKey(form, input.item_count),
-        minutesPerDay: result.minutes_per_day,
-        studyDays: result.study_days,
-        itemsPerDay: result.items_per_day,
-        reviewDayReserved: result.review_day_reserved,
-        rationale: result.rationale,
-        cached: result.cached,
-      });
-      setEstimateConfirmation(null);
+      setPreparationContext({ preview, input });
+      setPreparationJobId(job_id);
     } catch (error) {
       setEstimateError(error);
-    } finally {
       setEstimatePending(false);
     }
   }
@@ -658,12 +729,12 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
       const preview = await preflightPreparationEstimate(projectId, input);
       if (preview.preflight.confirmation_required) {
         setEstimateConfirmation({ preview, input });
+        setEstimatePending(false);
       } else {
         await applyPreparationEstimate(preview, input, false);
       }
     } catch (error) {
       setEstimateError(error);
-    } finally {
       setEstimatePending(false);
     }
   }
@@ -1764,7 +1835,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
             : libraryPurpose === "exam_structure"
               ? "Выбрать список вопросов из Библиотеки"
               : libraryPurpose === "reference_answers"
-                ? "Выбрать эталонные ответы из Библиотеки"
+                ? "Выбрать ответы из Библиотеки"
                 : "Выбрать учебные материалы из Библиотеки"}
           purpose={libraryPurpose}
           examSlot={librarySlot ? SLOT_VALUE[librarySlot] : undefined}

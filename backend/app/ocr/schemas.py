@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import ParserMode
-from app.ocr.engines import RASTER_SCALE_OPTIONS
+from app.ocr.engines import RASTER_SCALE_OPTIONS, CloudStrategy
 
 RasterScale = Literal[*RASTER_SCALE_OPTIONS]
 EngineRuntime = Literal["worker", "gpu_service", "cloud"]
@@ -23,7 +25,6 @@ Readiness = Literal[
     "unavailable",
 ]
 JobState = Literal["running", "done", "failed", "cancelled"]
-ServiceState = Literal["running", "starting", "stopped", "failed", "absent", "unavailable"]
 
 
 class ApiModel(BaseModel):
@@ -77,45 +78,18 @@ class OcrModelRead(ApiModel):
     job_error: str
 
 
-class OcrGpuRead(ApiModel):
-    name: str
-    vram_mb: int | None
-    driver: str | None
-    source: str
-
-
-class OcrHardwareRead(ApiModel):
-    cpu_cores: int | None
-    ram_mb: int | None
-    free_disk_mb: int | None
-    gpu: OcrGpuRead | None
-    gpu_reason: str
-    notes: list[str]
-
-
-class OcrServiceRead(ApiModel):
-    state: ServiceState
-    summary: str
-    detail: str
-    can_start: bool
-    can_stop: bool
-
-
 class OcrEngineRead(ApiModel):
     mode: str
     title: str
     description: str
     trade_off: str
     runtime: EngineRuntime
-    configurable: bool
     enabled: bool
     available: bool
     readiness: Readiness
     status_detail: str
     # Что именно сейчас считает — модель или исполнитель, если это известно.
     active_label: str
-    # Настройки, применяемые только при следующем запуске GPU-сервиса.
-    restart_required: bool
     model_id: str | None
     device: str | None
     language: str | None
@@ -123,12 +97,53 @@ class OcrEngineRead(ApiModel):
     extra: dict[str, object]
     updated_at: datetime | None
     models: list[OcrModelRead]
-    service: OcrServiceRead | None
+
+
+class OcrCloudSettingsWrite(ApiModel):
+    """Что можно поменять в режиме «Облако» с экрана распознавания."""
+
+    provider_id: UUID | None = None
+    model_id: str | None = Field(default=None, max_length=200)
+    strategy: CloudStrategy
+
+
+class OcrCloudStrategyRead(ApiModel):
+    value: CloudStrategy
+    title: str
+    hint: str
+
+
+class OcrCloudModelRead(ApiModel):
+    """Кандидат в распознаватели страниц из локального каталога моделей."""
+
+    provider_id: UUID
+    provider_label: str
+    model_id: str
+    display_name: str
+    context_length: int | None
+    # Годится ли по правилу отбора и почему; причина показывается рядом.
+    suitable: bool
+    reason: str
+    # Чем модель хороша, если она в списке рекомендованных.
+    recommended_note: str
+    price_per_page_usd: Decimal | None
+
+
+class OcrCloudRead(ApiModel):
+    """Состояние режима «Облако»: выбранная модель, стратегия и цена страницы."""
+
+    external_models_enabled: bool
+    provider_id: UUID | None
+    provider_label: str
+    model_id: str | None
+    strategy: CloudStrategy
+    strategies: list[OcrCloudStrategyRead]
+    price_per_page_usd: Decimal | None
 
 
 class OcrSettingsRead(ApiModel):
     default_mode: ParserMode
     quality_threshold: float
     raster_scale: float
-    hardware: OcrHardwareRead
     engines: list[OcrEngineRead]
+    cloud: OcrCloudRead

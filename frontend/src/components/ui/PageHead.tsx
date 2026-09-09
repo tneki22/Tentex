@@ -10,6 +10,8 @@ interface PageHeadProps {
   lead?: string;
   /** Действия справа от заголовка: главная кнопка экрана. */
   actions?: ReactNode;
+  /** Содержимое по центру шапки, на одной высоте с заголовком и действиями. */
+  center?: ReactNode;
   /** Элемент слева от заголовка: кнопка «назад» там, где нет боковой панели. */
   leading?: ReactNode;
   /**
@@ -46,6 +48,7 @@ export function PageHead({
   eyebrow,
   lead,
   actions,
+  center,
   leading,
   placement = "page",
   children,
@@ -81,6 +84,7 @@ export function PageHead({
         {lead && <p className="lead">{lead}</p>}
         {children}
       </div>
+      {center && <div className="page-head-center">{center}</div>}
       {actions && <div className="page-head-actions">{actions}</div>}
     </header>
   );

@@ -13,14 +13,15 @@ from pydantic import (
 )
 
 from app.bindings.schemas import AffectedProjectPreview
+from app.materials.presentation import MaterialPresentationKind
 from app.models import (
+    BackgroundJobState,
     BlockClass,
     MaterialSourceKind,
     MaterialState,
     PageQuality,
     ParserMode,
     ProcessingStage,
-    ProcessingTaskState,
     RecognitionSource,
     SourceRole,
 )
@@ -119,11 +120,44 @@ class ProcessingStart(ApiModel):
         return self
 
 
+class TypstBuildWrite(ApiModel):
+    """Явно подтверждает сеть для пакетов и действия по уже показанным проблемам."""
+
+    entrypoint: str | None = Field(default=None, max_length=240)
+    download_packages: bool = False
+
+
+class TypstIssueRead(ApiModel):
+    kind: str
+    message: str
+    path: str | None = None
+    line: int | None = None
+    column: int | None = None
+    # Путь, под которым компилятор искал файл, — он же путь, куда его положить.
+    missing_path: str | None = None
+
+
+class TypstMaterialRead(ApiModel):
+    input_kind: str
+    entrypoint: str | None
+    # Заполняется только пока точка входа не выбрана: из чего выбирать.
+    entrypoint_candidates: list[str] = []
+    compiler_version: str | None
+    packages: list[dict[str, str]]
+    issues: list[TypstIssueRead]
+    has_rendered_pdf: bool
+
+
+class TypstStartRead(ApiModel):
+    material_id: UUID
+    job_id: UUID
+
+
 class ProcessingTaskRead(ApiModel):
     id: UUID
-    state: ProcessingTaskState
+    state: BackgroundJobState
     stage: ProcessingStage
-    parser_mode: ParserMode
+    parser_mode: ParserMode | None
     done: int
     total: int
     diagnostics: list[str]
@@ -200,6 +234,9 @@ class PageRead(ApiModel):
     markdown: str
     quality: PageQuality
     confidence: float | None
+    # NULL у текстового слоя (распознавание не потребовалось) и у страниц,
+    # разобранных до появления этого поля — тогда просмотрщик берёт режим версии.
+    parser_mode: ParserMode | None
     reviewed_at: datetime | None
     diagnostics: list[str]
     fragments: list[FragmentRead]
@@ -244,9 +281,6 @@ class LibraryMaterialRead(ApiModel):
     usage: list[LibraryUsageRead]
 
 
-MaterialPresentationKind = Literal[
-    "pdf", "image", "document", "plain_text", "web", "youtube", "audio"
-]
 OutlineSource = Literal["embedded", "recognized", "none"]
 
 
@@ -303,6 +337,10 @@ class LibraryMaterialDetailRead(LibraryMaterialRead):
     task: ProcessingTaskRead | None
     retrieved_at: datetime | None
     updated_at: datetime
+    # Путь от корня проекта, а не абсолютный: инспектор — не про то, куда
+    # установлен Tentex на этой машине, а про то, где файл лежит внутри `data/`.
+    storage_path: str
+    typst: TypstMaterialRead | None = None
 
 
 class LibraryMaterialAttachWrite(ApiModel):
@@ -322,11 +360,14 @@ class LibrarySearchHit(ApiModel):
     bbox: list[float]
     text: str
     rank: float
+    matched_forms: list[str] = []
 
 
 class LibrarySearchResult(ApiModel):
     query: str
     revision: int
+    #: Леммы, по которым искали, — просмотрщику для подписи под полем поиска.
+    terms: list[str] = []
     hits: list[LibrarySearchHit]
 
 

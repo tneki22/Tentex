@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import math
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from datetime import time as day_time
 from decimal import Decimal
+from io import BytesIO
 from typing import Any
 from uuid import UUID
 
+from PIL import Image
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -24,6 +28,7 @@ from app.ai.provider import (
     ProviderUsage,
 )
 from app.ai.schemas import (
+    AiImagePart,
     AiMessage,
     AiModelSelection,
     AiModelTestRead,
@@ -48,8 +53,27 @@ from app.models import (
 ZERO = Decimal("0")
 
 # Сбой одной из этих причин обычно временный (роутинг провайдера, пустой
-# ответ из-за неудачного размещения) — стоит попробовать тот же запрос ещё раз.
-_RETRYABLE_PROVIDER_CODES = {"ai_provider_unavailable", "ai_empty_response"}
+# ответ из-за неудачного размещения, упёршийся в потолок общий пул) — стоит
+# попробовать тот же запрос ещё раз.
+#
+# `ai_rate_limited` здесь потому, что дешёвые модели живут в общем пуле
+# провайдера: 429 прилетает не из-за нашего расхода, а из-за чужой нагрузки, и
+# через несколько секунд тот же запрос проходит. Разбор материала — это сотни
+# вызовов подряд, и без повтора один чужой всплеск ронял всю обработку.
+# `ai_invalid_credentials` и лимиты стоимости не повторяются никогда: ключ и
+# кошелёк от ожидания не чинятся.
+_RETRYABLE_PROVIDER_CODES = {
+    "ai_provider_unavailable",
+    "ai_empty_response",
+    "ai_rate_limited",
+    "ai_timeout",
+}
+
+# Паузы между попытками, по одной на каждый повтор: длина задаёт и число
+# повторов. Пауза растёт, чтобы не долбить провайдера, который и так ограничил
+# запросы; суммарно ожидание не превышает полминуты — дальше отказ честнее,
+# чем бесконечная «обработка».
+RETRY_BACKOFF_SECONDS: tuple[float, ...] = (2.0, 6.0, 15.0)
 
 # Человекочитаемые названия возможностей модели: попадают в текст ошибки,
 # когда выбранная модель не умеет то, что нужно функции.
@@ -57,7 +81,46 @@ _CAPABILITY_LABELS = {
     "structured_output": "структурированный ответ (response_format)",
     "streaming": "потоковый вывод",
     "audio_transcription": "приём аудио",
+    "image_input": "приём изображений",
 }
+
+# Оценка стоимости картинки в токенах. Модели считают её плитками: изображение
+# режется на квадраты 768×768, каждая плитка стоит фиксированно, а всё, что
+# мельче 384×384, идёт одной плиткой. Коэффициенты взяты у Gemini; у других
+# провайдеров они отличаются, но порядок тот же — числа нужны, чтобы
+# предупредить о стоимости заранее, а не чтобы вести бухгалтерию. Фактический
+# расход всё равно приходит в `usage` от провайдера.
+IMAGE_TILE_PX = 768
+IMAGE_SMALL_PX = 384
+IMAGE_TILE_TOKENS = 258
+
+
+def _data_url_bytes(url: str) -> bytes | None:
+    """Содержимое `data:`-URL. Ссылки наружу мы не отправляем, так что иначе — None."""
+    marker = "base64,"
+    index = url.find(marker)
+    if not url.startswith("data:") or index < 0:
+        return None
+    try:
+        return base64.b64decode(url[index + len(marker):], validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _image_tokens(url: str) -> int:
+    """Во сколько токенов обойдётся картинка. Неизвестный формат — одна плитка."""
+    payload = _data_url_bytes(url)
+    if payload is None:
+        return IMAGE_TILE_TOKENS
+    try:
+        with Image.open(BytesIO(payload)) as image:
+            width, height = image.size
+    except (OSError, ValueError):
+        return IMAGE_TILE_TOKENS
+    if width <= IMAGE_SMALL_PX and height <= IMAGE_SMALL_PX:
+        return IMAGE_TILE_TOKENS
+    tiles = math.ceil(width / IMAGE_TILE_PX) * math.ceil(height / IMAGE_TILE_PX)
+    return tiles * IMAGE_TILE_TOKENS
 
 
 @dataclass(frozen=True)
@@ -74,6 +137,10 @@ class AiTextRequest[T: BaseModel]:
     # Лимит completion у рассуждающих моделей расходуется и на скрытые
     # рассуждения. Операция задаёт нижнюю границу для полезного JSON-ответа.
     minimum_output_tokens: int = 0
+    # Заполняется, только когда вызов идёт из очереди фоновых операций
+    # (`app.ai.jobs.process_ai_job`) — прямые вызовы (например, экзаменационный
+    # чат) его не передают, и `AiRun.job_id` остаётся пустым.
+    job_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -127,9 +194,13 @@ class ModelGateway:
         self,
         session: Session,
         transport: OpenAICompatibleTransport | None = None,
+        retry_backoff: Sequence[float] = RETRY_BACKOFF_SECONDS,
     ) -> None:
         self.session = session
         self.transport = transport
+        # Паузы между повторами. Тесты передают пустую последовательность,
+        # чтобы не ждать по-настоящему.
+        self.retry_backoff = tuple(retry_backoff)
 
     async def preflight(self, request: AiTextRequest[Any]) -> AiPreflight:
         resolved = resolve_model(self.session, request.role, request.request_model_override)
@@ -186,12 +257,12 @@ class ModelGateway:
             context_manifest=request.context_manifest,
         )
 
-    async def complete[T: BaseModel](self, request: AiTextRequest[T]) -> AiResult[T]:
-        if request.response_model is None:
-            raise AiGatewayError(
-                "Для complete нужна схема структурного ответа",
-                code="ai_response_schema_missing",
-            )
+    async def preflight_confirmed(self, request: AiTextRequest[Any]) -> AiPreflight:
+        """Предпросмотр с проверкой подтверждения — общий для `complete()`,
+        `stream()` и постановки в очередь (`start()` у ролей ИИ, Ш4 плана):
+        задача не должна попасть в очередь, если стоимость или контекст ещё не
+        подтверждены, а не проваливаться на этом уже во время исполнения.
+        """
         preflight = await self.preflight(request)
         if preflight.confirmation_required and not request.confirmed:
             raise AiGatewayError(
@@ -199,6 +270,15 @@ class ModelGateway:
                 code="ai_confirmation_required",
                 context={"reasons": preflight.confirmation_reasons},
             )
+        return preflight
+
+    async def complete[T: BaseModel](self, request: AiTextRequest[T]) -> AiResult[T]:
+        if request.response_model is None:
+            raise AiGatewayError(
+                "Для complete нужна схема структурного ответа",
+                code="ai_response_schema_missing",
+            )
+        preflight = await self.preflight_confirmed(request)
         resolved = resolve_model(self.session, request.role, request.request_model_override)
         cache = self.session.get(AiCacheEntry, preflight.request_hash)
         if cache is not None and resolved.role.cache_policy != "none":
@@ -213,10 +293,13 @@ class ModelGateway:
             "max_output_tokens": preflight.estimated_output_tokens,
         })
         combined_usage = ProviderUsage()
-        # Один сбой роутинга провайдера или один невалидный по схеме ответ не
-        # должен ронять весь вызов — модели даётся ровно одна попытка
-        # исправиться, прежде чем мы сдаёмся и записываем неудачу.
-        for attempt in range(2):
+        # Временный сбой провайдера или один невалидный по схеме ответ не должен
+        # ронять весь вызов: попытки повторяются с растущей паузой, и только
+        # исчерпав их, мы сдаёмся и записываем неудачу. Схему модель
+        # переписывает по замечанию, поэтому её попытка — последняя.
+        attempts = len(self.retry_backoff) + 1
+        for attempt in range(attempts):
+            last_attempt = attempt == attempts - 1
             try:
                 result = await transport.complete(
                     model=resolved.model_id,
@@ -226,7 +309,8 @@ class ModelGateway:
                     parameters=parameters,
                 )
             except ProviderError as error:
-                if attempt == 0 and error.code in _RETRYABLE_PROVIDER_CODES:
+                if not last_attempt and error.code in _RETRYABLE_PROVIDER_CODES:
+                    await asyncio.sleep(self.retry_backoff[attempt])
                     continue
                 self._fail_run(run.id, error.code, started)
                 raise _gateway_error(error.code, error.detail) from error
@@ -234,7 +318,7 @@ class ModelGateway:
             try:
                 value = request.response_model.model_validate_json(result.content)
             except (ValidationError, ValueError, json.JSONDecodeError) as error:
-                if attempt == 0:
+                if not last_attempt:
                     messages = [
                         *messages,
                         {"role": "assistant", "content": result.content},
@@ -272,13 +356,7 @@ class ModelGateway:
         raise AssertionError("unreachable: loop always returns or raises")
 
     async def stream(self, request: AiTextRequest[Any]) -> AsyncIterator[AiStreamEvent]:
-        preflight = await self.preflight(request)
-        if preflight.confirmation_required and not request.confirmed:
-            raise AiGatewayError(
-                "Перед вызовом нужно подтвердить стоимость или большой контекст",
-                code="ai_confirmation_required",
-                context={"reasons": preflight.confirmation_reasons},
-            )
+        preflight = await self.preflight_confirmed(request)
         resolved = resolve_model(self.session, request.role, request.request_model_override)
         transport = self.transport or production_transport(self.session, resolved.provider.id)
         run = self._start_run(request, resolved, preflight)
@@ -403,15 +481,52 @@ class ModelGateway:
 
     @staticmethod
     def _estimate_input(messages: list[AiMessage], response_schema: dict[str, Any] | None) -> int:
+        """Оценка входных токенов до вызова.
+
+        Картинку нельзя мерить длиной её base64: страница весит около мегабайта,
+        и по буквам получилось бы полмиллиона токенов вместо полутора тысяч —
+        подтверждение стоимости срабатывало бы на каждой странице и врало бы в
+        сотни раз. Поэтому текст считается по длине, картинки — по плиткам.
+        """
+        image_tokens = 0
+        text_parts: list[Any] = []
+        for message in messages:
+            if isinstance(message.content, str):
+                text_parts.append(message.content)
+                continue
+            for part in message.content:
+                if isinstance(part, AiImagePart):
+                    image_tokens += _image_tokens(part.image_url.url)
+                else:
+                    text_parts.append(part.text)
         payload = json.dumps(
-            {
-                "messages": [item.model_dump() for item in messages],
-                "schema": response_schema,
-            },
+            {"text": text_parts, "schema": response_schema},
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode()
-        return max(1, math.ceil(len(payload) / 3))
+        return max(1, image_tokens + math.ceil(len(payload) / 3))
+
+    @staticmethod
+    def _hashable_messages(messages: list[AiMessage]) -> list[dict[str, Any]]:
+        """Сообщения для ключа кэша: картинка сворачивается в свой отпечаток.
+
+        Ключ должен оставаться коротким и стабильным. Тот же вырез страницы,
+        полученный при повторном разборе, даёт тот же sha256 — и тот же ключ.
+        """
+        result: list[dict[str, Any]] = []
+        for message in messages:
+            dumped = message.model_dump()
+            content = dumped.get("content")
+            if not isinstance(content, list):
+                result.append(dumped)
+                continue
+            for part in content:
+                if part.get("type") != "image_url":
+                    continue
+                url = str(part["image_url"]["url"])
+                part["image_url"]["url"] = f"sha256:{hashlib.sha256(url.encode()).hexdigest()}"
+            result.append(dumped)
+        return result
 
     @staticmethod
     def _estimated_cost(
@@ -463,7 +578,7 @@ class ModelGateway:
                 "parameters": parameters,
                 "prompt_version": resolved.role.prompt_version,
                 "response_schema": response_schema,
-                "messages": [item.model_dump() for item in request.messages],
+                "messages": ModelGateway._hashable_messages(request.messages),
                 "project_id": str(request.project_id) if request.project_id else None,
                 "context_manifest": request.context_manifest,
                 "source_fingerprint": request.source_fingerprint,
@@ -484,6 +599,7 @@ class ModelGateway:
         with self.session.begin():
             run = AiRun(
                 project_id=request.project_id,
+                job_id=request.job_id,
                 provider_id=resolved.provider.id,
                 provider_label_snapshot=resolved.provider.label,
                 role=request.role,
@@ -519,6 +635,7 @@ class ModelGateway:
             cache.last_used_at = utc_now()
             run = AiRun(
                 project_id=request.project_id,
+                job_id=request.job_id,
                 provider_id=resolved.provider.id,
                 provider_label_snapshot=resolved.provider.label,
                 role=request.role,

@@ -1,5 +1,6 @@
 import { ProjectApiError, request, type ProgramChangeResult } from "./projects";
 import type { AiPreflight, AiUsage } from "./ai";
+import type { BackgroundJobStartRead } from "./backgroundJobs";
 
 export type MaterialPurpose = "exam_structure" | "reference_answers" | "study_source";
 export type ExamMaterialSlot =
@@ -12,19 +13,25 @@ export type MaterialState =
   | "queued"
   | "processing"
   | "paused"
+  | "needs_input"
   | "ready"
   | "failed";
-export type ParserMode = "fast" | "textbook";
+export type ParserMode = "fast" | "cloud";
+/** Название режима распознавания в интерфейсе. Одно место на весь фронтенд. */
+export const PARSER_MODE_TITLES: Record<ParserMode, string> = {
+  fast: "Быстро",
+  cloud: "Облако",
+};
 export type PageQuality = "native" | "ocr" | "ocr_low";
 export type RecognitionSource = "native" | "ocr" | "vl" | "manual";
 export type SourceRole = "main" | "additional" | "reference";
-export type MaterialSourceKind = "file" | "text" | "url" | "youtube" | "audio";
+export type MaterialSourceKind = "file" | "text" | "url" | "youtube" | "audio" | "typst";
 
 export interface ProcessingTaskRead {
   id: string;
   state: "queued" | "running" | "paused" | "failed" | "completed";
   stage: "queued" | "extract" | "segment" | "complete";
-  parser_mode: ParserMode;
+  parser_mode: ParserMode | null;
   done: number;
   total: number;
   diagnostics: string[];
@@ -106,6 +113,8 @@ export interface MaterialPageRead {
   markdown: string;
   quality: PageQuality;
   confidence: number | null;
+  /** null — текстовый слой (распознавание не требовалось) либо старая страница без этого поля. */
+  parser_mode: ParserMode | null;
   reviewed_at: string | null;
   diagnostics: string[];
   fragments: MaterialFragmentRead[];
@@ -160,7 +169,8 @@ export type MaterialPresentationKind =
   | "plain_text"
   | "web"
   | "youtube"
-  | "audio";
+  | "audio"
+  | "typst";
 
 export type OutlineSource = "embedded" | "recognized" | "none";
 
@@ -222,7 +232,32 @@ export interface LibraryMaterialDetailRead extends LibraryMaterialRead {
   task: ProcessingTaskRead | null;
   retrieved_at: string | null;
   updated_at: string;
+  storage_path: string;
+  typst: TypstMaterialRead | null;
 }
+
+export interface TypstIssueRead {
+  kind: string;
+  message: string;
+  path: string | null;
+  line: number | null;
+  column: number | null;
+  /** Куда компилятор ходил за файлом — туда же его и класть. */
+  missing_path: string | null;
+}
+
+export interface TypstMaterialRead {
+  input_kind: "single" | "folder" | "zip";
+  entrypoint: string | null;
+  /** Непусто, только пока точка входа не выбрана: из чего выбирать. */
+  entrypoint_candidates: string[];
+  compiler_version: string | null;
+  packages: Array<{ namespace: string; name: string; version: string }>;
+  issues: TypstIssueRead[];
+  has_rendered_pdf: boolean;
+}
+
+export interface TypstStartRead { material_id: string; job_id: string; }
 
 export interface LibrarySearchHit {
   fragment_id: string;
@@ -231,11 +266,15 @@ export interface LibrarySearchHit {
   bbox: number[];
   text: string;
   rank: number;
+  /** Словоформы из текста, совпавшие с запросом, — для подсветки на клиенте. */
+  matched_forms: string[];
 }
 
 export interface LibrarySearchResult {
   query: string;
   revision: number;
+  /** Леммы, по которым искали. */
+  terms: string[];
   hits: LibrarySearchHit[];
 }
 
@@ -523,7 +562,7 @@ export const runMaterialPageCleanup = (
     confirmed: boolean;
   },
   signal?: AbortSignal,
-): Promise<CleanupRunRead> => request(
+): Promise<BackgroundJobStartRead> => request(
   `${materialPath(projectId, materialId)}/pages/${page}/ai-cleanup`,
   { method: "POST", body: JSON.stringify(command), signal },
 );
@@ -614,6 +653,46 @@ export function uploadLibraryMaterial(
   return uploadFormWithProgress<LibraryMaterialDetailRead>("/api/materials/upload", form, onProgress);
 }
 
+export async function uploadTypstMaterial(
+  inputKind: "single" | "folder" | "zip",
+  files: File[],
+  paths: string[],
+  entrypoint?: string,
+): Promise<LibraryMaterialDetailRead> {
+  const form = new FormData();
+  form.set("input_kind", inputKind);
+  if (entrypoint) form.set("entrypoint", entrypoint);
+  if (inputKind === "zip") form.set("file", files[0]);
+  else files.forEach((file, index) => {
+    form.append("files", file);
+    form.append("paths", paths[index] || file.name);
+  });
+  const started = await uploadFormWithProgress<TypstStartRead>("/api/materials/typst", form);
+  return getLibraryMaterial(started.material_id);
+}
+
+/** Дослать в проект недостающие файлы ровно по тем путям, где их искал Typst. */
+export async function addTypstFiles(
+  materialId: string,
+  files: File[],
+  targetPaths: string[],
+): Promise<TypstStartRead> {
+  const form = new FormData();
+  files.forEach((file, index) => {
+    form.append("files", file);
+    form.append("target_paths", targetPaths[index] ?? file.name);
+  });
+  return uploadFormWithProgress<TypstStartRead>(`${libraryPath(materialId)}/typst/files`, form);
+}
+
+export const buildTypstMaterial = (
+  materialId: string,
+  command: { entrypoint?: string; download_packages: boolean },
+): Promise<TypstStartRead> => request(`${libraryPath(materialId)}/typst/build`, {
+  method: "POST",
+  body: JSON.stringify(command),
+});
+
 export const createLibraryTextMaterial = (
   command: { name: string; text: string },
 ): Promise<LibraryMaterialDetailRead> => request("/api/materials/text", {
@@ -664,6 +743,12 @@ export const librarySourceUrl = (materialId: string, revision?: number): string 
   revision === undefined
     ? `${libraryPath(materialId)}/source`
     : `${libraryPath(materialId)}/source?revision=${revision}`;
+
+/** Собранный PDF Typst-проекта. Без версии — текущая сборка, как и у исходника. */
+export const libraryRenderedUrl = (materialId: string, revision?: number): string =>
+  revision === undefined
+    ? `${libraryPath(materialId)}/rendered`
+    : `${libraryPath(materialId)}/rendered?revision=${revision}`;
 
 export const searchLibraryMaterial = (
   materialId: string,
@@ -757,7 +842,7 @@ export const runLibraryPageCleanup = (
     confirmed: boolean;
   },
   signal?: AbortSignal,
-): Promise<CleanupRunRead> => request(
+): Promise<BackgroundJobStartRead> => request(
   `${libraryPath(materialId)}/pages/${page}/ai-cleanup`,
   { method: "POST", body: JSON.stringify(command), signal },
 );

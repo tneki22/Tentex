@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   BookOpen,
   CheckCircle2,
+  CreditCard,
   ChevronLeft,
   ChevronRight,
   FileImage,
@@ -36,6 +37,7 @@ import {
   importMaterialReferenceAnswers,
   materialFragmentAssetUrl,
   materialPageImageUrl,
+  searchLibraryMaterial,
   updateMaterialPageText,
 } from "../api/materials";
 import type {
@@ -55,6 +57,8 @@ import {
   ProjectNav,
   QualityBadge,
 } from "../components/domain";
+import { usePendingReviewJob } from "../hooks/usePendingReviewJob";
+import { AnswersAiPlanDialog } from "./answers/AnswersAiPlanDialog";
 import {
   Button,
   ConfirmDialog,
@@ -71,6 +75,7 @@ import {
 import { MetricList } from "../components/domain";
 import { useBindings } from "../hooks/useBindings";
 import { useConspectSummary } from "../hooks/useConspect";
+import { useDocumentSearch } from "../hooks/useDocumentSearch";
 
 // Прямой импорт файла, а не барреля components/domain: тянет Milkdown только
 // когда реально открыт «Сводный конспект» (см. ProjectWorkspace.tsx).
@@ -84,7 +89,7 @@ import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTr
 import { AiCleanupPanel } from "./AiCleanupPanel";
 import { MaterialFileTab } from "./materials/MaterialFileTab";
 import { MaterialProcessingPanels } from "./materials/MaterialProcessingPanels";
-import { StructuredPage } from "../components/domain/material-viewer";
+import { DocumentSearchField, PageNumberInput, StructuredPage } from "../components/domain/material-viewer";
 
 const EMPTY_STRING_SET: Set<string> = new Set();
 const EMPTY_TITLES_MAP: Map<string, string[]> = new Map();
@@ -98,13 +103,14 @@ const STATUS: Record<MaterialRead["status"], { label: string; tone: "neutral" | 
   queued: { label: "В очереди", tone: "info" },
   processing: { label: "Разбирается", tone: "info" },
   paused: { label: "На паузе", tone: "warning" },
+  needs_input: { label: "Нужны файлы", tone: "warning" },
   ready: { label: "Готов", tone: "success" },
   failed: { label: "Ошибка", tone: "danger" },
 };
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "Структура экзамена",
-  reference_answers: "Эталонные ответы",
+  reference_answers: "Ответы",
   study_source: "Учебный источник",
 };
 
@@ -255,7 +261,7 @@ function MaterialOverview({
             <div>
               <p className="materials-kicker">Приоритет этапа 5</p>
               <h1>Материалы экзамена</h1>
-              <p>Загрузите список вопросов, эталонные ответы и учебные источники.</p>
+              <p>Загрузите список вопросов, ответы и учебные источники.</p>
             </div>
             <div className="material-entry-actions is-end">
               <Button onClick={onAdd}><Upload size={15} /> Добавить материал</Button>
@@ -329,7 +335,7 @@ function AddMaterialDialog({
   const [externalMode, setExternalMode] = useState<"url" | "youtube" | null>(null);
   const [externalUrl, setExternalUrl] = useState("");
   const [text, setText] = useState("");
-  const [name, setName] = useState("Эталонные ответы.txt");
+  const [name, setName] = useState("Ответы.txt");
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [pendingAnswers, setPendingAnswers] = useState<"file" | "text" | null>(null);
 
@@ -353,7 +359,7 @@ function AddMaterialDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={textMode ? "Вставить эталонные ответы" : externalMode ? externalMode === "url" ? "Добавить веб-страницу" : "Добавить YouTube-транскрипт" : "Добавить материал"}
+      title={textMode ? "Вставить ответы" : externalMode ? externalMode === "url" ? "Добавить веб-страницу" : "Добавить YouTube-транскрипт" : "Добавить материал"}
       description={textMode
         ? "Заголовок ответа должен точно совпадать с названием вопроса программы."
         : externalMode
@@ -399,7 +405,7 @@ function AddMaterialDialog({
           <button type="button" disabled={busy} onClick={() => chooseAnswers("file")}>
             <FileText size={18} />
             <span>
-              <strong>Эталонные ответы</strong>
+              <strong>Ответы</strong>
               <small>
                 {answersMaterial
                   ? `Сейчас: ${answersMaterial.display_name}. Файл ответов один — можно заменить`
@@ -425,7 +431,7 @@ function AddMaterialDialog({
       <ConfirmDialog
         open={replaceOpen}
         onOpenChange={setReplaceOpen}
-        title="Заменить файл эталонных ответов?"
+        title="Заменить файл с ответами?"
         confirmLabel="Заменить"
         onConfirm={() => {
           const target = pendingAnswers;
@@ -438,11 +444,11 @@ function AddMaterialDialog({
         }}
       >
         <p>
-          Сейчас эталонные ответы берутся из «{answersMaterial?.display_name}». Проект
+          Сейчас ответы берутся из «{answersMaterial?.display_name}». Проект
           держит один такой файл: с прежнего снимется назначение, и он останется в
           материалах как учебный источник.
         </p>
-        <p>Уже заполненные эталоны и привязки старого файла сохранятся.</p>
+        <p>Уже заполненные ответы и привязки старого файла сохранятся.</p>
       </ConfirmDialog>
     </Dialog>
   );
@@ -466,14 +472,14 @@ function DocumentView({
   material,
   page,
   viewMode,
-  query,
+  terms,
   binding,
 }: {
   projectId: string;
   material: MaterialRead;
   page: MaterialPageRead;
   viewMode: "original" | "text";
-  query: string;
+  terms: string[];
   binding: DocumentBindingProps;
 }) {
   if (viewMode === "original" && (material.media_type === "application/pdf" || material.media_type.startsWith("image/"))) {
@@ -513,9 +519,8 @@ function DocumentView({
     <div className={`materials-pages is-text ${material.parser_mode !== "fast" && page.quality === "ocr_low" ? "is-ocr-low" : ""}`.trim()}>
       <StructuredPage
         showOcrReview={material.parser_mode !== "fast"}
-        preserveLayout={material.parser_mode === "textbook"}
         page={page}
-        query={query}
+        terms={terms}
         assetUrl={(fragmentId) => materialFragmentAssetUrl(projectId, material.id, fragmentId)}
         className={`materials-page materials-structured-page ${material.parser_mode !== "fast" && page.quality === "ocr_low" ? "is-ocr-low" : ""}`.trim()}
         fragmentProps={(fragment) => {
@@ -740,6 +745,7 @@ const MECHANISM_LABEL: Record<BindingFragmentRead["mechanism"], string> = {
 };
 
 interface BindingsTabProps {
+  projectId: string;
   activeNode: ProgramTreeNode | null;
   studyNodeCount: number;
   onOpenPicker: () => void;
@@ -787,6 +793,7 @@ function nodeLabel(nodeNumberById: Map<string, string>, node: { program_node_id:
 }
 
 function BindingsTab({
+  projectId,
   activeNode,
   studyNodeCount,
   onOpenPicker,
@@ -1020,8 +1027,11 @@ function BindingsTab({
             </ul>
           )}
           <div className="materials-button-stack">
+            <Link className="primary-button" to={`/projects/${projectId}/cards?mode=creation&path=fragment&fragment=${focusedFragment.id}`}>
+              <CreditCard size={14} /> В карточку
+            </Link>
             {activeNode && !alreadyBoundToActive && (
-              <Button onClick={onBindFocusedToActive}><Link2 size={14} /> Привязать к выбранному вопросу</Button>
+              <Button variant="secondary" onClick={onBindFocusedToActive}><Link2 size={14} /> Привязать к выбранному вопросу</Button>
             )}
             <Button variant="secondary" onClick={onOpenPickerForFocused}>
               {focusedFragmentBindings.length > 0 ? "Привязать ещё к одному вопросу" : "Привязать к другому вопросу"}
@@ -1192,12 +1202,19 @@ function MaterialSurface() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
   const [autoMatchOpen, setAutoMatchOpen] = useState(false);
+  const [aiPlanOpen, setAiPlanOpen] = useState(false);
+  // Разметка ответов моделью досчиталась в фоне и ждёт человека — открываем
+  // диалог с готовым планом сразу, без поиска нужной кнопки на экране.
+  const answersReviewJob = usePendingReviewJob(
+    "ai_answer_sections",
+    { projectId, materialId },
+    Boolean(materialId),
+  );
   const [pageNumber, setPageNumber] = useState(1);
   const [page, setPage] = useState<MaterialPageRead | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"original" | "text">("original");
   const [notice, setNotice] = useState<NoticeState | null>(null);
-  const [documentQuery, setDocumentQuery] = useState("");
   /** «fit» — вписать страницу целиком: с ним документ открывается, а не с обрезанного 100%. */
   const [zoom, setZoom] = useState<number | "fit">("fit");
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
@@ -1244,6 +1261,8 @@ function MaterialSurface() {
   useEffect(() => {
     setViewMode(hasOriginal ? "original" : "text");
   }, [hasOriginal, material?.id]);
+
+  useEffect(() => { if (answersReviewJob) setAiPlanOpen(true); }, [answersReviewJob]);
 
   const treeResult = useMemo(() => {
     try { return buildProgramTree(project?.program.nodes ?? []); }
@@ -1316,6 +1335,35 @@ function MaterialSurface() {
     });
   }, [pageCount]);
 
+  // Поиск идёт по всему материалу через тот же FTS5, что и в Библиотеке:
+  // ручка `/api/materials/{id}/search` про проект ничего не знает.
+  const searchProvider = useCallback(async (value: string, signal: AbortSignal) => {
+    if (!material) return [];
+    const result = await searchLibraryMaterial(material.id, value, { signal });
+    return result.hits.map((hit) => ({
+      fragmentId: hit.fragment_id,
+      pageNumber: hit.page_number,
+      text: hit.text,
+      blockTitle: hit.block_title,
+      matchedForms: hit.matched_forms,
+    }));
+  }, [material]);
+  const search = useDocumentSearch(searchProvider);
+
+  useEffect(() => {
+    if (!search.current) return;
+    if (search.current.pageNumber !== pageNumber) goToPage(search.current.pageNumber);
+    // Страница успевает смениться и отрисоваться раньше, чем ищется якорь.
+    const timer = window.setTimeout(() => {
+      document
+        .getElementById(`fragment-${search.current?.fragmentId}`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 120);
+    return () => window.clearTimeout(timer);
+    // Перепрыгивать надо на смену совпадения, а не на каждый рендер страницы.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.current?.fragmentId, search.current?.pageNumber]);
+
   useEffect(() => {
     const controller = new AbortController();
     void getProject(projectId, controller.signal).then(setProject).catch(() => undefined);
@@ -1372,6 +1420,15 @@ function MaterialSurface() {
     if (focusParam) {
       setFocusedFragmentId(focusParam);
       setInspectorTab("bindings");
+    }
+    // `node` приходит из предпросмотра источника в Рабочей области: там вопрос
+    // уже выбран, и переспрашивать его здесь незачем. Режим привязки включается
+    // сразу — иначе клики по абзацам молча ничего не делают.
+    const nodeParam = searchParams.get("node");
+    if (nodeParam) {
+      setActiveNodeId(nodeParam);
+      setInspectorTab("bindings");
+      setBindingMode(true);
     }
     // Параметры читаются один раз при переходе на материал, дальше страницами
     // управляет сам экран — эффект не должен реагировать на их изменения.
@@ -1742,8 +1799,8 @@ function MaterialSurface() {
       void bindings.refreshSummary();
       say(
         result.created_answers
-          ? "Раздел привязан, эталон заполнен. Решение запомнено — повторная привязка его не потеряет."
-          : "Раздел привязан; эталон у вопроса уже был и не тронут.",
+          ? "Раздел привязан, ответ заполнен. Решение запомнено — повторная привязка его не потеряет."
+          : "Раздел привязан; ответ у вопроса уже был и не тронут.",
         "success",
       );
     } catch (caught) {
@@ -1755,7 +1812,7 @@ function MaterialSurface() {
     if (!material) return;
     try {
       const result = await importMaterialReferenceAnswers(projectId, material.id);
-      say(`Создано эталонов: ${result.created}; пропущено существующих: ${result.skipped_existing}.`, "success");
+      say(`Создано ответов: ${result.created}; пропущено существующих: ${result.skipped_existing}.`, "success");
     } catch (caught) {
       say(caught instanceof Error ? caught.message : "Импорт не выполнен", "danger");
     }
@@ -1836,10 +1893,16 @@ function MaterialSurface() {
                 <Button variant={viewMode === "text" ? "secondary" : "ghost"} onClick={() => setViewMode("text")}>Текст</Button>
                 <div className="materials-page-tools">
                   <IconButton label="Предыдущая страница" disabled={pageNumber <= 1} onClick={() => goToPage(pageNumber - 1)}><ChevronLeft size={15} /></IconButton>
-                  <span>{pageNumber} / {pageCount}</span>
+                  <PageNumberInput page={pageNumber} pageCount={pageCount} onPageChange={goToPage} />
                   <IconButton label="Следующая страница" disabled={pageNumber >= pageCount} onClick={() => goToPage(pageNumber + 1)}><ChevronRight size={15} /></IconButton>
                 </div>
-                <label className="materials-search-tools is-open"><Search size={14} /><span className="sr-only">Найти на странице</span><input type="search" value={documentQuery} onChange={(event) => setDocumentQuery(event.target.value)} placeholder="Найти на странице" /></label>
+                <DocumentSearchField
+                  query={search.query}
+                  matchLabel={search.label}
+                  searching={search.loading}
+                  onQueryChange={search.setQuery}
+                  onQuerySubmit={search.step}
+                />
                 <div className="materials-zoom-tools">
                   <IconButton label="Уменьшить" disabled={effectiveZoom <= 0.5} onClick={() => setZoom(Math.max(0.5, Number((effectiveZoom - 0.25).toFixed(2))))}><ZoomOut size={15} /></IconButton>
                   <Tooltip label={viewMode === "original" ? "Вписать страницу в окно" : "Вернуть обычный кегль"}>
@@ -1916,7 +1979,7 @@ function MaterialSurface() {
                     material={material}
                     page={page}
                     viewMode={viewMode}
-                    query={documentQuery}
+                    terms={search.forms}
                     binding={{
                       bindingMode: bindingMode && documentBindingEnabled,
                       activeNodeId: documentBindingEnabled ? activeNodeId : null,
@@ -1979,6 +2042,7 @@ function MaterialSurface() {
             onDismissNotice: () => setNotice(null),
           }}
           bindingsProps={{
+            projectId,
             activeNode,
             studyNodeCount: studyNodes.length,
             onOpenPicker: () => { setPickerTarget("active"); setPickerOpen(true); },
@@ -2035,8 +2099,24 @@ function MaterialSurface() {
         open={autoMatchOpen}
         onOpenChange={setAutoMatchOpen}
         onRunHeadings={() => void answerMatch.run()}
+        onRunAi={() => setAiPlanOpen(true)}
         onImportText={() => void importAnswers()}
       />
+      {material && (
+        <AnswersAiPlanDialog
+          open={aiPlanOpen}
+          projectId={projectId}
+          materialId={material.id}
+          nodeNumberById={nodeNumberById}
+          onOpenChange={setAiPlanOpen}
+          onApplied={(result) => {
+            refreshBindingData();
+            void bindings.refreshSummary();
+            setAnswersSuggestions({ materialId: material.id, items: result.suggestions });
+            if (result.suggestions.length) setInspectorTab("bindings");
+          }}
+        />
+      )}
       <AddMaterialDialog
         open={addOpen}
         busy={store.busy}
@@ -2124,7 +2204,7 @@ function MaterialSurface() {
             if (removal) void removal.then(() => navigate(`/projects/${projectId}/materials`));
           }}
         >
-          <p>Файл отвяжется от этого проекта. Эталоны, уже импортированные из него, сохранятся.</p>
+          <p>Файл отвяжется от этого проекта. Ответы, уже импортированные из него, сохранятся.</p>
         </ConfirmDialog>
       )}
     </div>

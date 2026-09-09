@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  addTypstFiles,
+  buildTypstMaterial,
   confirmLibraryPageReview,
   controlLibraryProcessing,
   getLibraryMaterial,
@@ -118,6 +120,17 @@ export function MaterialProcessingPanels({
   const control = (action: "pause" | "resume" | "retry" | "cancel") =>
     void run(() => controlLibraryProcessing(materialId, action));
 
+  // Сборка Typst не зависит от проекта: тот же материал Библиотеки, те же
+  // маршруты. Раньше здесь стояла заглушка, и внутри проекта кнопки молчали.
+  const buildTypst = (downloadPackages: boolean, entrypoint?: string) =>
+    void run(() => buildTypstMaterial(materialId, {
+      download_packages: downloadPackages,
+      entrypoint,
+    }));
+
+  const addTypstFile = (file: File, targetPath: string) =>
+    void run(() => addTypstFiles(materialId, [file], [targetPath]));
+
   const restore = (revision: number) => {
     setSelectedRevision(null);
     void run(() => restoreMaterialRevision(materialId, revision));
@@ -147,6 +160,8 @@ export function MaterialProcessingPanels({
         readOnly={false}
         onStart={start}
         onControl={control}
+        onTypstBuild={buildTypst}
+        onTypstAddFile={addTypstFile}
         onEditPage={onEditPage}
         onCleanupPage={onCleanupPage}
         onConfirmPageReview={confirmReview}

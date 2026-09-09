@@ -14,6 +14,14 @@ import {
   type ProgramGroupingRunRead,
   type ProgramNodeRead,
 } from "../api/projects";
+import {
+  ACTIVE_JOB_STATES,
+  cancelBackgroundJob,
+  findResumableBackgroundJob,
+  getBackgroundJobResult,
+  resolveBackgroundJob,
+} from "../api/backgroundJobs";
+import { useBackgroundJob } from "../hooks/useBackgroundJob";
 import { AiFailureNotice } from "../components/domain";
 import {
   Button,
@@ -90,17 +98,20 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
   const [runResult, setRunResult] = useState<ProgramGroupingRunRead | null>(null);
   const [groups, setGroups] = useState<ProgramGroupingItem[]>([]);
   const [originalGroups, setOriginalGroups] = useState<ProgramGroupingItem[]>([]);
-  const [busy, setBusy] = useState<"preflight" | "run" | "apply" | null>(null);
+  const [busy, setBusy] = useState<"preflight" | "starting" | "apply" | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const expectedIds = useMemo(() => nodes.map((node) => node.id), [nodes]);
   const validationMessage = validation(groups, expectedIds);
   const dirty = Boolean(runResult && JSON.stringify(groups) !== JSON.stringify(originalGroups));
+  const { job, error: jobError } = useBackgroundJob(jobId);
+  const jobActive = Boolean(job && ACTIVE_JOB_STATES.has(job.state));
 
   useEffect(() => {
     if (!open) return;
@@ -115,11 +126,18 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
     setError(null);
     setConfirmed(false);
     setConflict(false);
-    void preflightProgramGrouping(projectId, controller.signal)
-      .then((value) => {
+    setJobId(null);
+    // Диалог сперва спрашивает реестр, нет ли уже активной задачи этого вида
+    // для проекта — ушли и вернулись, задача всё это время шла в фоне.
+    Promise.all([
+      preflightProgramGrouping(projectId, controller.signal),
+      findResumableBackgroundJob("ai_grouping", { projectId }, controller.signal),
+    ])
+      .then(([value, active]) => {
         if (controller.signal.aborted) return;
         setPreflight(value);
         setConfirmed(!value.preflight.confirmation_required);
+        if (active) setJobId(active.id);
       })
       .catch((caught) => {
         if (!controller.signal.aborted) setError(caught);
@@ -129,6 +147,26 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
       });
     return () => controller.abort();
   }, [open, projectId]);
+
+  // Закрытие диалога задачу не отменяет — она живёт в очереди, и вернувшийся
+  // экран забирает её готовое предложение из реестра, а не зовёт модель заново.
+  useEffect(() => {
+    if (!job || job.state !== "completed" || runResult) return;
+    const controller = new AbortController();
+    void getBackgroundJobResult<ProgramGroupingRunRead>(job.id, controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        const suggestion = cloneGroups(result.suggestion.groups);
+        setRunResult(result);
+        setGroups(suggestion);
+        setOriginalGroups(cloneGroups(suggestion));
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) setError(caught);
+      });
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id, job?.state, runResult]);
 
   function requestClose() {
     if (dirty) {
@@ -144,19 +182,16 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
-    setBusy("run");
+    setBusy("starting");
     setError(null);
     setConflict(false);
     try {
-      const result = await runProgramGrouping(projectId, {
+      const { job_id } = await runProgramGrouping(projectId, {
         expected_program_revision: preflight.program_revision,
         expected_source_hash: preflight.source_hash,
         confirmed,
       }, controller.signal);
-      const suggestion = cloneGroups(result.suggestion.groups);
-      setRunResult(result);
-      setGroups(suggestion);
-      setOriginalGroups(cloneGroups(suggestion));
+      setJobId(job_id);
     } catch (caught) {
       if (!controller.signal.aborted) setError(caught);
     } finally {
@@ -178,6 +213,8 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
         expected_source_hash: runResult.source_hash,
         groups,
       }, controller.signal);
+      // Задача доведена до конца: предложение принято, из «ждут проверки» уходит.
+      if (jobId) void resolveBackgroundJob(jobId).catch(() => undefined);
       onApplied(result);
       onOpenChange(false);
     } catch (caught) {
@@ -188,10 +225,11 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
     }
   }
 
+  /** Остановить значит отменить саму фоновую задачу (реестр), а не локальное
+   *  ожидание: диалог больше ничего не ждёт синхронно. */
   function stop() {
-    abortRef.current?.abort();
-    setBusy(null);
-    setError(new DOMException("Ожидание остановлено пользователем", "AbortError"));
+    if (!job) return;
+    void cancelBackgroundJob(job.id).catch((caught) => setError(caught));
   }
 
   function updateGroup(index: number, patch: Partial<ProgramGroupingItem>) {
@@ -237,9 +275,10 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
         description="Модель предложит наименьшее полезное число связных разделов — от 2 до 8. Дерево изменится только после применения."
         footer={<>
           <Button variant="ghost" onClick={requestClose}>Закрыть</Button>
-          {busy === "run" ? <Button variant="secondary" onClick={stop}><Square size={13} />Остановить</Button>
+          {jobActive ? <Button variant="secondary" onClick={stop}><Square size={13} />Остановить</Button>
             : runResult ? <Button disabled={busy !== null || Boolean(validationMessage) || conflict} onClick={() => void applyGrouping()}>{busy === "apply" ? "Применяем…" : "Применить структуру"}</Button>
-              : <Button disabled={busy !== null || !preflight || (preflight.preflight.confirmation_required && !confirmed)} onClick={() => void runGrouping()}><WandSparkles size={14} />Предложить разделы</Button>}
+              : !jobId ? <Button disabled={busy !== null || !preflight || (preflight.preflight.confirmation_required && !confirmed)} onClick={() => void runGrouping()}><WandSparkles size={14} />Предложить разделы</Button>
+                : null}
         </>}
       >
         <div className="ai-grouping-flow">
@@ -250,15 +289,15 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
           <Disclosure summary="Что отправим">
             <div className="ai-manifest">
               <p>Название экзамена и активные узлы: id, тип и формулировка.</p>
-              <p><strong>Не отправляются:</strong> эталоны, ответы пользователя, материалы, привязки, конспекты и попытки.</p>
+              <p><strong>Не отправляются:</strong> ответы, ответы пользователя, материалы, привязки, конспекты и попытки.</p>
               <ol className="ai-question-manifest">
                 {nodes.map((node) => <li key={node.id}><code>{node.id}</code><span>{node.exam_kind === "task" ? "Задача" : "Вопрос"}</span><strong>{node.title}</strong></li>)}
               </ol>
             </div>
           </Disclosure>
 
-          {busy === "preflight" && <LoadingState label="Проверяем список и оцениваем вызов" />}
-          {preflight && (
+          {busy === "preflight" && !jobId && <LoadingState label="Проверяем список и оцениваем вызов" />}
+          {preflight && !jobId && (
             <>
               <PreflightLine value={preflight.preflight} />
               <Link className="ai-settings-link" to="/setup?section=ai#role-exam-program-grouping">Изменить модель в Параметрах</Link>
@@ -277,10 +316,11 @@ export function AiGroupingDialog({ open, projectId, projectName, nodes, onOpenCh
               manualAlternative="Ручное редактирование вопросов остаётся доступным."
             />
           )}
-          {Boolean(error) && !failure && !(error instanceof DOMException && error.name === "AbortError") && <p className="inline-error" role="alert">{error instanceof Error ? error.message : "Группировка не выполнена"}</p>}
-          {error instanceof DOMException && error.name === "AbortError" && <p className="ai-muted" role="status">Ожидание остановлено. Программа не изменена.</p>}
-          {busy === "run" && <LoadingState label="Модель собирает предложение; текущее дерево не меняется" />}
-
+          {Boolean(error) && !failure && <p className="inline-error" role="alert">{error instanceof Error ? error.message : "Группировка не выполнена"}</p>}
+          {jobError && <p className="inline-error" role="alert">{jobError}</p>}
+          {jobActive && <LoadingState label="Модель собирает предложение; текущее дерево не меняется" />}
+          {job?.state === "failed" && <p className="inline-error" role="alert">{job.error ?? "Группировка не выполнена"}</p>}
+          {job?.state === "cancelled" && <p className="ai-muted" role="status">Остановлено. Программа не изменена.</p>}
           {runResult && (
             <section className="ai-grouping-result">
               <header>
