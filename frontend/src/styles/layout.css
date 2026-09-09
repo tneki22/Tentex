@@ -5703,8 +5703,14 @@ button.wizard-back-projects {
 }
 
 .coverage-list {
+  position: sticky;
+  top: var(--space-4);
   display: grid;
   align-content: start;
+  max-block-size: calc(100dvh - var(--space-8));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .coverage-row {
@@ -7061,7 +7067,8 @@ button.wizard-back-projects {
 @media (max-width: 1180px) {
   .coverage-editor-grid,
   .coverage-editor-grid.is-scans { grid-template-columns: minmax(0, 1fr); }
-  .coverage-inspector { position: static; }
+  .coverage-list,
+  .coverage-inspector { position: static; max-block-size: none; }
   .coverage-toolbar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .coverage-toolbar .segmented-tabs { grid-column: 1 / -1; }
 }
