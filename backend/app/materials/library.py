@@ -895,9 +895,14 @@ async def create_library_upload(session: Session, upload: UploadFile) -> Library
 
 
 def create_typst_material(
-    session: Session, bundle: Bundle, input_kind: str
+    session: Session, bundle: Bundle, input_kind: str, display_name: str | None = None
 ) -> tuple[LibraryMaterialDetailRead, BackgroundJob]:
-    """Регистрирует bundle и ставит единственную автоматическую сборку Typst."""
+    """Регистрирует bundle и ставит единственную автоматическую сборку Typst.
+
+    `display_name` — имя загруженного архива или папки браузера: материал
+    называется по нему, а не по точке входа, иначе любой проект в архиве
+    показывался бы в Библиотеке как «main.typ» независимо от своего названия.
+    """
     storage_path = store_bundle(bundle)
     session.rollback()
     with session.begin():
@@ -905,7 +910,8 @@ def create_typst_material(
             session,
             sha256=bundle.sha256,
             original_name=(
-                Path(bundle.entrypoint).name if bundle.entrypoint else "Typst-проект.zip"
+                display_name
+                or (Path(bundle.entrypoint).name if bundle.entrypoint else "Typst-проект.zip")
             ),
             storage_path=storage_path,
             media_type="application/zip",
@@ -1021,9 +1027,6 @@ def replace_typst_bundle(session: Session, material_id: UUID, bundle: Bundle) ->
         material.sha256 = bundle.sha256
         material.storage_path = store_bundle(bundle)
         material.size_bytes = bundle.size_bytes
-        material.original_name = (
-            Path(bundle.entrypoint).name if bundle.entrypoint else "Typst-проект.zip"
-        )
         row.entrypoint = bundle.entrypoint
         row.packages = bundle.packages
         row.issues = []

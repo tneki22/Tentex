@@ -229,6 +229,12 @@ def _bundle_from_files(files: dict[str, bytes], requested_entrypoint: str | None
     return Bundle(path, sha256, size, entrypoint, candidates, _packages_from_texts(texts))
 
 
+def folder_display_name(paths: Iterable[str]) -> str | None:
+    """Имя корневой папки браузера — она едина у всех путей `webkitRelativePath`."""
+    roots = {raw.replace("\\", "/").split("/", 1)[0] for raw in paths if raw}
+    return roots.pop() if len(roots) == 1 else None
+
+
 def bundle_packages(root: Path) -> list[dict[str, str]]:
     """`@preview`-пакеты распакованного проекта — тем же разбором, что при загрузке."""
     return _packages_from_texts(
@@ -379,10 +385,19 @@ def _relative_to_root(raw: str, root: Path) -> str | None:
 
 
 def _diagnostics(stderr: str, root: Path) -> list[dict[str, object]]:
+    """Разбирает `stderr` компилятора в структурированные проблемы.
+
+    При `allow_download` тот же поток несёт живой прогресс загрузки пакета
+    («downloading …», «12.0 KiB / 20.6 KiB (58 %), …») — это не диагностика,
+    а разговор CLI с человеком у терминала. Настоящая диагностика typst всегда
+    маркирована `error:` или `warning:`; всё остальное отбрасывается, иначе
+    успешная сборка после докачки показывала бы в «Нужно внимание» технический
+    шум и выглядела бы как незавершённая.
+    """
     issues: list[dict[str, object]] = []
     for raw in stderr.splitlines():
         line = raw.strip()
-        if not line:
+        if not line or not re.search(r"\b(error|warning):", line, re.IGNORECASE):
             continue
         kind = "warning" if "warning" in line.lower() else "compile"
         match = re.search(r"(.+\.typ):(\d+):(\d+)", line)
