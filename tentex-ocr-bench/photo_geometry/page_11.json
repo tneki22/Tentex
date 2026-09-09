@@ -1,0 +1,53 @@
+{
+  "image": "page_11.jpg",
+  "width": 1800,
+  "height": 2400,
+  "page_corners_px": [
+    [
+      250,
+      155
+    ],
+    [
+      1600,
+      270
+    ],
+    [
+      1535,
+      2250
+    ],
+    [
+      135,
+      2110
+    ]
+  ],
+  "page_corners_normalized": [
+    [
+      0.138889,
+      0.064583
+    ],
+    [
+      0.888889,
+      0.1125
+    ],
+    [
+      0.852778,
+      0.9375
+    ],
+    [
+      0.075,
+      0.879167
+    ]
+  ],
+  "order": [
+    "top_left",
+    "top_right",
+    "bottom_right",
+    "bottom_left"
+  ],
+  "variant_of_original_page": 1,
+  "defects": [
+    "perspective",
+    "keystone",
+    "page_shadow"
+  ]
+}

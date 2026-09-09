@@ -1,0 +1,109 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[a4paper,margin=22mm]{geometry}
+\usepackage{fontspec}
+\usepackage{amsmath,mathtools}
+\usepackage{unicode-math}
+\usepackage{array,booktabs}
+\usepackage{enumitem}
+\setmainfont{DejaVu Serif}
+\setmathfont{DejaVu Math TeX Gyre}
+\pagestyle{plain}
+\setlength{\parindent}{1.25em}
+\setlength{\parskip}{0.35em}
+
+\begin{document}
+
+\begin{center}
+{\Large\bfseries Нативный PDF: формулы математического анализа}\\[4pt]
+{\small Формулы набраны LaTeX и не растеризованы}
+\end{center}
+
+Пусть $f$ непрерывна на отрезке $[a,b]$, а $F'(x)=f(x)$. Тогда формула Ньютона--Лейбница имеет вид
+\begin{equation}
+  \int_a^b f(x)\,dx = F(b)-F(a).
+  \tag{N.1}
+\end{equation}
+Для функции двух переменных полный дифференциал и квадратичная форма второго порядка записываются так:
+\begin{align}
+  du &= \frac{\partial u}{\partial x}\,dx + \frac{\partial u}{\partial y}\,dy, \tag{N.2}\\
+  d^2u &= u_{xx}\,dx^2 + 2u_{xy}\,dx\,dy + u_{yy}\,dy^2. \tag{N.3}
+\end{align}
+Ряд Фурье функции периода $2\pi$ задаётся формулой
+\begin{equation}
+ f(x) \sim \frac{a_0}{2}+\sum_{n=1}^{\infty}\bigl(a_n\cos nx+b_n\sin nx\bigr),
+ \quad a_n=\frac{1}{\pi}\int_{-\pi}^{\pi}f(x)\cos nx\,dx.
+ \tag{N.4}
+\end{equation}
+Для проверки распознавания пределов включим составную дробь:
+\begin{equation}
+ \lim_{x\to0}\frac{\sqrt{1+x}-1}{x}=\frac12,
+ \qquad
+ \lim_{n\to\infty}\left(1+\frac{x}{n}\right)^n=e^x.
+ \tag{N.5}
+\end{equation}
+
+\newpage
+\begin{center}
+{\Large\bfseries Нативный PDF: линейная алгебра и системы}
+\end{center}
+
+Система линейных уравнений $A\mathbf{x}=\mathbf{b}$ имеет единственное решение, если $\det A\ne0$. В развёрнутом виде:
+\begin{equation}
+\begin{cases}
+  2x-y+3z=7,\\
+  x+4y-z=2,\\
+  3x+2y+2z=9.
+\end{cases}
+\tag{N.6}
+\end{equation}
+Определитель и обратная матрица:
+\begin{equation}
+ \det A=\sum_{\sigma\in S_n}\operatorname{sgn}(\sigma)
+ \prod_{i=1}^{n}a_{i,\sigma(i)},
+ \qquad A^{-1}=\frac{1}{\det A}\operatorname{adj}A.
+ \tag{N.7}
+\end{equation}
+Спектральное разложение симметрической матрицы:
+\begin{equation}
+ A=Q\Lambda Q^{\mathsf T},\qquad Q^{\mathsf T}Q=I,
+ \qquad \Lambda=\operatorname{diag}(\lambda_1,\ldots,\lambda_n).
+ \tag{N.8}
+\end{equation}
+Норма и скалярное произведение:
+\begin{equation}
+ \|\mathbf{x}\|_2=\sqrt{\sum_{i=1}^{n}|x_i|^2},
+ \qquad \langle\mathbf{x},\mathbf{y}\rangle=\mathbf{x}^{\mathsf T}\mathbf{y}.
+ \tag{N.9}
+\end{equation}
+
+\newpage
+\begin{center}
+{\Large\bfseries Нативный PDF: вероятность и статистика}
+\end{center}
+
+Для дискретной случайной величины $X$ математическое ожидание и дисперсия равны
+\begin{align}
+ \mathbb{E}X &= \sum_k x_k p_k, \tag{N.10}\\
+ \operatorname{Var}(X) &= \mathbb{E}\bigl[(X-\mathbb{E}X)^2\bigr]
+ =\mathbb{E}X^2-(\mathbb{E}X)^2. \tag{N.11}
+\end{align}
+Плотность нормального распределения:
+\begin{equation}
+ p(x)=\frac{1}{\sigma\sqrt{2\pi}}
+ \exp\!\left[-\frac{(x-\mu)^2}{2\sigma^2}\right].
+ \tag{N.12}
+\end{equation}
+Формула Байеса для полной группы гипотез $H_1,\ldots,H_m$:
+\begin{equation}
+ \mathbb{P}(H_i\mid A)=
+ \frac{\mathbb{P}(H_i)\,\mathbb{P}(A\mid H_i)}
+ {\sum_{j=1}^{m}\mathbb{P}(H_j)\,\mathbb{P}(A\mid H_j)}.
+ \tag{N.13}
+\end{equation}
+В качестве теста комбинаторной записи используем биномиальное тождество
+\begin{equation}
+ \sum_{k=0}^{n}\binom{n}{k}p^k(1-p)^{n-k}=1.
+ \tag{N.14}
+\end{equation}
+
+\end{document}

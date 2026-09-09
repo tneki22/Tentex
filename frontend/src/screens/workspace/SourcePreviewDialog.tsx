@@ -461,10 +461,18 @@ export function SourcePreviewDialog({
           )}
 
           <Button
+            className="source-preview-bind-button"
             disabled={busy || contentFragmentIds.length === 0}
             onClick={() => bind(contentFragmentIds, `Привязана вся страница ${pageNumber}.`)}
           >
             <Link2 size={15} /> Привязать всю страницу
+          </Button>
+          <Button
+            className="source-preview-bind-button"
+            disabled={busy || selectedIds.length === 0}
+            onClick={() => bind(selectedIds, `Привязано фрагментов: ${selectedIds.length}.`)}
+          >
+            <Link2 size={15} /> Привязать выбранные · {selectedIds.length}
           </Button>
           <p className="source-preview-hint">
             Немного лишнего не мешает — это самый быстрый путь. Ниже можно оставить
@@ -489,13 +497,6 @@ export function SourcePreviewDialog({
                   </li>
                 ))}
               </ul>
-              <Button
-                variant="secondary"
-                disabled={busy || selectedIds.length === 0}
-                onClick={() => bind(selectedIds, `Привязано фрагментов: ${selectedIds.length}.`)}
-              >
-                Привязать выбранные · {selectedIds.length}
-              </Button>
             </section>
           )}
 

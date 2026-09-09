@@ -1,0 +1,53 @@
+{
+  "image": "page_14.jpg",
+  "width": 1800,
+  "height": 2400,
+  "page_corners_px": [
+    [
+      175,
+      145
+    ],
+    [
+      1610,
+      90
+    ],
+    [
+      1715,
+      2200
+    ],
+    [
+      120,
+      2290
+    ]
+  ],
+  "page_corners_normalized": [
+    [
+      0.097222,
+      0.060417
+    ],
+    [
+      0.894444,
+      0.0375
+    ],
+    [
+      0.952778,
+      0.916667
+    ],
+    [
+      0.066667,
+      0.954167
+    ]
+  ],
+  "order": [
+    "top_left",
+    "top_right",
+    "bottom_right",
+    "bottom_left"
+  ],
+  "variant_of_original_page": 7,
+  "defects": [
+    "mild_perspective",
+    "finger_occlusion",
+    "page_shadow"
+  ]
+}
