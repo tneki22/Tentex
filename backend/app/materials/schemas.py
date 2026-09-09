@@ -120,11 +120,41 @@ class ProcessingStart(ApiModel):
         return self
 
 
+class TypstBuildWrite(ApiModel):
+    """Явно подтверждает сеть для пакетов и действия по уже показанным проблемам."""
+
+    entrypoint: str | None = Field(default=None, max_length=240)
+    download_packages: bool = False
+    placeholder_images: list[str] = Field(default_factory=list, max_length=50)
+
+
+class TypstIssueRead(ApiModel):
+    kind: str
+    message: str
+    path: str | None = None
+    line: int | None = None
+    column: int | None = None
+
+
+class TypstMaterialRead(ApiModel):
+    input_kind: str
+    entrypoint: str | None
+    compiler_version: str | None
+    packages: list[dict[str, str]]
+    issues: list[TypstIssueRead]
+    has_rendered_pdf: bool
+
+
+class TypstStartRead(ApiModel):
+    material_id: UUID
+    job_id: UUID
+
+
 class ProcessingTaskRead(ApiModel):
     id: UUID
     state: BackgroundJobState
     stage: ProcessingStage
-    parser_mode: ParserMode
+    parser_mode: ParserMode | None
     done: int
     total: int
     diagnostics: list[str]
@@ -307,6 +337,7 @@ class LibraryMaterialDetailRead(LibraryMaterialRead):
     # Путь от корня проекта, а не абсолютный: инспектор — не про то, куда
     # установлен Tentex на этой машине, а про то, где файл лежит внутри `data/`.
     storage_path: str
+    typst: TypstMaterialRead | None = None
 
 
 class LibraryMaterialAttachWrite(ApiModel):

@@ -38,6 +38,7 @@ const STATUS_LABEL: Record<LibraryMaterialRead["status"], string> = {
   queued: "В очереди",
   processing: "Обрабатывается",
   paused: "На паузе",
+  needs_input: "Нужны файлы",
   failed: "Ошибка обработки",
 };
 
@@ -47,6 +48,7 @@ const SOURCE_LABEL: Record<LibraryMaterialRead["source_kind"], string> = {
   url: "Веб-страница",
   youtube: "YouTube",
   audio: "Аудио",
+  typst: "Typst",
 };
 
 const STATUS_ORDER: Record<LibraryMaterialRead["status"], number> = {
@@ -54,6 +56,7 @@ const STATUS_ORDER: Record<LibraryMaterialRead["status"], number> = {
   processing: 1,
   queued: 1,
   paused: 1,
+  needs_input: 2,
   ready_to_process: 2,
   failed: 3,
 };

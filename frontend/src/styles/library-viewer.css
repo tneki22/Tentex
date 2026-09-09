@@ -787,6 +787,13 @@
   padding: var(--space-5);
 }
 
+.typst-rendered-document {
+  width: 100%;
+  min-height: 100%;
+  border: 0;
+  background: var(--surface);
+}
+
 .viewer-sheet-scroll {
   display: block;
   padding: var(--space-6);

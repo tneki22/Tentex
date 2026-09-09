@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     # Крупный структурный ответ (например, весь список вопросов экзамена)
     # у думающей модели легко выходит за минуту скрытых рассуждений.
     ai_timeout_seconds: float = 180.0
+    # Typst живёт только в worker-образе; путь можно подменить в локальном smoke.
+    typst_binary: Path = Path("typst")
 
     @property
     def database_path(self) -> Path:
@@ -44,6 +46,13 @@ class Settings(BaseSettings):
     @property
     def installation_secret_path(self) -> Path:
         return self.data_dir / "installation.secret"
+
+    @property
+    def typst_package_cache_dir(self) -> Path:
+        """Постоянный локальный кэш подтверждённых пакетов Typst."""
+        path = self.data_dir / "typst-packages"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
 
 settings = Settings()

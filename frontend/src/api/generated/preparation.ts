@@ -5403,7 +5403,7 @@ export interface components {
              * Presentation Kind
              * @enum {string}
              */
-            presentation_kind: "pdf" | "image" | "document" | "plain_text" | "web" | "youtube" | "audio";
+            presentation_kind: "pdf" | "image" | "document" | "plain_text" | "web" | "youtube" | "audio" | "typst";
             capabilities: components["schemas"]["LibraryMaterialCapabilities"];
             /** Outline */
             outline: components["schemas"]["OutlineItem"][];
@@ -5721,12 +5721,12 @@ export interface components {
          * MaterialSourceKind
          * @enum {string}
          */
-        MaterialSourceKind: "file" | "text" | "url" | "youtube" | "audio";
+        MaterialSourceKind: "file" | "text" | "url" | "youtube" | "audio" | "typst";
         /**
          * MaterialState
          * @enum {string}
          */
-        MaterialState: "ready_to_process" | "queued" | "processing" | "paused" | "ready" | "failed";
+        MaterialState: "ready_to_process" | "queued" | "processing" | "paused" | "needs_input" | "ready" | "failed";
         /** MaterialUpdate */
         MaterialUpdate: {
             /** Display Name */
@@ -6594,7 +6594,7 @@ export interface components {
         /** ProcessingStart */
         ProcessingStart: {
             /** @default fast */
-            parser_mode: components["schemas"]["ParserMode"];
+            parser_mode: components["schemas"]["ParserMode"] | null;
             /**
              * Scope
              * @default all
@@ -7376,7 +7376,7 @@ export interface components {
              * Presentation Kind
              * @enum {string}
              */
-            presentation_kind: "pdf" | "image" | "document" | "plain_text" | "web" | "youtube" | "audio";
+            presentation_kind: "pdf" | "image" | "document" | "plain_text" | "web" | "youtube" | "audio" | "typst";
             /**
              * Block Id
              * Format: uuid

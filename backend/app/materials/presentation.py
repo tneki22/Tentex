@@ -10,7 +10,7 @@ from typing import Literal
 from app.models import Material, MaterialSourceKind
 
 MaterialPresentationKind = Literal[
-    "pdf", "image", "document", "plain_text", "web", "youtube", "audio"
+    "pdf", "image", "document", "plain_text", "web", "youtube", "audio", "typst"
 ]
 
 DOCUMENT_MEDIA_TYPES = {
@@ -26,6 +26,8 @@ PAGE_IMAGE_KINDS: frozenset[MaterialPresentationKind] = frozenset({"pdf", "image
 
 def presentation_kind(material: Material) -> MaterialPresentationKind:
     """Один производный вид вместо проверок MIME по всему фронтенду."""
+    if material.source_kind == MaterialSourceKind.TYPST:
+        return "typst"
     if material.source_kind == MaterialSourceKind.YOUTUBE:
         return "youtube"
     if material.source_kind == MaterialSourceKind.AUDIO or material.media_type.startswith("audio/"):

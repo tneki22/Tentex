@@ -9,6 +9,7 @@ const STATUS_COPY: Record<MaterialState, string> = {
   queued: "Файл в очереди на разбор.",
   processing: "Разбираем файл.",
   paused: "Разбор на паузе.",
+  needs_input: "Нужны файлы проекта или выбор точки входа.",
   ready: "Файл разобран.",
   failed: "Разбор не удался.",
 };

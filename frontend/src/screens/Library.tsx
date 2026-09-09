@@ -57,6 +57,7 @@ const STATUS_LABEL: Record<LibraryMaterialRead["status"], string> = {
   queued: "В очереди",
   processing: "Обрабатывается",
   paused: "На паузе",
+  needs_input: "Нужны файлы",
   ready: "Готов",
   failed: "Ошибка",
 };
@@ -67,6 +68,7 @@ const USAGE_SHOWN = 2;
 
 /** Тот же вывод, что у сервера, но по данным списка: отдельная ручка не нужна. */
 function kindOf(material: LibraryMaterialRead): MaterialPresentationKind {
+  if (material.source_kind === "typst") return "typst";
   if (material.source_kind === "youtube") return "youtube";
   if (material.source_kind === "audio" || material.media_type.startsWith("audio/")) return "audio";
   if (material.source_kind === "url") return "web";
@@ -83,6 +85,7 @@ const KIND_ICON: Record<MaterialPresentationKind, typeof FileText> = {
   image: FileImage,
   document: FileType2,
   plain_text: FileText,
+  typst: FileType2,
   web: Globe,
   youtube: Video,
   audio: AudioLines,
