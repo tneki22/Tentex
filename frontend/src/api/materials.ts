@@ -13,6 +13,7 @@ export type MaterialState =
   | "queued"
   | "processing"
   | "paused"
+  | "needs_input"
   | "ready"
   | "failed";
 export type ParserMode = "fast" | "cloud";
@@ -24,13 +25,13 @@ export const PARSER_MODE_TITLES: Record<ParserMode, string> = {
 export type PageQuality = "native" | "ocr" | "ocr_low";
 export type RecognitionSource = "native" | "ocr" | "vl" | "manual";
 export type SourceRole = "main" | "additional" | "reference";
-export type MaterialSourceKind = "file" | "text" | "url" | "youtube" | "audio";
+export type MaterialSourceKind = "file" | "text" | "url" | "youtube" | "audio" | "typst";
 
 export interface ProcessingTaskRead {
   id: string;
   state: "queued" | "running" | "paused" | "failed" | "completed";
   stage: "queued" | "extract" | "segment" | "complete";
-  parser_mode: ParserMode;
+  parser_mode: ParserMode | null;
   done: number;
   total: number;
   diagnostics: string[];
@@ -168,7 +169,8 @@ export type MaterialPresentationKind =
   | "plain_text"
   | "web"
   | "youtube"
-  | "audio";
+  | "audio"
+  | "typst";
 
 export type OutlineSource = "embedded" | "recognized" | "none";
 
@@ -231,7 +233,27 @@ export interface LibraryMaterialDetailRead extends LibraryMaterialRead {
   retrieved_at: string | null;
   updated_at: string;
   storage_path: string;
+  typst: TypstMaterialRead | null;
 }
+
+export interface TypstIssueRead {
+  kind: string;
+  message: string;
+  path: string | null;
+  line: number | null;
+  column: number | null;
+}
+
+export interface TypstMaterialRead {
+  input_kind: "single" | "folder" | "zip";
+  entrypoint: string | null;
+  compiler_version: string | null;
+  packages: Array<{ namespace: string; name: string; version: string }>;
+  issues: TypstIssueRead[];
+  has_rendered_pdf: boolean;
+}
+
+export interface TypstStartRead { material_id: string; job_id: string; }
 
 export interface LibrarySearchHit {
   fragment_id: string;
@@ -627,6 +649,32 @@ export function uploadLibraryMaterial(
   return uploadFormWithProgress<LibraryMaterialDetailRead>("/api/materials/upload", form, onProgress);
 }
 
+export async function uploadTypstMaterial(
+  inputKind: "single" | "folder" | "zip",
+  files: File[],
+  paths: string[],
+  entrypoint?: string,
+): Promise<LibraryMaterialDetailRead> {
+  const form = new FormData();
+  form.set("input_kind", inputKind);
+  if (entrypoint) form.set("entrypoint", entrypoint);
+  if (inputKind === "zip") form.set("file", files[0]);
+  else files.forEach((file, index) => {
+    form.append("files", file);
+    form.append("paths", paths[index] || file.name);
+  });
+  const started = await uploadFormWithProgress<TypstStartRead>("/api/materials/typst", form);
+  return getLibraryMaterial(started.material_id);
+}
+
+export const buildTypstMaterial = (
+  materialId: string,
+  command: { entrypoint?: string; download_packages: boolean; placeholder_images?: string[] },
+): Promise<TypstStartRead> => request(`${libraryPath(materialId)}/typst/build`, {
+  method: "POST",
+  body: JSON.stringify(command),
+});
+
 export const createLibraryTextMaterial = (
   command: { name: string; text: string },
 ): Promise<LibraryMaterialDetailRead> => request("/api/materials/text", {
@@ -677,6 +725,8 @@ export const librarySourceUrl = (materialId: string, revision?: number): string 
   revision === undefined
     ? `${libraryPath(materialId)}/source`
     : `${libraryPath(materialId)}/source?revision=${revision}`;
+
+export const libraryRenderedUrl = (materialId: string): string => `${libraryPath(materialId)}/rendered`;
 
 export const searchLibraryMaterial = (
   materialId: string,

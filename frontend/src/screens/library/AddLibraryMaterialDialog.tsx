@@ -1,14 +1,15 @@
-import { ChevronRight, FileUp, Globe, Type } from "lucide-react";
+import { Braces, ChevronRight, FileUp, Globe, Type } from "lucide-react";
 import { useRef, useState } from "react";
 import {
   createLibraryExternalMaterial,
   createLibraryTextMaterial,
+  uploadTypstMaterial,
   uploadLibraryMaterial,
   type LibraryMaterialDetailRead,
 } from "../../api/materials";
 import { Button, Dialog, ErrorState, Field, Progress } from "../../components/ui";
 
-type Mode = "choose" | "text" | "link";
+type Mode = "choose" | "text" | "link" | "typst";
 
 const ACCEPT = ".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.mp3,.wav,.m4a,.ogg,.flac";
 
@@ -39,6 +40,9 @@ export function AddLibraryMaterialDialog({
   onCreated,
 }: AddLibraryMaterialDialogProps) {
   const fileInput = useRef<HTMLInputElement>(null);
+  const typstFileInput = useRef<HTMLInputElement>(null);
+  const typstFolderInput = useRef<HTMLInputElement>(null);
+  const typstZipInput = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<Mode>("choose");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -80,15 +84,28 @@ export function AddLibraryMaterialDialog({
     void submit(() => uploadLibraryMaterial(file, setUploadPercent));
   }
 
+  function submitTypst(kind: "single" | "folder" | "zip", selected: FileList | null) {
+    const files = selected ? Array.from(selected) : [];
+    if (!files.length) return;
+    setUploadingFile(files[0]);
+    void submit(() => uploadTypstMaterial(
+      kind,
+      files,
+      files.map((file) => file.webkitRelativePath || file.name),
+    ));
+  }
+
   const titles: Record<Mode, string> = {
     choose: "Добавить материал",
     text: "Вставить текст",
     link: "Добавить по ссылке",
+    typst: "Добавить Typst",
   };
   const descriptions: Record<Mode, string> = {
     choose: "Материал появится в Библиотеке. Подключить его к проекту можно позже.",
     text: "Текст сохранится как отдельный материал установки.",
     link: "Tentex сохранит локальный снимок: веб-страницу текстом, YouTube — субтитрами.",
+    typst: "Загрузите один автономный файл, папку проекта или ZIP. Пользователь увидит PDF, модель — исходный Typst-код.",
   };
 
   return (
@@ -112,6 +129,8 @@ export function AddLibraryMaterialDialog({
             Добавить текст
           </Button>
         </>
+      ) : mode === "typst" ? (
+        <Button variant="ghost" onClick={() => setMode("choose")}>Назад</Button>
       ) : (
         <>
           <Button variant="ghost" onClick={() => setMode("choose")}>Назад</Button>
@@ -140,6 +159,9 @@ export function AddLibraryMaterialDialog({
           if (file) submitFile(file);
         }}
       />
+      <input ref={typstFileInput} className="materials-file-input" type="file" accept=".typ" tabIndex={-1} aria-hidden="true" onChange={(event) => { submitTypst("single", event.target.files); event.target.value = ""; }} />
+      <input ref={(node) => { typstFolderInput.current = node; node?.setAttribute("webkitdirectory", ""); }} className="materials-file-input" type="file" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => { submitTypst("folder", event.target.files); event.target.value = ""; }} />
+      <input ref={typstZipInput} className="materials-file-input" type="file" accept=".zip" tabIndex={-1} aria-hidden="true" onChange={(event) => { submitTypst("zip", event.target.files); event.target.value = ""; }} />
 
       {error && <ErrorState message={error} />}
 
@@ -180,6 +202,14 @@ export function AddLibraryMaterialDialog({
             </span>
             <ChevronRight size={15} />
           </button>
+          <button type="button" disabled={busy} onClick={() => setMode("typst")}>
+            <Braces size={18} />
+            <span>
+              <strong>Typst</strong>
+              <small>Один файл, папка проекта или ZIP — соберём PDF без OCR</small>
+            </span>
+            <ChevronRight size={15} />
+          </button>
         </div>
       )}
 
@@ -214,6 +244,20 @@ export function AddLibraryMaterialDialog({
               placeholder="https://example.org/article"
             />
           </Field>
+        </div>
+      )}
+
+      {mode === "typst" && (
+        <div className="materials-add-grid">
+          <button type="button" disabled={busy} onClick={() => typstFileInput.current?.click()}>
+            <FileUp size={18} /><span><strong>Один файл</strong><small>Автономный `.typ` без внешних зависимостей</small></span><ChevronRight size={15} />
+          </button>
+          <button type="button" disabled={busy} onClick={() => typstFolderInput.current?.click()}>
+            <FileUp size={18} /><span><strong>Папка проекта</strong><small>Исходники, шрифты и изображения сохранят пути</small></span><ChevronRight size={15} />
+          </button>
+          <button type="button" disabled={busy} onClick={() => typstZipInput.current?.click()}>
+            <FileUp size={18} /><span><strong>ZIP</strong><small>Безопасно нормализуем архив перед сборкой</small></span><ChevronRight size={15} />
+          </button>
         </div>
       )}
     </Dialog>

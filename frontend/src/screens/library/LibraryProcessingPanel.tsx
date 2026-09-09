@@ -112,6 +112,7 @@ interface LibraryProcessingPanelProps {
     page_to?: number;
   }) => void;
   onControl: (action: "pause" | "resume" | "retry" | "cancel") => void;
+  onTypstBuild: (downloadPackages: boolean) => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
   onConfirmPageReview: () => void;
@@ -124,6 +125,7 @@ export function LibraryProcessingPanel({
   readOnly,
   onStart,
   onControl,
+  onTypstBuild,
   onEditPage,
   onCleanupPage,
   onConfirmPageReview,
@@ -197,7 +199,7 @@ export function LibraryProcessingPanel({
   const backgroundTask: BackgroundTask | null = useMemo(() => {
     if (!task || task.state === "completed") return null;
     const left = Math.max(0, task.total - task.done);
-    const perPage = SECONDS_PER_PAGE[task.parser_mode];
+    const perPage = task.parser_mode ? SECONDS_PER_PAGE[task.parser_mode] : 0;
     return {
       id: task.id,
       kind: "parse",
@@ -205,7 +207,7 @@ export function LibraryProcessingPanel({
       unit: "страниц",
       done: task.done,
       total: task.total,
-      etaMinutes: left > 0 ? Math.ceil((left * perPage) / 60) : null,
+      etaMinutes: left > 0 && perPage > 0 ? Math.ceil((left * perPage) / 60) : null,
       state: task.state,
       error: task.error ?? undefined,
     };
@@ -224,6 +226,38 @@ export function LibraryProcessingPanel({
 
   const rangeInvalid = scope === "range"
     && (range.from < 1 || range.to > pageCount || range.from > range.to);
+
+  if (material.presentation_kind === "typst") {
+    const issues = material.typst?.issues ?? [];
+    const packageRequired = issues.some((issue) => issue.kind === "package");
+    return (
+      <div className="inspector-content">
+        <header className="inspector-section-head"><h3>Сборка Typst</h3></header>
+        <p className="inspector-note">
+          PDF собирается локально без системных шрифтов; текстовый поиск использует PDF,
+          а модели получают исходный Typst-код.
+        </p>
+        {issues.length > 0 && (
+          <section className="inspector-section">
+            <h4>Нужно внимание</h4>
+            <ul className="inspector-list">
+              {issues.map((issue, index) => <li key={`${issue.kind}-${index}`}>{issue.message}</li>)}
+            </ul>
+          </section>
+        )}
+        {packageRequired && !readOnly && (
+          <Button disabled={busy} onClick={() => onTypstBuild(true)}>
+            Скачать пакет и продолжить
+          </Button>
+        )}
+        {!packageRequired && !readOnly && (
+          <Button variant="secondary" disabled={busy} onClick={() => onTypstBuild(false)}>
+            <RotateCcw size={14} aria-hidden="true" /> Собрать заново
+          </Button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="inspector-content">

@@ -71,9 +71,12 @@ from app.materials.schemas import (
     ProcessingStart,
     ProcessingTaskRead,
     SourceRefreshResult,
+    TypstIssueRead,
+    TypstMaterialRead,
 )
 from app.materials.segmentation import build_blocks
 from app.materials.storage import material_path, store_revision_text, store_text, store_upload
+from app.materials.typst import Bundle, store_bundle
 from app.models import (
     BackgroundJob,
     BackgroundJobKind,
@@ -93,6 +96,7 @@ from app.models import (
     ProjectStatus,
     ReferenceAnswer,
     SourceRole,
+    TypstMaterial,
     utc_now,
 )
 from app.ocr import settings as ocr_settings
@@ -132,7 +136,7 @@ def _capabilities(
         can_compare=kind in {"pdf", "image", "document", "plain_text", "web"},
         # У YouTube локального оригинала нет: материал — это сохранённая расшифровка.
         can_view_original=kind != "youtube",
-        can_edit_text=material.active_parse_revision >= 1,
+        can_edit_text=material.active_parse_revision >= 1 and kind != "typst",
         can_run_ocr=kind in {"pdf", "image"},
         can_refresh_source=kind in {"web", "youtube"},
         has_outline=has_outline,
@@ -183,17 +187,18 @@ def _outline(session: Session, material: Material) -> tuple[list[OutlineItem], O
 
 
 def latest_task(session: Session, material_id: UUID) -> BackgroundJob | None:
-    """Последняя задача РАЗБОРА этого материала — не любая фоновая задача.
+    """Последняя задача подготовки материала, но не любая фоновая задача.
 
     `background_jobs.material_id` теперь общий и для уборки текста ИИ: без
     фильтра по `kind` сюда попала бы и она, а `ProcessingTaskRead` ждёт от
     задачи разбора обязательные `stage`/`parser_mode`, которых у уборки нет.
+    Typst-сборка добавлена явно: она тоже показывает прогресс в этой панели.
     """
     return session.scalar(
         select(BackgroundJob)
         .where(
             BackgroundJob.material_id == material_id,
-            BackgroundJob.kind == BackgroundJobKind.PARSE,
+            BackgroundJob.kind.in_((BackgroundJobKind.PARSE, BackgroundJobKind.TYPST_COMPILE)),
         )
         .order_by(desc(BackgroundJob.created_at))
         .limit(1)
@@ -215,7 +220,7 @@ def latest_tasks_by_material(
         select(BackgroundJob)
         .where(
             BackgroundJob.material_id.in_(material_ids),
-            BackgroundJob.kind == BackgroundJobKind.PARSE,
+            BackgroundJob.kind.in_((BackgroundJobKind.PARSE, BackgroundJobKind.TYPST_COMPILE)),
         )
         .order_by(BackgroundJob.material_id, desc(BackgroundJob.created_at))
     ):
@@ -365,6 +370,28 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
     aggregate = library_aggregates(session, [material]).get(material.id, EMPTY_LIBRARY_AGGREGATE)
     outline, outline_source = _outline(session, material)
     kind = presentation_kind(material)
+    typst_row = session.get(TypstMaterial, material.id)
+    typst = (
+        TypstMaterialRead(
+            input_kind=typst_row.input_kind,
+            entrypoint=typst_row.entrypoint,
+            compiler_version=typst_row.compiler_version,
+            packages=typst_row.packages or [],
+            issues=[
+                TypstIssueRead(
+                    kind=str(issue.get("kind", "compile")),
+                    message=str(issue.get("message", "Неизвестная проблема Typst")),
+                    path=str(issue["path"]) if issue.get("path") is not None else None,
+                    line=int(issue["line"]) if issue.get("line") is not None else None,
+                    column=int(issue["column"]) if issue.get("column") is not None else None,
+                )
+                for issue in typst_row.issues or []
+            ],
+            has_rendered_pdf=bool(typst_row.current_pdf_path),
+        )
+        if typst_row
+        else None
+    )
     return LibraryMaterialDetailRead(
         **library_read(material, aggregate).model_dump(),
         presentation_kind=kind,
@@ -396,6 +423,7 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
         retrieved_at=material.retrieved_at,
         updated_at=material.updated_at,
         storage_path=f"data/storage/{material.storage_path}",
+        typst=typst,
     )
 
 
@@ -820,6 +848,126 @@ async def create_library_upload(session: Session, upload: UploadFile) -> Library
         material = register_uploaded_material(session, uploaded)
         material_id = material.id
     return read_library_material(session, material_id)
+
+
+def create_typst_material(
+    session: Session, bundle: Bundle, input_kind: str
+) -> tuple[LibraryMaterialDetailRead, BackgroundJob]:
+    """Регистрирует bundle и ставит единственную автоматическую сборку Typst."""
+    storage_path = store_bundle(bundle)
+    session.rollback()
+    with session.begin():
+        material = _existing_or_new(
+            session,
+            sha256=bundle.sha256,
+            original_name=(
+                Path(bundle.entrypoint).name if bundle.entrypoint else "Typst-проект.zip"
+            ),
+            storage_path=storage_path,
+            media_type="application/zip",
+            source_kind=MaterialSourceKind.TYPST,
+            size_bytes=bundle.size_bytes,
+            page_count=None,
+            estimated_seconds=1,
+        )
+        typst = session.get(TypstMaterial, material.id)
+        if typst is None:
+            typst = TypstMaterial(
+                material_id=material.id,
+                input_kind=input_kind,
+                entrypoint=bundle.entrypoint,
+                packages=bundle.packages,
+                issues=(
+                    []
+                    if bundle.entrypoint
+                    else [{"kind": "entrypoint", "message": "Выберите точку входа", "path": None}]
+                ),
+                current_pdf_path=None,
+                updated_at=utc_now(),
+            )
+            session.add(typst)
+        material.status = MaterialState.QUEUED if bundle.entrypoint else MaterialState.NEEDS_INPUT
+        job = BackgroundJob(
+            material_id=material.id,
+            kind=BackgroundJobKind.TYPST_COMPILE,
+            state=(
+                BackgroundJobState.QUEUED if bundle.entrypoint else BackgroundJobState.COMPLETED
+            ),
+            stage=ProcessingStage.QUEUED if bundle.entrypoint else ProcessingStage.COMPLETE,
+            done=0 if bundle.entrypoint else 1,
+            total=1,
+            checkpoint={"entrypoint": bundle.entrypoint, "download_packages": False},
+            diagnostics=[],
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        session.add(job)
+        session.flush()
+        material_id = material.id
+    return read_library_material(session, material_id), job
+
+
+def queue_typst_build(
+    session: Session, material_id: UUID, *, entrypoint: str | None, download_packages: bool
+) -> BackgroundJob:
+    """Перезапускает сборку, не изменяя активную ревизию до полного успеха."""
+    material = material_or_404(session, material_id)
+    typst = session.get(TypstMaterial, material_id)
+    if typst is None:
+        raise ProjectDomainError(
+            "Материал не является Typst-проектом", status=422, code="typst_bundle_invalid"
+        )
+    selected = entrypoint or typst.entrypoint
+    if not selected:
+        raise ProjectDomainError(
+            "Выберите точку входа Typst", status=422, code="typst_entrypoint_required"
+        )
+    session.rollback()
+    with session.begin():
+        material.status = MaterialState.QUEUED
+        material.error = None
+        typst.entrypoint = selected
+        job = BackgroundJob(
+            material_id=material_id,
+            kind=BackgroundJobKind.TYPST_COMPILE,
+            state=BackgroundJobState.QUEUED,
+            stage=ProcessingStage.QUEUED,
+            total=1,
+            checkpoint={"entrypoint": selected, "download_packages": download_packages},
+            diagnostics=[],
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        session.add(job)
+        session.flush()
+    return job
+
+
+def replace_typst_bundle(session: Session, material_id: UUID, bundle: Bundle) -> None:
+    """Обновляет исходный bundle перед сборкой, оставляя прошлую PDF-ревизию активной."""
+    material_or_404(session, material_id)
+    session.rollback()
+    with session.begin():
+        material = material_or_404(session, material_id)
+        existing = session.scalar(select(Material.id).where(Material.sha256 == bundle.sha256))
+        if existing is not None and existing != material_id:
+            raise ProjectConflictError(
+                "Такой Typst-проект уже есть в Библиотеке", code="typst_bundle_invalid"
+            )
+        row = session.get(TypstMaterial, material_id)
+        if row is None:
+            raise ProjectDomainError(
+                "Материал не является Typst-проектом", status=422, code="typst_bundle_invalid"
+            )
+        material.sha256 = bundle.sha256
+        material.storage_path = store_bundle(bundle)
+        material.size_bytes = bundle.size_bytes
+        material.original_name = (
+            Path(bundle.entrypoint).name if bundle.entrypoint else "Typst-проект.zip"
+        )
+        row.entrypoint = bundle.entrypoint
+        row.packages = bundle.packages
+        row.issues = []
 
 
 def create_library_text(

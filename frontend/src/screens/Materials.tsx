@@ -103,6 +103,7 @@ const STATUS: Record<MaterialRead["status"], { label: string; tone: "neutral" | 
   queued: { label: "В очереди", tone: "info" },
   processing: { label: "Разбирается", tone: "info" },
   paused: { label: "На паузе", tone: "warning" },
+  needs_input: { label: "Нужны файлы", tone: "warning" },
   ready: { label: "Готов", tone: "success" },
   failed: { label: "Ошибка", tone: "danger" },
 };

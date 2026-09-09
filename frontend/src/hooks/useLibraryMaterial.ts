@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   controlLibraryProcessing,
+  buildTypstMaterial,
   getLibraryMaterial,
   getLibraryPage,
   listMaterialRevisions,
@@ -163,6 +164,10 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
   const controlProcessing = useCallback((action: "pause" | "resume" | "retry" | "cancel") =>
     run(() => controlLibraryProcessing(materialId, action)), [materialId, run]);
 
+  const buildTypst = useCallback((downloadPackages: boolean) =>
+    run(() => buildTypstMaterial(materialId, { download_packages: downloadPackages })),
+  [materialId, run]);
+
   return {
     detail,
     revisions,
@@ -177,6 +182,7 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
     refreshDetail,
     startProcessing,
     controlProcessing,
+    buildTypst,
     run,
   };
 }

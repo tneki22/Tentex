@@ -147,6 +147,7 @@ export function MaterialProcessingPanels({
         readOnly={false}
         onStart={start}
         onControl={control}
+        onTypstBuild={() => undefined}
         onEditPage={onEditPage}
         onCleanupPage={onCleanupPage}
         onConfirmPageReview={confirmReview}

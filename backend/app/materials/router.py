@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
@@ -9,7 +10,7 @@ from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
 from app.background.schemas import BackgroundJobStartRead
 from app.db import get_session
-from app.materials import ai_cleanup, library, service
+from app.materials import ai_cleanup, library, service, typst
 from app.materials.schemas import (
     ExamCompositeDraftImportResult,
     ExamCompositeDraftImportWrite,
@@ -38,8 +39,11 @@ from app.materials.schemas import (
     ProcessingStart,
     SourceRefreshResult,
     TextMaterialCreate,
+    TypstBuildWrite,
+    TypstStartRead,
 )
-from app.models import SourceRole
+from app.materials.storage import material_path
+from app.models import SourceRole, TypstMaterial
 from app.projects.errors import ProjectDomainError
 from app.projects.schemas import ProgramChangeResult
 
@@ -66,6 +70,90 @@ async def upload_library_material(
     session: SessionDependency, file: Annotated[UploadFile, File()]
 ) -> LibraryMaterialDetailRead:
     return await library.create_library_upload(session, file)
+
+
+@router.post(
+    "/materials/typst", response_model=TypstStartRead, status_code=status.HTTP_202_ACCEPTED
+)
+async def upload_typst_material(
+    session: SessionDependency,
+    input_kind: Annotated[str, Form()],
+    file: Annotated[UploadFile | None, File()] = None,
+    files: Annotated[list[UploadFile] | None, File()] = None,
+    paths: Annotated[list[str] | None, Form()] = None,
+    entrypoint: Annotated[str | None, Form()] = None,
+) -> TypstStartRead:
+    """Принимает один `.typ`, дерево браузера или ZIP и сразу ставит сборку."""
+    if input_kind == "zip":
+        if file is None:
+            raise ProjectDomainError(
+                "Для ZIP нужен файл архива", status=422, code="typst_bundle_invalid"
+            )
+        bundle = await typst.bundle_zip(file, entrypoint)
+    elif input_kind in {"single", "folder"}:
+        selected = files or ([file] if file else [])
+        selected_paths = paths or ([file.filename or "main.typ"] if file else [])
+        bundle = await typst.bundle_uploads(selected, selected_paths, entrypoint)
+    else:
+        raise ProjectDomainError(
+            "Тип загрузки Typst не поддерживается", status=422, code="typst_bundle_invalid"
+        )
+    _, job = library.create_typst_material(session, bundle, input_kind)
+    return TypstStartRead(material_id=job.material_id, job_id=job.id)
+
+
+@router.post("/materials/{material_id}/typst/build", response_model=TypstStartRead)
+def build_typst_material(
+    material_id: UUID, command: TypstBuildWrite, session: SessionDependency
+) -> TypstStartRead:
+    """Повторяет сборку после выбора entrypoint или явного разрешения пакетов."""
+    job = library.queue_typst_build(
+        session,
+        material_id,
+        entrypoint=command.entrypoint,
+        download_packages=command.download_packages,
+    )
+    return TypstStartRead(material_id=material_id, job_id=job.id)
+
+
+@router.post("/materials/{material_id}/typst/files", response_model=TypstStartRead)
+async def add_typst_files(
+    material_id: UUID,
+    session: SessionDependency,
+    files: Annotated[list[UploadFile], File()],
+    target_paths: Annotated[list[str], Form()],
+) -> TypstStartRead:
+    """Кладёт недостающие зависимости только под подтверждёнными путями проекта."""
+    row = session.get(TypstMaterial, material_id)
+    material = library.material_or_404(session, material_id)
+    if row is None:
+        raise ProjectDomainError(
+            "Материал не является Typst-проектом", status=422, code="typst_bundle_invalid"
+        )
+    bundle = await typst.merge_bundle_files(
+        material_path(material.storage_path), files, target_paths, row.entrypoint
+    )
+    library.replace_typst_bundle(session, material_id, bundle)
+    job = library.queue_typst_build(
+        session, material_id, entrypoint=row.entrypoint, download_packages=False
+    )
+    return TypstStartRead(material_id=material_id, job_id=job.id)
+
+
+@router.get("/materials/{material_id}/rendered")
+def get_typst_rendered(material_id: UUID, session: SessionDependency) -> FileResponse:
+    """Отдаёт только последнюю полностью успешную сборку Typst."""
+    material = library.material_or_404(session, material_id)
+    row = session.get(TypstMaterial, material.id)
+    if row is None or not row.current_pdf_path:
+        raise ProjectDomainError(
+            "Собранный PDF пока недоступен", status=409, code="typst_preview_unavailable"
+        )
+    return FileResponse(
+        material_path(row.current_pdf_path),
+        media_type="application/pdf",
+        filename=f"{Path(material.original_name).stem}.pdf",
+    )
 
 
 @router.post(
@@ -135,9 +223,7 @@ def search_material(
     revision: int | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> LibrarySearchResult:
-    return library.search_library_material(
-        session, material_id, q, revision=revision, limit=limit
-    )
+    return library.search_library_material(session, material_id, q, revision=revision, limit=limit)
 
 
 @router.get("/materials/{material_id}/source")
@@ -242,9 +328,7 @@ def apply_library_page_cleanup(
     return ai_cleanup.apply(session, None, material_id, page_number, command)
 
 
-@router.get(
-    "/materials/{material_id}/fragments/{fragment_id}/asset", response_class=FileResponse
-)
+@router.get("/materials/{material_id}/fragments/{fragment_id}/asset", response_class=FileResponse)
 def get_library_fragment_asset(
     material_id: UUID, fragment_id: UUID, session: SessionDependency
 ) -> FileResponse:

@@ -27,6 +27,7 @@ const SOURCE_LABEL: Record<MaterialSourceKind, string> = {
   url: "Веб-страница",
   youtube: "YouTube-транскрипт",
   audio: "Аудиофайл",
+  typst: "Typst-проект",
 };
 
 const STATUS_LABEL: Record<MaterialRead["status"], string> = {
@@ -34,6 +35,7 @@ const STATUS_LABEL: Record<MaterialRead["status"], string> = {
   queued: "В очереди",
   processing: "Обрабатывается",
   paused: "На паузе",
+  needs_input: "Нужны файлы",
   ready: "Готов",
   failed: "Ошибка",
 };
@@ -46,6 +48,7 @@ const STATUS_TONE: Record<
   queued: "info",
   processing: "info",
   paused: "warning",
+  needs_input: "warning",
   ready: "success",
   failed: "danger",
 };

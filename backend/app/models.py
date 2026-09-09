@@ -171,6 +171,7 @@ class MaterialState(StrEnum):
     QUEUED = "queued"
     PROCESSING = "processing"
     PAUSED = "paused"
+    NEEDS_INPUT = "needs_input"
     READY = "ready"
     FAILED = "failed"
 
@@ -181,6 +182,7 @@ class MaterialSourceKind(StrEnum):
     URL = "url"
     YOUTUBE = "youtube"
     AUDIO = "audio"
+    TYPST = "typst"
 
 
 class ParserMode(StrEnum):
@@ -217,6 +219,7 @@ class BackgroundJobKind(StrEnum):
     материала (Р3/Р4) поднята до общего реестра, а не заведена рядом с ним."""
 
     PARSE = "parse"
+    TYPST_COMPILE = "typst_compile"
     AI_GROUPING = "ai_grouping"
     AI_IMPORT_REPAIR = "ai_import_repair"
     AI_PREPARATION = "ai_preparation"
@@ -741,9 +744,57 @@ class MaterialRevision(Base):
     task_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     source_storage_path: Mapped[str | None] = mapped_column(String, nullable=True)
     source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    render_storage_path: Mapped[str | None] = mapped_column(String, nullable=True)
     scope: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class TypstMaterial(Base):
+    """Метаданные Typst-проекта, отделённые от общего материала.
+
+    В `Material` остаются общие поля Библиотеки, а здесь — только сведения,
+    нужные для воспроизводимой сборки и интерфейса разрешения зависимостей.
+    """
+
+    __tablename__ = "typst_materials"
+
+    material_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE"), primary_key=True
+    )
+    input_kind: Mapped[str] = mapped_column(String(16))
+    entrypoint: Mapped[str | None] = mapped_column(String, nullable=True)
+    compiler_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    build_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    packages: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list)
+    issues: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    current_pdf_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class TypstSourceChunk(Base):
+    """Неизменённый отрезок исходника Typst, передаваемый модели вместо PDF-текста."""
+
+    __tablename__ = "typst_source_chunks"
+    __table_args__ = (
+        CheckConstraint("line_from > 0 AND line_to >= line_from", name="typst_chunk_line_range"),
+        Index("ix_typst_source_chunks_material_revision", "material_id", "revision", "sort_order"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    material_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE")
+    )
+    revision: Mapped[int] = mapped_column(Integer)
+    sort_order: Mapped[int] = mapped_column(Integer)
+    path: Mapped[str] = mapped_column(String)
+    line_from: Mapped[int] = mapped_column(Integer)
+    line_to: Mapped[int] = mapped_column(Integer)
+    source_text: Mapped[str] = mapped_column(Text)
+    source_hash: Mapped[str] = mapped_column(String(64))
+    page_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    diagnostic: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class BackgroundJob(Base):
@@ -1292,9 +1343,7 @@ class CardSession(Base):
         enum_type(CardSessionScope, "card_session_scope")
     )
     selected_unit_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
-    pace: Mapped[CardSessionPace] = mapped_column(
-        enum_type(CardSessionPace, "card_session_pace")
-    )
+    pace: Mapped[CardSessionPace] = mapped_column(enum_type(CardSessionPace, "card_session_pace"))
     limit_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     queue: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     position: Mapped[int] = mapped_column(Integer, default=0)

@@ -1,9 +1,13 @@
 import argparse
+import hashlib
 import logging
 import os
+import shutil
 import socket
+import tempfile
 import time
 from datetime import timedelta
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
@@ -17,11 +21,18 @@ from app.db import SessionLocal, upgrade_database
 from app.logging_config import configure_logging
 from app.materials import library
 from app.materials import revisions as revision_registry
-from app.materials.parsers.base import ParsedPage
+from app.materials.parsers.base import ParsedElement, ParsedPage
 from app.materials.parsers.cloud_vlm import CloudRecognizer
 from app.materials.parsers.native import extract_outline, iter_pages
 from app.materials.schemas import MaterialPurpose
 from app.materials.storage import material_path
+from app.materials.typst import (
+    compile_bundle,
+    extract_bundle,
+    missing_packages,
+    native_pdf_pages,
+    source_chunks,
+)
 from app.models import (
     BackgroundJob,
     BackgroundJobKind,
@@ -34,6 +45,8 @@ from app.models import (
     ParserMode,
     ProcessingStage,
     ProjectMaterial,
+    TypstMaterial,
+    TypstSourceChunk,
     utc_now,
 )
 from app.ocr import settings as ocr_settings
@@ -99,6 +112,10 @@ def claim_job(session: Session, worker_id: str) -> BackgroundJob | None:
             if material:
                 material.status = MaterialState.PROCESSING
                 material.outline = extract_outline(material_path(material.storage_path))
+        elif job.kind == BackgroundJobKind.TYPST_COMPILE:
+            material = session.get(Material, job.material_id)
+            if material:
+                material.status = MaterialState.PROCESSING
         session.flush()
         session.expunge(job)
         log.info("claimed job=%s kind=%s material=%s", job.id, job.kind, job.material_id)
@@ -258,9 +275,7 @@ def _finish(session: Session, task_id: UUID) -> None:
         library.refresh_material_counters(session, material, revision)
         session.flush()
         if old_fragments:
-            transfer_bindings_on_revision(
-                session, task.material_id, old_fragments, new_fragments
-            )
+            transfer_bindings_on_revision(session, task.material_id, old_fragments, new_fragments)
         reindex_material(session, task.material_id)
 
         storage_path, source_hash = revision_registry.inherit_source(
@@ -366,6 +381,172 @@ def process_parse_job(session: Session, task: BackgroundJob) -> None:
             recognizer.close()
 
 
+def _typst_pages(pdf_path: Path) -> list[ParsedPage]:
+    """Превращает итоговый PDF в native-страницы, сознательно не вызывая OCR."""
+    return [
+        ParsedPage(
+            page_number=number,
+            width=width,
+            height=height,
+            markdown=text,
+            plain_text=text,
+            quality="native",
+            elements=(ParsedElement("paragraph", text, (0, 0, 1, 1)),) if text else (),
+        )
+        for number, width, height, text in native_pdf_pages(pdf_path)
+    ]
+
+
+def _mark_typst_input_needed(
+    session: Session, task_id: UUID, issues: list[dict[str, object]]
+) -> None:
+    """Проблема, разрешимая пользователем, не считается падением сборки."""
+    with session.begin():
+        task = session.get(BackgroundJob, task_id)
+        if task is None:
+            return
+        material = session.get(Material, task.material_id)
+        row = session.get(TypstMaterial, task.material_id)
+        if material:
+            material.status = MaterialState.NEEDS_INPUT
+            material.error = None
+        if row:
+            row.issues = issues
+        task.state = BackgroundJobState.COMPLETED
+        task.done = task.total
+        task.completed_at = utc_now()
+        task.lease_owner = None
+        task.lease_expires_at = None
+
+
+def _save_typst_chunks(
+    session: Session, material_id: UUID, revision: int, bundle: Path, entrypoint: str, pages: int
+) -> None:
+    """Сохраняет exact-code отдельной таблицей: FTS-представление к нему не подмешивается."""
+    with tempfile.TemporaryDirectory(prefix="tentex-typst-source-") as raw:
+        root = Path(raw)
+        extract_bundle(bundle, root)
+        chunks = source_chunks(root, entrypoint, pages)
+    with session.begin():
+        for order, chunk in enumerate(chunks):
+            session.add(
+                TypstSourceChunk(
+                    material_id=material_id, revision=revision, sort_order=order, **chunk
+                )
+            )
+
+
+def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:
+    """Собирает Typst, затем нативно индексирует PDF и атомарно активирует ревизию."""
+    task_id, material_id = task.id, task.material_id
+    if material_id is None:
+        return
+    try:
+        material = session.get(Material, material_id)
+        row = session.get(TypstMaterial, material_id)
+        if material is None or row is None:
+            return
+        entrypoint = str(task.checkpoint.get("entrypoint") or row.entrypoint or "")
+        storage_path = material.storage_path
+        packages = missing_packages(row.packages or [])
+        session.rollback()
+        if packages and not bool(task.checkpoint.get("download_packages")):
+            _mark_typst_input_needed(
+                session,
+                task_id,
+                [
+                    {
+                        "kind": "package",
+                        "message": f"Нужен {item['name']} {item['version']}",
+                        **item,
+                    }
+                    for item in packages
+                ],
+            )
+            return
+        revision = revision_registry.max_revision(session, material_id) + 1
+        session.rollback()
+        with session.begin():
+            current = session.get(BackgroundJob, task_id)
+            assert current is not None
+            current.checkpoint = {**current.checkpoint, "revision": revision, "selected_pages": []}
+        bundle = material_path(storage_path)
+        result = compile_bundle(
+            bundle, entrypoint, allow_download=bool(task.checkpoint.get("download_packages"))
+        )
+        if not result.ok:
+            needs_input = any(issue.get("kind") == "missing_file" for issue in result.diagnostics)
+            if needs_input:
+                _mark_typst_input_needed(session, task_id, result.diagnostics)
+                return
+            with session.begin():
+                failed = session.get(BackgroundJob, task_id)
+                material = session.get(Material, material_id)
+                row = session.get(TypstMaterial, material_id)
+                if failed:
+                    failed.state = BackgroundJobState.FAILED
+                    failed.error = str(
+                        result.diagnostics[0].get("message", "Сборка Typst не удалась")
+                    )
+                    failed.lease_owner = None
+                    failed.lease_expires_at = None
+                if material:
+                    material.status = MaterialState.FAILED
+                    material.error = failed.error if failed else "Сборка Typst не удалась"
+                if row:
+                    row.issues = result.diagnostics
+            return
+        assert result.pdf_path is not None
+        pages = _typst_pages(result.pdf_path)
+        with session.begin():
+            material = session.get(Material, material_id)
+            assert material is not None
+            material.outline = extract_outline(result.pdf_path)
+            current = session.get(BackgroundJob, task_id)
+            assert current is not None
+            current.checkpoint = {
+                **current.checkpoint,
+                "selected_pages": [page.page_number for page in pages],
+            }
+            current.total = len(pages)
+        for page in pages:
+            if not _save_page(session, task_id, page):
+                return
+        _finish(session, task_id)
+        target = Path("typst-rendered") / str(material_id) / f"{revision}.pdf"
+        destination = material_path(target.as_posix())
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(result.pdf_path, destination)
+        _save_typst_chunks(session, material_id, revision, bundle, entrypoint, len(pages))
+        with session.begin():
+            material = session.get(Material, material_id)
+            row = session.get(TypstMaterial, material_id)
+            record = revision_registry.require_revision(session, material_id, revision)
+            record.render_storage_path = target.as_posix()
+            if material:
+                material.status = MaterialState.READY
+                material.error = None
+            if row:
+                row.current_pdf_path = target.as_posix()
+                row.compiler_version = result.compiler_version
+                row.build_hash = hashlib.sha256(destination.read_bytes()).hexdigest()
+                row.issues = result.diagnostics
+    except Exception as error:
+        session.rollback()
+        log.exception("typst compile failed material=%s: %s", material_id, error)
+        with session.begin():
+            failed = session.get(BackgroundJob, task_id)
+            material = session.get(Material, material_id)
+            if failed:
+                failed.state = BackgroundJobState.FAILED
+                failed.error = "Внутренняя ошибка сборки Typst"
+                failed.lease_owner = None
+                failed.lease_expires_at = None
+            if material:
+                material.status = MaterialState.FAILED
+                material.error = "Внутренняя ошибка сборки Typst"
+
+
 def process_link_answers_job(session: Session, job: BackgroundJob) -> None:
     """Выполнить `BackgroundJobKind.LINK_ANSWERS`.
 
@@ -420,6 +601,8 @@ def run_once() -> bool:
         # её доводит до конца, а состояние (`state`) остаётся общим для всех.
         if job.kind == BackgroundJobKind.PARSE:
             process_parse_job(session, job)
+        elif job.kind == BackgroundJobKind.TYPST_COMPILE:
+            process_typst_compile_job(session, job)
         elif job.kind == BackgroundJobKind.LINK_ANSWERS:
             process_link_answers_job(session, job)
         else:
