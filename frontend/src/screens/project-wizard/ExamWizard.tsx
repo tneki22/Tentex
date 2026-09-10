@@ -7,7 +7,6 @@ import {
   detachMaterial,
   importCompositeExamDraftProgram,
   importExamDraftProgramFromMaterial,
-  importMaterialReferenceAnswers,
   listMaterials,
   previewExamProgram,
   startMaterialProcessing,
@@ -241,13 +240,13 @@ function getPreparationForecast(form: ExamForm, itemCount: number) {
 
 function getMaterialOpinion(form: ExamForm) {
   if (form.format === "unknown") {
-    return "Сохраним учебные материалы. Когда появится официальный список, вы добавите его и получите программу экзамена.";
+    return "Сохраним учебные материалы. Когда появится официальный список, вы добавите вопросы, задачи или билеты.";
   }
   if (trackFor(form.format) === "combined") {
     const hasStructure = form.questionList.selected || form.taskList.selected;
     const hasAnswers = form.questionAnswers.selected || form.taskAnswers.selected;
     if (!hasStructure) {
-      return "Добавьте список вопросов или список задач — без него не из чего собрать программу.";
+      return "Добавьте список вопросов или список задач — без него не из чего собрать структуру экзамена.";
     }
     if (hasAnswers && form.hasTheory) {
       return "Отличный набор: готовые ответы и решения дадут основу для повторения, а учебные материалы помогут глубже разобраться и уточнить сложные темы.";
@@ -258,7 +257,7 @@ function getMaterialOpinion(form: ExamForm) {
     if (form.hasTheory) {
       return "Учебные материалы помогут не только запомнить ответы, но и разобраться в темах глубже. Готовые ответы и решения можно добавить позже.";
     }
-    return "Списка достаточно, чтобы создать программу и начать подготовку. Ответы, решения и учебные материалы можно добавить позже.";
+    return "Списка достаточно, чтобы создать проект и начать подготовку. Ответы, решения и учебные материалы можно добавить позже.";
   }
   if (form.hasAnswers && form.hasTheory) {
     return "Отличный набор: готовые ответы дадут основу для повторения, а учебные материалы помогут глубже разобраться и уточнить сложные темы.";
@@ -269,7 +268,7 @@ function getMaterialOpinion(form: ExamForm) {
   if (form.hasTheory) {
     return "Учебные материалы помогут не только запомнить ответы, но и разобраться в темах глубже. Готовые ответы можно добавить позже.";
   }
-  return "Списка вопросов достаточно, чтобы создать программу и начать подготовку. Ответы и учебные материалы можно добавить позже.";
+  return "Списка вопросов достаточно, чтобы создать проект и начать подготовку. Ответы и учебные материалы можно добавить позже.";
 }
 
 function formatDetectedCounts(counts: { tickets: number; questions: number; tasks: number; subpoints?: number }) {
@@ -372,7 +371,7 @@ interface ExamWizardProps {
   controller: WizardDraftController;
   requestedStep?: number;
   onStepChange?: (step: number) => void;
-  onActivated?: (project: ProjectDetail, warning?: string) => void;
+  onActivated?: (project: ProjectDetail) => void;
 }
 
 export function ExamWizard({ controller, requestedStep, onStepChange, onActivated }: ExamWizardProps) {
@@ -1228,25 +1227,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     try {
       await controller.queueSave(command(5));
       const project = await controller.activate();
-      const projectId = project.project.id;
-      const auxiliary = projectMaterials.materials.filter((material) =>
-        material.purposes.some((purpose) => ["reference_answers", "study_source"].includes(purpose)),
-      );
-      const starts = auxiliary.map(async (material) => {
-        if (material.status === "ready_to_process") {
-          await startMaterialProcessing(projectId, material.id, "fast");
-        } else if (material.status === "ready" && material.purposes.includes("reference_answers")) {
-          await importMaterialReferenceAnswers(projectId, material.id);
-        }
-      });
-      const results = await Promise.allSettled(starts);
-      const failed = results.filter((result) => result.status === "rejected").length;
-      onActivated?.(
-        project,
-        failed > 0
-          ? `Проект создан, но не удалось запустить обработку ${failed} материалов. Продолжите её в разделе «Материалы».`
-          : undefined,
-      );
+      onActivated?.(project);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Не удалось создать проект");
     }
@@ -1270,7 +1251,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
       {(actionError || controller.error || projectMaterials.error) && <p className="inline-error" role="alert">{actionError || controller.error?.message || projectMaterials.error}</p>}
       {controller.conflict && <Card><h2>Черновик изменился в другой вкладке</h2><p>Загрузите серверную версию, чтобы не затереть изменения.</p><Button onClick={() => void controller.reload()}>Загрузить серверную версию</Button></Card>}
 
-      {step === 1 && <section className="wizard-step"><PageHead eyebrow="Сначала — структура" title="Как устроен ваш экзамен?" /><p>Это определит, как Tentex сохранит формулировки и соберёт из них программу.</p><RadioCards label="Формат экзамена" value={trackFor(form.format)} options={FORMAT_OPTIONS} onChange={(track) => setForm((current) => ({ ...current, format: track === "combined" ? (current.taskList.selected ? "questions_tasks" : "questions") : track, hasTheory: track === "unknown" || current.hasTheory }))} className="wizard-format-options" />{form.format === "unknown" && <div className="wizard-context-note"><LibraryBig size={18} aria-hidden="true" /><span><b>Официальный список добавите позже</b>Сейчас сохраним учебные источники. Без прохода 1 предварительную программу по ним не выдумываем.</span></div>}<div className="wizard-actions"><Button disabled={busy || !form.format} onClick={() => void go(2)}>Продолжить</Button></div></section>}
+      {step === 1 && <section className="wizard-step"><PageHead eyebrow="Сначала — структура" title="Как устроен ваш экзамен?" /><p>Это определит, как Tentex сохранит вопросы, задачи или билеты.</p><RadioCards label="Формат экзамена" value={trackFor(form.format)} options={FORMAT_OPTIONS} onChange={(track) => setForm((current) => ({ ...current, format: track === "combined" ? (current.taskList.selected ? "questions_tasks" : "questions") : track, hasTheory: track === "unknown" || current.hasTheory }))} className="wizard-format-options" />{form.format === "unknown" && <div className="wizard-context-note"><LibraryBig size={18} aria-hidden="true" /><span><b>Официальный список добавите позже</b>Сейчас сохраним учебные источники, а вопросы, задачи или билеты можно будет добавить позже.</span></div>}<div className="wizard-actions"><Button disabled={busy || !form.format} onClick={() => void go(2)}>Продолжить</Button></div></section>}
 
       {step === 2 && (
         <section className="wizard-step">
@@ -1586,7 +1567,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
             eyebrow="Паспорт цели"
             title="Настроим подготовку под вас"
           />
-          <p>Эти ответы зададут глубину программы и реальный темп. Их можно будет изменить после создания проекта.</p>
+          <p>Эти ответы зададут реальный темп подготовки. Их можно будет изменить после создания проекта.</p>
           <div className="wizard-passport-grid">
             <Card className="wizard-form-card">
               <div className="wizard-form-card-head">
@@ -1636,7 +1617,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                 <div className="wizard-control-group">
                   <b>Желаемый результат</b>
                   <SegmentedTabs className="wizard-outcome-tabs" label="Желаемый результат" value={form.targetOutcome} tabs={OUTCOME_TABS} onChange={(targetOutcome) => setForm((current) => ({ ...current, targetOutcome }))} />
-                  <small>Чем выше уровень, тем больше практики и проверок понимания войдёт в программу.</small>
+                  <small>Чем выше уровень, тем больше будет практики и проверок понимания.</small>
                 </div>
                 <div className="wizard-control-group">
                   <b>Формат подготовки</b>
@@ -1810,13 +1791,13 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
           <section className="wizard-after-create">
             <h3>Что произойдёт после создания</h3>
             {form.format === "unknown" ? (
-              <p>Проект создастся с пустой Программой, а учебные источники начнут обрабатываться в фоне. Когда появится официальный список, импортируйте его в разделе «Вопросы экзамена».</p>
+              <p>Учебные источники сохранятся в проекте. Когда появится официальный список, импортируйте его в разделе «Вопросы экзамена».</p>
             ) : (
               <>
-                <p>Список вопросов уже сохранён в Программе.</p>
-                {form.hasAnswers && <p>Файлы ответов автоматически пойдут в OCR, разбор и автопривязку. После создания откройте «Материалы → Ответы», проверьте распознанный текст и автоматические привязки, вручную исправив только неоднозначные.</p>}
+                <p>{form.format === "tickets" ? "Билеты" : form.format === "questions_tasks" ? "Вопросы и задачи" : "Вопросы"} уже сохранены в проекте.</p>
+                {form.hasAnswers && <p>Файлы ответов сохранены. Подготовить их текст и привязать ответы можно в разделе «Материалы».</p>}
                 {!form.hasAnswers && <p>Готовые ответы можно добавить позже в разделе «Материалы → Ответы» и привязать к вопросам.</p>}
-                {form.hasTheory && <p>Учебные источники начнут обрабатываться в фоне.</p>}
+                {form.hasTheory && <p>Учебные материалы сохранены. Подготовить их текст можно в разделе «Материалы».</p>}
               </>
             )}
           </section>

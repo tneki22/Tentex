@@ -19,9 +19,9 @@ const TRACKS = [
     icon: GraduationCap,
     eyebrow: "До конкретной даты",
     title: "Подготовка к экзамену",
-    description: "Есть вопросы, задачи, билеты или только учебные материалы. Соберём программу и распределим работу до экзамена.",
+    description: "Есть вопросы, задачи, билеты или только учебные материалы. Сохраним структуру экзамена и распределим работу до даты.",
     need: "Список формулировок или материалы по предмету",
-    result: "Структура экзамена, программа и понятный темп подготовки",
+    result: "Вопросы, задачи или билеты и понятный темп подготовки",
     available: true,
   },
   {
@@ -69,7 +69,6 @@ export function ProjectWizard() {
   const [draftDeleteError, setDraftDeleteError] = useState("");
   const [requestedStep, setRequestedStep] = useState<number | null>(null);
   const [activatedProject, setActivatedProject] = useState<ProjectDetail | null>(null);
-  const [activationWarning, setActivationWarning] = useState("");
   const templateKey: TemplateKey = track ?? "exam";
   const controller = useWizardDraft({ templateKey, projectId: resumeId });
 
@@ -179,13 +178,11 @@ export function ProjectWizard() {
       <div className="project-wizard is-success">
         <Card className="wizard-success-card">
           <h1>Создан проект: {activatedProject.project.name || (textbook ? "Учебниковый проект" : "Экзаменационный проект")}</h1>
-          <p>{first ? "Паспорт цели и программа сохранены." : textbook ? "Паспорт цели и источники сохранены. Программу можно составить позже." : "Паспорт цели сохранён. Вопросы можно импортировать позже."}</p>
-          {activationWarning && <p className="inline-warning" role="status">{activationWarning}</p>}
-          <p className="wizard-success-next">Следующий шаг — {textbook ? "открыть Программу и добавить первую тему, когда будете готовы" : "открыть проект, проверить программу и начать готовиться"}.</p>
+          {textbook && <p>{first ? "Паспорт цели и программа сохранены." : "Паспорт цели и источники сохранены. Программу можно составить позже."}</p>}
+          <p className="wizard-success-next">{textbook ? "Следующий шаг — открыть Программу и добавить первую тему, когда будете готовы." : "Следующий шаг: открыть проект, проверить вопросы, подготовить материалы и привязать ответы. Начать готовиться!"}</p>
           <div className="wizard-success-actions">
             <Button onClick={() => navigate(destination)}>{textbook ? "Открыть программу" : "Открыть проект"}</Button>
-            {activationWarning && <Button variant="secondary" onClick={() => navigate(`/projects/${activatedProject.project.id}/materials`)}>Открыть Материалы</Button>}
-            <Button variant="ghost" onClick={() => { setActivatedProject(null); setActivationWarning(""); }}>Вернуться к проверке</Button>
+            <Button variant="ghost" onClick={() => setActivatedProject(null)}>Вернуться к проверке</Button>
           </div>
         </Card>
       </div>
@@ -204,7 +201,7 @@ export function ProjectWizard() {
         >
           <div className="wizard-hero">
             <h1>Как вы хотите<br />учиться?</h1>
-            <p>Расскажите, к чему готовитесь и что у вас уже есть. Tentex поможет собрать программу и следующий шаг.</p>
+            <p>Расскажите, к чему готовитесь и что у вас уже есть. Tentex поможет определить следующий шаг.</p>
           </div>
 
           <div className="wizard-track-grid">
@@ -281,11 +278,11 @@ export function ProjectWizard() {
         onDiscard={controller.detail ? () => setDiscardOpen(true) : undefined}
       >
         {track === "exam"
-          ? <ExamWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={(project, warning) => { setActivationWarning(warning ?? ""); setActivatedProject(project); }} />
-          : <TextbookWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={(project) => { setActivationWarning(""); setActivatedProject(project); }} />}
+          ? <ExamWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} />
+          : <TextbookWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} />}
       </WizardChrome>
       <ConfirmDialog open={discardOpen} onOpenChange={setDiscardOpen} title="Удалить черновик?" confirmLabel="Удалить черновик" destructive onConfirm={discard}>
-        <p>Паспорт и ручная программа этого черновика будут удалены. Общие материалы других проектов не затрагиваются.</p>
+        <p>Паспорт и данные этого черновика будут удалены. Общие материалы других проектов не затрагиваются.</p>
         {draftDeleteError && <p className="inline-error" role="alert">{draftDeleteError}</p>}
       </ConfirmDialog>
     </>
