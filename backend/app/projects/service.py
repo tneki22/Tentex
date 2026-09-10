@@ -149,7 +149,7 @@ def get_wizard_draft(session: Session, project_id: UUID) -> WizardDraftDetail:
 def save_wizard_draft(
     session: Session, project_id: UUID, command: WizardDraftWrite
 ) -> WizardDraftDetail:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None:
             raise ProjectNotFoundError()
@@ -281,7 +281,7 @@ def _normalize_active_order(session: Session) -> int:
 def activate_wizard_draft(
     session: Session, project_id: UUID, expected_revision: int
 ) -> ProjectDetail:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None:
             raise ProjectNotFoundError()

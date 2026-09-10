@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.bindings.service import delete_project_material_bindings
+from app.db import project_write_transaction
 from app.materials import library
 from app.materials.library import (
     PURPOSE_VALUES,
@@ -289,7 +290,7 @@ def get_material(session: Session, project_id: UUID, material_id: UUID) -> Mater
 def update_material(
     session: Session, project_id: UUID, material_id: UUID, command: MaterialUpdate
 ) -> MaterialRead:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _project(session, project_id, writable=True)
         link = _link(session, project_id, material_id)
         material = session.get(Material, material_id)
@@ -323,7 +324,7 @@ def update_material(
 
 
 def detach_material(session: Session, project_id: UUID, material_id: UUID) -> None:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _project(session, project_id, writable=True)
         link = _link(session, project_id, material_id)
         delete_project_material_bindings(session, project_id, material_id)

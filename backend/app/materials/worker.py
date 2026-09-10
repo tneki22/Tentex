@@ -11,13 +11,14 @@ from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.ai.jobs import process_ai_job
 from app.bindings.answers_link import link_answers_material
 from app.bindings.search import reindex_material
 from app.bindings.service import transfer_bindings_on_revision
-from app.db import SessionLocal, upgrade_database
+from app.db import SessionLocal, job_write_transaction, retry_on_locked, upgrade_database
 from app.logging_config import configure_logging
 from app.materials import library
 from app.materials import revisions as revision_registry
@@ -79,7 +80,7 @@ def claim_job(session: Session, worker_id: str) -> BackgroundJob | None:
     `rowcount == 1` вместо read-then-write.
     """
     now = utc_now()
-    with session.begin():
+    with job_write_transaction(session):
         expired = list(
             session.scalars(
                 select(BackgroundJob).where(
@@ -130,7 +131,7 @@ def _prepare_revision(session: Session, task_id: UUID) -> None:
     Частичный запуск обязан дать полную версию: иначе прежние страницы исчезли
     бы из активного разбора, а привязки к ним осиротели бы без всякой причины.
     """
-    with session.begin():
+    with job_write_transaction(session, task_id):
         task = session.get(BackgroundJob, task_id)
         if task is None:
             return
@@ -166,7 +167,7 @@ def _prepare_revision(session: Session, task_id: UUID) -> None:
 
 
 def _save_page(session: Session, task_id: UUID, parsed: ParsedPage) -> bool:
-    with session.begin():
+    with job_write_transaction(session, task_id):
         task = session.get(BackgroundJob, task_id)
         if task is None:
             return False
@@ -256,7 +257,8 @@ def link_answers_projects(session: Session, material_id: UUID) -> None:
 
 
 def _finish(session: Session, task_id: UUID) -> None:
-    with session.begin():
+    started = time.perf_counter()
+    with job_write_transaction(session, task_id):
         task = session.get(BackgroundJob, task_id)
         if task is None:
             return
@@ -311,6 +313,16 @@ def _finish(session: Session, task_id: UUID) -> None:
         task.lease_expires_at = None
         task.completed_at = utc_now()
         task.updated_at = utc_now()
+    # Единственная заведомо длинная запись конвейера (пересборка структуры,
+    # перенос привязок и FTS всей ревизии в одной транзакции) — замер решает,
+    # нужно ли выносить `reindex_material`/`transfer_bindings_on_revision`
+    # в отдельные короткие транзакции (docs/architecture/stage-5-material-pipeline.md).
+    log.info(
+        "_finish material=%s revision=%s %.1fms",
+        task.material_id,
+        revision,
+        (time.perf_counter() - started) * 1000,
+    )
 
 
 def process_parse_job(session: Session, task: BackgroundJob) -> None:
@@ -355,13 +367,32 @@ def process_parse_job(session: Session, task: BackgroundJob) -> None:
                 page_numbers=remaining_pages,
                 recognizer=recognizer,
             ):
-                if not _save_page(session, task_id, page):
+                if not retry_on_locked(lambda page=page: _save_page(session, task_id, page)):
                     return
-        _finish(session, task_id)
+        retry_on_locked(lambda: _finish(session, task_id))
     except Exception as error:
         session.rollback()
+        message = str(error).lower()
+        if isinstance(error, OperationalError) and (
+            "database is locked" in message or "database is busy" in message
+        ):
+            # Ретраи в retry_on_locked исчерпаны, а не отсутствовали: снимок
+            # SQLite так и не стал текущим за ~3.7с бэкоффа. Это не поломка
+            # разбора — checkpoint (готовые страницы) уже сохранён, задача
+            # просто возвращается в очередь и воркер подберёт её сам.
+            log.warning(
+                "task material=%s requeued after exhausted sqlite lock: %s", material_id, error
+            )
+            with job_write_transaction(session, task_id):
+                requeued = session.get(BackgroundJob, task_id)
+                if requeued:
+                    requeued.state = BackgroundJobState.QUEUED
+                    requeued.lease_owner = None
+                    requeued.lease_expires_at = None
+                    requeued.updated_at = utc_now()
+            return
         log.exception("task failed material=%s: %s", material_id, error)
-        with session.begin():
+        with job_write_transaction(session, task_id):
             failed = session.get(BackgroundJob, task_id)
             material = session.get(Material, material_id)
             if failed:
@@ -387,7 +418,7 @@ def _mark_typst_input_needed(
     session: Session, task_id: UUID, issues: list[dict[str, object]]
 ) -> None:
     """Проблема, разрешимая пользователем, не считается падением сборки."""
-    with session.begin():
+    with job_write_transaction(session, task_id):
         task = session.get(BackgroundJob, task_id)
         if task is None:
             return

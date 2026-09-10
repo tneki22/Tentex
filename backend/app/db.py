@@ -1,16 +1,20 @@
+import logging
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from uuid import UUID
 
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import URL, MetaData, create_engine, event, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from app.config import BACKEND_ROOT, settings
+
+log = logging.getLogger("tentex.db")
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -84,6 +88,53 @@ def project_write_transaction(session: Session, project_id: UUID):
     with session.begin():
         session.execute(text("UPDATE projects SET id = id WHERE id = :id"), {"id": project_id.hex})
         yield
+
+
+@contextmanager
+def job_write_transaction(session: Session, job_id: UUID | None = None):
+    """Тот же приём резервирования writer, что у `project_write_transaction`,
+    но для фоновой задачи (`SQLITE_BUSY_SNAPSHOT` объяснён там же).
+
+    `job_id=None` — вариант для `claim_job`: конкретная задача ещё не выбрана
+    (это чтение и есть первый шаг), поэтому резервирующий `UPDATE` не находит
+    ни одной строки (`WHERE 1=0`). SQLite всё равно запрашивает write-lock при
+    подготовке write-опкода, до сканирования совпадений — нулевой результат
+    ничего не портит и ничего не меняет.
+    """
+    if session.in_transaction():
+        session.commit()
+    with session.begin():
+        if job_id is None:
+            session.execute(text("UPDATE background_jobs SET updated_at = updated_at WHERE 1=0"))
+        else:
+            session.execute(
+                text("UPDATE background_jobs SET updated_at = updated_at WHERE id = :id"),
+                {"id": job_id.hex},
+            )
+        yield
+
+
+def retry_on_locked[T](operation: Callable[[], T], *, attempts: int = 5) -> T:
+    """Повторить операцию при `SQLITE_BUSY_SNAPSHOT` вместо немедленного отказа.
+
+    Эта ошибка не проходит через busy handler (`PRAGMA busy_timeout` не спасает),
+    поэтому единственный выход — короткая пауза и новая попытка на свежем снимке.
+    Любая другая ошибка пробрасывается сразу: ретраить её бессмысленно.
+    """
+    delays = (0.2, 0.5, 1, 2)
+    for attempt in range(attempts):
+        try:
+            return operation()
+        except OperationalError as error:
+            message = str(error).lower()
+            if "database is locked" not in message and "database is busy" not in message:
+                raise
+            if attempt == attempts - 1:
+                raise
+            delay = delays[min(attempt, len(delays) - 1)]
+            log.warning("retrying after sqlite lock, attempt=%d delay=%.1fs", attempt + 1, delay)
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def _ensure_wal_mode(attempts: int = 5, delay: float = 0.5) -> None:
