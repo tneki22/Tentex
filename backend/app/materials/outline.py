@@ -116,19 +116,23 @@ def _cluster_levels(indents: list[float]) -> list[int]:
     return [level_of[round(value, 1)] for value in indents]
 
 
-def _extract_page_items(page: fitz.Page) -> list[dict[str, object]] | None:
+def _extract_page_items(page: fitz.Page, *, max_page: int) -> list[dict[str, object]] | None:
     lines = _page_lines(page)
     plain = [text for text, _ in lines]
     if not _looks_like_toc_page(plain):
         return None
 
+    # Номер страницы не может далеко уйти за объём книги — это и отсекает
+    # колонтитул с годом («ИУ-6, МГТУ..., 2023») и страницу-обманку вроде
+    # списка литературы с годами изданий, случайно прошедшую первый фильтр.
+    page_bound = max_page + max(20, max_page // 4)
     parsed: list[tuple[str | None, str, int, float]] = []
     for text, x0 in lines:
         result = _parse_line(text.strip())
         if result is None:
             continue
         num, title, page_number = result
-        if page_number < 1:
+        if page_number < 1 or page_number > page_bound:
             continue
         parsed.append((num, title, page_number, x0))
     if len(parsed) < MIN_TOC_LINES:
@@ -183,13 +187,13 @@ def _scan_printed_outline(
     with fitz.open(path) as document:
         total = min(page_count, document.page_count)
         for page_number in _candidate_pages(total):
-            items = _extract_page_items(document[page_number - 1])
+            items = _extract_page_items(document[page_number - 1], max_page=page_count)
             if items is None:
                 continue
             source_pages = [page_number]
             next_page = page_number + 1
             while len(source_pages) < MAX_MERGED_PAGES and next_page <= total:
-                continued = _extract_page_items(document[next_page - 1])
+                continued = _extract_page_items(document[next_page - 1], max_page=page_count)
                 if continued is None:
                     break
                 items.extend(continued)

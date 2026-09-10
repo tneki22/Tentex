@@ -57,7 +57,9 @@ def test_finds_printed_outline_with_dot_leaders(tmp_path: Path) -> None:
     ]
     path = _make_pdf(tmp_path / "leaders.pdf", _flat(lines))
 
-    result = find_printed_outline(path, page_count=1)
+    # page_count — объём книги, которую страница представляет (используется
+    # как верхняя граница правдоподобия номера), а не число страниц PDF-файла.
+    result = find_printed_outline(path, page_count=30)
 
     assert result is not None
     items, source_pages = result
@@ -81,7 +83,7 @@ def test_finds_printed_outline_without_dot_leaders(tmp_path: Path) -> None:
     ]
     path = _make_pdf(tmp_path / "plain.pdf", _flat(lines))
 
-    result = find_printed_outline(path, page_count=1)
+    result = find_printed_outline(path, page_count=30)
 
     assert result is not None
     items, _ = result
@@ -103,7 +105,7 @@ def test_numbering_maps_to_levels(tmp_path: Path) -> None:
     ]
     path = _make_pdf(tmp_path / "numbered.pdf", _flat(lines))
 
-    result = find_printed_outline(path, page_count=1)
+    result = find_printed_outline(path, page_count=25)
 
     assert result is not None
     items, _ = result
@@ -159,12 +161,39 @@ def test_out_of_order_page_is_dropped_not_whole_page(tmp_path: Path) -> None:
     ]
     path = _make_pdf(tmp_path / "outlier.pdf", _flat(lines))
 
-    result = find_printed_outline(path, page_count=1)
+    result = find_printed_outline(path, page_count=20)
 
     assert result is not None
     items, _ = result
     assert [item["title"] for item in items] == ["A", "B", "C", "E", "F", "G", "H", "I"]
     assert [item["page"] for item in items] == [3, 5, 7, 9, 11, 13, 15, 17]
+
+
+def test_page_footer_with_year_is_not_mistaken_for_entry(tmp_path: Path) -> None:
+    # Найдено на реальном учебнике: повторяющийся колонтитул с годом издания
+    # ("Курс, Университет, 2023") оканчивается числом и проходит первичный
+    # regex, но 2023 намного больше объёма книги — верхняя граница по
+    # page_count должна его отсечь, а не показать пользователю лишний пункт.
+    lines = [
+        "Contents",
+        "Introduction .......................... 3",
+        "Course Name, University, 2023",
+        "Chapter 1 Basics .......................... 5",
+        "History .......................... 6",
+        "Overview .......................... 8",
+        "Chapter 2 Advanced Topics .......................... 12",
+        "Details .......................... 14",
+        "Examples .......................... 20",
+        "Appendix .......................... 25",
+    ]
+    path = _make_pdf(tmp_path / "footer-year.pdf", _flat(lines))
+
+    result = find_printed_outline(path, page_count=30)
+
+    assert result is not None
+    items, _ = result
+    assert [item["page"] for item in items] == [3, 5, 6, 8, 12, 14, 20, 25]
+    assert all(item["page"] != 2023 for item in items)
 
 
 def test_bibliography_page_is_not_mistaken_for_outline(tmp_path: Path) -> None:
