@@ -1,4 +1,4 @@
-import { FileUp, Pencil, Play, RotateCcw, Settings2, Sparkles } from "lucide-react";
+import { FileUp, Pencil, Play, RotateCcw, ScanLine, Settings2, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import type {
@@ -118,6 +118,7 @@ interface LibraryProcessingPanelProps {
   onTypstAddFile: (file: File, targetPath: string) => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
+  onFindHeaderFooter: () => void;
   onConfirmPageReview: () => void;
 }
 
@@ -132,6 +133,7 @@ export function LibraryProcessingPanel({
   onTypstAddFile,
   onEditPage,
   onCleanupPage,
+  onFindHeaderFooter,
   onConfirmPageReview,
 }: LibraryProcessingPanelProps) {
   const presentation = getMaterialPresentation(material.presentation_kind);
@@ -594,6 +596,17 @@ export function LibraryProcessingPanel({
               </Button>
             </div>
           )}
+        </section>
+      )}
+
+      {prepared && material.presentation_kind === "pdf" && pageCount >= 3 && !readOnly && (
+        <section className="inspector-section">
+          <h4>Весь документ</h4>
+          <div className="inspector-actions">
+            <Button variant="secondary" disabled={busy || Boolean(running)} onClick={onFindHeaderFooter}>
+              <ScanLine size={14} aria-hidden="true" /> Найти колонтитулы
+            </Button>
+          </div>
         </section>
       )}
 

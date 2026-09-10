@@ -313,6 +313,36 @@ export interface PageCorrectionRead {
   orphaned_binding_ids: string[];
 }
 
+export type HeaderFooterKind = "header" | "footer" | "page_number";
+
+export interface HeaderFooterCandidateRead {
+  id: string;
+  kind: HeaderFooterKind;
+  text: string | null;
+  element_type: "text" | "image";
+  bbox: number[];
+  pages: number[];
+  representative_page: number;
+  occurrences: Array<{ page: number; bbox: number[] }>;
+  fragment_count: number;
+  binding_count: number;
+}
+
+export interface HeaderFooterPreviewRead {
+  material_id: string;
+  revision: number;
+  page_count: number;
+  candidates: HeaderFooterCandidateRead[];
+}
+
+export interface HeaderFooterApplyRead {
+  revision: number;
+  removed_occurrences: number;
+  removed_fragments: number;
+  transferred_bindings: number;
+  orphaned_binding_ids: string[];
+}
+
 export interface CleanupSuggestion {
   markdown: string;
   changes: string[];
@@ -589,6 +619,24 @@ export const materialPageImageUrl = (
   page: number,
 ): string => `${materialPath(projectId, materialId)}/pages/${page}/image`;
 
+export const previewMaterialHeaderFooter = (
+  projectId: string,
+  materialId: string,
+  signal?: AbortSignal,
+): Promise<HeaderFooterPreviewRead> => request(
+  `${materialPath(projectId, materialId)}/header-footer/preview`,
+  { method: "POST", signal },
+);
+
+export const applyMaterialHeaderFooter = (
+  projectId: string,
+  materialId: string,
+  command: { expected_revision: number; candidate_ids: string[] },
+): Promise<HeaderFooterApplyRead> => request(
+  `${materialPath(projectId, materialId)}/header-footer/apply`,
+  { method: "POST", body: JSON.stringify(command) },
+);
+
 /** Картинка, вынутая из PDF или DOCX: показывается на своём месте в тексте. */
 export const materialFragmentAssetUrl = (
   projectId: string,
@@ -735,6 +783,22 @@ export const getLibraryPage = (
 
 export const libraryPageImageUrl = (materialId: string, page: number): string =>
   `${libraryPath(materialId)}/pages/${page}/image`;
+
+export const previewLibraryHeaderFooter = (
+  materialId: string,
+  signal?: AbortSignal,
+): Promise<HeaderFooterPreviewRead> => request(
+  `${libraryPath(materialId)}/header-footer/preview`,
+  { method: "POST", signal },
+);
+
+export const applyLibraryHeaderFooter = (
+  materialId: string,
+  command: { expected_revision: number; candidate_ids: string[] },
+): Promise<HeaderFooterApplyRead> => request(
+  `${libraryPath(materialId)}/header-footer/apply`,
+  { method: "POST", body: JSON.stringify(command) },
+);
 
 export const libraryFragmentAssetUrl = (materialId: string, fragmentId: string): string =>
   `${libraryPath(materialId)}/fragments/${encodeURIComponent(fragmentId)}/asset`;

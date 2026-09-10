@@ -17,10 +17,12 @@ import {
 import { Button, ErrorState, LoadingState } from "../../components/ui";
 import { LibraryProcessingPanel } from "../library/LibraryProcessingPanel";
 import { MaterialRevisionPanel } from "../library/MaterialRevisionPanel";
+import { HeaderFooterDialog } from "../HeaderFooterDialog";
 
 const POLL_MS = 1200;
 
 interface MaterialProcessingPanelsProps {
+  projectId: string;
   materialId: string;
   /** Текущая страница проекта: панель по ней включает правку и подтверждение OCR. */
   page: MaterialPageRead | null;
@@ -39,6 +41,7 @@ interface MaterialProcessingPanelsProps {
  * скачивание исходника и полное удаление остаются в Библиотеке.
  */
 export function MaterialProcessingPanels({
+  projectId,
   materialId,
   page,
   onEditPage,
@@ -51,6 +54,7 @@ export function MaterialProcessingPanels({
   const [busy, setBusy] = useState(false);
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [headerFooterOpen, setHeaderFooterOpen] = useState(false);
 
   /** Родитель пересоздаёт onError на каждый свой рендер (листание страниц и т.п.) —
    * держим актуальный колбэк в ref, чтобы это не меняло identity refresh и не гоняло
@@ -164,6 +168,7 @@ export function MaterialProcessingPanels({
         onTypstAddFile={addTypstFile}
         onEditPage={onEditPage}
         onCleanupPage={onCleanupPage}
+        onFindHeaderFooter={() => setHeaderFooterOpen(true)}
         onConfirmPageReview={confirmReview}
       />
       <MaterialRevisionPanel
@@ -173,6 +178,16 @@ export function MaterialProcessingPanels({
         busy={busy}
         onSelect={setSelectedRevision}
         onRestore={restore}
+      />
+      <HeaderFooterDialog
+        open={headerFooterOpen}
+        projectId={projectId}
+        material={{ id: detail.id, display_name: detail.original_name }}
+        onOpenChange={setHeaderFooterOpen}
+        onReload={async () => {
+          await refresh();
+        }}
+        onApplied={() => onChanged()}
       />
     </>
   );

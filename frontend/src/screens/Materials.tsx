@@ -655,6 +655,7 @@ const TAB_LABELS: Record<InspectorTab, string> = {
 };
 
 function ProcessingTab({
+  projectId,
   material,
   page,
   libraryLink,
@@ -665,6 +666,7 @@ function ProcessingTab({
   notice,
   onDismissNotice,
 }: {
+  projectId: string;
   material: MaterialRead;
   /** Текущая страница проекта: по ней панель включает правку и подтверждение OCR. */
   page: MaterialPageRead | null;
@@ -681,6 +683,7 @@ function ProcessingTab({
     <div className="materials-inspector-content">
       <NoticeLine notice={notice} onDismiss={onDismissNotice} />
       <MaterialProcessingPanels
+        projectId={projectId}
         materialId={material.id}
         page={page}
         onEditPage={onEdit}
@@ -1110,6 +1113,7 @@ function ExamStructureBindingsTab({
 }
 
 function MaterialInspector({
+  projectId,
   material,
   activeTab,
   onTabChange,
@@ -1130,6 +1134,7 @@ function MaterialInspector({
   isExamStructureFile,
   onDismissNotice,
 }: {
+  projectId: string;
   material: MaterialRead;
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
@@ -1172,7 +1177,7 @@ function MaterialInspector({
           : <BindingsTab {...bindingsProps} />
         )}
         {activeTab === "processing" && (
-          <ProcessingTab material={material} page={page} libraryLink={libraryLink} onEdit={onEdit} onCleanup={onCleanup} onChanged={onChanged} onError={onError} notice={notice} onDismissNotice={onDismissNotice} />
+          <ProcessingTab projectId={projectId} material={material} page={page} libraryLink={libraryLink} onEdit={onEdit} onCleanup={onCleanup} onChanged={onChanged} onError={onError} notice={notice} onDismissNotice={onDismissNotice} />
         )}
         {activeTab === "file" && (
           <div className="materials-inspector-content">
@@ -2015,6 +2020,7 @@ function MaterialSurface() {
       </main>
       {material && (
         <MaterialInspector
+          projectId={projectId}
           material={material}
           activeTab={inspectorTab}
           onTabChange={setInspectorTab}

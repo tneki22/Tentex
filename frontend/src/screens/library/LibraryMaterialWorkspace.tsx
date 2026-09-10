@@ -37,6 +37,7 @@ import { useDocumentSearch } from "../../hooks/useDocumentSearch";
 import { useLibraryMaterial } from "../../hooks/useLibraryMaterial";
 import { useMaterialViewport } from "../../hooks/useMaterialViewport";
 import { AiCleanupPanel } from "../AiCleanupPanel";
+import { HeaderFooterDialog } from "../HeaderFooterDialog";
 import { AddToProjectDialog } from "./AddToProjectDialog";
 import { LibraryMaterialInspector, type InspectorTab } from "./LibraryMaterialInspector";
 import { MaterialSourceView, MaterialTextView } from "./MaterialSourceView";
@@ -86,6 +87,7 @@ export function LibraryMaterialWorkspace() {
   const [editError, setEditError] = useState<string | null>(null);
   const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
   const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [headerFooterOpen, setHeaderFooterOpen] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
   const [deletePreview, setDeletePreview] = useState<MaterialDeletePreview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -619,6 +621,7 @@ export function LibraryMaterialWorkspace() {
             onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
             onEditPage={openTextEditor}
             onCleanupPage={() => setCleanupOpen(true)}
+            onFindHeaderFooter={() => setHeaderFooterOpen(true)}
             onConfirmPageReview={() => {
               if (!page) return;
               void store.run(() => confirmLibraryPageReview(detail.id, page.page_number));
@@ -706,6 +709,7 @@ export function LibraryMaterialWorkspace() {
             onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
             onEditPage={openTextEditor}
             onCleanupPage={() => setCleanupOpen(true)}
+            onFindHeaderFooter={() => setHeaderFooterOpen(true)}
             onConfirmPageReview={() => {
               if (!page) return;
               void store.run(() => confirmLibraryPageReview(detail.id, page.page_number));
@@ -754,6 +758,21 @@ export function LibraryMaterialWorkspace() {
           }}
         />
       )}
+
+      <HeaderFooterDialog
+        open={headerFooterOpen}
+        projectId={null}
+        material={{ id: detail.id, display_name: detail.original_name }}
+        onOpenChange={setHeaderFooterOpen}
+        onReload={async () => {
+          await store.refreshDetail();
+        }}
+        onApplied={(result) => {
+          setNotice(
+            `Колонтитулы удалены новой версией: ${result.removed_occurrences} вхождений.`,
+          );
+        }}
+      />
 
       <AddToProjectDialog
         open={attachOpen}
