@@ -4,7 +4,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { OutlineItem, OutlineSource, PageStateRead } from "../../../api/materials";
 import { SegmentedTabs } from "../../ui";
 
-interface OutlineNode {
+export interface OutlineNode {
   key: string;
   item: OutlineItem;
   children: OutlineNode[];
@@ -20,7 +20,7 @@ function pageMark(state: PageStateRead | undefined, showOcrReview: boolean): { c
   return { className: "", label: null };
 }
 
-function buildTree(items: OutlineItem[]): OutlineNode[] {
+export function buildTree(items: OutlineItem[]): OutlineNode[] {
   const roots: OutlineNode[] = [];
   const stack: OutlineNode[] = [];
   items.forEach((item, index) => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { useNavigate } from "react-router";
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, Copy, Filter, Info, LibraryBig, MessageSquare, Pencil, Plus, Search, Trash2, Undo2, UploadCloud, WandSparkles } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, Copy, Filter, Info, LibraryBig, Pencil, Plus, Search, Trash2, Undo2, UploadCloud, WandSparkles } from "lucide-react";
 import {
   createProgramNode,
   moveProgramNode,
@@ -15,12 +15,13 @@ import {
   type TargetOutcome,
 } from "../api/projects";
 import type { WizardDraftController } from "../hooks/useWizardDraft";
-import { Button, Card, ContextMenu, Disclosure, Field, IconButton, LoadingState, PageHead, SegmentedTabs, StatusBadge, Switch } from "../components/ui";
+import { Button, Card, ContextMenu, Disclosure, Field, IconButton, LoadingState, PageHead, SegmentedTabs, StatusBadge } from "../components/ui";
 import type { ContextMenuItem } from "../components/ui";
 import { LibraryMaterialPickerDialog, QualityBadge, TaskRow } from "../components/domain";
 import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTreeNode } from "./programTree";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { TextbookSourceCard } from "./TextbookSourceCard";
+import { TextbookOutlineReview, type OutlineDraftState } from "./TextbookOutlineReview";
 
 type ProgramView = "tree" | "text" | "questions";
 
@@ -56,6 +57,13 @@ const EMPTY_FORM: TextbookForm = {
 const nullable = (value: string) => value.trim() || null;
 const positive = (value: string) => Number(value) > 0 ? Number(value) : null;
 
+const TARGET_OUTCOME_LABEL: Record<TargetOutcome, string> = {
+  awareness: "Ориентироваться",
+  understanding: "Понимать",
+  application: "Применять",
+  mastery: "Освоить",
+};
+
 function volumeLabel(totalBytes: number): string {
   if (totalBytes < 1024) return `${totalBytes} Б`;
   if (totalBytes < 1024 ** 2) return `${(totalBytes / 1024).toFixed(1)} КБ`;
@@ -82,6 +90,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   const [editingTitle, setEditingTitle] = useState("");
   const [actionError, setActionError] = useState("");
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [outlineDraft, setOutlineDraft] = useState<OutlineDraftState | null>(null);
   const initializedKey = useRef<string | null>(null);
   const materialInput = useRef<HTMLInputElement>(null);
   const materials = useProjectMaterials(controller.detail?.project.id);
@@ -101,6 +110,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
     const goal = detail.goal_passport;
     setStep(detail.draft.current_step);
     setView((detail.draft.state.program_view as ProgramView) ?? "tree");
+    setOutlineDraft((detail.draft.state.outline as OutlineDraftState | undefined) ?? null);
     setForm({
       name: detail.project.name ?? "",
       subject: goal?.subject ?? "",
@@ -164,7 +174,11 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
         enabled_modules: ["plan", "lessons", "cards", "repetitions"] as ModuleKey[],
       },
       goal_passport: passport(),
-      state: { program_view: view, selected_node_id: controller.detail?.program.nodes[0]?.id ?? null },
+      state: {
+        program_view: view,
+        selected_node_id: controller.detail?.program.nodes[0]?.id ?? null,
+        outline: outlineDraft,
+      },
     };
   }
 
@@ -197,7 +211,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
       void controller.queueSave(command(step)).catch(() => undefined);
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [form, step, view]);
+  }, [form, step, view, outlineDraft]);
 
   async function go(nextStep: number) {
     setActionError("");
@@ -478,16 +492,45 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
 
       {step === 3 && (
         <section className="textbook-step textbook-preflight">
-          <p className="wizard-step-intro">Проверьте материалы и профиль перед составлением программы.</p>
-          <Card className="textbook-preflight-card">
-            <div className="textbook-preflight-summary"><b>{form.name || form.subject || "Учебниковый черновик"}</b><p><strong>Ваша цель:</strong> {form.scope === "goal" ? form.goal || "не указана" : "изучить весь основной материал."}</p><p><strong>Предмет:</strong> {form.subject || "не указан"}</p></div>
-            <div className="textbook-preflight-list">
-              <section><h2>Источники</h2>{materials.materials.map((material, index) => <p key={material.id}><span>{index + 1}</span>{material.display_name}<small>{material.source_role === "main" ? "основной" : material.source_role === "additional" ? "дополнительный" : "справочный"}</small></p>)}</section>
-              <section className="is-processing-copy"><h2>Подготовка материалов</h2><p>Текст готов для {readyMaterialCount} из {materials.materials.length} файлов. Всё происходит на этом компьютере.</p></section>
-              <section className="is-processing-copy"><h2>Составление программы</h2><p>На следующем шаге вы сможете составить программу вручную.</p></section>
+          <p className="wizard-step-intro">Проверьте профиль, материалы и оглавление перед программой.</p>
+
+          <section className="wizard-review-summary">
+            <div className="wizard-review-hero">
+              <h2>
+                <span>Вы изучаете предмет</span>
+                <strong>{form.subject || "Без названия"}</strong>
+              </h2>
+              <p className="wizard-review-lead">
+                {form.scope === "goal" ? form.goal || "Цель пока не указана." : "Весь основной материал."} На подготовку — <b>{form.minutesPerDay || "—"} минут в день</b>.
+              </p>
             </div>
-            <Switch checked={false} onCheckedChange={() => undefined} disabled label="Составить программу автоматически" hint="Пока недоступно" />
+            <dl className="wizard-review-facts">
+              {form.currentKnowledge.trim() && <div><dt>Что вы уже знаете</dt><dd>{form.currentKnowledge}</dd></div>}
+              <div><dt>Желаемый результат</dt><dd>{TARGET_OUTCOME_LABEL[form.targetOutcome]}</dd></div>
+              {form.successCriterion.trim() && <div><dt>{form.scope === "goal" ? "Как поймёте, что цель достигнута" : "Критерий успеха"}</dt><dd>{form.successCriterion}</dd></div>}
+              {form.important.trim() && <div><dt>Что особенно важно</dt><dd>{form.important}</dd></div>}
+              {form.excluded.trim() && <div><dt>Что можно исключить</dt><dd>{form.excluded}</dd></div>}
+              <div><dt>Темп</dt><dd>{form.minutesPerDay || "—"} мин. в день, {form.daysPerWeek || "—"} дн. в неделю</dd></div>
+            </dl>
+          </section>
+
+          <Card className="textbook-preflight-card">
+            <div className="textbook-preflight-list">
+              <section><h3>Источники</h3>{materials.materials.map((material, index) => <p key={material.id}><span>{index + 1}</span>{material.display_name}<small>{material.source_role === "main" ? "основной" : material.source_role === "additional" ? "дополнительный" : "справочный"}</small></p>)}</section>
+              <section className="is-processing-copy"><h3>Подготовка материалов</h3><p>Текст готов для {readyMaterialCount} из {materials.materials.length} файлов. Всё происходит на этом компьютере.</p></section>
+              <section className="is-processing-copy"><h3>Составление программы</h3><p>На следующем шаге вы сможете составить программу вручную.</p></section>
+            </div>
           </Card>
+
+          {controller.detail && (
+            <TextbookOutlineReview
+              projectId={controller.detail.project.id}
+              materials={materials.materials}
+              value={outlineDraft}
+              onChange={setOutlineDraft}
+            />
+          )}
+
           <div className="wizard-actions"><Button variant="ghost" onClick={() => void go(2)}>Назад</Button><Button disabled={busy} onClick={() => void go(4)}>Перейти к программе</Button></div>
         </section>
       )}
@@ -502,7 +545,6 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
             <Button disabled={busy} onClick={() => void go(5)}>{nodes.length === 0 ? "Продолжить без программы" : "Утвердить программу"}</Button>
           </header>
 
-          <div className="textbook-builder-grid">
             <div className="textbook-program-panel">
               <div className="textbook-program-toolbar">
                 <SegmentedTabs label="Представление программы" value={view} onChange={setView} tabs={[{ value: "tree", label: "Дерево" }, { value: "text", label: "Текст" }, { value: "questions", label: "Вопросы" }]} />
@@ -561,34 +603,38 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
                 ))}
                 {view === "tree" && visibleFlat.length === 0 && (missingOnly
                   ? <div className="textbook-editor-empty"><h2>Нет узлов с такой отметкой</h2><p>Отключите фильтр, чтобы вернуться ко всей программе.</p><Button variant="secondary" onClick={() => setMissingOnly(false)}>Показать всю программу</Button></div>
-                  : <div className="textbook-editor-empty"><BookOpen size={28} aria-hidden="true" /><h2>Составьте программу вручную</h2><p>Начните с раздела и добавляйте в него темы и подпункты. До четырёх уровней вложенности.</p><div><Button disabled={busy} onClick={() => void createNode("section", null)}><Plus size={15} />Добавить первый раздел</Button><Button variant="secondary" disabled={busy} onClick={() => void createNode("topic", null)}><Plus size={15} />Добавить тему без раздела</Button></div></div>)}
+                  : <div className="textbook-editor-empty"><BookOpen size={28} aria-hidden="true" /><h2>Составьте программу вручную</h2><p>{outlineDraft && outlineDraft.items.length > 0 ? "Оглавление проверено на шаге 3. Автоматическая сборка программы из него пока не реализована — соберите программу вручную." : "Начните с раздела и добавляйте в него темы и подпункты. До четырёх уровней вложенности."}</p><div><Button disabled={busy} onClick={() => void createNode("section", null)}><Plus size={15} />Добавить первый раздел</Button><Button variant="secondary" disabled={busy} onClick={() => void createNode("topic", null)}><Plus size={15} />Добавить тему без раздела</Button></div></div>)}
                 {view === "text" && <article className="textbook-text-view"><h2>{form.name || form.subject || "Программа"}</h2>{visibleFlat.map((node) => <p key={node.id}><b>{node.number}. {node.title}</b> — {node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}.</p>)}</article>}
                 {view === "questions" && <ol className="textbook-question-view">{visibleFlat.filter((node) => node.node_type !== "section").map((node) => <li key={node.id}>Как объяснить: «{node.title}»?</li>)}</ol>}
               </div>
             </div>
-
-            <aside className="textbook-assistant" aria-label="Помощник по программе">
-              <header><span><MessageSquare size={17} aria-hidden="true" /><b>Помощник по программе</b></span><label>Контекст<select disabled><option>Вся программа</option></select></label></header>
-              <div className="textbook-chat-body"><div className="textbook-chat-locked"><WandSparkles size={24} aria-hidden="true" /><b>Помощник пока недоступен</b><p>Сейчас программу можно редактировать вручную</p></div></div>
-              <footer><textarea disabled placeholder="Опишите изменение программы" /><Button disabled><ArrowUp size={15} />Отправить</Button><small>Ручное редактирование программы уже доступно.</small></footer>
-            </aside>
-          </div>
         </section>
       )}
 
       {step === 5 && (
-        <section className="textbook-step textbook-summary">
+        <section className="textbook-step">
           <p className="wizard-step-intro">Проверьте данные перед созданием проекта.</p>
-          <Card className="textbook-summary-story">
-            <h2>{form.name || form.subject || "Учебниковый черновик"}</h2>
-            <dl className="textbook-summary-profile">
-              <div><dt>Предмет</dt><dd>{form.subject || "Не указан"}</dd></div>
-              <div><dt>{form.scope === "goal" ? "Цель" : "Охват"}</dt><dd>{form.scope === "goal" ? form.goal || "Не указана" : "Весь основной материал"}</dd></div>
+
+          <section className="wizard-review-summary">
+            <div className="wizard-review-hero">
+              <h2>
+                <span>Итог: вы изучаете предмет</span>
+                <strong>{form.subject || form.name || "Без названия"}</strong>
+              </h2>
+              <p className="wizard-review-lead">
+                {form.scope === "goal" ? form.goal || "Цель пока не указана." : "Весь основной материал."} На подготовку — <b>{form.minutesPerDay || "—"} минут в день</b>.
+              </p>
+            </div>
+            <dl className="wizard-review-facts">
               <div><dt>Срок</dt><dd>{form.deadline ? new Date(`${form.deadline}T00:00:00`).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" }) : "Не задан"}</dd></div>
+              {form.currentKnowledge.trim() && <div><dt>Что вы уже знаете</dt><dd>{form.currentKnowledge}</dd></div>}
+              <div><dt>Желаемый результат</dt><dd>{TARGET_OUTCOME_LABEL[form.targetOutcome]}</dd></div>
+              {form.successCriterion.trim() && <div><dt>{form.scope === "goal" ? "Как поймёте, что цель достигнута" : "Критерий успеха"}</dt><dd>{form.successCriterion}</dd></div>}
+              {form.important.trim() && <div><dt>Что особенно важно</dt><dd>{form.important}</dd></div>}
+              {form.excluded.trim() && <div><dt>Что можно исключить</dt><dd>{form.excluded}</dd></div>}
               <div><dt>Темп</dt><dd>{form.minutesPerDay || "—"} мин. в день, {form.daysPerWeek || "—"} дн. в неделю</dd></div>
-              <div><dt>Критерий успеха</dt><dd>{form.successCriterion || "Не указан"}</dd></div>
             </dl>
-          </Card>
+          </section>
 
           <Card className="textbook-summary-card">
             <h3>Источники</h3>
@@ -617,7 +663,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
             {flat.length === 0 && <p>Программа пока пуста.</p>}
           </Card>
 
-          <Card className="textbook-summary-card"><h3>После создания</h3><p>Проект станет активным, а источники сохранят свои роли и настройки. {nodes.length === 0 ? "Программа останется пустой — её можно составить позже в разделе «Программа»." : "Программа сразу откроется для ручной работы."} Автоматическое составление можно будет запустить позже.</p></Card>
+          <Card className="textbook-summary-card"><h3>После создания</h3><p>Проект станет активным, а источники сохранят свои роли и настройки. {nodes.length === 0 ? "Программа останется пустой — её можно собрать вручную в разделе «Программа» после создания проекта." : "Программа сразу откроется для ручной работы."}</p></Card>
           <div className="wizard-actions"><Button variant="ghost" onClick={() => void go(4)}>Вернуться к программе</Button><Button disabled={busy} onClick={() => void activate()}>Создать проект</Button></div>
         </section>
       )}

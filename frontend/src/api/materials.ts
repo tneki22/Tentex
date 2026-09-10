@@ -172,7 +172,7 @@ export type MaterialPresentationKind =
   | "audio"
   | "typst";
 
-export type OutlineSource = "embedded" | "recognized" | "none";
+export type OutlineSource = "embedded" | "printed" | "recognized" | "model" | "none";
 
 export type RevisionOrigin =
   | "imported"
@@ -198,6 +198,22 @@ export interface OutlineItem {
   level: number;
   title: string;
   page: number;
+}
+
+export interface OutlineDetailRead {
+  items: OutlineItem[];
+  source: OutlineSource;
+  source_pages: number[];
+  available_sources: OutlineSource[];
+}
+
+export interface OutlineModelRunRead {
+  run_id: string;
+  items: OutlineItem[];
+  usage: AiUsage;
+  requested_model_id: string;
+  actual_model_id: string;
+  cached: boolean;
 }
 
 export interface PageStateRead {
@@ -618,6 +634,24 @@ export const materialPageImageUrl = (
   materialId: string,
   page: number,
 ): string => `${materialPath(projectId, materialId)}/pages/${page}/image`;
+
+export const getMaterialOutline = (
+  projectId: string,
+  materialId: string,
+  source: "auto" | Exclude<OutlineSource, "model"> = "auto",
+  signal?: AbortSignal,
+): Promise<OutlineDetailRead> => request(
+  `${materialPath(projectId, materialId)}/outline?source=${source}`,
+  { signal },
+);
+
+export const runMaterialOutlineModel = (
+  projectId: string,
+  materialId: string,
+): Promise<OutlineModelRunRead> => request(
+  `${materialPath(projectId, materialId)}/outline/model`,
+  { method: "POST" },
+);
 
 export const previewMaterialHeaderFooter = (
   projectId: string,
