@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.schemas import AiModelSelection
 from app.ai.settings import validate_model_selection
+from app.db import project_write_transaction
 from app.exam.context import (
     CONTEXT_FLAG_KEYS,
     ChatContext,
@@ -129,7 +130,7 @@ def list_session_summaries(
 
 
 def create_session(session: Session, project_id: UUID, node_id: UUID) -> ChatSession:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_exam_project(session, project_id)
         node = _require_chat_node(session, project_id, node_id)
         existing = session.scalar(
@@ -201,7 +202,7 @@ def get_session_detail(session: Session, project_id: UUID, chat_id: UUID) -> Cha
 
 
 def save_draft(session: Session, project_id: UUID, chat_id: UUID, text: str) -> ChatSession:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_exam_project(session, project_id)
         chat = _require_session(session, project_id, chat_id)
         chat.draft_text = text
@@ -216,7 +217,7 @@ def update_settings(
 ) -> ChatSession:
     """Частичный PATCH: поле трогается, только если явно прислано (`model_fields_set`)."""
     fields = command.model_fields_set
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_exam_project(session, project_id)
         chat = _require_session(session, project_id, chat_id)
         if "mode" in fields and command.mode is not None:
@@ -343,7 +344,7 @@ def start_turn(
     session: Session, project_id: UUID, chat_id: UUID, text: str
 ) -> tuple[ChatSession, ChatContext]:
     """Validate, build the reply context and record the user's turn — one transaction."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_exam_project(session, project_id)
         chat = _require_session(session, project_id, chat_id)
         ctx = build_context(session, chat, for_judge=False)
@@ -363,7 +364,7 @@ def finish_turn(
     stream_state: ChatStreamState,
     ai_run_id: UUID | None,
 ) -> ChatMessage:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_exam_project(session, project_id)
         chat = _require_session(session, project_id, chat_id)
         return _append_message_row(
