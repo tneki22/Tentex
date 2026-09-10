@@ -9,7 +9,7 @@ from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
 from app.background.schemas import BackgroundJobStartRead
 from app.db import get_session
-from app.materials import ai_cleanup, library, service, typst
+from app.materials import ai_cleanup, header_footer, library, service, typst
 from app.materials.schemas import (
     ExamCompositeDraftImportResult,
     ExamCompositeDraftImportWrite,
@@ -207,6 +207,28 @@ def list_material_revisions(
     material_id: UUID, session: SessionDependency
 ) -> list[MaterialRevisionRead]:
     return library.list_library_revisions(session, material_id)
+
+
+@router.post(
+    "/materials/{material_id}/header-footer/preview",
+    response_model=header_footer.HeaderFooterPreviewRead,
+)
+def preview_library_header_footer(
+    material_id: UUID, session: SessionDependency
+) -> header_footer.HeaderFooterPreviewRead:
+    return header_footer.preview(session, material_id)
+
+
+@router.post(
+    "/materials/{material_id}/header-footer/apply",
+    response_model=header_footer.HeaderFooterApplyRead,
+)
+def apply_library_header_footer(
+    material_id: UUID,
+    command: header_footer.HeaderFooterApplyWrite,
+    session: SessionDependency,
+) -> header_footer.HeaderFooterApplyRead:
+    return header_footer.apply(session, material_id, command)
 
 
 @router.post(
@@ -510,6 +532,31 @@ def get_material_page(
     task_id: UUID | None = None,
 ) -> PageRead:
     return service.get_page(session, project_id, material_id, page_number, task_id)
+
+
+@router.post(
+    "/projects/{project_id}/materials/{material_id}/header-footer/preview",
+    response_model=header_footer.HeaderFooterPreviewRead,
+)
+def preview_project_header_footer(
+    project_id: UUID, material_id: UUID, session: SessionDependency
+) -> header_footer.HeaderFooterPreviewRead:
+    service.get_material(session, project_id, material_id)
+    return header_footer.preview(session, material_id)
+
+
+@router.post(
+    "/projects/{project_id}/materials/{material_id}/header-footer/apply",
+    response_model=header_footer.HeaderFooterApplyRead,
+)
+def apply_project_header_footer(
+    project_id: UUID,
+    material_id: UUID,
+    command: header_footer.HeaderFooterApplyWrite,
+    session: SessionDependency,
+) -> header_footer.HeaderFooterApplyRead:
+    service.get_material(session, project_id, material_id)
+    return header_footer.apply(session, material_id, command)
 
 
 @router.post(

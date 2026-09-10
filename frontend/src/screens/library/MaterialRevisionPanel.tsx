@@ -27,6 +27,9 @@ const ORIGIN_LABEL: Record<RevisionOrigin, string> = {
 function originText(revision: MaterialRevisionRead): string {
   const base = ORIGIN_LABEL[revision.origin];
   const scope = revision.scope as { kind?: string; page?: number; page_from?: number; page_to?: number; restored_from?: number };
+  if (revision.origin === "manual_edit" && scope.kind === "header_footer") {
+    return "Удаление колонтитулов";
+  }
   if (revision.origin === "manual_edit" && typeof scope.page === "number") {
     return `${base} ${scope.page}`;
   }
@@ -62,6 +65,7 @@ function summaryText(revision: MaterialRevisionRead): string {
   if (summary.page_count) parts.push(`${summary.page_count} стр.`);
   if (revision.parser_mode !== "fast" && summary.review_page_count) parts.push(`нужно проверить: ${summary.review_page_count}`);
   if (summary.changed_pages) parts.push(`изменено: ${summary.changed_pages}`);
+  if (summary.removed_occurrences) parts.push(`удалено: ${summary.removed_occurrences}`);
   return parts.join(" · ");
 }
 

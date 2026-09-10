@@ -224,7 +224,7 @@ def _save_page(session: Session, task_id: UUID, parsed: ParsedPage) -> bool:
         return True
 
 
-def _link_answers_projects(session: Session, material_id: UUID) -> None:
+def link_answers_projects(session: Session, material_id: UUID) -> None:
     """Файл ответов после разбора сам ложится на вопросы и заполняет эталоны.
 
     Осечка автопривязки не должна ронять разбор: файл уже разобран и полезен,
@@ -302,7 +302,7 @@ def _finish(session: Session, task_id: UUID) -> None:
             scope=dict(task.checkpoint.get("scope") or {"kind": "all"}),
             summary=summary,
         )
-        _link_answers_projects(session, task.material_id)
+        link_answers_projects(session, task.material_id)
 
         task.state = BackgroundJobState.COMPLETED
         task.stage = ProcessingStage.COMPLETE

@@ -41,6 +41,7 @@ interface LibraryMaterialInspectorProps {
   onTypstAddFile: (file: File, targetPath: string) => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
+  onFindHeaderFooter: () => void;
   onConfirmPageReview: () => void;
   onRestore: (revision: number) => void;
   onAddToProject: () => void;
@@ -71,6 +72,7 @@ export function LibraryMaterialInspector({
   onTypstAddFile,
   onEditPage,
   onCleanupPage,
+  onFindHeaderFooter,
   onConfirmPageReview,
   onRestore,
   onAddToProject,
@@ -108,6 +110,7 @@ export function LibraryMaterialInspector({
               onTypstAddFile={onTypstAddFile}
               onEditPage={onEditPage}
               onCleanupPage={onCleanupPage}
+              onFindHeaderFooter={onFindHeaderFooter}
               onConfirmPageReview={onConfirmPageReview}
             />
           </Tabs.Content>
