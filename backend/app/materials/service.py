@@ -6,9 +6,10 @@ from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai.gateway import ModelGateway
 from app.bindings.service import delete_project_material_bindings
 from app.db import project_write_transaction
-from app.materials import library
+from app.materials import library, outline_ai
 from app.materials.library import (
     PURPOSE_VALUES,
 )
@@ -37,6 +38,7 @@ from app.materials.schemas import (
     MaterialPurpose,
     MaterialRead,
     MaterialUpdate,
+    OutlineDetailRead,
     PageCorrectionRead,
     PageRead,
     PageTextUpdate,
@@ -372,6 +374,27 @@ def page_image_path(
     _project(session, project_id, writable=False)
     _link(session, project_id, material_id)
     return library.library_page_image_path(session, material_id, page_number)
+
+
+def get_outline(
+    session: Session, project_id: UUID, material_id: UUID, source: str
+) -> OutlineDetailRead:
+    """Оглавление источника для шага 3 мастера учебника (Работа 4 плана).
+
+    Только извлечение и показ — импорт в настоящую программу не реализован."""
+    _project(session, project_id, writable=False)
+    _link(session, project_id, material_id)
+    material = library.material_or_404(session, material_id)
+    return library.resolve_outline(session, material, source)
+
+
+async def run_outline_model(
+    session: Session, gateway: ModelGateway, project_id: UUID, material_id: UUID
+) -> outline_ai.OutlineModelRunRead:
+    """Четвёртый источник — по явной кнопке пользователя, когда остальных не хватило."""
+    _project(session, project_id, writable=True)
+    _link(session, project_id, material_id)
+    return await outline_ai.run(session, gateway, project_id, material_id)
 
 
 def fragment_asset_path(

@@ -193,6 +193,16 @@ ROLE_SPECS = {
             parameter_model=SpeechRoleParameters,
         ),
         AiRoleSpec(
+            "study_outline_extract",
+            "Оглавление учебника",
+            "Восстанавливает структуру учебника, когда закладок и печатного оглавления нет.",
+            "text",
+            frozenset({"structured_output"}),
+            "content_hash",
+            "outline-v1",
+            {"max_output_tokens": 6000, "temperature": 0},
+        ),
+        AiRoleSpec(
             "settings_model_test",
             "Проверка модели",
             "Проверяет, отвечает ли явно выбранная модель.",

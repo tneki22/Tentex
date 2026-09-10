@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
@@ -9,7 +9,7 @@ from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
 from app.background.schemas import BackgroundJobStartRead
 from app.db import get_session
-from app.materials import ai_cleanup, header_footer, library, service, typst
+from app.materials import ai_cleanup, header_footer, library, outline_ai, service, typst
 from app.materials.schemas import (
     ExamCompositeDraftImportResult,
     ExamCompositeDraftImportWrite,
@@ -32,6 +32,7 @@ from app.materials.schemas import (
     MaterialsDeletePreview,
     MaterialsDeleteWrite,
     MaterialUpdate,
+    OutlineDetailRead,
     PageCorrectionRead,
     PageRead,
     PageTextUpdate,
@@ -628,6 +629,37 @@ def get_material_page_image(
     session: SessionDependency,
 ) -> FileResponse:
     return FileResponse(service.page_image_path(session, project_id, material_id, page_number))
+
+
+@router.get(
+    "/projects/{project_id}/materials/{material_id}/outline", response_model=OutlineDetailRead
+)
+def get_material_outline(
+    project_id: UUID,
+    material_id: UUID,
+    session: SessionDependency,
+    source: Literal["auto", "embedded", "printed", "recognized"] = "auto",
+) -> OutlineDetailRead:
+    """Шаг 3 мастера учебника: приоритет `embedded → printed → recognized`.
+
+    Импорт найденного оглавления в программу не реализован — это только
+    извлечение и показ для проверки глазами (Работа 4 плана мастера учебника).
+    """
+    return service.get_outline(session, project_id, material_id, source)
+
+
+@router.post(
+    "/projects/{project_id}/materials/{material_id}/outline/model",
+    response_model=outline_ai.OutlineModelRunRead,
+)
+async def run_material_outline_model(
+    project_id: UUID,
+    material_id: UUID,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> outline_ai.OutlineModelRunRead:
+    """Четвёртый источник — по явной кнопке, когда остальных не хватило."""
+    return await service.run_outline_model(session, gateway, project_id, material_id)
 
 
 @router.get(

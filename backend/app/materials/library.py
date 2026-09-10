@@ -39,8 +39,9 @@ from app.config import settings
 from app.materials import revisions as revision_registry
 from app.materials.external import fetch_web_page, fetch_youtube_transcript
 from app.materials.lexicon import index_text, prefix_term, query_terms
+from app.materials.outline import find_printed_outline
 from app.materials.parsers.base import ParsedElement, ParsedPage
-from app.materials.parsers.native import inspect, parse_text_page
+from app.materials.parsers.native import extract_outline, inspect, parse_text_page
 from app.materials.presentation import (
     MaterialPresentationKind,
     presentation_kind,
@@ -62,6 +63,7 @@ from app.materials.schemas import (
     MaterialPurpose,
     MaterialRevisionRead,
     MaterialsDeletePreview,
+    OutlineDetailRead,
     OutlineItem,
     OutlineSource,
     PageCorrectionRead,
@@ -165,8 +167,8 @@ def _recognized_outline(session: Session, material: Material) -> list[OutlineIte
     ]
 
 
-def _outline(session: Session, material: Material) -> tuple[list[OutlineItem], OutlineSource]:
-    embedded = [
+def _embedded_outline(material: Material) -> list[OutlineItem]:
+    return [
         OutlineItem(
             level=int(item.get("level", 1) or 1),
             title=str(item.get("title", "")).strip(),
@@ -175,12 +177,63 @@ def _outline(session: Session, material: Material) -> tuple[list[OutlineItem], O
         for item in material.outline or []
         if str(item.get("title", "")).strip()
     ]
+
+
+# Порядок проверки источников — от гарантированного офлайнового к дорогому;
+# "model" сюда не входит: она не определяется автоматически, а вызывается
+# явной кнопкой пользователя (materials.outline_ai.extract_with_model).
+OUTLINE_AUTO_PRIORITY: tuple[OutlineSource, ...] = ("embedded", "printed", "recognized")
+
+
+def outline_sources(
+    session: Session, material: Material
+) -> dict[OutlineSource, tuple[list[OutlineItem], list[int]]]:
+    """Все источники оглавления, у которых реально нашлись данные (без модели)."""
+    found: dict[OutlineSource, tuple[list[OutlineItem], list[int]]] = {}
+    embedded = _embedded_outline(material)
     if embedded:
-        return embedded, "embedded"
+        found["embedded"] = (embedded, [])
+    if material.page_count:
+        printed = find_printed_outline(material_path(material.storage_path), material.page_count)
+        if printed:
+            items, source_pages = printed
+            found["printed"] = (
+                [
+                    OutlineItem(
+                        level=int(item["level"]), title=str(item["title"]), page=int(item["page"])
+                    )
+                    for item in items
+                ],
+                source_pages,
+            )
     recognized = _recognized_outline(session, material)
     if recognized:
-        return recognized, "recognized"
+        found["recognized"] = (recognized, [])
+    return found
+
+
+def _outline(session: Session, material: Material) -> tuple[list[OutlineItem], OutlineSource]:
+    """Просмотрщик Библиотеки: только список и источник, без страниц-носителей."""
+    found = outline_sources(session, material)
+    for source in OUTLINE_AUTO_PRIORITY:
+        if source in found:
+            return found[source][0], source
     return [], "none"
+
+
+def resolve_outline(session: Session, material: Material, requested: str) -> OutlineDetailRead:
+    """`GET /outline` мастера учебника: `requested="auto"` идёт по приоритету,
+    конкретный источник — только он, если для него что-то нашлось."""
+    found = outline_sources(session, material)
+    available = [source for source in OUTLINE_AUTO_PRIORITY if source in found]
+    order = OUTLINE_AUTO_PRIORITY if requested == "auto" else (requested,)
+    for source in order:
+        if source in found:
+            items, source_pages = found[source]
+            return OutlineDetailRead(
+                items=items, source=source, source_pages=source_pages, available_sources=available
+            )
+    return OutlineDetailRead(items=[], source="none", source_pages=[], available_sources=available)
 
 
 # ── Задачи ──────────────────────────────────────────────────────────────────
@@ -800,6 +853,7 @@ def _existing_or_new(
     diagnostics: list[str] | None = None,
     source_url: str | None = None,
     retrieved_at: Any = None,
+    outline: list[dict[str, object]] | None = None,
 ) -> Material:
     """Дедупликация по содержимому: один файл в установке хранится один раз."""
     material = session.scalar(select(Material).where(Material.sha256 == sha256))
@@ -822,6 +876,10 @@ def _existing_or_new(
         ocr_low_page_count=0,
         estimated_seconds=estimated_seconds,
         diagnostics=diagnostics or [],
+        # Закладки PDF читаются сразу при загрузке (inspect() уже открывает
+        # файл), а не в момент старта разбора — оглавление доступно и до
+        # всякой подготовки текста (Работа 4 плана мастера учебника).
+        outline=outline or [],
         created_at=now,
         updated_at=now,
     )
@@ -841,13 +899,15 @@ class UploadedFile:
     scan_page_count: int
     estimated_seconds: int
     diagnostics: list[str]
+    outline: list[dict[str, object]]
 
 
 async def store_uploaded_file(upload: UploadFile) -> UploadedFile:
     """Записать файл и осмотреть его. Транзакции здесь нет и быть не должно:
     держать её открытой на время загрузки стомегабайтного PDF нельзя."""
     sha256, storage_path, size, original_name, media_type = await store_upload(upload)
-    page_count, scan_pages, estimate, diagnostics = _inspect_file(material_path(storage_path))
+    path = material_path(storage_path)
+    page_count, scan_pages, estimate, diagnostics = _inspect_file(path)
     return UploadedFile(
         sha256=sha256,
         storage_path=storage_path,
@@ -858,6 +918,7 @@ async def store_uploaded_file(upload: UploadFile) -> UploadedFile:
         scan_page_count=scan_pages,
         estimated_seconds=estimate,
         diagnostics=diagnostics,
+        outline=extract_outline(path),
     )
 
 
@@ -879,6 +940,7 @@ def register_uploaded_material(session: Session, uploaded: UploadedFile) -> Mate
         scan_page_count=uploaded.scan_page_count,
         estimated_seconds=uploaded.estimated_seconds,
         diagnostics=uploaded.diagnostics,
+        outline=uploaded.outline,
     )
 
 

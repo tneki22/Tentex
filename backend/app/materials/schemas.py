@@ -281,7 +281,7 @@ class LibraryMaterialRead(ApiModel):
     usage: list[LibraryUsageRead]
 
 
-OutlineSource = Literal["embedded", "recognized", "none"]
+OutlineSource = Literal["embedded", "printed", "recognized", "model", "none"]
 
 
 class LibraryMaterialCapabilities(ApiModel):
@@ -301,6 +301,21 @@ class OutlineItem(ApiModel):
     level: int
     title: str
     page: int
+
+
+class OutlineDetailRead(ApiModel):
+    """Ответ `GET /outline` — оглавление шага 3 мастера учебника (Работа 4 плана).
+
+    Импорт в настоящую программу (`ProgramNode`) не реализован: это только
+    извлечение и показ для проверки глазами."""
+
+    items: list[OutlineItem]
+    source: OutlineSource
+    # Номера страниц исходного документа, на которых найдено оглавление —
+    # печатное оглавление занимает конкретные листы, у остальных источников
+    # это пусто (не привязаны к конкретному месту).
+    source_pages: list[int]
+    available_sources: list[OutlineSource]
 
 
 class PageStateRead(ApiModel):

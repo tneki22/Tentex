@@ -107,14 +107,10 @@ def claim_job(session: Session, worker_id: str) -> BackgroundJob | None:
         job.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
         job.updated_at = now
         # Стадии extract/segment и статус материала осмысленны только у
-        # разбора: у ролей ИИ и у link_answers material_id пустой.
-        if job.kind == BackgroundJobKind.PARSE:
-            job.stage = ProcessingStage.EXTRACT
-            material = session.get(Material, job.material_id)
-            if material:
-                material.status = MaterialState.PROCESSING
-                material.outline = extract_outline(material_path(material.storage_path))
-        elif job.kind == BackgroundJobKind.TYPST_COMPILE:
+        # разбора: у ролей ИИ и у link_answers material_id пустой. Закладки
+        # PDF уже прочитаны при загрузке (library.store_uploaded_file) —
+        # здесь их незачем извлекать заново.
+        if job.kind in (BackgroundJobKind.PARSE, BackgroundJobKind.TYPST_COMPILE):
             job.stage = ProcessingStage.EXTRACT
             material = session.get(Material, job.material_id)
             if material:
