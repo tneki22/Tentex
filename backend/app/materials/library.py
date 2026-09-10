@@ -223,17 +223,36 @@ def _outline(session: Session, material: Material) -> tuple[list[OutlineItem], O
 
 def resolve_outline(session: Session, material: Material, requested: str) -> OutlineDetailRead:
     """`GET /outline` мастера учебника: `requested="auto"` идёт по приоритету,
-    конкретный источник — только он, если для него что-то нашлось."""
+    конкретный источник — только он, если для него что-то нашлось.
+
+    Страница для просмотрщика (`review_pages`) выбирается отдельно от того,
+    откуда взяты сами пункты: печатная страница «Оглавление» — самый надёжный
+    ориентир для проверки глазами, даже если победили закладки PDF (у них
+    самих привязки к странице нет)."""
     found = outline_sources(session, material)
     available = [source for source in OUTLINE_AUTO_PRIORITY if source in found]
+    printed_pages = found["printed"][1] if "printed" in found else []
     order = OUTLINE_AUTO_PRIORITY if requested == "auto" else (requested,)
     for source in order:
         if source in found:
             items, source_pages = found[source]
+            review_pages = printed_pages or source_pages
             return OutlineDetailRead(
-                items=items, source=source, source_pages=source_pages, available_sources=available
+                items=items,
+                source=source,
+                source_pages=source_pages,
+                available_sources=available,
+                review_pages=review_pages,
+                review_needs_check=not review_pages and source != "embedded",
             )
-    return OutlineDetailRead(items=[], source="none", source_pages=[], available_sources=available)
+    return OutlineDetailRead(
+        items=[],
+        source="none",
+        source_pages=[],
+        available_sources=available,
+        review_pages=[],
+        review_needs_check=True,
+    )
 
 
 # ── Задачи ──────────────────────────────────────────────────────────────────

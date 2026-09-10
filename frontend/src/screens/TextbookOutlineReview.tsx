@@ -1,4 +1,15 @@
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Plus, Trash2, Undo2, WandSparkles } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Trash2,
+  Undo2,
+  WandSparkles,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { getAiSettings, type AiSettingsRead } from "../api/ai";
@@ -10,8 +21,9 @@ import {
   type OutlineItem,
   type OutlineSource,
 } from "../api/materials";
-import { Button, Field, IconButton, LoadingState, Select } from "../components/ui";
+import { Button, ConfirmDialog, Field, IconButton, LoadingState, Select } from "../components/ui";
 import { DocumentStage } from "../components/domain/material-viewer/DocumentStage";
+import { PageNumberInput } from "../components/domain/material-viewer/ViewerToolbar";
 import { buildTree } from "../components/domain/material-viewer/PdfOutline";
 
 export interface OutlineDraftState {
@@ -19,6 +31,9 @@ export interface OutlineDraftState {
   source: OutlineSource;
   items: OutlineItem[];
   source_pages: number[];
+  /** Страница для просмотрщика по умолчанию — см. `OutlineDetailRead.review_pages`. */
+  review_pages: number[];
+  review_needs_check: boolean;
   edited: boolean;
   checked_at: string | null;
 }
@@ -78,12 +93,13 @@ export function TextbookOutlineReview({ projectId, materials, value, onChange }:
 
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [page, setPage] = useState(() => value?.source_pages[0] ?? 1);
+  const [page, setPage] = useState(() => value?.review_pages?.[0] ?? value?.source_pages[0] ?? 1);
   const [aiSettings, setAiSettings] = useState<AiSettingsRead | null>(null);
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false);
   const [aiRunning, setAiRunning] = useState(false);
   const [aiError, setAiError] = useState("");
   const [history, setHistory] = useState<OutlineItem[][]>([]);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const fetchedFor = useRef<string | null>(null);
 
   useEffect(() => {
@@ -112,10 +128,12 @@ export function TextbookOutlineReview({ projectId, materials, value, onChange }:
           source: detail.source,
           items: detail.items,
           source_pages: detail.source_pages,
+          review_pages: detail.review_pages,
+          review_needs_check: detail.review_needs_check,
           edited: false,
           checked_at: new Date().toISOString(),
         });
-        setPage(detail.source_pages[0] ?? 1);
+        setPage(detail.review_pages[0] ?? detail.source_pages[0] ?? 1);
       })
       .catch((caught) => setLoadError(caught instanceof Error ? caught.message : "Не удалось получить оглавление"))
       .finally(() => setLoading(false));
@@ -171,7 +189,23 @@ export function TextbookOutlineReview({ projectId, materials, value, onChange }:
   }
 
   function skipOutline() {
-    onChange({ material_id: materialId, source: "none", items: [], source_pages: [], edited: true, checked_at: new Date().toISOString() });
+    onChange({
+      material_id: materialId,
+      source: "none",
+      items: [],
+      source_pages: [],
+      review_pages: [],
+      review_needs_check: false,
+      edited: true,
+      checked_at: new Date().toISOString(),
+    });
+    setHistory([]);
+  }
+
+  function retrySearch() {
+    fetchedFor.current = null;
+    setHistory([]);
+    onChange(null);
   }
 
   async function runModel() {
@@ -180,14 +214,18 @@ export function TextbookOutlineReview({ projectId, materials, value, onChange }:
     setAiError("");
     try {
       const result = await runMaterialOutlineModel(projectId, materialId);
+      const firstItemPage = result.items[0]?.page;
       onChange({
         material_id: materialId,
         source: "model",
         items: result.items,
         source_pages: [],
+        review_pages: firstItemPage ? [firstItemPage] : [],
+        review_needs_check: !firstItemPage,
         edited: false,
         checked_at: new Date().toISOString(),
       });
+      setPage(firstItemPage ?? page);
       setHistory([]);
     } catch (caught) {
       setAiError(caught instanceof Error ? caught.message : "Не удалось получить оглавление от модели");
@@ -228,27 +266,50 @@ export function TextbookOutlineReview({ projectId, materials, value, onChange }:
             Источник: {SOURCE_LABEL[value.source]}.
             {!isReady && " Текст ещё готовится, на оглавление это не влияет."}
           </p>
+          {value.review_needs_check && (
+            <p className="textbook-outline-source-note is-warning">
+              Печатная страница с оглавлением не нашлась — проверьте вручную, с какой страницы начинается книга.
+            </p>
+          )}
           <DocumentStage
             mode="compare"
             storageKey={`textbook-outline:${materialId}`}
             sourceLabel="Страница документа"
             textLabel="Оглавление"
-            onPrevPage={() => setPage((current) => Math.max(1, current - 1))}
-            onNextPage={() => setPage((current) => Math.min(pageCount, current + 1))}
-            canPrevPage={page > 1}
-            canNextPage={page < pageCount}
             source={
-              <div className="viewer-pane-scroll textbook-outline-page-scroll">
-                <img
-                  className="textbook-outline-page-image"
-                  src={materialPageImageUrl(projectId, materialId, page)}
-                  alt={`Страница ${page}`}
-                />
-              </div>
+              <>
+                <div className="textbook-outline-page-toolbar">
+                  <IconButton
+                    label="Предыдущая страница"
+                    disabled={page <= 1}
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  >
+                    <ChevronLeft size={15} />
+                  </IconButton>
+                  <PageNumberInput page={page} pageCount={pageCount} onPageChange={setPage} />
+                  <IconButton
+                    label="Следующая страница"
+                    disabled={page >= pageCount}
+                    onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
+                  >
+                    <ChevronRight size={15} />
+                  </IconButton>
+                </div>
+                <div className="viewer-pane-scroll textbook-outline-page-scroll">
+                  <img
+                    className="textbook-outline-page-image"
+                    src={materialPageImageUrl(projectId, materialId, page)}
+                    alt={`Страница ${page}`}
+                  />
+                </div>
+              </>
             }
             text={
               <div className="viewer-pane-scroll textbook-outline-tree">
                 <div className="textbook-outline-tree-actions">
+                  <Button variant="ghost" onClick={() => setClearConfirmOpen(true)}>
+                    <Trash2 size={14} aria-hidden="true" />Удалить дерево
+                  </Button>
                   <Button variant="ghost" disabled={history.length === 0} onClick={undo}>
                     <Undo2 size={14} aria-hidden="true" />Отменить
                   </Button>
@@ -264,7 +325,24 @@ export function TextbookOutlineReview({ projectId, materials, value, onChange }:
               </div>
             }
           />
+          <ConfirmDialog
+            open={clearConfirmOpen}
+            onOpenChange={setClearConfirmOpen}
+            title="Удалить дерево оглавления?"
+            confirmLabel="Удалить дерево"
+            destructive
+            onConfirm={skipOutline}
+          >
+            <p>Распознанное и отредактированное оглавление этого материала уберётся из черновика. Его можно будет поискать заново.</p>
+          </ConfirmDialog>
         </>
+      )}
+
+      {!loading && value && value.items.length === 0 && (
+        <div className="textbook-outline-empty">
+          <p>Оглавление не используется и не попадёт в программу.</p>
+          <Button variant="secondary" onClick={retrySearch}>Поискать оглавление ещё раз</Button>
+        </div>
       )}
 
       {!loading && !value && !isReady && !isFailed && (
@@ -315,6 +393,7 @@ function renderOutlineRows(items: OutlineItem[], actions: RowActions) {
         <input
           className="textbook-outline-row-title"
           value={node.item.title}
+          title={node.item.title}
           onChange={(event) => actions.onRename(index, event.target.value)}
           aria-label={`Формулировка пункта «${node.item.title}»`}
         />

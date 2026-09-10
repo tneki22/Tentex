@@ -205,6 +205,10 @@ export interface OutlineDetailRead {
   source: OutlineSource;
   source_pages: number[];
   available_sources: OutlineSource[];
+  /** Страница для просмотрщика по умолчанию — печатная страница оглавления,
+   *  если нашлась, даже когда сами пункты взяты из закладок PDF. */
+  review_pages: number[];
+  review_needs_check: boolean;
 }
 
 export interface OutlineModelRunRead {

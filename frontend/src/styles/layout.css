@@ -7293,20 +7293,23 @@ button.wizard-back-projects {
 .textbook-outline-review-head h2 { margin: 0; font-size: var(--text-lg); }
 .textbook-outline-review-head .field { margin: 0; min-width: 240px; }
 .textbook-outline-source-note { margin: 0; color: var(--muted); font-size: var(--text-xs); }
+.textbook-outline-source-note.is-warning { color: var(--tone-warning); }
 .textbook-outline-review .viewer-stage { height: 60vh; min-height: 420px; border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; background: var(--paper); }
-.textbook-outline-page-scroll { display: flex; justify-content: center; }
+.textbook-outline-page-toolbar { flex: none; display: flex; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-block-end: 1px solid var(--line); background: var(--paper); }
+.textbook-outline-page-scroll { display: flex; justify-content: center; flex: 1; min-height: 0; }
 .textbook-outline-page-image { display: block; max-width: 100%; height: auto; box-shadow: var(--shadow-sm); }
 .textbook-outline-tree { display: flex; flex-direction: column; gap: var(--space-1); }
-.textbook-outline-tree-actions { display: flex; justify-content: flex-end; margin-bottom: var(--space-2); }
+.textbook-outline-tree-actions { display: flex; justify-content: space-between; margin-bottom: var(--space-2); }
 .textbook-outline-row { display: flex; align-items: center; gap: var(--space-2); padding: 2px 0; border-radius: var(--radius-sm); }
 .textbook-outline-row-page { flex: none; min-width: 34px; padding: 2px 6px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--muted); font-size: var(--text-xs); line-height: 1.4; cursor: pointer; }
 .textbook-outline-row-page:hover { color: var(--ink); border-color: var(--accent); }
-.textbook-outline-row-title { flex: 1; min-width: 0; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 4px 6px; background: transparent; color: var(--ink); font-size: var(--text-sm); }
+.textbook-outline-row-title { flex: 1; min-width: 60px; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 4px 6px; background: transparent; color: var(--ink); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; }
 .textbook-outline-row-title:hover,
 .textbook-outline-row-title:focus { border-color: var(--line); background: var(--surface-sunken); outline: none; }
-.textbook-outline-row-actions { flex: none; display: flex; gap: 2px; opacity: 0; transition: opacity var(--ease-fast); }
-.textbook-outline-row:hover .textbook-outline-row-actions,
-.textbook-outline-row:focus-within .textbook-outline-row-actions { opacity: 1; }
+/* Кнопки строки всегда на виду: спрятанные до наведения занимали место молча
+   (шесть кнопок по 36px), из-за чего формулировка обрезалась до пары слов. */
+.textbook-outline-row-actions { flex: none; display: flex; gap: 2px; }
+.textbook-outline-row-actions .icon-button { width: 26px; height: 26px; }
 .textbook-outline-empty { display: grid; gap: var(--space-3); padding: var(--space-6) var(--space-5); border: 1px dashed var(--line); border-radius: var(--radius-lg); background: var(--surface-sunken); text-align: center; color: var(--ink-soft); }
 .textbook-outline-empty .material-entry-actions { justify-content: center; }
 

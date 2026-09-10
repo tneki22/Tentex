@@ -218,6 +218,67 @@ def test_bibliography_page_is_not_mistaken_for_outline(tmp_path: Path) -> None:
     assert result is None
 
 
+def test_prefers_full_toc_over_brief_contents_page(tmp_path: Path) -> None:
+    # Найдено на реальном учебнике (Олифер, «Компьютерные сети», кириллица —
+    # воспроизведено здесь латиницей: `insert_text` без встроенного шрифта не
+    # печатает кириллицу, см. остальные тесты файла): короткое «Краткое
+    # содержание» (только части книги, 2 страницы) стоит в файле раньше
+    # подробного «Оглавление» (все главы, 14 страниц) — по плотности выносок
+    # обе страницы проходят фильтр одинаково, но заголовок различает их
+    # однозначно. Раньше сканер останавливался на первой подходящей странице
+    # и возвращал укороченный вариант.
+    brief = [
+        "Brief Contents",
+        "Part I .......... 24",
+        "Part II .......... 120",
+        "Part III .......... 300",
+        "Part IV .......... 450",
+        "Part V .......... 600",
+        "Part VI .......... 750",
+        "Part VII .......... 900",
+    ]
+    full_page_1 = [
+        "Contents",
+        "Preface .......... 21",
+        "Chapter 1. Introduction .......... 26",
+        "Chapter 2. Basics .......... 41",
+        "Chapter 3. Networks .......... 53",
+        "Chapter 4. Protocols .......... 60",
+        "Chapter 5. Addressing .......... 70",
+        "Chapter 6. Routing .......... 80",
+        "Chapter 7. Switching .......... 90",
+    ]
+    full_page_2 = [
+        "Contents",
+        "Chapter 8. Security .......... 100",
+        "Chapter 9. DWDM .......... 110",
+        "Chapter 10. VLAN .......... 120",
+        "Chapter 11. DHCP .......... 130",
+        "Chapter 12. Routing 2 .......... 140",
+        "Chapter 13. LSP .......... 150",
+        "Chapter 14. Bluetooth .......... 160",
+        "Chapter 15. SMTP .......... 170",
+    ]
+    pages = [
+        [("Title page", 0.0)],
+        [("Copyright", 0.0)],
+        [(line, 0.0) for line in brief],
+        [(line, 0.0) for line in full_page_1],
+        [(line, 0.0) for line in full_page_2],
+    ]
+    path = _make_pdf(tmp_path / "brief-vs-full.pdf", pages)
+
+    result = find_printed_outline(path, page_count=200)
+
+    assert result is not None
+    items, source_pages = result
+    assert source_pages == [4, 5]
+    assert len(items) == 16
+    assert items[0]["title"] == "Preface"
+    titles = [item["title"] for item in items]
+    assert "Part I" not in titles
+
+
 def test_missing_file_returns_none_instead_of_raising(tmp_path: Path) -> None:
     assert find_printed_outline(tmp_path / "does-not-exist.pdf", page_count=10) is None
 
@@ -312,3 +373,80 @@ def test_outline_source_priority_recognized_when_no_pdf_source(session: Session)
 
     assert source == "recognized"
     assert [item.title for item in items] == ["Заголовок"]
+
+
+# ── Страница для просмотрщика (`resolve_outline`) ────────────────────────
+#
+# Независима от того, откуда взяты сами пункты: печатная страница «Оглавление»
+# — самый надёжный ориентир для проверки глазами, даже когда пункты в итоге
+# взяты из закладок PDF (у самих закладок привязки к странице нет).
+
+
+def test_resolve_outline_review_page_prefers_printed_even_when_embedded_wins(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    material = _pdf_material(session, "6a7b", tmp_path)
+    material.outline = [{"level": 1, "title": "Из закладок", "page": 1}]
+    session.commit()
+    from app.materials.storage import material_path
+
+    file_path = material_path(material.storage_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    _make_pdf(file_path, _flat([
+        "Contents", "A .......... 6", "B .......... 7", "C .......... 8", "D .......... 9",
+        "E .......... 10", "F .......... 11", "G .......... 12", "H .......... 13",
+    ]))
+
+    detail = library.resolve_outline(session, material, "auto")
+
+    assert detail.source == "embedded"
+    assert detail.review_pages == [1]
+    assert detail.review_needs_check is False
+
+
+def test_resolve_outline_review_page_defaults_quietly_for_embedded_only(session: Session) -> None:
+    # Материал текстовый (не PDF) — печатную страницу искать негде, но
+    # закладки нашлись сами по себе: страница 1 по умолчанию — не повод
+    # для предупреждения, это ожидаемое поведение для такого источника.
+    material = make_material(session, "7c8d")
+    material.outline = [{"level": 1, "title": "Из закладок", "page": 1}]
+    session.commit()
+
+    detail = library.resolve_outline(session, material, "auto")
+
+    assert detail.source == "embedded"
+    assert detail.review_pages == []
+    assert detail.review_needs_check is False
+
+
+def test_resolve_outline_review_page_warns_without_printed_anchor(session: Session) -> None:
+    material = make_material(session, "9e0f")
+    material.active_parse_revision = 0
+    add_page_with_fragments(session, material, page_number=1, revision=1, fragments=["Заголовок"])
+    material.active_parse_revision = 1
+    session.commit()
+    page_fragments = library.fragments_by_page(session, material.id, 1)[1]
+    page_fragments[0].element_kind = "heading"
+    page_fragments[0].structure_level = 1
+    session.commit()
+
+    detail = library.resolve_outline(session, material, "auto")
+
+    assert detail.source == "recognized"
+    assert detail.review_pages == []
+    assert detail.review_needs_check is True
+
+
+def test_resolve_outline_review_page_warns_when_nothing_found(session: Session) -> None:
+    material = make_material(session, "1f2e")
+    material.active_parse_revision = 0
+    session.commit()
+
+    detail = library.resolve_outline(session, material, "auto")
+
+    assert detail.source == "none"
+    assert detail.review_pages == []
+    assert detail.review_needs_check is True

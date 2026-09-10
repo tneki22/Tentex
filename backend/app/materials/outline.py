@@ -23,8 +23,10 @@ import pymupdf as fitz
 MAX_LEADING_CANDIDATES = 40
 TRAILING_CANDIDATES = 10
 # Сколько соседних страниц может занимать одно оглавление (длинный учебник
-# с многими главами не влезает в один лист).
-MAX_MERGED_PAGES = 5
+# с многими главами не влезает в один лист). Найдено на реальном учебнике:
+# подробное «Оглавление» заняло 14 страниц — прежний запас в 5 обрезал его
+# на середине части I.
+MAX_MERGED_PAGES = 20
 
 TITLE_MARKERS = ("оглавление", "содержание", "contents", "table of contents")
 MIN_TOC_LINES = 8
@@ -67,16 +69,26 @@ def _page_lines(page: fitz.Page) -> list[tuple[str, float]]:
     return lines
 
 
-def _looks_like_toc_page(lines: list[str]) -> bool:
+def _toc_page_kind(lines: list[str]) -> str | None:
+    """`"strong"` — заголовок страницы буквально начинается с «Оглавление»/
+    «Содержание»; `"weak"` — заголовка нет (например, это уже продолжение),
+    но плотность выносок в номера страниц похожа на оглавление; `None` — не
+    похоже совсем.
+
+    Найдено на реальном учебнике: короткое «Краткое содержание» (только
+    части книги, 2 страницы) стоит в файле раньше подробного «Оглавление»
+    (все главы, 14 страниц) — оба проходят плотностный фильтр одинаково, но
+    заголовок различает их однозначно. Сканирование ниже выбирает первую
+    `"strong"`-страницу, если она есть, а не просто первую подходящую."""
     if not lines:
-        return False
+        return None
     head = lines[0].strip().lower()
     if any(head.startswith(marker) for marker in TITLE_MARKERS):
-        return True
+        return "strong"
     if len(lines) < MIN_TOC_LINES:
-        return False
+        return None
     ending = sum(1 for line in lines if _ENDS_WITH_NUMBER_RE.search(line))
-    return ending / len(lines) >= MIN_TOC_LINE_RATIO
+    return "weak" if ending / len(lines) >= MIN_TOC_LINE_RATIO else None
 
 
 def _parse_line(line: str) -> tuple[str | None, str, int] | None:
@@ -119,7 +131,7 @@ def _cluster_levels(indents: list[float]) -> list[int]:
 def _extract_page_items(page: fitz.Page, *, max_page: int) -> list[dict[str, object]] | None:
     lines = _page_lines(page)
     plain = [text for text, _ in lines]
-    if not _looks_like_toc_page(plain):
+    if _toc_page_kind(plain) is None:
         return None
 
     # Номер страницы не может далеко уйти за объём книги — это и отсекает
@@ -186,18 +198,42 @@ def _scan_printed_outline(
 ) -> tuple[list[dict[str, object]], list[int]] | None:
     with fitz.open(path) as document:
         total = min(page_count, document.page_count)
+        weak_start: tuple[int, list[dict[str, object]]] | None = None
         for page_number in _candidate_pages(total):
-            items = _extract_page_items(document[page_number - 1], max_page=page_count)
+            page = document[page_number - 1]
+            kind = _toc_page_kind([text for text, _ in _page_lines(page)])
+            if kind is None:
+                continue
+            items = _extract_page_items(page, max_page=page_count)
             if items is None:
                 continue
-            source_pages = [page_number]
-            next_page = page_number + 1
-            while len(source_pages) < MAX_MERGED_PAGES and next_page <= total:
-                continued = _extract_page_items(document[next_page - 1], max_page=page_count)
-                if continued is None:
-                    break
-                items.extend(continued)
-                source_pages.append(next_page)
-                next_page += 1
-            return items, source_pages
+            if kind == "strong":
+                return _merge_from(document, page_number, items, total, max_page=page_count)
+            if weak_start is None:
+                weak_start = (page_number, items)
+        if weak_start is not None:
+            return _merge_from(document, *weak_start, total, max_page=page_count)
     return None
+
+
+def _merge_from(
+    document: fitz.Document,
+    page_number: int,
+    items: list[dict[str, object]],
+    total: int,
+    *,
+    max_page: int,
+) -> tuple[list[dict[str, object]], list[int]]:
+    """Печатное оглавление может занимать несколько листов подряд — тянем
+    вперёд от найденной страницы, пока следующая всё ещё разбирается как
+    её продолжение."""
+    source_pages = [page_number]
+    next_page = page_number + 1
+    while len(source_pages) < MAX_MERGED_PAGES and next_page <= total:
+        continued = _extract_page_items(document[next_page - 1], max_page=max_page)
+        if continued is None:
+            break
+        items.extend(continued)
+        source_pages.append(next_page)
+        next_page += 1
+    return items, source_pages
