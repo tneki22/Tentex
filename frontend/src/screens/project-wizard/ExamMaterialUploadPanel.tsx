@@ -124,7 +124,7 @@ export function ExamMaterialUploadPanel({
               <UploadCloud size={24} aria-hidden="true" />
               <span>
                 <b>{uploading ? "Загружаем…" : "Перетащите файлы сюда"}</b>
-                <small>PDF, DOCX, TXT, MD или изображения — до 100 МБ и 500 страниц</small>
+                <small>PDF, DOCX, TXT, MD или изображения — до 200 МБ</small>
               </span>
               <div className="material-entry-actions">
                 <label className="secondary-button" htmlFor={inputId}>Выбрать файлы</label>

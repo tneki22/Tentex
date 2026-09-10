@@ -822,7 +822,7 @@ export function Program() {
             <section className="program-import-empty">
               <Upload size={24} aria-hidden="true" />
               <h3>Список вопросов ещё не загружен</h3>
-              <p>Подойдут PDF, DOCX, текстовый файл или фотография. Ограничение — 100 МБ и 500 страниц.</p>
+              <p>Подойдут PDF, DOCX, текстовый файл или фотография. Ограничение — 200 МБ.</p>
               <div className="material-entry-actions">
                 <Button variant="secondary" disabled={materials.busy} onClick={() => importInput.current?.click()}>
                   Загрузить список вопросов

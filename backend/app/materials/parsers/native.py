@@ -73,8 +73,6 @@ def inspect(path: Path) -> tuple[int, int, int, list[str]]:
             raise ValueError("PDF повреждён или не читается") from error
         if document.needs_pass:
             raise PermissionError("PDF защищён паролем")
-        if len(document) > 500:
-            raise OverflowError("В PDF больше 500 страниц")
         scan_pages = sum(not page.get_text("text").strip() for page in document)
         return len(document), scan_pages, max(1, len(document) - scan_pages + scan_pages * 3), []
     if suffix in {".jpg", ".jpeg", ".png"}:

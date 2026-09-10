@@ -57,13 +57,13 @@
 
 1. `POST /api/materials/upload` получает multipart `file`.
 2. `store_upload` берёт basename, приводит расширение к нижнему регистру, проверяет whitelist.
-3. Читает блоками по 1 МиБ во временный `storage/tmp/<uuid><suffix>`, одновременно считает SHA-256 и размер. Пустой файл — `422 material_empty`; больше 100 МиБ — `413 material_too_large`.
+3. Читает блоками по 1 МиБ во временный `storage/tmp/<uuid><suffix>`, одновременно считает SHA-256 и размер. Пустой файл — `422 material_empty`; больше 200 МиБ — `413 material_too_large`.
 4. Перемещает в `storage/materials/<первые 2 символа sha>/<sha><suffix>`; если файл уже существует, удаляет временный дубликат. MIME берётся из `content_type` браузера либо `mimetypes`, а не из универсального анализатора байтов.
-5. До записи SQL выполняет `inspect`: PDF открывается PyMuPDF, проверяются пароль и предел **500 страниц**, считаются страницы без непустого текстового слоя; JPG/PNG проходят `Pillow.verify`; DOCX открывается `Document`; TXT/MD читаются как UTF-8 с допустимым BOM. Для аудио на этом шаге **нет декодирования**: ставится одна страница и `audio_transcription_required`.
+5. До записи SQL выполняет `inspect`: PDF открывается PyMuPDF, проверяется пароль (предела на число страниц нет), считаются страницы без непустого текстового слоя; JPG/PNG проходят `Pillow.verify`; DOCX открывается `Document`; TXT/MD читаются как UTF-8 с допустимым BOM. Для аудио на этом шаге **нет декодирования**: ставится одна страница и `audio_transcription_required`.
 6. По `sha256` ищется существующая строка `materials`. Совпадение возвращает тот же материал, не новую независимую копию; переименование файла не создаёт нового содержания.
 7. Новый материал: `status=ready_to_process`, `active_parse_revision=0`. Выдаётся карточка. Задачи ещё нет.
 
-`material_encrypted`, `material_too_many_pages`, `material_corrupt` отображают ошибки проверки. Проверка происходит после сохранения физического файла: это не одна атомарная операция filesystem + SQLite, и отказ inspection может оставить объект на диске без строки материала.
+`material_encrypted`, `material_corrupt` отображают ошибки проверки. Проверка происходит после сохранения физического файла: это не одна атомарная операция filesystem + SQLite, и отказ inspection может оставить объект на диске без строки материала.
 
 Код: [маршрут](https://github.com/tneki22/Tentex/blob/9acd0f78167a6e3d0b2f79479cfc99139b1ee298/backend/app/materials/router.py#L63-L71), [storage](https://github.com/tneki22/Tentex/blob/9acd0f78167a6e3d0b2f79479cfc99139b1ee298/backend/app/materials/storage.py#L33-L74), [inspection](https://github.com/tneki22/Tentex/blob/9acd0f78167a6e3d0b2f79479cfc99139b1ee298/backend/app/materials/parsers/native.py#L67-L92), [отображение ошибок и дедупликация](https://github.com/tneki22/Tentex/blob/9acd0f78167a6e3d0b2f79479cfc99139b1ee298/backend/app/materials/library.py#L779-L894).
 

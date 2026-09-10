@@ -781,8 +781,6 @@ def _inspect_file(path: Path) -> tuple[int, int, int, list[str]]:
         return inspect(path)
     except PermissionError as error:
         raise ProjectDomainError(str(error), status=422, code="material_encrypted") from error
-    except OverflowError as error:
-        raise ProjectDomainError(str(error), status=422, code="material_too_many_pages") from error
     except (ValueError, OSError) as error:
         raise ProjectDomainError(str(error), status=422, code="material_corrupt") from error
 
