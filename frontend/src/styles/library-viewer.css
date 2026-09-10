@@ -990,8 +990,12 @@
 
 .structured-figure .structured-image { margin: 0; }
 
-/* Шапка подготовленного текста: режим слева, тумблер «фото фрагментов» справа. */
+/* Шапка подготовленного текста: режим слева, тумблер «фото фрагментов» справа.
+   Позиция и z-index выше .viewer-page-edge (2): в режиме «Текст» правая
+   зона перелистывания лежит поверх сцены и перехватывала клик по тумблеру. */
 .viewer-text-controls {
+  position: relative;
+  z-index: 3;
   display: flex;
   gap: var(--space-3);
   align-items: center;

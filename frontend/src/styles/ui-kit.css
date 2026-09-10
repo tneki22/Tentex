@@ -544,6 +544,12 @@
   animation: popover-in var(--motion-fast) var(--motion-ease-out);
 }
 
+/* Пошире обычной: имя обрабатываемого файла бывает длинным, и на 296px
+   перенос (.task-row-label) сминал бы карточку в узкую колонку. */
+.popover-tasks {
+  width: 360px;
+}
+
 .popover-title {
   margin: 0 0 var(--space-3);
   color: var(--ink);

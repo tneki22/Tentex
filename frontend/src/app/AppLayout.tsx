@@ -165,6 +165,7 @@ function BackgroundJobsWidget({
   return (
     <Popover
       title="Фоновые задачи"
+      className="popover-tasks"
       trigger={
         <button type="button" className={reviewJobs.length > 0 ? "app-widget has-review" : "app-widget"}>
           <Activity size={15} aria-hidden="true" />
