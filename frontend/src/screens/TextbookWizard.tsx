@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { useNavigate } from "react-router";
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, Copy, Filter, LibraryBig, MessageSquare, Pencil, Plus, Search, Trash2, Undo2, UploadCloud, WandSparkles } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, Copy, Filter, Info, LibraryBig, MessageSquare, Pencil, Plus, Search, Trash2, Undo2, UploadCloud, WandSparkles } from "lucide-react";
 import {
   createProgramNode,
   moveProgramNode,
@@ -12,7 +12,6 @@ import {
   type ModuleKey,
   type NodeType,
   type ProjectDetail,
-  type StudyFormat,
   type TargetOutcome,
 } from "../api/projects";
 import type { WizardDraftController } from "../hooks/useWizardDraft";
@@ -21,6 +20,7 @@ import type { ContextMenuItem } from "../components/ui";
 import { LibraryMaterialPickerDialog, QualityBadge, TaskRow } from "../components/domain";
 import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTreeNode } from "./programTree";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
+import { TextbookSourceCard } from "./TextbookSourceCard";
 
 type ProgramView = "tree" | "text" | "questions";
 
@@ -37,8 +37,6 @@ interface TextbookForm {
   deadline: string;
   minutesPerDay: string;
   daysPerWeek: string;
-  sessionMinutes: string;
-  studyFormat: StudyFormat;
 }
 
 const EMPTY_FORM: TextbookForm = {
@@ -54,11 +52,16 @@ const EMPTY_FORM: TextbookForm = {
   deadline: "",
   minutesPerDay: "45",
   daysPerWeek: "4",
-  sessionMinutes: "45",
-  studyFormat: "theory_and_practice",
 };
 const nullable = (value: string) => value.trim() || null;
 const positive = (value: string) => Number(value) > 0 ? Number(value) : null;
+
+function volumeLabel(totalBytes: number): string {
+  if (totalBytes < 1024) return `${totalBytes} Б`;
+  if (totalBytes < 1024 ** 2) return `${(totalBytes / 1024).toFixed(1)} КБ`;
+  if (totalBytes < 1024 ** 3) return `${(totalBytes / 1024 ** 2).toFixed(1)} МБ`;
+  return `${(totalBytes / 1024 ** 3).toFixed(1)} ГБ`;
+}
 
 interface TextbookWizardProps {
   controller: WizardDraftController;
@@ -111,8 +114,6 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
       deadline: detail.project.deadline ?? "",
       minutesPerDay: goal?.minutes_per_day ? String(goal.minutes_per_day) : "45",
       daysPerWeek: goal?.days_per_week ? String(goal.days_per_week) : "4",
-      sessionMinutes: goal?.session_minutes ? String(goal.session_minutes) : "45",
-      studyFormat: goal?.study_format ?? "theory_and_practice",
     });
   }, [controller.detail, controller.hydrationVersion]);
 
@@ -137,10 +138,10 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
       success_criterion: nullable(form.successCriterion),
       important: nullable(form.important),
       excluded: nullable(form.excluded),
-      study_format: form.studyFormat,
+      study_format: null,
       minutes_per_day: positive(form.minutesPerDay),
       days_per_week: positive(form.daysPerWeek),
-      session_minutes: positive(form.sessionMinutes),
+      session_minutes: null,
       exam_format: null,
       expected_item_count: null,
       instructor_requirements: null,
@@ -182,8 +183,8 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   const topicCount = nodes.filter((node) => node.node_type === "topic").length;
   const subpointCount = nodes.filter((node) => node.node_type === "subpoint").length;
   const readyMaterialCount = materials.materials.filter((material) => material.status === "ready").length;
-  const scanPageCount = materials.materials.reduce((sum, material) => sum + material.scan_page_count, 0);
-  const reviewPageCount = materials.materials.reduce((sum, material) => sum + (material.parser_mode === "fast" ? 0 : material.ocr_low_page_count), 0);
+  const totalPageCount = materials.materials.reduce((sum, material) => sum + (material.page_count ?? 0), 0);
+  const totalSizeBytes = materials.materials.reduce((sum, material) => sum + material.size_bytes, 0);
 
   useEffect(() => {
     if (selected && selected.id !== selectedId) setSelectedId(selected.id);
@@ -421,22 +422,19 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
                 </div>
                 {material.task && material.task.state !== "completed" && <TaskRow task={{ id: material.task.id, kind: "parse", subject: material.display_name, unit: "страниц", done: material.task.done, total: material.task.total, etaMinutes: null, state: material.task.state, error: material.task.error ?? undefined }} onPause={() => void materials.control(material.id, "pause")} onResume={() => void materials.control(material.id, "resume")} onRetry={() => void materials.control(material.id, "retry")} />}
                 <Disclosure summary="Роль и инструкция">
-                  <div className="textbook-source-settings">
-                    <Field label="Роль источника"><select value={material.source_role} onChange={(event) => void materials.update(material.id, { source_role: event.target.value as "main" | "additional" | "reference" })}><option value="main">Основной</option><option value="additional">Дополнительный</option><option value="reference">Справочный</option></select></Field>
-                    <Field label="Приоритет"><input type="number" min="0" value={material.priority} onChange={(event) => void materials.update(material.id, { priority: Number(event.target.value) })} /></Field>
-                    <Field label="Как использовать"><textarea value={material.instruction ?? ""} onChange={(event) => void materials.update(material.id, { instruction: event.target.value })} placeholder="Например, отсюда брать определения" /></Field>
-                  </div>
+                  <TextbookSourceCard material={material} busy={materials.busy} onSave={materials.update} />
                 </Disclosure>
               </Card>
             ))}
           </div>
 
           <Card className="textbook-analysis-card">
-            <div className="textbook-analysis-head"><WandSparkles size={18} aria-hidden="true" /><span><b>Подготовка материалов</b><small>Кнопка «Подготовить текст» извлечёт текст со всех страниц. Для сканов автоматически используется быстрый локальный OCR.</small></span></div>
+            <div className="textbook-analysis-head"><WandSparkles size={18} aria-hidden="true" /><span><b>Подготовка материалов</b><small>Кнопка «Подготовить текст» извлекает текст источника на этом компьютере.</small></span></div>
             <table className="textbook-analysis-table">
-              <thead><tr><th scope="col">Текст готов</th><th scope="col">Всего файлов</th><th scope="col">Страницы-сканы</th><th scope="col">Нужно проверить</th></tr></thead>
-              <tbody><tr><td>{readyMaterialCount}</td><td>{materials.materials.length}</td><td>{scanPageCount}</td><td>{reviewPageCount}</td></tr></tbody>
+              <thead><tr><th scope="col">Всего файлов</th><th scope="col">Всего страниц</th><th scope="col">Общий объём</th></tr></thead>
+              <tbody><tr><td>{materials.materials.length}</td><td>{totalPageCount}</td><td>{volumeLabel(totalSizeBytes)}</td></tr></tbody>
             </table>
+            <p><Info size={14} aria-hidden="true" />Подготовка идёт в фоне — можно перейти к следующему шагу, не дожидаясь конца. Прогресс виден в панели фоновых задач и в разделе «Материалы».</p>
           </Card>
 
           <div className="wizard-actions"><Button variant="ghost" onClick={() => navigate("/projects/new")}>Вернуться к выбору</Button><Button disabled={busy || materials.materials.length === 0} onClick={() => void go(2)}>Продолжить с источниками</Button></div>
@@ -469,9 +467,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
                 <div className="textbook-number-grid">
                   <Field label="Минут в день" hint="Необязательно"><input type="number" min="10" step="5" value={form.minutesPerDay} onChange={(event) => setForm((current) => ({ ...current, minutesPerDay: event.target.value }))} /></Field>
                   <Field label="Дней в неделю" hint="Необязательно"><input type="number" min="1" max="7" value={form.daysPerWeek} onChange={(event) => setForm((current) => ({ ...current, daysPerWeek: event.target.value }))} /></Field>
-                  <Field label="Минут на занятие" hint="Необязательно"><input type="number" min="10" step="5" value={form.sessionMinutes} onChange={(event) => setForm((current) => ({ ...current, sessionMinutes: event.target.value }))} /></Field>
                 </div>
-                <SegmentedTabs label="Формат занятий" value={form.studyFormat} onChange={(studyFormat) => setForm((current) => ({ ...current, studyFormat: studyFormat as StudyFormat }))} tabs={[{ value: "theory", label: "Теория" }, { value: "theory_and_practice", label: "Смешанный" }, { value: "practice", label: "Практика" }]} />
                 <div className="textbook-source-summary"><b>Источники</b>{materials.materials.map((material, index) => <span key={material.id}><i>{index + 1}</i>{material.display_name}<small>{material.status === "ready" ? "текст готов" : "текст не подготовлен"}</small></span>)}<Button variant="ghost" onClick={() => void go(1)}>К источникам</Button></div>
               </div>
             </Card>
@@ -590,7 +586,6 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
               <div><dt>{form.scope === "goal" ? "Цель" : "Охват"}</dt><dd>{form.scope === "goal" ? form.goal || "Не указана" : "Весь основной материал"}</dd></div>
               <div><dt>Срок</dt><dd>{form.deadline ? new Date(`${form.deadline}T00:00:00`).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" }) : "Не задан"}</dd></div>
               <div><dt>Темп</dt><dd>{form.minutesPerDay || "—"} мин. в день, {form.daysPerWeek || "—"} дн. в неделю</dd></div>
-              <div><dt>Занятие</dt><dd>{form.sessionMinutes ? `${form.sessionMinutes} мин.` : "Не задано"}</dd></div>
               <div><dt>Критерий успеха</dt><dd>{form.successCriterion || "Не указан"}</dd></div>
             </dl>
           </Card>

@@ -7255,7 +7255,7 @@ button.wizard-back-projects {
 .textbook-profile-card header p { margin: 2px 0 0; color: var(--muted); font-size: var(--text-xs); }
 .textbook-profile-fields { display: grid; gap: var(--space-5); padding: var(--space-5); }
 .textbook-profile-fields textarea { resize: vertical; }
-.textbook-number-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.textbook-number-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .textbook-profile-fields .disclosure-inner { display: grid; gap: var(--space-3); }
 
 .textbook-source-summary { display: grid; gap: var(--space-2); padding: var(--space-4); border-radius: var(--radius-lg); background: var(--surface-sunken); }

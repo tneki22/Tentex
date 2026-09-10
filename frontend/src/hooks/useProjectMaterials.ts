@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   controlMaterialProcessing,
   createExternalMaterial,
@@ -22,6 +22,10 @@ export function useProjectMaterials(projectId: string | undefined) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Опрос раз в 1200 мс и явные refresh() (после привязки из Библиотеки и
+  // т.п.) могут завершиться не в том порядке, в котором были запущены:
+  // ответ на устаревший запрос не должен переписывать более свежий список.
+  const requestIdRef = useRef(0);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!projectId) {
@@ -30,15 +34,17 @@ export function useProjectMaterials(projectId: string | undefined) {
       setLoading(false);
       return;
     }
+    const requestId = ++requestIdRef.current;
     try {
       const result = await listMaterials(projectId, signal);
+      if (requestId !== requestIdRef.current) return;
       setMaterials(result);
       setError(null);
     } catch (caught) {
-      if (signal?.aborted) return;
+      if (signal?.aborted || requestId !== requestIdRef.current) return;
       setError(caught instanceof Error ? caught.message : "Не удалось загрузить материалы");
     } finally {
-      if (!signal?.aborted) setLoading(false);
+      if (!signal?.aborted && requestId === requestIdRef.current) setLoading(false);
     }
   }, [projectId]);
 
@@ -101,8 +107,22 @@ export function useProjectMaterials(projectId: string | undefined) {
       purposes: MaterialPurpose[];
       exam_slot?: ExamMaterialSlot | null;
     }) => projectId ? mutate(() => createExternalMaterial(projectId, command)) : null,
-    update: (materialId: string, command: Parameters<typeof updateMaterial>[2]) =>
-      projectId ? mutate(() => updateMaterial(projectId, materialId, command)) : null,
+    // Отдельно от mutate(): PATCH уже возвращает свежую запись, полный
+    // повторный GET не нужен, а глобальный busy не должен гасить кнопки
+    // остальных карточек ради сохранения одной. Ошибка ловится тут же —
+    // вызывающая сторона получает null и может показать её сама.
+    update: async (materialId: string, command: Parameters<typeof updateMaterial>[2]) => {
+      if (!projectId) return null;
+      try {
+        const updated = await updateMaterial(projectId, materialId, command);
+        setMaterials((current) => current.map((item) => (item.id === materialId ? updated : item)));
+        setError(null);
+        return updated;
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "Действие не выполнено");
+        return null;
+      }
+    },
     start: (materialId: string, mode: ParserMode = "fast") =>
       projectId ? mutate(() => startMaterialProcessing(projectId, materialId, mode)) : null,
     control: (materialId: string, action: "pause" | "resume" | "retry" | "cancel") =>
