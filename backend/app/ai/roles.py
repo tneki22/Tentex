@@ -103,7 +103,7 @@ ROLE_SPECS = {
             "text",
             frozenset({"structured_output"}),
             "exact",
-            "preparation-estimate-v1",
+            "preparation-estimate-v2",
             {"max_output_tokens": 700},
         ),
         AiRoleSpec(
