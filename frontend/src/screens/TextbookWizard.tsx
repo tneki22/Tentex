@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { useNavigate } from "react-router";
 import { BookOpen, Info, LibraryBig, Trash2, Undo2, UploadCloud, WandSparkles } from "lucide-react";
+import type { ChatMessageRead } from "../api/chat";
 import {
   type GoalPassportWrite,
   type GoalScope,
@@ -11,7 +12,7 @@ import {
 } from "../api/projects";
 import type { WizardDraftController } from "../hooks/useWizardDraft";
 import { Button, Card, Disclosure, Field, IconButton, LoadingState, PageHead, SegmentedTabs, StatusBadge } from "../components/ui";
-import { LibraryMaterialPickerDialog, QualityBadge, TaskRow, TextbookProgramEditor } from "../components/domain";
+import { LibraryMaterialPickerDialog, ProgramTreePreview, QualityBadge, TaskRow, TextbookProgramEditor } from "../components/domain";
 import type { TextbookProgramView } from "../components/domain";
 import { buildProgramTree, flattenProgramTree } from "./programTree";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
@@ -19,6 +20,7 @@ import { TextbookSourceCard } from "./TextbookSourceCard";
 import {
   TextbookOutlineReview,
 } from "./TextbookOutlineReview";
+import { lastPendingDiff, ProgramChatWorkspace } from "./workspace/chat/ProgramChatWorkspace";
 import {
   outlineItemsWithKeys,
   type OutlineDraftState,
@@ -86,6 +88,13 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   const [form, setForm] = useState<TextbookForm>(EMPTY_FORM);
   const [view, setView] = useState<TextbookProgramView>("tree");
   const [programMode, setProgramMode] = useState<ProgramMode>("manual");
+  const [aiChatMessages, setAiChatMessages] = useState<ChatMessageRead[]>([]);
+  const lastPendingDiffValue = lastPendingDiff(aiChatMessages);
+  function executeProgramCommand(
+    request: (revision: number) => Promise<import("../api/projects").ProgramChangeResult>,
+  ) {
+    return controller.enqueueProgramCommand((current) => request(current.program.revision));
+  }
   const [actionError, setActionError] = useState("");
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [outlinesByMaterialId, setOutlinesByMaterialId] = useState<OutlinesByMaterialId>({});
@@ -368,7 +377,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
             <div className="textbook-preflight-list">
               <section><h3>Источники</h3>{materials.materials.map((material, index) => <p key={material.id}><span>{index + 1}</span>{material.display_name}<small>{material.source_role === "main" ? "основной" : material.source_role === "additional" ? "дополнительный" : "справочный"}</small></p>)}</section>
               <section className="is-processing-copy"><h3>Подготовка материалов</h3><p>Текст готов для {readyMaterialCount} из {materials.materials.length} файлов. Всё происходит на этом компьютере.</p></section>
-              <section className="is-processing-copy"><h3>Составление программы</h3><p>На следующем шаге вы сможете составить программу вручную.</p></section>
+              <section className="is-processing-copy"><h3>Составление программы</h3><p>На следующем шаге можно собрать программу вручную или попросить ИИ-чат составить её по оглавлению или по вашей цели.</p></section>
             </div>
           </Card>
 
@@ -398,11 +407,25 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
             busy={busy}
             view={view}
             onViewChange={setView}
-            execute={(request) => controller.enqueueProgramCommand((current) => request(current.program.revision))}
+            execute={executeProgramCommand}
             onUndo={async () => { await controller.undo(); }}
+            mode={programMode}
+            aiContent={<div className="textbook-program-ai-layout">
+              <ProgramChatWorkspace
+                projectId={controller.detail.project.id}
+                program={controller.detail.program}
+                execute={executeProgramCommand}
+                onMessagesChange={setAiChatMessages}
+              />
+              <ProgramTreePreview
+                program={controller.detail.program}
+                pendingOperations={lastPendingDiffValue?.operations}
+                pendingStates={lastPendingDiffValue?.operation_states}
+              />
+            </div>}
             renderHeader={(actions) => <header className="textbook-builder-head">
               <Button variant="ghost" disabled={!actions.canUndo || actions.busy} onClick={() => void actions.undo()}><Undo2 size={15} />Отменить</Button>
-              <SegmentedTabs label="Режим составления программы" value={programMode} onChange={setProgramMode} tabs={[{ value: "manual", label: "Вручную" }, { value: "ai", label: "С ИИ", disabled: true, tooltip: "ИИ-режим добавляется во второй части" }]} />
+              <SegmentedTabs label="Режим составления программы" value={programMode} onChange={setProgramMode} tabs={[{ value: "manual", label: "Вручную" }, { value: "ai", label: "С ИИ" }]} />
               <Button variant="secondary" disabled={actions.busy} onClick={actions.openImport}>Импортировать программу из оглавления</Button>
               <Button variant="ghost" disabled={actions.busy || !actions.hasNodes} onClick={actions.openRemoveAll}><Trash2 size={15} />Удалить все</Button>
               <Button className="textbook-builder-confirm" disabled={actions.busy} onClick={() => void go(5)}>{actions.hasNodes ? "Утвердить программу" : "Продолжить без программы"}</Button>

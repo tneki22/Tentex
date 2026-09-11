@@ -231,6 +231,7 @@ class BackgroundJobKind(StrEnum):
     AI_CLEANUP = "ai_cleanup"
     LINK_ANSWERS = "link_answers"
     AI_ANSWER_SECTIONS = "ai_answer_sections"
+    AI_PROGRAM_BUILD = "ai_program_build"
 
 
 class BackgroundJobState(StrEnum):
@@ -283,6 +284,9 @@ class ChatMessageRole(StrEnum):
     USER = "user"
     EXAMINER = "examiner"
     SYSTEM = "system"
+    # Реплика модели в чате построения программы учебника — семантически
+    # ответ ассистента, а не экзаменатора (AGENTS.md, TEXTBOOK_MODE.md §3).
+    ASSISTANT = "assistant"
 
 
 class ChatStreamState(StrEnum):
@@ -298,6 +302,9 @@ class ChatPayloadKind(StrEnum):
     TASK = "task"
     INTERACTIVE = "interactive"
     TOOL_RESULT = "tool_result"
+    # Предложение изменений дерева программы учебника — операции с чекбоксами,
+    # применяются отдельным вызовом apply/reject (docs/architecture/textbook-program.md).
+    PROGRAM_DIFF = "program_diff"
 
 
 class ChatMode(StrEnum):
@@ -305,6 +312,9 @@ class ChatMode(StrEnum):
     # Зарегистрирован в capabilities, но сервис отвечает chat_mode_unavailable
     # до итерации 2 (AI-CHATS.md §21.4).
     STUDY = "study"
+    # Чат построения программы учебника — TEXTBOOK_MODE.md §3, режим «С ИИ».
+    # Сессия проектная (program_node_id может быть NULL), а не по одному вопросу.
+    PROGRAM = "program"
 
 
 class ChatToolRunState(StrEnum):
@@ -1486,7 +1496,13 @@ class Grade(Base):
 
 
 class ChatSession(Base):
-    """Один чат по одному вопросу. Новый чат не стирает старые."""
+    """Чат по одному вопросу (exam) либо по всей программе проекта (program).
+
+    `program_node_id` — NULL у чата построения программы: он привязан к
+    проекту целиком, а не к одному узлу (TEXTBOOK_MODE.md §3). Составной FK
+    ниже с NULL-значением колонки просто не проверяется (SQLite MATCH SIMPLE).
+    Новый чат не стирает старые.
+    """
 
     __tablename__ = "chat_sessions"
     __table_args__ = (
@@ -1502,7 +1518,7 @@ class ChatSession(Base):
     project_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
     )
-    program_node_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    program_node_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     # Ближайший предок-раздел на момент создания; NULL — плоский список.
     # Показывается и используется памятью раздела только с итерации 2.
     section_scope_node_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)

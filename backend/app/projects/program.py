@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.bindings.answers_link import apply_answers_link_undo
 from app.bindings.service import apply_undo as apply_binding_undo
 from app.models import (
+    ChatMessage,
     ExamKind,
     GoalPassport,
     GoalRole,
@@ -1005,6 +1006,60 @@ def undo_last_project_action(
                     if node is not None and node.id not in old_ids:
                         node.is_in_current_program = False
                         node.is_archived = True
+            case "program_chat_apply":
+                for position in data["positions"]:
+                    node = nodes_by_id.get(UUID(position["id"]))
+                    if node is None:
+                        continue
+                    node.parent_id = (
+                        UUID(position["parent_id"]) if position["parent_id"] else None
+                    )
+                    node.sort_order = position["sort_order"]
+                enum_fields = {
+                    "node_type": NodeType,
+                    "goal_role": GoalRole,
+                    "target_level": TargetOutcome,
+                    "origin_kind": OriginKind,
+                    "basis_kind": ProgramBasisKind,
+                }
+                for node_id_str, snapshot in data["node_snapshots"].items():
+                    node = nodes_by_id.get(UUID(node_id_str))
+                    if node is None:
+                        continue
+                    for field in (
+                        "title",
+                        "section_purpose",
+                        "goal_role",
+                        "target_level",
+                        "is_in_current_program",
+                        "needs_material",
+                        "is_archived",
+                        "origin_kind",
+                        "basis_kind",
+                        "origin_note",
+                    ):
+                        value = snapshot.get(field)
+                        enum_class = enum_fields.get(field)
+                        setattr(node, field, enum_class(value) if enum_class and value else value)
+                    node.origin_material_id = (
+                        UUID(snapshot["origin_material_id"])
+                        if snapshot.get("origin_material_id")
+                        else None
+                    )
+                for created_id in data.get("created_node_ids", []):
+                    node = nodes_by_id.get(UUID(created_id))
+                    if node is not None:
+                        session.delete(node)
+                for move in data.get("page_range_moves", []):
+                    range_row = session.get(ProgramNodeSourcePageRange, UUID(move["range_id"]))
+                    if range_row is not None:
+                        range_row.program_node_id = UUID(move["from_node_id"])
+                message = session.get(ChatMessage, UUID(data["message_id"]))
+                if message is not None:
+                    message.payload = {
+                        **message.payload,
+                        "operation_states": data["previous_operation_states"],
+                    }
             case "ai_program_grouping":
                 section_ids = {UUID(item["id"]) for item in data["sections"]}
                 sections_by_id = {

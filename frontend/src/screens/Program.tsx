@@ -46,7 +46,7 @@ import {
   type ProjectDetail,
   type TargetOutcome,
 } from "../api/projects";
-import { GOAL_LEVELS, GoalLevelPicker, LibraryMaterialPickerDialog, ProjectNav, TextbookProgramEditor } from "../components/domain";
+import { GOAL_LEVELS, GoalLevelPicker, LibraryMaterialPickerDialog, ProgramTreePreview, ProjectNav, TextbookProgramEditor } from "../components/domain";
 import type { GoalLevelValue, TextbookProgramView } from "../components/domain";
 import {
   Button,
@@ -71,11 +71,13 @@ import {
   visibleHiddenRoots,
   type ProgramTreeNode,
 } from "./programTree";
+import type { ChatMessageRead } from "../api/chat";
 import { useBindings } from "../hooks/useBindings";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { usePendingReviewJob } from "../hooks/usePendingReviewJob";
 import { AiGroupingDialog } from "./AiGroupingDialog";
 import { AiImportRepairDialog } from "./AiImportRepairDialog";
+import { lastPendingDiff, ProgramChatWorkspace } from "./workspace/chat/ProgramChatWorkspace";
 
 type AddKind = "section" | "ticket" | "question" | "task" | "topic" | "subpoint";
 type OutlineFilter = "all" | "sections" | "ungrouped";
@@ -124,6 +126,8 @@ export function Program() {
   const [query, setQuery] = useState("");
   const [textbookView, setTextbookView] = useState<TextbookProgramView>("tree");
   const [textbookMode, setTextbookMode] = useState<"manual" | "ai">("manual");
+  const [aiChatMessages, setAiChatMessages] = useState<ChatMessageRead[]>([]);
+  const lastPendingDiffValue = lastPendingDiff(aiChatMessages);
   const [filter, setFilter] = useState<OutlineFilter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -530,12 +534,26 @@ export function Program() {
           onViewChange={setTextbookView}
           execute={runTextbookCommand}
           onUndo={undo}
+          mode={textbookMode}
+          aiContent={<div className="textbook-program-ai-layout">
+            <ProgramChatWorkspace
+              projectId={projectId}
+              program={detail.program}
+              execute={runTextbookCommand}
+              onMessagesChange={setAiChatMessages}
+            />
+            <ProgramTreePreview
+              program={detail.program}
+              pendingOperations={lastPendingDiffValue?.operations}
+              pendingStates={lastPendingDiffValue?.operation_states}
+            />
+          </div>}
           renderHeader={(actions) => <PageHead
             eyebrow="Структура учебника"
             title="Программа"
             actions={<>
               <Button variant="ghost" disabled={!actions.canUndo || actions.busy} onClick={() => void actions.undo()}><Undo2 size={15} />Отменить</Button>
-              <SegmentedTabs label="Режим составления программы" value={textbookMode} onChange={setTextbookMode} tabs={[{ value: "manual", label: "Вручную" }, { value: "ai", label: "С ИИ", disabled: true, tooltip: "ИИ-режим добавляется во второй части" }]} />
+              <SegmentedTabs label="Режим составления программы" value={textbookMode} onChange={setTextbookMode} tabs={[{ value: "manual", label: "Вручную" }, { value: "ai", label: "С ИИ" }]} />
               <Button variant="secondary" disabled={actions.busy} onClick={actions.openImport}><Files size={15} />Импортировать программу из оглавления</Button>
               <Button variant="ghost" disabled={actions.busy || !actions.hasNodes} onClick={actions.openRemoveAll}><Trash2 size={15} />Удалить все</Button>
             </>}

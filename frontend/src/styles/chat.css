@@ -142,7 +142,8 @@
   background: var(--accent-wash);
 }
 
-.chat-bubble.is-examiner {
+.chat-bubble.is-examiner,
+.chat-bubble.is-assistant {
   background: var(--paper-strong);
 }
 
@@ -1057,4 +1058,135 @@
   .chat-material-search-prompt {
     flex-wrap: wrap;
   }
+}
+
+/* Чат построения программы учебника (TEXTBOOK_MODE.md §3, режим «С ИИ») */
+
+.program-chat-workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.program-chat-build-status {
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--line);
+}
+
+.program-diff-card {
+  max-width: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.program-diff-card.is-rejected {
+  color: var(--muted);
+}
+
+.program-diff-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.program-diff-summary {
+  margin: 0;
+  color: var(--ink);
+}
+
+.program-diff-pros-cons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  font-size: var(--text-xs);
+}
+
+.program-diff-pros,
+.program-diff-cons {
+  margin: 0;
+  padding-inline-start: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.program-diff-pros { color: var(--tone-success); }
+.program-diff-cons { color: var(--tone-danger); }
+
+.program-diff-ops {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.program-diff-op {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+
+.program-diff-op.is-applied {
+  border-color: var(--tone-success);
+  background: color-mix(in srgb, var(--tone-success) 8%, var(--paper));
+}
+
+.program-diff-op.is-conflicted {
+  opacity: 0.6;
+}
+
+.program-diff-op-rationale {
+  margin: var(--space-1) 0 0 26px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.program-diff-op-status {
+  margin-left: 26px;
+  font-size: var(--text-xs);
+  color: var(--tone-success);
+}
+
+.program-diff-op-status.is-conflicted {
+  color: var(--tone-danger);
+}
+
+.program-diff-op-children {
+  margin: var(--space-2) 0 0;
+  padding-inline-start: var(--space-5);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border-left: 1px dashed var(--line);
+}
+
+.program-diff-op.is-nested {
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  background: transparent;
+}
+
+.program-diff-op-nested-label {
+  font-size: var(--text-sm);
+}
+
+.program-diff-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.program-diff-rejected-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  font-size: var(--text-xs);
 }

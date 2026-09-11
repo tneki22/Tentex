@@ -15,6 +15,7 @@ from app.projects import (
     preparation_ai,
     program,
     program_ai,
+    program_chat,
     program_outline,
     service,
 )
@@ -333,6 +334,131 @@ def apply_program_grouping(
     session: SessionDependency,
 ) -> ProgramChangeResult:
     return program_ai.apply(session, project_id, command)
+
+
+@projects.get(
+    "/{project_id}/program-chat/sessions",
+    response_model=list[program_chat.ProgramChatSessionSummary],
+)
+def list_program_chat_sessions(
+    project_id: UUID, session: SessionDependency
+) -> list[program_chat.ProgramChatSessionSummary]:
+    return program_chat.list_session_summaries(session, project_id)
+
+
+@projects.post(
+    "/{project_id}/program-chat/sessions",
+    response_model=program_chat.ProgramChatSessionDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_program_chat_session(
+    project_id: UUID, session: SessionDependency
+) -> program_chat.ProgramChatSessionDetail:
+    chat = program_chat.create_session(session, project_id)
+    return program_chat.get_session_detail(session, project_id, chat.id)
+
+
+@projects.get(
+    "/{project_id}/program-chat/sessions/{session_id}",
+    response_model=program_chat.ProgramChatSessionDetail,
+)
+def get_program_chat_session(
+    project_id: UUID, session_id: UUID, session: SessionDependency
+) -> program_chat.ProgramChatSessionDetail:
+    return program_chat.get_session_detail(session, project_id, session_id)
+
+
+@projects.put(
+    "/{project_id}/program-chat/sessions/{session_id}/draft",
+    response_model=program_chat.ProgramChatSessionDetail,
+)
+def save_program_chat_draft(
+    project_id: UUID,
+    session_id: UUID,
+    command: program_chat.ProgramChatDraftWrite,
+    session: SessionDependency,
+) -> program_chat.ProgramChatSessionDetail:
+    program_chat.save_draft(session, project_id, session_id, command.text)
+    return program_chat.get_session_detail(session, project_id, session_id)
+
+
+@projects.get(
+    "/{project_id}/program-chat/sessions/{session_id}/context",
+    response_model=program_chat.ProgramChatContextPreviewRead,
+)
+def get_program_chat_context(
+    project_id: UUID, session_id: UUID, session: SessionDependency
+) -> program_chat.ProgramChatContextPreviewRead:
+    return program_chat.context_preview(session, project_id, session_id)
+
+
+@projects.put(
+    "/{project_id}/program-chat/sessions/{session_id}/context",
+    response_model=program_chat.ProgramChatSessionDetail,
+)
+def update_program_chat_context(
+    project_id: UUID,
+    session_id: UUID,
+    command: program_chat.ProgramChatContextWrite,
+    session: SessionDependency,
+) -> program_chat.ProgramChatSessionDetail:
+    program_chat.update_context(session, project_id, session_id, command)
+    return program_chat.get_session_detail(session, project_id, session_id)
+
+
+@projects.post(
+    "/{project_id}/program-chat/sessions/{session_id}/build",
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_program_chat_build(
+    project_id: UUID,
+    session_id: UUID,
+    command: program_chat.ProgramChatBuildWrite,
+    session: SessionDependency,
+) -> BackgroundJobStartRead:
+    return program_chat.start_build(session, project_id, session_id, command)
+
+
+@projects.post(
+    "/{project_id}/program-chat/sessions/{session_id}/messages",
+    response_model=program_chat.ChatMessageRead,
+)
+async def post_program_chat_message(
+    project_id: UUID,
+    session_id: UUID,
+    command: program_chat.ProgramChatMessageWrite,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> program_chat.ChatMessageRead:
+    message = await program_chat.send_message(
+        session, gateway, project_id, session_id, command.text
+    )
+    return program_chat.chat_common.message_read(message)
+
+
+@projects.post(
+    "/{project_id}/program-chat/proposals/{message_id}/apply",
+    response_model=ProgramChangeResult,
+)
+def apply_program_chat_proposal(
+    project_id: UUID,
+    message_id: UUID,
+    command: program_chat.ProgramChatApplyWrite,
+    session: SessionDependency,
+) -> ProgramChangeResult:
+    return program_chat.apply_proposal(session, project_id, message_id, command)
+
+
+@projects.post(
+    "/{project_id}/program-chat/proposals/{message_id}/reject",
+    response_model=program_chat.ChatMessageRead,
+)
+def reject_program_chat_proposal(
+    project_id: UUID, message_id: UUID, session: SessionDependency
+) -> program_chat.ChatMessageRead:
+    message = program_chat.reject_proposal(session, project_id, message_id)
+    return program_chat.chat_common.message_read(message)
 
 
 @projects.post(

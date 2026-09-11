@@ -1,15 +1,62 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpenCheck, MessageSquare, Search } from "lucide-react";
+import { BookOpenCheck, FileQuestion, History, ListChecks, MessageSquare, MessageSquareText, ScrollText, Search } from "lucide-react";
+import type { ChatContextFlags, ChatContextPreview } from "../../../api/chat";
 import type { ProgramNodeRead } from "../../../api/projects";
 import { Button, EmptyState, ErrorState, LoadingState } from "../../../components/ui";
 import { AnswerFormCard } from "./AnswerFormCard";
 import { ChatComposer } from "./ChatComposer";
 import { ChatHeader } from "./ChatHeader";
 import { ChatTimeline } from "./ChatTimeline";
+import type { ChipDef } from "./ContextChips";
 import { ContextChips } from "./ContextChips";
 import { SkillPalette } from "./SkillPalette";
 import type { PaletteCommandDef } from "./skills";
 import { useExamChat } from "./useExamChat";
+
+/** Шесть чипов экзаменационного чата — вопрос/профиль/ответ/материал/попытки/история раздела. */
+function buildExamContextChips(preview: ChatContextPreview | null): ChipDef[] | null {
+  if (!preview) return null;
+  const byKind = new Map(preview.manifest.map((entry) => [entry.kind, entry]));
+  const fragmentEntries = preview.manifest.filter((entry) => entry.kind === "fragment");
+  const fragmentCount = fragmentEntries.filter((entry) => entry.included).length;
+  const node = byKind.get("program_node");
+  const profile = byKind.get("profile");
+  const reference = byKind.get("reference_answer");
+  const attempts = byKind.get("attempts_digest");
+  const sectionMemory = byKind.get("section_memory");
+
+  return [
+    {
+      key: "question", icon: FileQuestion, title: "Вопрос", flagKey: null,
+      included: true, bytes: node?.bytes ?? 0, count: null, reason: null,
+    },
+    {
+      key: "profile", icon: MessageSquareText, title: "Профиль", flagKey: "profile",
+      included: Boolean(profile?.included), bytes: profile?.bytes ?? 0, count: null,
+      reason: profile?.reason ?? null,
+    },
+    {
+      key: "reference", icon: ScrollText, title: "Ответ", flagKey: "reference",
+      included: Boolean(reference?.included), bytes: reference?.bytes ?? 0, count: null,
+      reason: reference?.reason ?? null,
+    },
+    {
+      key: "fragments", icon: ListChecks, title: `Материал · ${fragmentCount}`, flagKey: "fragments",
+      included: fragmentCount > 0, bytes: fragmentEntries.reduce((sum, e) => sum + e.bytes, 0),
+      count: fragmentCount, reason: fragmentEntries.length === 0 ? null : (fragmentEntries[0]?.reason ?? null),
+    },
+    {
+      key: "attempts", icon: History, title: "Попытки", flagKey: "attempts",
+      included: false, bytes: 0, count: null, reason: attempts?.reason ?? "not_implemented",
+      futureNote: "Появится вместе с историей попыток раздела",
+    },
+    {
+      key: "section_memory", icon: History, title: "История раздела", flagKey: "section_memory",
+      included: false, bytes: 0, count: null, reason: sectionMemory?.reason ?? "not_implemented",
+      futureNote: "Появится вместе со сжатой памятью раздела",
+    },
+  ];
+}
 
 interface ExamChatPanelProps {
   projectId: string;
@@ -156,9 +203,11 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
           )}
 
           <ContextChips
-            preview={chat.contextPreview}
+            chips={buildExamContextChips(chat.contextPreview)}
             contextFlags={chat.session.context_flags}
-            onToggleFlag={(key, value) => void chat.updateSettings({ context_flags: { [key]: value } })}
+            onToggleFlag={(key, value) => void chat.updateSettings({
+              context_flags: { [key]: value } as Partial<ChatContextFlags>,
+            })}
           />
 
           {answering ? (

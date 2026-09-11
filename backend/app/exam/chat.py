@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.schemas import AiModelSelection
 from app.ai.settings import validate_model_selection
+from app.chat import common as chat_common
 from app.db import project_write_transaction
 from app.exam.context import (
     CONTEXT_FLAG_KEYS,
@@ -30,7 +31,6 @@ from app.models import (
     ChatMessage,
     ChatMessageRole,
     ChatMode,
-    ChatPayloadKind,
     ChatSession,
     ChatStreamState,
     ExaminerPersona,
@@ -119,13 +119,7 @@ def list_session_summaries(
     chats = list_sessions(session, project_id, node_id)
     if not chats:
         return []
-    counts = dict(
-        session.execute(
-            select(ChatMessage.session_id, func.count(ChatMessage.id))
-            .where(ChatMessage.session_id.in_([chat.id for chat in chats]))
-            .group_by(ChatMessage.session_id)
-        ).all()
-    )
+    counts = chat_common.message_counts(session, [chat.id for chat in chats])
     return [_summary(chat, counts.get(chat.id, 0)) for chat in chats]
 
 
@@ -157,7 +151,7 @@ def create_session(session: Session, project_id: UUID, node_id: UUID) -> ChatSes
 
 
 def _message_read(message: ChatMessage) -> ChatMessageRead:
-    return ChatMessageRead.model_validate(message)
+    return chat_common.message_read(message)
 
 
 def get_session(session: Session, project_id: UUID, chat_id: UUID) -> ChatSession:
@@ -205,11 +199,7 @@ def save_draft(session: Session, project_id: UUID, chat_id: UUID, text: str) -> 
     with project_write_transaction(session, project_id):
         _require_exam_project(session, project_id)
         chat = _require_session(session, project_id, chat_id)
-        chat.draft_text = text
-        chat.updated_at = utc_now()
-        session.flush()
-        session.refresh(chat)
-    return chat
+        return chat_common.save_draft_text(session, chat, text)
 
 
 def update_settings(
@@ -283,56 +273,15 @@ def context_preview(
     )
 
 
-def _append_message_row(
-    session: Session,
-    chat: ChatSession,
-    *,
-    role: ChatMessageRole,
-    text: str = "",
-    stream_state: ChatStreamState = ChatStreamState.COMPLETE,
-    payload_kind: ChatPayloadKind = ChatPayloadKind.NONE,
-    payload: dict[str, Any] | None = None,
-    context_snapshot: dict[str, Any] | None = None,
-    skill: str | None = None,
-    ai_run_id: UUID | None = None,
-    attempt_id: UUID | None = None,
-    grade_attempt_id: UUID | None = None,
-    message_id: UUID | None = None,
-) -> ChatMessage:
+def _append_message_row(session: Session, chat: ChatSession, **fields: Any) -> ChatMessage:
     """Raw insert, no transaction of its own — caller must already be inside one.
 
-    SQLAlchemy autobegins a transaction on the session's first read, so a
-    second `with session.begin():` inside the same request raises
-    "A transaction is already begun". Compound flows (build context, then
-    append) call this directly inside their own single `with session.begin():`;
-    `append_message` below stays the transactional entry point for callers
-    that touch nothing else on the session first.
+    Delegates to `app.chat.common` (вынесено оттуда — логика domain-agnostic,
+    её же использует `app.projects.program_chat`). Тонкая обёртка остаётся
+    здесь ради существующих вызывающих (`exam/attempts.py`, `chat_tools/executor.py`
+    зовут `chat_service._append_message_row` по имени).
     """
-    next_sequence = session.scalar(
-        select(func.coalesce(func.max(ChatMessage.sequence), 0) + 1).where(
-            ChatMessage.session_id == chat.id
-        )
-    )
-    message = ChatMessage(
-        id=message_id or uuid4(),
-        session_id=chat.id,
-        sequence=next_sequence,
-        role=role,
-        text=text,
-        stream_state=stream_state,
-        payload_kind=payload_kind,
-        payload=payload or {},
-        context_snapshot=context_snapshot or {},
-        skill=skill,
-        ai_run_id=ai_run_id,
-        attempt_id=attempt_id,
-        grade_attempt_id=grade_attempt_id,
-    )
-    session.add(message)
-    chat.updated_at = utc_now()
-    session.flush()
-    session.refresh(message)
-    return message
+    return chat_common.append_message_row(session, chat, **fields)
 
 
 def append_message(session: Session, chat: ChatSession, **fields: Any) -> ChatMessage:

@@ -5,6 +5,9 @@ import type {
   GradeMethod,
   GradeUsageRead,
   MaterialSearchResultItem,
+  ProgramChatDiffPayload,
+  ProgramChatOperationState,
+  ProgramChatOperationView,
   RubricPointRead,
   ToolResultPayload,
   VerdictPayload,
@@ -15,6 +18,7 @@ export type ParsedPayload =
   | { kind: "answer_form"; data: AnswerFormPayload }
   | { kind: "verdict"; data: VerdictPayload }
   | { kind: "tool_result"; data: ToolResultPayload }
+  | { kind: "program_diff"; data: ProgramChatDiffPayload }
   | { kind: "unknown" };
 
 const OUTCOMES = new Set<AttemptOutcome>(["passed", "partial", "failed", "unscored"]);
@@ -160,6 +164,40 @@ function toolResultPayload(value: unknown): ToolResultPayload | null {
   };
 }
 
+const OPERATION_STATES = new Set<ProgramChatOperationState>(["pending", "applied", "conflicted"]);
+
+function programChatOperation(value: unknown): ProgramChatOperationView | null {
+  const record = value as Record<string, unknown>;
+  if (!record || typeof record.op !== "string") return null;
+  const children = Array.isArray(record.children)
+    ? record.children.map(programChatOperation).filter((item): item is ProgramChatOperationView => item !== null)
+    : undefined;
+  return { ...record, rationale: typeof record.rationale === "string" ? record.rationale : "", children } as ProgramChatOperationView;
+}
+
+function programChatDiffPayload(value: unknown): ProgramChatDiffPayload | null {
+  const record = value as Record<string, unknown>;
+  if (!record || !Array.isArray(record.operations)) return null;
+  const operations = record.operations
+    .map(programChatOperation)
+    .filter((item): item is ProgramChatOperationView => item !== null);
+  const rawStates = Array.isArray(record.operation_states) ? record.operation_states : [];
+  const operation_states = operations.map((_op, index) => {
+    const value = rawStates[index];
+    return OPERATION_STATES.has(value as ProgramChatOperationState)
+      ? (value as ProgramChatOperationState)
+      : "pending";
+  });
+  return {
+    summary: typeof record.summary === "string" ? record.summary : "",
+    pros: Array.isArray(record.pros) ? record.pros.filter((item): item is string => typeof item === "string") : [],
+    cons: Array.isArray(record.cons) ? record.cons.filter((item): item is string => typeof item === "string") : [],
+    operations,
+    operation_states,
+    rejected: Boolean(record.rejected),
+  };
+}
+
 /** Разбор по дискриминанту `payload_kind`. Задание и интерактив — итерация 2. */
 export function parsePayload(message: ChatMessageRead): ParsedPayload {
   if (message.payload_kind === "answer_form" && isAnswerFormPayload(message.payload)) {
@@ -172,6 +210,10 @@ export function parsePayload(message: ChatMessageRead): ParsedPayload {
   if (message.payload_kind === "tool_result") {
     const tool = toolResultPayload(message.payload);
     return tool ? { kind: "tool_result", data: tool } : { kind: "unknown" };
+  }
+  if (message.payload_kind === "program_diff") {
+    const diff = programChatDiffPayload(message.payload);
+    return diff ? { kind: "program_diff", data: diff } : { kind: "unknown" };
   }
   if (message.payload_kind === "none") return { kind: "none" };
   return { kind: "unknown" };
