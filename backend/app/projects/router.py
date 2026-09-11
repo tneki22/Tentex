@@ -9,7 +9,15 @@ from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
 from app.background.schemas import BackgroundJobStartRead
 from app.db import get_session
-from app.projects import answers, import_repair, preparation_ai, program, program_ai, service
+from app.projects import (
+    answers,
+    import_repair,
+    preparation_ai,
+    program,
+    program_ai,
+    program_outline,
+    service,
+)
 from app.projects.schemas import (
     ActionUndoResult,
     ActivateWizardDraft,
@@ -20,6 +28,7 @@ from app.projects.schemas import (
     ProgramMove,
     ProgramNodeCreate,
     ProgramNodeUpdate,
+    ProgramOutlinesImportWrite,
     ProgramRevisionCommand,
     ProgramSwap,
     ProgramTargetLevel,
@@ -264,6 +273,26 @@ def create_node(
     project_id: UUID, command: ProgramNodeCreate, session: SessionDependency
 ) -> ProgramChangeResult:
     return program.create_program_node(session, project_id, command)
+
+
+@projects.post("/{project_id}/program/import-outlines", response_model=ProgramChangeResult)
+def import_program_outlines(
+    project_id: UUID,
+    command: ProgramOutlinesImportWrite,
+    session: SessionDependency,
+) -> ProgramChangeResult:
+    """Импортировать выбранные ветви оглавлений без обращения к модели."""
+    return program_outline.import_outlines(session, project_id, command)
+
+
+@projects.post("/{project_id}/program/remove-all", response_model=ProgramChangeResult)
+def remove_all_program_nodes(
+    project_id: UUID,
+    command: ProgramRevisionCommand,
+    session: SessionDependency,
+) -> ProgramChangeResult:
+    """Вывести все видимые корни из текущей программы одной операцией."""
+    return program.remove_all_program_nodes(session, project_id, command)
 
 
 @projects.post(

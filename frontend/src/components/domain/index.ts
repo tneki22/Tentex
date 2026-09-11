@@ -43,6 +43,11 @@ export { StepChip } from "./StepChip";
 export type { NextStep, StepTone } from "./StepChip";
 export { TaskRow } from "./TaskRow";
 export type { BackgroundTask, TaskKind } from "./TaskRow";
+export { TextbookProgramEditor } from "./program-editor/TextbookProgramEditor";
+export type {
+  TextbookProgramEditorActions,
+  TextbookProgramView,
+} from "./program-editor/TextbookProgramEditor";
 export { TopicStatusBadge, TOPIC_STATUSES, topicStatusLabel } from "./TopicStatusBadge";
 export type { TopicStatus } from "./TopicStatusBadge";
 export { PurposeDot, purposeLabel, purposeOf, type Purpose } from "./PurposeDot";

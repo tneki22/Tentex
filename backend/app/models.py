@@ -148,6 +148,11 @@ class OriginKind(StrEnum):
     MODEL = "model"
 
 
+class ProgramBasisKind(StrEnum):
+    OUTLINE = "outline"
+    CUSTOM = "custom"
+
+
 class ReferenceAnswerOrigin(StrEnum):
     MANUAL = "manual"
     IMPORT = "import"
@@ -905,10 +910,50 @@ class ProgramNode(Base):
     origin_kind: Mapped[OriginKind] = mapped_column(
         enum_type(OriginKind, "origin_kind"), default=OriginKind.MANUAL
     )
+    basis_kind: Mapped[ProgramBasisKind] = mapped_column(
+        enum_type(ProgramBasisKind, "program_basis_kind"), default=ProgramBasisKind.CUSTOM
+    )
     origin_note: Mapped[str | None] = mapped_column(String, nullable=True)
     origin_material_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class ProgramNodeSourcePageRange(Base):
+    __tablename__ = "program_node_source_page_ranges"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "program_node_id"],
+            ["program_nodes.project_id", "program_nodes.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "program_node_id",
+            "material_id",
+            "outline_item_key",
+            name="uq_program_node_source_page_range",
+        ),
+        CheckConstraint("page_from > 0", name="page_from_positive"),
+        CheckConstraint("page_to >= page_from", name="page_range_ordered"),
+        Index(
+            "ix_program_node_source_ranges_project_material",
+            "project_id",
+            "material_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    program_node_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    material_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="RESTRICT")
+    )
+    source_name_snapshot: Mapped[str] = mapped_column(String)
+    outline_item_key: Mapped[str] = mapped_column(String(200))
+    page_from: Mapped[int] = mapped_column(Integer)
+    page_to: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class ReferenceAnswer(Base):

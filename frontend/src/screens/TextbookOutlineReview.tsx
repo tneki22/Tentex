@@ -25,18 +25,14 @@ import { Button, ConfirmDialog, Field, IconButton, LoadingState, Select } from "
 import { DocumentStage } from "../components/domain/material-viewer/DocumentStage";
 import { PageNumberInput } from "../components/domain/material-viewer/ViewerToolbar";
 import { buildTree } from "../components/domain/material-viewer/PdfOutline";
+import {
+  outlineItemsWithKeys,
+  type OutlineDraftItem,
+  type OutlineDraftState,
+  type OutlinesByMaterialId,
+} from "../components/domain/program-editor/outlineState";
 
-export interface OutlineDraftState {
-  material_id: string;
-  source: OutlineSource;
-  items: OutlineItem[];
-  source_pages: number[];
-  /** Страница для просмотрщика по умолчанию — см. `OutlineDetailRead.review_pages`. */
-  review_pages: number[];
-  review_needs_check: boolean;
-  edited: boolean;
-  checked_at: string | null;
-}
+export type { OutlineDraftState, OutlinesByMaterialId };
 
 const SOURCE_LABEL: Record<OutlineSource, string> = {
   embedded: "закладки PDF",
@@ -61,8 +57,8 @@ function modelUnavailableReason(settings: AiSettingsRead | null, loaded: boolean
 interface TextbookOutlineReviewProps {
   projectId: string;
   materials: MaterialRead[];
-  value: OutlineDraftState | null;
-  onChange: (next: OutlineDraftState | null) => void;
+  values: OutlinesByMaterialId;
+  onChange: (materialId: string, next: OutlineDraftState | null) => void;
 }
 
 /**
@@ -71,15 +67,16 @@ interface TextbookOutlineReviewProps {
  * происходит — это только визуальная проверка перед шагом 4 (Работа 5 плана
  * правок мастера учебника).
  */
-export function TextbookOutlineReview({ projectId, materials, value, onChange }: TextbookOutlineReviewProps) {
+export function TextbookOutlineReview({ projectId, materials, values, onChange }: TextbookOutlineReviewProps) {
   const candidates = materials.filter((material) => (material.page_count ?? 0) > 0);
   const [materialId, setMaterialId] = useState(
-    () => value?.material_id
+    () => Object.keys(values)[0]
       ?? candidates.find((item) => item.source_role === "main")?.id
       ?? candidates[0]?.id
       ?? "",
   );
   const material = candidates.find((item) => item.id === materialId) ?? null;
+  const value = values[materialId] ?? null;
 
   useEffect(() => {
     // Материалы проекта грузятся асинхронно и на первом кадре ещё пусты:
@@ -98,7 +95,7 @@ export function TextbookOutlineReview({ projectId, materials, value, onChange }:
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false);
   const [aiRunning, setAiRunning] = useState(false);
   const [aiError, setAiError] = useState("");
-  const [history, setHistory] = useState<OutlineItem[][]>([]);
+  const [history, setHistory] = useState<OutlineDraftItem[][]>([]);
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const fetchedFor = useRef<string | null>(null);
 
@@ -113,20 +110,29 @@ export function TextbookOutlineReview({ projectId, materials, value, onChange }:
 
   useEffect(() => {
     if (!materialId) return;
-    if ((value && value.material_id === materialId) || fetchedFor.current === materialId) return;
+    if (values[materialId] || fetchedFor.current === materialId) return;
     fetchedFor.current = materialId;
     setLoading(true);
     setLoadError("");
     getMaterialOutline(projectId, materialId, "auto")
       .then((detail) => {
         if (detail.source === "none") {
-          onChange(null);
+          onChange(materialId, {
+            material_id: materialId,
+            source: "none",
+            items: [],
+            source_pages: [],
+            review_pages: [],
+            review_needs_check: false,
+            edited: false,
+            checked_at: new Date().toISOString(),
+          });
           return;
         }
-        onChange({
+        onChange(materialId, {
           material_id: materialId,
           source: detail.source,
-          items: detail.items,
+          items: outlineItemsWithKeys(materialId, detail.source, detail.items),
           source_pages: detail.source_pages,
           review_pages: detail.review_pages,
           review_needs_check: detail.review_needs_check,
@@ -137,19 +143,19 @@ export function TextbookOutlineReview({ projectId, materials, value, onChange }:
       })
       .catch((caught) => setLoadError(caught instanceof Error ? caught.message : "Не удалось получить оглавление"))
       .finally(() => setLoading(false));
-  }, [projectId, materialId, value, onChange]);
+  }, [projectId, materialId, values, onChange]);
 
   function commit(items: OutlineItem[]) {
     if (!value) return;
     setHistory((current) => [...current, value.items]);
-    onChange({ ...value, items, edited: true });
+    onChange(materialId, { ...value, items: outlineItemsWithKeys(materialId, value.source, items), edited: true });
   }
 
   function undo() {
     if (!value || history.length === 0) return;
     const previous = history[history.length - 1];
     setHistory((current) => current.slice(0, -1));
-    onChange({ ...value, items: previous, edited: true });
+    onChange(materialId, { ...value, items: previous, edited: true });
   }
 
   function renameItem(index: number, title: string) {
@@ -182,14 +188,19 @@ export function TextbookOutlineReview({ projectId, materials, value, onChange }:
   function addItem(afterIndex: number) {
     if (!value) return;
     const anchor = value.items[afterIndex];
-    const draft: OutlineItem = { level: anchor?.level ?? 1, title: "Новый пункт", page: anchor?.page ?? page };
+    const draft: OutlineDraftItem = {
+      outline_item_key: crypto.randomUUID(),
+      level: anchor?.level ?? 1,
+      title: "Новый пункт",
+      page: anchor?.page ?? page,
+    };
     const next = [...value.items];
     next.splice(afterIndex + 1, 0, draft);
     commit(next);
   }
 
   function skipOutline() {
-    onChange({
+    onChange(materialId, {
       material_id: materialId,
       source: "none",
       items: [],
@@ -205,7 +216,7 @@ export function TextbookOutlineReview({ projectId, materials, value, onChange }:
   function retrySearch() {
     fetchedFor.current = null;
     setHistory([]);
-    onChange(null);
+    onChange(materialId, null);
   }
 
   async function runModel() {
@@ -215,10 +226,10 @@ export function TextbookOutlineReview({ projectId, materials, value, onChange }:
     try {
       const result = await runMaterialOutlineModel(projectId, materialId);
       const firstItemPage = result.items[0]?.page;
-      onChange({
+      onChange(materialId, {
         material_id: materialId,
         source: "model",
-        items: result.items,
+        items: outlineItemsWithKeys(materialId, "model", result.items),
         source_pages: [],
         review_pages: firstItemPage ? [firstItemPage] : [],
         review_needs_check: !firstItemPage,

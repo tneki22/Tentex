@@ -22,6 +22,7 @@
 | Глобальная Библиотека | `global-library-material-workspace.md` | `check_library_workspace.py` |
 | Typst-материалы | `typst-materials.md` | `check_typst_material.py` |
 | Оглавление источника (мастер учебника) | `textbook-outline.md` | pytest (`test_material_outline.py`) |
+| Ручная программа учебника и импорт оглавлений | `textbook-program.md` | pytest (`test_textbook_program.py`) |
 | Конспекты | `conspects.md` | pytest |
 | Карточки и сохраняемый сеанс | `cards.md` | pytest, миграции, typecheck/build |
 | Фоновые операции | `background-jobs.md` | pytest |

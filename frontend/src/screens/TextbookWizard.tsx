@@ -1,29 +1,31 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { useNavigate } from "react-router";
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, Copy, Filter, Info, LibraryBig, Pencil, Plus, Search, Trash2, Undo2, UploadCloud, WandSparkles } from "lucide-react";
+import { BookOpen, Info, LibraryBig, Trash2, Undo2, UploadCloud, WandSparkles } from "lucide-react";
 import {
-  createProgramNode,
-  moveProgramNode,
-  removeProgramNode,
-  updateProgramNode,
   type GoalPassportWrite,
   type GoalScope,
   type ModuleKey,
-  type NodeType,
   type ProjectDetail,
   type TargetOutcome,
 } from "../api/projects";
 import type { WizardDraftController } from "../hooks/useWizardDraft";
-import { Button, Card, ContextMenu, Disclosure, Field, IconButton, LoadingState, PageHead, SegmentedTabs, StatusBadge } from "../components/ui";
-import type { ContextMenuItem } from "../components/ui";
-import { LibraryMaterialPickerDialog, QualityBadge, TaskRow } from "../components/domain";
-import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTreeNode } from "./programTree";
+import { Button, Card, Disclosure, Field, IconButton, LoadingState, PageHead, SegmentedTabs, StatusBadge } from "../components/ui";
+import { LibraryMaterialPickerDialog, QualityBadge, TaskRow, TextbookProgramEditor } from "../components/domain";
+import type { TextbookProgramView } from "../components/domain";
+import { buildProgramTree, flattenProgramTree } from "./programTree";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { TextbookSourceCard } from "./TextbookSourceCard";
-import { TextbookOutlineReview, type OutlineDraftState } from "./TextbookOutlineReview";
+import {
+  TextbookOutlineReview,
+} from "./TextbookOutlineReview";
+import {
+  outlineItemsWithKeys,
+  type OutlineDraftState,
+  type OutlinesByMaterialId,
+} from "../components/domain/program-editor/outlineState";
 
-type ProgramView = "tree" | "text" | "questions";
+type ProgramMode = "manual" | "ai";
 
 interface TextbookForm {
   name: string;
@@ -82,15 +84,11 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<TextbookForm>(EMPTY_FORM);
-  const [view, setView] = useState<ProgramView>("tree");
-  const [query, setQuery] = useState("");
-  const [missingOnly, setMissingOnly] = useState(false);
-  const [selectedId, setSelectedId] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingTitle, setEditingTitle] = useState("");
+  const [view, setView] = useState<TextbookProgramView>("tree");
+  const [programMode, setProgramMode] = useState<ProgramMode>("manual");
   const [actionError, setActionError] = useState("");
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const [outlineDraft, setOutlineDraft] = useState<OutlineDraftState | null>(null);
+  const [outlinesByMaterialId, setOutlinesByMaterialId] = useState<OutlinesByMaterialId>({});
   const initializedKey = useRef<string | null>(null);
   const materialInput = useRef<HTMLInputElement>(null);
   const materials = useProjectMaterials(controller.detail?.project.id);
@@ -109,8 +107,15 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
     initializedKey.current = key;
     const goal = detail.goal_passport;
     setStep(detail.draft.current_step);
-    setView((detail.draft.state.program_view as ProgramView) ?? "tree");
-    setOutlineDraft((detail.draft.state.outline as OutlineDraftState | undefined) ?? null);
+    setView((detail.draft.state.program_view as TextbookProgramView) ?? "tree");
+    setProgramMode((detail.draft.state.program_mode as ProgramMode) ?? "manual");
+    const saved = (detail.draft.state.outlines_by_material_id as OutlinesByMaterialId | undefined) ?? {};
+    const legacy = detail.draft.state.outline as OutlineDraftState | undefined;
+    const outlineEntries = Object.keys(saved).length ? saved : legacy ? { [legacy.material_id]: legacy } : {};
+    setOutlinesByMaterialId(Object.fromEntries(Object.entries(outlineEntries).map(([materialId, outline]) => [
+      materialId,
+      { ...outline, items: outlineItemsWithKeys(materialId, outline.source, outline.items) },
+    ])));
     setForm({
       name: detail.project.name ?? "",
       subject: goal?.subject ?? "",
@@ -176,8 +181,9 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
       goal_passport: passport(),
       state: {
         program_view: view,
+        program_mode: programMode,
         selected_node_id: controller.detail?.program.nodes[0]?.id ?? null,
-        outline: outlineDraft,
+        outlines_by_material_id: outlinesByMaterialId,
       },
     };
   }
@@ -189,10 +195,6 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
     tree = buildProgramTree(nodes);
     flat = flattenProgramTree(tree);
   } catch { /* The draft error state remains available instead of crashing the editor. */ }
-  const visibleFlat = flattenProgramTree(filterProgramTree(tree, query)).filter((node) => !missingOnly || node.needs_material);
-  const selected = flat.find((node) => node.id === selectedId) ?? flat[0] ?? null;
-  const selectedSiblings = selected ? flat.filter((node) => node.parent_id === selected.parent_id) : [];
-  const selectedIndex = selected ? selectedSiblings.findIndex((node) => node.id === selected.id) : -1;
   const sectionCount = nodes.filter((node) => node.node_type === "section").length;
   const topicCount = nodes.filter((node) => node.node_type === "topic").length;
   const subpointCount = nodes.filter((node) => node.node_type === "subpoint").length;
@@ -201,17 +203,21 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   const totalSizeBytes = materials.materials.reduce((sum, material) => sum + material.size_bytes, 0);
 
   useEffect(() => {
-    if (selected && selected.id !== selectedId) setSelectedId(selected.id);
-  }, [selected, selectedId]);
-
-  useEffect(() => {
     const key = controller.detail ? `${controller.detail.project.id}:${controller.hydrationVersion}` : null;
     if (!controller.detail || initializedKey.current !== key || controller.conflict) return;
     const timer = window.setTimeout(() => {
       void controller.queueSave(command(step)).catch(() => undefined);
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [form, step, view, outlineDraft]);
+  }, [form, step, view, programMode, outlinesByMaterialId]);
+
+  const updateOutline = useCallback((materialId: string, next: OutlineDraftState | null) => {
+    setOutlinesByMaterialId((current) => {
+      const updated = { ...current };
+      if (next) updated[materialId] = next; else delete updated[materialId];
+      return updated;
+    });
+  }, []);
 
   async function go(nextStep: number) {
     setActionError("");
@@ -225,162 +231,6 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
 
   async function addMaterial(file: File) {
     await materials.upload(file, "main", ["study_source"]);
-  }
-
-  async function createNode(nodeType: NodeType, parentId: string | null, position: number | null = null) {
-    if (!controller.detail) return;
-    setActionError("");
-    try {
-      const result = await controller.enqueueProgramCommand((current) => createProgramNode(current.project.id, {
-        expected_program_revision: current.program.revision,
-        parent_id: parentId,
-        position,
-        node_type: nodeType,
-        exam_kind: null,
-        title: nodeType === "section" ? "Новый раздел" : nodeType === "topic" ? "Новая тема" : "Новый подпункт",
-        goal_role: "target",
-      }));
-      if (result.changed_node) {
-        setSelectedId(result.changed_node.id);
-        setEditingId(result.changed_node.id);
-        setEditingTitle(result.changed_node.title);
-      }
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Не удалось добавить узел");
-    }
-  }
-
-  async function renameNode(node: ProgramTreeNode) {
-    if (!editingTitle.trim() || editingTitle.trim() === node.title) {
-      setEditingId(null);
-      return;
-    }
-    setActionError("");
-    try {
-      await controller.enqueueProgramCommand((current) => updateProgramNode(current.project.id, node.id, {
-        expected_program_revision: current.program.revision,
-        title: editingTitle.trim(),
-      }));
-      setEditingId(null);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Не удалось переименовать узел");
-    }
-  }
-
-  async function moveNode(node: ProgramTreeNode, position: number, parentId = node.parent_id) {
-    setActionError("");
-    try {
-      await controller.enqueueProgramCommand((current) => moveProgramNode(current.project.id, node.id, {
-        expected_program_revision: current.program.revision,
-        parent_id: parentId,
-        position,
-      }));
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Не удалось переместить узел");
-    }
-  }
-
-  async function removeNode(node: ProgramTreeNode) {
-    setActionError("");
-    try {
-      await controller.enqueueProgramCommand((current) => removeProgramNode(current.project.id, node.id, current.program.revision));
-      setSelectedId("");
-      setEditingId(null);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Не удалось убрать узел из программы");
-    }
-  }
-
-  function startRename(node: ProgramTreeNode) {
-    setSelectedId(node.id);
-    setEditingId(node.id);
-    setEditingTitle(node.title);
-  }
-
-  async function changeNodeType(node: ProgramTreeNode, nodeType: NodeType) {
-    if (node.node_type === nodeType) return;
-    setActionError("");
-    try {
-      await controller.enqueueProgramCommand((current) => updateProgramNode(current.project.id, node.id, {
-        expected_program_revision: current.program.revision,
-        node_type: nodeType,
-        exam_kind: null,
-      }));
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Не удалось изменить тип узла");
-    }
-  }
-
-  async function duplicateNode(node: ProgramTreeNode) {
-    const siblings = flat.filter((item) => item.parent_id === node.parent_id);
-    const index = siblings.findIndex((item) => item.id === node.id);
-    setActionError("");
-    try {
-      const result = await controller.enqueueProgramCommand((current) => createProgramNode(current.project.id, {
-        expected_program_revision: current.program.revision,
-        parent_id: node.parent_id,
-        position: index + 1,
-        node_type: node.node_type,
-        exam_kind: null,
-        title: `${node.title} — копия`,
-        section_purpose: node.section_purpose,
-        goal_role: node.goal_role,
-        target_level: node.target_level,
-        needs_material: node.needs_material,
-      }));
-      if (result.changed_node) setSelectedId(result.changed_node.id);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Не удалось продублировать узел");
-    }
-  }
-
-  function subtreeHeight(nodeId: string): number {
-    const children = flat.filter((node) => node.parent_id === nodeId);
-    return children.length ? 1 + Math.max(...children.map((child) => subtreeHeight(child.id))) : 1;
-  }
-
-  const previousSibling = selectedIndex > 0 ? selectedSiblings[selectedIndex - 1] : null;
-  const canIndent = Boolean(selected && previousSibling && previousSibling.depth + subtreeHeight(selected.id) <= 4);
-  const selectedParent = selected?.parent_id ? flat.find((node) => node.id === selected.parent_id) ?? null : null;
-
-  function childType(node: ProgramTreeNode): NodeType {
-    return node.node_type === "section" ? "topic" : "subpoint";
-  }
-
-  function nodeMenuItems(node: ProgramTreeNode): ContextMenuItem[] {
-    const siblings = flat.filter((item) => item.parent_id === node.parent_id);
-    const index = siblings.findIndex((item) => item.id === node.id);
-    const previous = index > 0 ? siblings[index - 1] : null;
-    const parent = node.parent_id ? flat.find((item) => item.id === node.parent_id) ?? null : null;
-    const canNest = Boolean(previous && previous.depth + subtreeHeight(node.id) <= 4);
-    return [
-      {
-        label: "Добавить внутрь",
-        icon: <Plus size={14} />,
-        items: (["section", "topic", "subpoint"] as NodeType[]).map((nodeType) => ({
-          label: nodeType === "section" ? "Раздел" : nodeType === "topic" ? "Тему" : "Подпункт",
-          disabled: busy || node.depth >= 4,
-          onSelect: () => void createNode(nodeType, node.id),
-        })),
-      },
-      { label: "Добавить перед", icon: <ArrowUp size={14} />, disabled: busy, onSelect: () => void createNode(node.node_type, node.parent_id, index) },
-      { label: "Добавить после", icon: <ArrowDown size={14} />, disabled: busy, onSelect: () => void createNode(node.node_type, node.parent_id, index + 1) },
-      { label: "Переименовать", icon: <Pencil size={14} />, disabled: busy, onSelect: () => startRename(node) },
-      { label: "Продублировать", icon: <Copy size={14} />, disabled: busy, onSelect: () => void duplicateNode(node) },
-      {
-        label: "Тип узла",
-        items: (["section", "topic", "subpoint"] as NodeType[]).map((nodeType) => ({
-          label: nodeType === "section" ? "Раздел" : nodeType === "topic" ? "Тема" : "Подпункт",
-          disabled: busy || node.node_type === nodeType,
-          onSelect: () => void changeNodeType(node, nodeType),
-        })),
-      },
-      { label: "Поднять", icon: <ArrowUp size={14} />, disabled: busy || index <= 0, onSelect: () => void moveNode(node, index - 1) },
-      { label: "Опустить", icon: <ArrowDown size={14} />, disabled: busy || index < 0 || index === siblings.length - 1, onSelect: () => void moveNode(node, index + 1) },
-      { label: "Уменьшить вложенность", icon: <ArrowLeft size={14} />, disabled: busy || !parent, onSelect: () => parent && void moveNode(node, parent.sort_order + 1, parent.parent_id) },
-      { label: "Увеличить вложенность", icon: <ArrowRight size={14} />, disabled: busy || !canNest || !previous, onSelect: () => previous && void moveNode(node, previous.children.length, previous.id) },
-      { label: "Убрать из программы", icon: <Trash2 size={14} />, destructive: true, disabled: busy, onSelect: () => void removeNode(node) },
-    ];
   }
 
   async function activate() {
@@ -526,8 +376,8 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
             <TextbookOutlineReview
               projectId={controller.detail.project.id}
               materials={materials.materials}
-              value={outlineDraft}
-              onChange={setOutlineDraft}
+              values={outlinesByMaterialId}
+              onChange={updateOutline}
             />
           )}
 
@@ -537,77 +387,27 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
 
       {step === 4 && (
         <section className="textbook-builder">
-          <header className="textbook-builder-head">
-            <Button variant="ghost" onClick={() => void go(3)}><ArrowLeft size={15} />К проверке</Button>
-            <span><b>{form.name || form.subject || "Учебниковый черновик"}</b><small>Изменения сохраняются автоматически</small></span>
-            <StatusBadge>Ручной режим</StatusBadge>
-            <Button variant="ghost" disabled={!controller.detail?.latest_undoable_action || busy} onClick={() => void controller.undo()}><Undo2 size={15} />Отменить</Button>
-            <Button disabled={busy} onClick={() => void go(5)}>{nodes.length === 0 ? "Продолжить без программы" : "Утвердить программу"}</Button>
-          </header>
-
-            <div className="textbook-program-panel">
-              <div className="textbook-program-toolbar">
-                <SegmentedTabs label="Представление программы" value={view} onChange={setView} tabs={[{ value: "tree", label: "Дерево" }, { value: "text", label: "Текст" }, { value: "questions", label: "Вопросы" }]} />
-                <label className="textbook-search"><Search size={15} aria-hidden="true" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти тему" aria-label="Найти тему" /></label>
-                <Button variant="ghost" aria-pressed={missingOnly} onClick={() => setMissingOnly((current) => !current)}><Filter size={15} />Нужен материал</Button>
-              </div>
-
-              <div className="textbook-manual-toolbar" aria-label="Ручные действия с узлом программы">
-                <div className="textbook-add-actions">
-                  <Button disabled={busy} onClick={() => void createNode("section", null)}><Plus size={15} />Добавить раздел</Button>
-                  <Button variant="secondary" disabled={busy || !selected || selected.depth >= 4} onClick={() => selected && void createNode(childType(selected), selected.id)}><Plus size={15} />{selected ? selected.node_type === "section" ? "Добавить тему" : "Добавить подпункт" : "Добавить внутрь"}</Button>
-                  <Button variant="ghost" disabled={busy || !selected} onClick={() => selected && void createNode(selected.node_type, selected.parent_id, selectedIndex + 1)}>Добавить рядом</Button>
-                </div>
-                <span>Выбрано: <b>{selected?.title ?? "узел не выбран"}</b></span>
-                {selected && <label className="textbook-selected-type"><span>Тип</span><select value={selected.node_type} disabled={busy} onChange={(event) => void changeNodeType(selected, event.target.value as NodeType)}><option value="section">Раздел</option><option value="topic">Тема</option><option value="subpoint">Подпункт</option></select></label>}
-                <div className="textbook-node-actions">
-                  <IconButton label="Поднять узел" disabled={busy || selectedIndex <= 0} onClick={() => selected && void moveNode(selected, selectedIndex - 1)}><ArrowUp size={15} /></IconButton>
-                  <IconButton label="Опустить узел" disabled={busy || selectedIndex < 0 || selectedIndex === selectedSiblings.length - 1} onClick={() => selected && void moveNode(selected, selectedIndex + 1)}><ArrowDown size={15} /></IconButton>
-                  <IconButton label="Уменьшить вложенность" disabled={busy || !selectedParent} onClick={() => selected && selectedParent && void moveNode(selected, selectedParent.sort_order + 1, selectedParent.parent_id)}><ArrowLeft size={15} /></IconButton>
-                  <IconButton label="Увеличить вложенность" disabled={busy || !canIndent || !previousSibling} onClick={() => selected && previousSibling && void moveNode(selected, previousSibling.children.length, previousSibling.id)}><ArrowRight size={15} /></IconButton>
-                  <IconButton label="Редактировать формулировку" disabled={busy || !selected} onClick={() => selected && startRename(selected)}><Pencil size={15} /></IconButton>
-                  <IconButton label="Продублировать узел" disabled={busy || !selected} onClick={() => selected && void duplicateNode(selected)}><Copy size={15} /></IconButton>
-                  <IconButton label="Убрать узел из программы" disabled={busy || !selected} onClick={() => selected && void removeNode(selected)}><Trash2 size={15} /></IconButton>
-                </div>
-              </div>
-
-              <div className="textbook-program-content" role={view === "tree" ? "tree" : undefined} aria-label={view === "tree" ? "Дерево программы" : undefined}>
-                {view === "tree" && visibleFlat.map((node) => (
-                  <ContextMenu
-                    key={node.id}
-                    label={`Действия с «${node.title}»`}
-                    items={nodeMenuItems(node)}
-                    trigger={
-                      <div
-                        className={`textbook-program-row ${selected?.id === node.id ? "is-selected" : ""}`.trim()}
-                        style={{ paddingInlineStart: `calc(var(--space-4) + ${node.depth - 1} * var(--space-6))` }}
-                        role="treeitem"
-                        aria-level={node.depth}
-                        aria-selected={selected?.id === node.id}
-                        tabIndex={selected?.id === node.id ? 0 : -1}
-                        onClick={() => setSelectedId(node.id)}
-                        onContextMenu={() => setSelectedId(node.id)}
-                        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedId(node.id); } }}
-                      >
-                        <span className="textbook-program-number">{node.number}</span>
-                        <span className="textbook-program-copy">
-                          {editingId === node.id
-                            ? <input autoFocus value={editingTitle} onClick={(event) => event.stopPropagation()} onChange={(event) => setEditingTitle(event.target.value)} onBlur={() => void renameNode(node)} onKeyDown={(event) => { if (event.key === "Enter") void renameNode(node); if (event.key === "Escape") setEditingId(null); }} aria-label={`Формулировка «${node.title}»`} />
-                            : <b>{node.title}</b>}
-                          <small>{node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}</small>
-                        </span>
-                        <span className="textbook-program-source"><StatusBadge>{node.needs_material ? "Материал нужен" : "Материал не добавлен"}</StatusBadge><small>Правой кнопкой — действия с узлом</small></span>
-                      </div>
-                    }
-                  />
-                ))}
-                {view === "tree" && visibleFlat.length === 0 && (missingOnly
-                  ? <div className="textbook-editor-empty"><h2>Нет узлов с такой отметкой</h2><p>Отключите фильтр, чтобы вернуться ко всей программе.</p><Button variant="secondary" onClick={() => setMissingOnly(false)}>Показать всю программу</Button></div>
-                  : <div className="textbook-editor-empty"><BookOpen size={28} aria-hidden="true" /><h2>Составьте программу вручную</h2><p>{outlineDraft && outlineDraft.items.length > 0 ? "Оглавление проверено на шаге 3. Автоматическая сборка программы из него пока не реализована — соберите программу вручную." : "Начните с раздела и добавляйте в него темы и подпункты. До четырёх уровней вложенности."}</p><div><Button disabled={busy} onClick={() => void createNode("section", null)}><Plus size={15} />Добавить первый раздел</Button><Button variant="secondary" disabled={busy} onClick={() => void createNode("topic", null)}><Plus size={15} />Добавить тему без раздела</Button></div></div>)}
-                {view === "text" && <article className="textbook-text-view"><h2>{form.name || form.subject || "Программа"}</h2>{visibleFlat.map((node) => <p key={node.id}><b>{node.number}. {node.title}</b> — {node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}.</p>)}</article>}
-                {view === "questions" && <ol className="textbook-question-view">{visibleFlat.filter((node) => node.node_type !== "section").map((node) => <li key={node.id}>Как объяснить: «{node.title}»?</li>)}</ol>}
-              </div>
-            </div>
+          {controller.detail && <TextbookProgramEditor
+            projectId={controller.detail.project.id}
+            projectName={form.name || form.subject || "Программа"}
+            program={controller.detail.program}
+            latestUndoableAction={controller.detail.latest_undoable_action}
+            materials={materials.materials}
+            outlinesByMaterialId={outlinesByMaterialId}
+            wizard
+            busy={busy}
+            view={view}
+            onViewChange={setView}
+            execute={(request) => controller.enqueueProgramCommand((current) => request(current.program.revision))}
+            onUndo={async () => { await controller.undo(); }}
+            renderHeader={(actions) => <header className="textbook-builder-head">
+              <Button variant="ghost" disabled={!actions.canUndo || actions.busy} onClick={() => void actions.undo()}><Undo2 size={15} />Отменить</Button>
+              <SegmentedTabs label="Режим составления программы" value={programMode} onChange={setProgramMode} tabs={[{ value: "manual", label: "Вручную" }, { value: "ai", label: "С ИИ", disabled: true, tooltip: "ИИ-режим добавляется во второй части" }]} />
+              <Button variant="secondary" disabled={actions.busy} onClick={actions.openImport}>Импортировать программу из оглавления</Button>
+              <Button variant="ghost" disabled={actions.busy || !actions.hasNodes} onClick={actions.openRemoveAll}><Trash2 size={15} />Удалить все</Button>
+              <Button className="textbook-builder-confirm" disabled={actions.busy} onClick={() => void go(5)}>{actions.hasNodes ? "Утвердить программу" : "Продолжить без программы"}</Button>
+            </header>}
+          />}
         </section>
       )}
 

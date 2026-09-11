@@ -22,6 +22,7 @@ from app.models import (
     ModuleKey,
     NodeType,
     OriginKind,
+    ProgramBasisKind,
     ProjectStatus,
     ReferenceAnswerMatchMethod,
     ReferenceAnswerOrigin,
@@ -275,6 +276,14 @@ class GoalPassportRead(GoalPassportWrite):
     updated_at: datetime
 
 
+class ProgramNodeSourcePageRangeRead(ApiModel):
+    material_id: UUID
+    source_name_snapshot: str
+    outline_item_key: str
+    page_from: int
+    page_to: int
+
+
 class ProgramNodeRead(ApiModel):
     id: UUID
     project_id: UUID
@@ -290,10 +299,32 @@ class ProgramNodeRead(ApiModel):
     needs_material: bool
     is_archived: bool
     origin_kind: OriginKind
+    basis_kind: ProgramBasisKind
     origin_note: str | None
     origin_material_id: UUID | None
+    source_page_ranges: list[ProgramNodeSourcePageRangeRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class ProgramOutlineItemWrite(ApiModel):
+    outline_item_key: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+    ]
+    level: int = Field(ge=1, le=4)
+    title: NonBlank
+    page: int = Field(ge=1)
+    selected: bool = True
+
+
+class ProgramOutlineSourceWrite(ApiModel):
+    material_id: UUID
+    items: list[ProgramOutlineItemWrite] = Field(min_length=1, max_length=2_000)
+
+
+class ProgramOutlinesImportWrite(ApiModel):
+    expected_program_revision: int = Field(ge=0)
+    sources: list[ProgramOutlineSourceWrite] = Field(min_length=1, max_length=50)
 
 
 class ProgramState(ApiModel):

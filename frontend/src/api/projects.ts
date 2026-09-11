@@ -112,8 +112,16 @@ export interface ProgramNodeRead {
   needs_material: boolean;
   is_archived: boolean;
   origin_kind: "manual" | "import" | "outline" | "pass1" | "catalog" | "model";
+  basis_kind: "outline" | "custom";
   origin_note: string | null;
   origin_material_id: string | null;
+  source_page_ranges: Array<{
+    material_id: string;
+    source_name_snapshot: string;
+    outline_item_key: string;
+    page_from: number;
+    page_to: number;
+  }>;
   created_at: string;
   updated_at: string;
 }
@@ -715,6 +723,32 @@ export const removeProgramNode = (projectId: string, nodeId: string, revision: n
 
 export const restoreProgramNode = (projectId: string, nodeId: string, revision: number) =>
   revisionCommand("restore", projectId, nodeId, revision);
+
+export interface ProgramOutlineImportItem {
+  outline_item_key: string;
+  level: number;
+  title: string;
+  page: number;
+  selected: boolean;
+}
+
+export const importProgramOutlines = (
+  projectId: string,
+  command: ProgramCommandBase & {
+    sources: Array<{ material_id: string; items: ProgramOutlineImportItem[] }>;
+  },
+): Promise<ProgramChangeResult> => request(`${projectPath(projectId)}/program/import-outlines`, {
+  method: "POST",
+  body: JSON.stringify(command),
+});
+
+export const removeAllProgramNodes = (
+  projectId: string,
+  expectedProgramRevision: number,
+): Promise<ProgramChangeResult> => request(`${projectPath(projectId)}/program/remove-all`, {
+  method: "POST",
+  body: JSON.stringify({ expected_program_revision: expectedProgramRevision }),
+});
 
 export const undoProjectAction = (
   projectId: string,
