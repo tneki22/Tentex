@@ -48,6 +48,7 @@ export type {
   TextbookProgramEditorActions,
   TextbookProgramView,
 } from "./program-editor/TextbookProgramEditor";
+export { ProgramTreePreview } from "./program-chat/ProgramTreePreview";
 export { TopicStatusBadge, TOPIC_STATUSES, topicStatusLabel } from "./TopicStatusBadge";
 export type { TopicStatus } from "./TopicStatusBadge";
 export { PurposeDot, purposeLabel, purposeOf, type Purpose } from "./PurposeDot";

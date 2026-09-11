@@ -90,7 +90,10 @@ TOOL_SPECS: dict[str, ToolSpec] = {
             key="search_project_materials",
             title="Найти в материалах",
             description="Лексический поиск по уже обработанным материалам проекта (BM25).",
-            modes=frozenset({"exam"}),
+            # "program" зарезервирован на будущее (сценарий "по моей цели"
+            # сейчас оркеструет поиск сам, не через этот Tool — см.
+            # app/projects/program_chat.py::run_build).
+            modes=frozenset({"exam", "program"}),
             effect="read",
             confirmation="never",
             input_model=MaterialSearchInput,

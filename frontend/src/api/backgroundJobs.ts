@@ -11,7 +11,8 @@ export type BackgroundJobKind =
   | "ai_preparation"
   | "ai_cleanup"
   | "link_answers"
-  | "ai_answer_sections";
+  | "ai_answer_sections"
+  | "ai_program_build";
 
 export type BackgroundJobState =
   | "queued"

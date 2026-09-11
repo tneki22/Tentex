@@ -3,6 +3,7 @@ import type { AttemptOutcome, ChatMessageRead } from "../../../api/chat";
 import { AnswerFormCard } from "./AnswerFormCard";
 import { Markdown } from "./Markdown";
 import { parsePayload } from "./payload";
+import { ProgramDiffCard } from "./ProgramDiffCard";
 import { ToolRunCard } from "./ToolRunCard";
 import { VerdictCard } from "./VerdictCard";
 
@@ -12,12 +13,18 @@ interface TypedMessageProps {
   answerText: string;
   needsCheck: boolean;
   isStreaming: boolean;
-  onAnswerAgain: () => void;
-  onCheckAgain: (attemptId: string) => Promise<void>;
-  onSelfAssessment: (
+  /** Экзаменационный чат — форма ответа и вердикт. Program-чат их не показывает. */
+  onAnswerAgain?: () => void;
+  onCheckAgain?: (attemptId: string) => Promise<void>;
+  onSelfAssessment?: (
     attemptId: string,
     outcome: Exclude<AttemptOutcome, "unscored">,
   ) => Promise<void>;
+  /** Чат построения программы — карточка предложения. */
+  onApplyProposal?: (messageId: string, selected: number[]) => Promise<void>;
+  onRejectProposal?: (messageId: string) => Promise<void>;
+  proposalBusy?: boolean;
+  nodeTitles?: Record<string, string>;
   headingRef: (node: HTMLHeadingElement | null) => void;
 }
 
@@ -28,18 +35,20 @@ interface TypedMessageProps {
  */
 export function TypedMessage({
   projectId, message, answerText, needsCheck, isStreaming,
-  onAnswerAgain, onCheckAgain, onSelfAssessment, headingRef,
+  onAnswerAgain, onCheckAgain, onSelfAssessment,
+  onApplyProposal, onRejectProposal, proposalBusy = false, nodeTitles,
+  headingRef,
 }: TypedMessageProps) {
   const payload = parsePayload(message);
 
-  if (payload.kind === "answer_form") {
+  if (payload.kind === "answer_form" && onAnswerAgain) {
     return (
       <AnswerFormCard
         mode="submitted"
         payload={payload.data}
         createdAt={message.created_at}
         onAnswerAgain={onAnswerAgain}
-        onCheckAgain={needsCheck && message.attempt_id
+        onCheckAgain={needsCheck && message.attempt_id && onCheckAgain
           ? () => onCheckAgain(message.attempt_id as string)
           : undefined}
         headingRef={headingRef}
@@ -63,6 +72,20 @@ export function TypedMessage({
     return <ToolRunCard projectId={projectId} payload={payload.data} headingRef={headingRef} />;
   }
 
+  if (payload.kind === "program_diff") {
+    return (
+      <ProgramDiffCard
+        summary={message.text}
+        diff={payload.data}
+        busy={proposalBusy}
+        onApply={onApplyProposal ? (selected) => onApplyProposal(message.id, selected) : undefined}
+        onReject={onRejectProposal ? () => onRejectProposal(message.id) : undefined}
+        nodeTitles={nodeTitles}
+        headingRef={headingRef}
+      />
+    );
+  }
+
   if (message.role === "system") {
     return <p className="chat-system-note">{message.text}</p>;
   }
@@ -78,7 +101,9 @@ export function TypedMessage({
 
   return (
     <div className={`chat-bubble is-${message.role}`}>
-      {message.role === "examiner" ? <Markdown text={message.text} /> : <p>{message.text}</p>}
+      {message.role === "examiner" || message.role === "assistant"
+        ? <Markdown text={message.text} />
+        : <p>{message.text}</p>}
       {isStreaming && message.stream_state === "complete" && (
         <span className="chat-typing" aria-hidden="true" />
       )}

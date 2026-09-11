@@ -67,9 +67,15 @@ interface TextbookProgramEditorProps {
   ) => Promise<ProgramChangeResult>;
   onUndo: () => Promise<void>;
   renderHeader?: (actions: TextbookProgramEditorActions) => ReactNode;
+  /** «Вручную» — дерево/текст/вопросы и CRUD ниже; «С ИИ» — контентная область
+   * заменяется на `aiContent` (чат с дифами), тулбар (Отменить/переключатель
+   * режима/Импорт/Удалить все) и диалоги импорта/удаления остаются общими. */
+  mode?: "manual" | "ai";
+  aiContent?: ReactNode;
 }
 
-/** Общая ручная поверхность учебниковой программы для мастера и активного проекта. */
+/** Общая поверхность учебниковой программы для мастера и активного проекта:
+ * режим «Вручную» — ручной редактор ниже, «С ИИ» — `aiContent` вызывающей стороны. */
 export function TextbookProgramEditor({
   projectId,
   projectName,
@@ -84,6 +90,8 @@ export function TextbookProgramEditor({
   execute,
   onUndo,
   renderHeader,
+  mode = "manual",
+  aiContent,
 }: TextbookProgramEditorProps) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState("");
@@ -287,47 +295,53 @@ export function TextbookProgramEditor({
       <div className="textbook-program-error-slot">
         {actionError && <p className="inline-error" role="alert">{actionError}</p>}
       </div>
-      <div className="textbook-program-toolbar">
-        <SegmentedTabs label="Представление программы" value={view} onChange={onViewChange} tabs={[{ value: "tree", label: "Дерево" }, { value: "text", label: "Текст" }, { value: "questions", label: "Вопросы" }]} />
-        <label className="textbook-search"><Search size={15} aria-hidden="true" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти тему" aria-label="Найти тему" /></label>
-      </div>
+      {mode === "ai" ? (
+        <div className="textbook-program-ai-content">{aiContent}</div>
+      ) : (
+        <>
+          <div className="textbook-program-toolbar">
+            <SegmentedTabs label="Представление программы" value={view} onChange={onViewChange} tabs={[{ value: "tree", label: "Дерево" }, { value: "text", label: "Текст" }, { value: "questions", label: "Вопросы" }]} />
+            <label className="textbook-search"><Search size={15} aria-hidden="true" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти тему" aria-label="Найти тему" /></label>
+          </div>
 
-      <div className="textbook-manual-toolbar" aria-label="Ручные действия с узлом программы">
-        <div className="textbook-add-actions">
-          <Button disabled={busy} onClick={() => void createNode("section", null)}><Plus size={15} />Добавить раздел</Button>
-          <Button variant="secondary" disabled={busy || !selected || selected.depth >= 4} onClick={() => selected && void createNode(childType(selected), selected.id)}><Plus size={15} />{selected ? selected.node_type === "section" ? "Добавить тему" : "Добавить подпункт" : "Добавить внутрь"}</Button>
-          <Button variant="ghost" disabled={busy || !selected} onClick={() => selected && void createNode(selected.node_type, selected.parent_id, selectedIndex + 1)}>Добавить рядом</Button>
-        </div>
-        <span>Выбрано: <b>{selected?.title ?? "узел не выбран"}</b></span>
-        {selected && <label className="textbook-selected-type"><span>Тип</span><select value={selected.node_type} disabled={busy} onChange={(event) => void changeNodeType(selected, event.target.value as NodeType)}><option value="section">Раздел</option><option value="topic">Тема</option><option value="subpoint">Подпункт</option></select></label>}
-        <div className="textbook-node-actions">
-          <IconButton label="Поднять узел" disabled={busy || selectedIndex <= 0} onClick={() => selected && void moveNode(selected, selectedIndex - 1)}><ArrowUp size={15} /></IconButton>
-          <IconButton label="Опустить узел" disabled={busy || selectedIndex < 0 || selectedIndex === siblings.length - 1} onClick={() => selected && void moveNode(selected, selectedIndex + 1)}><ArrowDown size={15} /></IconButton>
-          <IconButton label="Уменьшить вложенность" disabled={busy || !selectedParent} onClick={() => selected && selectedParent && void moveNode(selected, selectedParent.sort_order + 1, selectedParent.parent_id)}><ArrowLeft size={15} /></IconButton>
-          <IconButton label="Увеличить вложенность" disabled={busy || !canIndent || !previousSibling} onClick={() => selected && previousSibling && void moveNode(selected, previousSibling.children.length, previousSibling.id)}><ArrowRight size={15} /></IconButton>
-          <IconButton label="Редактировать формулировку" disabled={busy || !selected} onClick={() => selected && startRename(selected)}><Pencil size={15} /></IconButton>
-          <IconButton label="Продублировать узел" disabled={busy || !selected} onClick={() => selected && void duplicateNode(selected)}><Copy size={15} /></IconButton>
-          <IconButton label="Убрать узел из программы" disabled={busy || !selected} onClick={() => selected && void run((revision) => removeProgramNode(projectId, selected.id, revision))}><Trash2 size={15} /></IconButton>
-        </div>
-      </div>
+          <div className="textbook-manual-toolbar" aria-label="Ручные действия с узлом программы">
+            <div className="textbook-add-actions">
+              <Button disabled={busy} onClick={() => void createNode("section", null)}><Plus size={15} />Добавить раздел</Button>
+              <Button variant="secondary" disabled={busy || !selected || selected.depth >= 4} onClick={() => selected && void createNode(childType(selected), selected.id)}><Plus size={15} />{selected ? selected.node_type === "section" ? "Добавить тему" : "Добавить подпункт" : "Добавить внутрь"}</Button>
+              <Button variant="ghost" disabled={busy || !selected} onClick={() => selected && void createNode(selected.node_type, selected.parent_id, selectedIndex + 1)}>Добавить рядом</Button>
+            </div>
+            <span>Выбрано: <b>{selected?.title ?? "узел не выбран"}</b></span>
+            {selected && <label className="textbook-selected-type"><span>Тип</span><select value={selected.node_type} disabled={busy} onChange={(event) => void changeNodeType(selected, event.target.value as NodeType)}><option value="section">Раздел</option><option value="topic">Тема</option><option value="subpoint">Подпункт</option></select></label>}
+            <div className="textbook-node-actions">
+              <IconButton label="Поднять узел" disabled={busy || selectedIndex <= 0} onClick={() => selected && void moveNode(selected, selectedIndex - 1)}><ArrowUp size={15} /></IconButton>
+              <IconButton label="Опустить узел" disabled={busy || selectedIndex < 0 || selectedIndex === siblings.length - 1} onClick={() => selected && void moveNode(selected, selectedIndex + 1)}><ArrowDown size={15} /></IconButton>
+              <IconButton label="Уменьшить вложенность" disabled={busy || !selectedParent} onClick={() => selected && selectedParent && void moveNode(selected, selectedParent.sort_order + 1, selectedParent.parent_id)}><ArrowLeft size={15} /></IconButton>
+              <IconButton label="Увеличить вложенность" disabled={busy || !canIndent || !previousSibling} onClick={() => selected && previousSibling && void moveNode(selected, previousSibling.children.length, previousSibling.id)}><ArrowRight size={15} /></IconButton>
+              <IconButton label="Редактировать формулировку" disabled={busy || !selected} onClick={() => selected && startRename(selected)}><Pencil size={15} /></IconButton>
+              <IconButton label="Продублировать узел" disabled={busy || !selected} onClick={() => selected && void duplicateNode(selected)}><Copy size={15} /></IconButton>
+              <IconButton label="Убрать узел из программы" disabled={busy || !selected} onClick={() => selected && void run((revision) => removeProgramNode(projectId, selected.id, revision))}><Trash2 size={15} /></IconButton>
+            </div>
+          </div>
 
-      <div className="textbook-program-content" role={view === "tree" ? "tree" : undefined} aria-label={view === "tree" ? "Дерево программы" : undefined}>
-        {view === "tree" && visibleFlat.map((node) => (
-          <ContextMenu key={node.id} label={`Действия с «${node.title}»`} items={nodeMenuItems(node)} trigger={renderTreeRow(node, {
-            selected: selected?.id === node.id,
-            editing: editingId === node.id,
-            editingTitle,
-            onSelect: setSelectedId,
-            onStartRename: startRename,
-            onEditingTitle: setEditingTitle,
-            onRename: renameNode,
-            onCancelRename: () => setEditingId(null),
-          })} />
-        ))}
-        {view === "tree" && visibleFlat.length === 0 && <div className="textbook-editor-empty"><BookOpen size={28} aria-hidden="true" /><h2>{query ? "Ничего не найдено" : "Составьте программу"}</h2><p>{query ? "Измените запрос, чтобы увидеть остальные узлы." : "Добавьте раздел вручную или импортируйте готовое оглавление. До четырёх уровней вложенности."}</p><div>{query ? <Button variant="secondary" onClick={() => setQuery("")}>Очистить поиск</Button> : <><Button disabled={busy} onClick={() => void createNode("section", null)}><Plus size={15} />Добавить первый раздел</Button><Button variant="secondary" disabled={busy} onClick={() => setImportOpen(true)}>Импортировать оглавление</Button></>}</div></div>}
-        {view === "text" && <article className="textbook-text-view"><h2>{projectName || "Программа"}</h2>{visibleFlat.map((node) => <p key={node.id}><b>{node.number}. {node.title}</b> — {node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}.</p>)}</article>}
-        {view === "questions" && <ol className="textbook-question-view">{visibleFlat.filter((node) => node.node_type !== "section").map((node) => <li key={node.id}>Как объяснить: «{node.title}»?</li>)}</ol>}
-      </div>
+          <div className="textbook-program-content" role={view === "tree" ? "tree" : undefined} aria-label={view === "tree" ? "Дерево программы" : undefined}>
+            {view === "tree" && visibleFlat.map((node) => (
+              <ContextMenu key={node.id} label={`Действия с «${node.title}»`} items={nodeMenuItems(node)} trigger={renderTreeRow(node, {
+                selected: selected?.id === node.id,
+                editing: editingId === node.id,
+                editingTitle,
+                onSelect: setSelectedId,
+                onStartRename: startRename,
+                onEditingTitle: setEditingTitle,
+                onRename: renameNode,
+                onCancelRename: () => setEditingId(null),
+              })} />
+            ))}
+            {view === "tree" && visibleFlat.length === 0 && <div className="textbook-editor-empty"><BookOpen size={28} aria-hidden="true" /><h2>{query ? "Ничего не найдено" : "Составьте программу"}</h2><p>{query ? "Измените запрос, чтобы увидеть остальные узлы." : "Добавьте раздел вручную или импортируйте готовое оглавление. До четырёх уровней вложенности."}</p><div>{query ? <Button variant="secondary" onClick={() => setQuery("")}>Очистить поиск</Button> : <><Button disabled={busy} onClick={() => void createNode("section", null)}><Plus size={15} />Добавить первый раздел</Button><Button variant="secondary" disabled={busy} onClick={() => setImportOpen(true)}>Импортировать оглавление</Button></>}</div></div>}
+            {view === "text" && <article className="textbook-text-view"><h2>{projectName || "Программа"}</h2>{visibleFlat.map((node) => <p key={node.id}><b>{node.number}. {node.title}</b> — {node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}.</p>)}</article>}
+            {view === "questions" && <ol className="textbook-question-view">{visibleFlat.filter((node) => node.node_type !== "section").map((node) => <li key={node.id}>Как объяснить: «{node.title}»?</li>)}</ol>}
+          </div>
+        </>
+      )}
 
       <TextbookOutlineImportDialog
         open={importOpen}

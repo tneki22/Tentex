@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { History, Plus } from "lucide-react";
-import type { ChatSessionDetail, ChatSessionSummary, ChatSettingsPatch } from "../../../api/chat";
+import type { ChatSessionDetail, ChatSettingsPatch } from "../../../api/chat";
 import { Button, IconButton, Popover } from "../../../components/ui";
 import { ExaminerControl } from "./ExaminerControl";
 
@@ -11,20 +11,32 @@ function sessionTime(iso: string, now = new Date()): string {
   return new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(value);
 }
 
+/** Минимум, нужный шапке от строки истории — экзаменационный и program-чат
+ * несут разные полные типы (program-сессия не привязана к одному вопросу). */
+export interface ChatHeaderSessionSummary {
+  id: string;
+  updated_at: string;
+  message_count: number;
+}
+
 interface ChatHeaderProps {
-  sessions: ChatSessionSummary[];
+  sessions: ChatHeaderSessionSummary[];
   activeSessionId: string | null;
-  session: ChatSessionDetail | null;
-  settingsError: string;
   onSelectSession: (id: string) => void;
   onNewChat: () => void;
-  onSettingsChange: (patch: ChatSettingsPatch) => void | Promise<void>;
+  /** Persona/строгость/override модели — только у экзаменационного чата. */
+  showModelControl?: boolean;
+  session?: ChatSessionDetail | null;
+  settingsError?: string;
+  onSettingsChange?: (patch: ChatSettingsPatch) => void | Promise<void>;
+  historyTitle?: string;
 }
 
 /** Компактная шапка вкладки «Чат»: история, новая сессия и настройки экзаменатора. */
 export function ChatHeader({
-  sessions, activeSessionId, session, settingsError,
+  sessions, activeSessionId, session = null, settingsError = "",
   onSelectSession, onNewChat, onSettingsChange,
+  showModelControl = true, historyTitle = "Чаты этого вопроса",
 }: ChatHeaderProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
 
@@ -34,7 +46,7 @@ export function ChatHeader({
         <Popover
           open={historyOpen}
           onOpenChange={setHistoryOpen}
-          title="Чаты этого вопроса"
+          title={historyTitle}
           trigger={<IconButton label="История чатов"><History size={15} /></IconButton>}
         >
           <div className="chat-history-list">
@@ -51,7 +63,7 @@ export function ChatHeader({
           </div>
         </Popover>
         <Button variant="secondary" onClick={onNewChat}><Plus size={14} />Новый чат</Button>
-        {session && (
+        {showModelControl && session && onSettingsChange && (
           <ExaminerControl
             session={session}
             error={settingsError}

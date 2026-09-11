@@ -7,12 +7,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from app.chat.common import ChatMessageRead, ManifestEntryRead  # re-export: см. ниже
 from app.models import (
     AttemptOutcome,
-    ChatMessageRole,
     ChatMode,
-    ChatPayloadKind,
-    ChatStreamState,
     ChatToolRunState,
     ExaminerPersona,
     ExaminerStrictness,
@@ -40,24 +38,6 @@ class ChatSessionSummary(ApiModel):
     # В итерации 1 разбор ответа виден только внутри чата: последний итог по
     # сессии на уровне списка чатов приезжает вместе с историей попыток (1b+).
     last_outcome: str | None = None
-
-
-class ChatMessageRead(ApiModel):
-    id: UUID
-    session_id: UUID
-    sequence: int
-    role: ChatMessageRole
-    text: str
-    stream_state: ChatStreamState
-    payload_kind: ChatPayloadKind
-    payload: dict[str, Any]
-    context_snapshot: dict[str, Any]
-    skill: str | None
-    ai_run_id: UUID | None
-    attempt_id: UUID | None
-    grade_attempt_id: UUID | None
-    created_at: datetime
-    updated_at: datetime
 
 
 class ChatModelOverrideRead(ApiModel):
@@ -99,20 +79,6 @@ class ChatSettingsWrite(ApiModel):
 
 class ChatDraftWrite(ApiModel):
     text: str = Field(max_length=200_000)
-
-
-class ManifestEntryRead(BaseModel):
-    # Записи манифеста несут kind-специфичные поля (revision, sha256, count) —
-    # эта схема отдаёт только то, что нужно чипу, и не падает на лишних ключах.
-    model_config = ConfigDict(extra="ignore")
-
-    kind: str
-    id: str | None = None
-    included: bool
-    truncated: bool = False
-    bytes: int = 0
-    count: int | None = None
-    reason: str | None = None
 
 
 class ChatContextPreviewRead(ApiModel):

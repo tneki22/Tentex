@@ -20,19 +20,25 @@ interface ChatTimelineProps {
   messages: ChatMessageRead[];
   streamingMessageId: string | null;
   preparing: boolean;
-  onAnswerAgain: () => void;
-  onCheckAgain: (attemptId: string) => Promise<void>;
-  onSelfAssessment: (
+  onAnswerAgain?: () => void;
+  onCheckAgain?: (attemptId: string) => Promise<void>;
+  onSelfAssessment?: (
     attemptId: string,
     outcome: Exclude<AttemptOutcome, "unscored">,
   ) => Promise<void>;
+  onApplyProposal?: (messageId: string, selected: number[]) => Promise<void>;
+  onRejectProposal?: (messageId: string) => Promise<void>;
+  proposalBusy?: boolean;
+  nodeTitles?: Record<string, string>;
   onRetry: () => void;
   failure: StreamFailure | null;
 }
 
 export function ChatTimeline({
   projectId, messages, streamingMessageId, preparing,
-  onAnswerAgain, onCheckAgain, onSelfAssessment, onRetry, failure,
+  onAnswerAgain, onCheckAgain, onSelfAssessment,
+  onApplyProposal, onRejectProposal, proposalBusy, nodeTitles,
+  onRetry, failure,
 }: ChatTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
@@ -141,6 +147,10 @@ export function ChatTimeline({
                 onAnswerAgain={onAnswerAgain}
                 onCheckAgain={onCheckAgain}
                 onSelfAssessment={onSelfAssessment}
+                onApplyProposal={onApplyProposal}
+                onRejectProposal={onRejectProposal}
+                proposalBusy={proposalBusy}
+                nodeTitles={nodeTitles}
                 headingRef={(heading) => {
                   if (heading) headingRefs.current.set(message.id, heading);
                   else headingRefs.current.delete(message.id);

@@ -2,12 +2,13 @@ import type { Schema } from "./preparation";
 import type { PageQuality } from "./materials";
 import { ProjectApiError, request } from "./projects";
 
-export type ChatMessageRole = "user" | "examiner" | "system";
+export type ChatMessageRole = "user" | "examiner" | "system" | "assistant";
 export type ChatStreamState = "complete" | "stopped" | "failed";
-export type ChatPayloadKind = "none" | "answer_form" | "verdict" | "task" | "interactive" | "tool_result";
+export type ChatPayloadKind =
+  | "none" | "answer_form" | "verdict" | "task" | "interactive" | "tool_result" | "program_diff";
 export type ExaminerPersona = "calm_teacher" | "neutral_examiner" | "strict_reviewer";
 export type ExaminerStrictness = "soft" | "normal" | "strict";
-export type ChatMode = "exam" | "study";
+export type ChatMode = "exam" | "study" | "program";
 export type ChatToolRunState = "queued" | "running" | "succeeded" | "failed";
 export type AttemptOutcome = "passed" | "partial" | "failed" | "unscored";
 export type GradeMethod = "exact_match" | "key_terms" | "sql" | "semantic" | "ai_judge" | "self_assessment";
@@ -61,6 +62,34 @@ export interface VerdictPayload {
   cached: boolean;
   actual_model_id: string | null;
   self_assessment: AttemptOutcome | null;
+}
+
+export interface ProgramChatOperationView {
+  op: "add" | "rename" | "move" | "change_type" | "set_goal" | "set_visibility" | "merge";
+  rationale: string;
+  title?: string | null;
+  node_type?: string;
+  node_id?: string;
+  node_ids?: string[];
+  parent_node_id?: string | null;
+  new_parent_node_id?: string | null;
+  after_node_id?: string | null;
+  is_in_current_program?: boolean;
+  goal_role?: string | null;
+  target_level?: string | null;
+  outline_ref?: { material_id: string; outline_item_key: string } | null;
+  children?: ProgramChatOperationView[];
+}
+
+export type ProgramChatOperationState = "pending" | "applied" | "conflicted";
+
+export interface ProgramChatDiffPayload {
+  summary: string;
+  pros: string[];
+  cons: string[];
+  operations: ProgramChatOperationView[];
+  operation_states: ProgramChatOperationState[];
+  rejected: boolean;
 }
 
 export interface AttemptRead {

@@ -13,8 +13,12 @@ interface ChatComposerProps {
   onChange: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
-  onOpenPalette: () => void;
-  modes: ChatCapability[];
+  /** Палитра навыков — только у экзаменационного чата; без неё кнопка `+` не рендерится. */
+  onOpenPalette?: () => void;
+  modes?: ChatCapability[];
+  /** Индикатор режима (сейчас — «Экзамен») — экзаменационная специфика. */
+  showModeIndicator?: boolean;
+  showDictation?: boolean;
   sending: boolean;
   disabled?: boolean;
 }
@@ -24,7 +28,10 @@ interface ChatComposerProps {
  * Enter отправляет, Shift+Enter переносит строку (AI-CHATS.md §21.3).
  */
 export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer(
-  { value, onChange, onSend, onStop, onOpenPalette, modes, sending, disabled },
+  {
+    value, onChange, onSend, onStop, onOpenPalette, modes = [],
+    showModeIndicator = true, showDictation = true, sending, disabled,
+  },
   forwardedRef,
 ) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -48,7 +55,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     }
     // `/` в самом начале пустого поля открывает палитру и не попадает в текст —
     // фильтр по продолжению команды набирается внутри самой палитры.
-    if (event.key === "/" && value.trim() === "") {
+    if (event.key === "/" && value.trim() === "" && onOpenPalette) {
       event.preventDefault();
       onOpenPalette();
     }
@@ -62,27 +69,33 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Спросите или введите / для команд"
+        placeholder={onOpenPalette ? "Спросите или введите / для команд" : "Спросите или предложите правку"}
         disabled={disabled}
         rows={1}
       />
       <div className="chat-composer-row">
         <div className="chat-composer-row-left">
-          <IconButton label="Команды" onClick={onOpenPalette} disabled={disabled}>
-            <Plus size={15} />
-          </IconButton>
-          <Tooltip label={studyMode?.available ? "Разобраться" : "«Разобраться» появится позже"}>
-            <span className="chat-composer-mode" aria-label="Режим чата: экзамен">
-              {examMode?.title ?? "Экзамен"}
-            </span>
-          </Tooltip>
+          {onOpenPalette && (
+            <IconButton label="Команды" onClick={onOpenPalette} disabled={disabled}>
+              <Plus size={15} />
+            </IconButton>
+          )}
+          {showModeIndicator && (
+            <Tooltip label={studyMode?.available ? "Разобраться" : "«Разобраться» появится позже"}>
+              <span className="chat-composer-mode" aria-label="Режим чата: экзамен">
+                {examMode?.title ?? "Экзамен"}
+              </span>
+            </Tooltip>
+          )}
         </div>
         <div className="chat-composer-row-right">
-          <Tooltip label="Диктовка появится вместе с распознаванием речи">
-            <IconButton label="Диктовка" disabled>
-              <Mic size={15} />
-            </IconButton>
-          </Tooltip>
+          {showDictation && (
+            <Tooltip label="Диктовка появится вместе с распознаванием речи">
+              <IconButton label="Диктовка" disabled>
+                <Mic size={15} />
+              </IconButton>
+            </Tooltip>
+          )}
           {sending ? (
             <Button variant="secondary" className="chat-composer-send" onClick={onStop}>
               <Square size={13} />Остановить

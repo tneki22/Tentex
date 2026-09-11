@@ -683,6 +683,7 @@
 .page-head-actions {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -7315,13 +7316,66 @@ button.wizard-back-projects {
 
 .wizard-main.is-textbook-editor { padding: var(--space-4); }
 .textbook-builder { width: 100%; height: calc(100vh - 158px); min-height: 680px; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--paper); box-shadow: var(--shadow-md); }
-.textbook-builder-head { min-height: 62px; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3); border-bottom: 1px solid var(--line); background: var(--paper-strong); }
+.textbook-builder-head { min-height: 62px; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-3); border-bottom: 1px solid var(--line); background: var(--paper-strong); }
 .textbook-builder-head .segmented-tabs,
 .page-head-actions .segmented-tabs { width: 180px; }
 .textbook-builder-confirm { margin-inline-start: auto; }
 .textbook-program-editor { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto auto auto minmax(0, 1fr); overflow: hidden; background: var(--paper); }
 .textbook-builder > .textbook-program-editor { grid-row: 1 / -1; }
 .program-main > .textbook-program-editor { min-height: calc(100vh - var(--space-8) * 2); border: 1px solid var(--line); border-radius: var(--radius-xl); }
+
+/* Режим «С ИИ»: тулбар общий (renderHeader), контентная область — чат + предпросмотр
+ * вместо Дерево/Текст/Вопросы. grid-row занимает всё, что осталось после header/error-slot,
+ * независимо от того, что в режиме «Вручную» там же три отдельных ряда. */
+.textbook-program-ai-content { grid-row: 3 / -1; min-height: 0; display: flex; }
+.textbook-program-ai-layout { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); }
+.textbook-program-ai-layout > .program-chat-workspace { min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
+.textbook-program-ai-layout > .program-tree-preview { min-width: 0; min-height: 0; overflow-y: auto; padding: var(--space-4) var(--space-5); background: var(--paper-strong); }
+
+@media (max-width: 1120px) {
+  .textbook-program-ai-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(220px, 320px); }
+  .textbook-program-ai-layout > .program-chat-workspace { border-right: none; border-bottom: 1px solid var(--line); }
+}
+
+.program-tree-preview-root,
+.program-tree-preview-children {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.program-tree-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 2px 0;
+  font-size: var(--text-sm);
+}
+
+.program-tree-preview-row.is-new {
+  color: var(--tone-success);
+}
+
+.program-tree-preview-type {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.program-tree-preview-note {
+  font-size: var(--text-xs);
+  color: var(--tone-warning);
+}
+
+.program-tree-preview-note.is-hidden,
+.program-tree-preview-note.is-merged {
+  color: var(--tone-danger);
+}
 .textbook-program-error-slot:empty { min-height: 0; }
 .textbook-program-panel { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; }
 

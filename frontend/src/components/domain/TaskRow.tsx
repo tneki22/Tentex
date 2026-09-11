@@ -14,7 +14,8 @@ export type TaskKind =
   | "ai_preparation"
   | "ai_cleanup"
   | "link_answers"
-  | "ai_answer_sections";
+  | "ai_answer_sections"
+  | "ai_program_build";
 
 export interface BackgroundTask {
   id: string;
@@ -48,6 +49,7 @@ const KIND_LABEL: Record<TaskKind, string> = {
   ai_cleanup: "Очистка текста",
   link_answers: "Автопривязка ответов",
   ai_answer_sections: "Разметка ответов моделью",
+  ai_program_build: "Составление программы",
 };
 
 interface TaskRowProps {
