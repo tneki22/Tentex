@@ -26,7 +26,6 @@
 
 ## Инструменты
 
-- Индекс кода: `codebase-memory-mcp` (`search_graph`, `trace_path`, `get_code_snippet`, `get_architecture`). Проект проиндексирован под именем `Tentex` — используй его в параметре `project`, не создавай второе имя. Если `index_status` показывает `head_sha`, отличный от текущего `git rev-parse HEAD`, перед работой освежи индекс через `index_repository`.
 - Документация библиотек: `npx ctx7@latest`. Не отвечай по памяти про версии и API — стек свежий.
 - Посмотреть приложение живьём: `preview_start` с конфигурацией `web` из `.claude/launch.json` запускает только frontend. Для сценария с API и фоновыми задачами используй `full` — он поднимает api, один worker и web; один `web` такой сценарий не проверяет.
 
