@@ -14,7 +14,9 @@ from app.models import (
     GoalRole,
     NodeType,
     OriginKind,
+    ProgramBasisKind,
     ProgramNode,
+    ProgramNodeSourcePageRange,
     Project,
     ProjectActionLog,
     ProjectStatus,
@@ -36,6 +38,7 @@ from app.projects.schemas import (
     ProgramMove,
     ProgramNodeCreate,
     ProgramNodeRead,
+    ProgramNodeSourcePageRangeRead,
     ProgramNodeUpdate,
     ProgramRevisionCommand,
     ProgramState,
@@ -103,8 +106,26 @@ def latest_undoable_action(
 
 def read_program(session: Session, project_id: UUID) -> ProgramState:
     project = _require_project(session, project_id)
+    nodes = _nodes(session, project_id)
+    ranges_by_node: dict[UUID, list[ProgramNodeSourcePageRange]] = defaultdict(list)
+    for source_range in session.scalars(
+        select(ProgramNodeSourcePageRange)
+        .where(ProgramNodeSourcePageRange.project_id == project_id)
+        .order_by(ProgramNodeSourcePageRange.page_from, ProgramNodeSourcePageRange.id)
+    ):
+        ranges_by_node[source_range.program_node_id].append(source_range)
     return ProgramState(
-        nodes=[ProgramNodeRead.model_validate(node) for node in _nodes(session, project_id)],
+        nodes=[
+            ProgramNodeRead.model_validate(node).model_copy(
+                update={
+                    "source_page_ranges": [
+                        ProgramNodeSourcePageRangeRead.model_validate(source_range)
+                        for source_range in ranges_by_node.get(node.id, [])
+                    ]
+                }
+            )
+            for node in nodes
+        ],
         revision=project.program_revision,
     )
 
@@ -279,11 +300,17 @@ def _change_result(
         if changed_node_id is not None
         else None
     )
+    program = read_program(session, project.id)
     return ProgramChangeResult(
         changed_node=(
-            ProgramNodeRead.model_validate(changed_node) if changed_node is not None else None
+            next(
+                (node for node in program.nodes if node.id == changed_node.id),
+                None,
+            )
+            if changed_node is not None
+            else None
         ),
-        program=read_program(session, project.id),
+        program=program,
         latest_undoable_action=latest_undoable_action(session, project.id, _phase(project)),
         draft_revision=draft_revision,
     )
@@ -305,6 +332,7 @@ def _node_snapshot(node: ProgramNode) -> dict[str, Any]:
         "needs_material": node.needs_material,
         "is_archived": node.is_archived,
         "origin_kind": node.origin_kind.value,
+        "basis_kind": node.basis_kind.value,
         "origin_note": node.origin_note,
         "origin_material_id": str(node.origin_material_id) if node.origin_material_id else None,
         "created_at": node.created_at.isoformat(),
@@ -344,6 +372,7 @@ def create_program_node(
             needs_material=command.needs_material,
             is_archived=False,
             origin_kind=OriginKind.MANUAL,
+            basis_kind=ProgramBasisKind.CUSTOM,
             origin_note=None,
         )
         nodes.append(node)
@@ -386,6 +415,9 @@ def update_program_node(
             old_value = getattr(node, field)
             inverse[field] = old_value.value if hasattr(old_value, "value") else old_value
             setattr(node, field, value)
+        if project.workspace_variant == WorkspaceVariant.TEXTBOOK:
+            inverse["origin_kind"] = node.origin_kind.value
+            node.origin_kind = OriginKind.MANUAL
         _validate_variant(project.workspace_variant, node.node_type, node.exam_kind)
         draft_revision = _begin_program_change(session, project, command.expected_program_revision)
         node.updated_at = utc_now()
@@ -421,10 +453,13 @@ def move_program_node(
             for item in nodes
         ]
         old_parent = node.parent_id
+        old_origin_kind = node.origin_kind
         parent_map = {item.id: item.parent_id for item in nodes}
         parent_map[node.id] = command.parent_id
         _validate_tree(parent_map)
         _place_node(nodes, node, command.parent_id, command.position)
+        if project.workspace_variant == WorkspaceVariant.TEXTBOOK:
+            node.origin_kind = OriginKind.MANUAL
         if old_parent != command.parent_id:
             _normalize_group(nodes, old_parent)
         draft_revision = _begin_program_change(session, project, command.expected_program_revision)
@@ -436,7 +471,14 @@ def move_program_node(
             project,
             "node_move",
             node.title,
-            {"positions": positions},
+            {
+                "positions": positions,
+                "origin": (
+                    {"id": str(node.id), "origin_kind": old_origin_kind.value}
+                    if project.workspace_variant == WorkspaceVariant.TEXTBOOK
+                    else None
+                ),
+            },
         )
         return _change_result(session, project, node.id, draft_revision)
 
@@ -586,6 +628,39 @@ def restore_program_node(
     return _set_subtree_visibility(session, project_id, node_id, command, restore=True)
 
 
+def remove_all_program_nodes(
+    session: Session, project_id: UUID, command: ProgramRevisionCommand
+) -> ProgramChangeResult:
+    """Вывести всю текущую программу одним отменяемым действием."""
+    with session.begin():
+        project = _require_writable_project(session, project_id)
+        nodes = _nodes(session, project_id)
+        visible = [node for node in nodes if node.is_in_current_program and not node.is_archived]
+        if project.program_revision != command.expected_program_revision:
+            raise ProjectConflictError(
+                "Программа уже изменена в другой вкладке",
+                code="stale_program_revision",
+                context={"current_program_revision": project.program_revision},
+            )
+        if not visible:
+            return _change_result(session, project, None, None)
+        draft_revision = _begin_program_change(session, project, command.expected_program_revision)
+        now = utc_now()
+        inverse = []
+        for node in visible:
+            inverse.append({"id": str(node.id), "is_in_current_program": True})
+            node.is_in_current_program = False
+            node.updated_at = now
+        _record_action(
+            session,
+            project,
+            "program_remove_all",
+            "Вся программа",
+            {"values": inverse},
+        )
+        return _change_result(session, project, None, draft_revision)
+
+
 def _delete_nodes_leaves_first(session: Session, nodes: list[ProgramNode]) -> None:
     parent_map = {node.id: node.parent_id for node in nodes}
     depths: dict[UUID, int] = {}
@@ -656,6 +731,7 @@ def replace_draft_program(
                 needs_material=False,
                 is_archived=False,
                 origin_kind=OriginKind.IMPORT,
+                basis_kind=ProgramBasisKind.CUSTOM,
                 origin_note=(
                     f"Материал: {material_name}" if material_name else "Вставленный текст"
                 ),
@@ -740,6 +816,7 @@ def replace_active_exam_program(
             node.needs_material = False
             node.is_archived = False
             node.origin_kind = OriginKind.IMPORT
+            node.basis_kind = ProgramBasisKind.CUSTOM
             node.origin_note = f"Материал: {material_name}"
             node.origin_material_id = material_id
             session.flush()
@@ -791,7 +868,13 @@ def _restore_snapshot(session: Session, project_id: UUID, snapshots: list[dict[s
                 needs_material=snapshot["needs_material"],
                 is_archived=snapshot["is_archived"],
                 origin_kind=OriginKind(snapshot["origin_kind"]),
+                basis_kind=ProgramBasisKind(snapshot.get("basis_kind", "custom")),
                 origin_note=snapshot["origin_note"],
+                origin_material_id=(
+                    UUID(snapshot["origin_material_id"])
+                    if snapshot.get("origin_material_id")
+                    else None
+                ),
                 created_at=datetime.fromisoformat(snapshot["created_at"]),
                 updated_at=datetime.fromisoformat(snapshot["updated_at"]),
             )
@@ -856,6 +939,7 @@ def undo_last_project_action(
                     "node_type": NodeType,
                     "exam_kind": ExamKind,
                     "goal_role": GoalRole,
+                    "origin_kind": OriginKind,
                 }
                 for field, value in data["fields"].items():
                     enum_class = enum_fields.get(field)
@@ -867,6 +951,12 @@ def undo_last_project_action(
                         raise ProjectInvariantError("Узел порядка для undo не найден")
                     node.parent_id = UUID(position["parent_id"]) if position["parent_id"] else None
                     node.sort_order = position["sort_order"]
+                origin = data.get("origin")
+                if origin:
+                    node = nodes_by_id.get(UUID(origin["id"]))
+                    if node is None:
+                        raise ProjectInvariantError("Узел происхождения для undo не найден")
+                    node.origin_kind = OriginKind(origin["origin_kind"])
             case "target_level_subtree":
                 for value in data["values"]:
                     node = nodes_by_id.get(UUID(value["id"]))
@@ -875,7 +965,7 @@ def undo_last_project_action(
                     node.target_level = (
                         TargetOutcome(value["target_level"]) if value["target_level"] else None
                     )
-            case "node_remove" | "node_restore":
+            case "node_remove" | "node_restore" | "program_remove_all" | "outline_import":
                 for value in data["values"]:
                     node = nodes_by_id.get(UUID(value["id"]))
                     if node is None:
@@ -905,6 +995,7 @@ def undo_last_project_action(
                     node.needs_material = item["needs_material"]
                     node.is_archived = item["is_archived"]
                     node.origin_kind = OriginKind(item["origin_kind"])
+                    node.basis_kind = ProgramBasisKind(item.get("basis_kind", "custom"))
                     node.origin_note = item["origin_note"]
                     node.origin_material_id = (
                         UUID(item["origin_material_id"]) if item.get("origin_material_id") else None

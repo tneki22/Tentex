@@ -46,8 +46,8 @@ import {
   type ProjectDetail,
   type TargetOutcome,
 } from "../api/projects";
-import { GOAL_LEVELS, GoalLevelPicker, LibraryMaterialPickerDialog, ProjectNav } from "../components/domain";
-import type { GoalLevelValue } from "../components/domain";
+import { GOAL_LEVELS, GoalLevelPicker, LibraryMaterialPickerDialog, ProjectNav, TextbookProgramEditor } from "../components/domain";
+import type { GoalLevelValue, TextbookProgramView } from "../components/domain";
 import {
   Button,
   ContextMenu,
@@ -122,6 +122,8 @@ export function Program() {
   const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  const [textbookView, setTextbookView] = useState<TextbookProgramView>("tree");
+  const [textbookMode, setTextbookMode] = useState<"manual" | "ai">("manual");
   const [filter, setFilter] = useState<OutlineFilter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -467,6 +469,26 @@ export function Program() {
     }
   }
 
+  async function runTextbookCommand(
+    command: (revision: number) => Promise<ProgramChangeResult>,
+  ): Promise<ProgramChangeResult> {
+    if (!detail) throw new Error("Проект не загружен");
+    setBusy(true);
+    setCommandError("");
+    try {
+      const result = await command(detail.program.revision);
+      acceptResult(result);
+      return result;
+    } catch (error) {
+      if (error instanceof ProjectApiError && error.code === "stale_program_revision") {
+        setConflict(true);
+      }
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading) return <div className="screen"><LoadingState label="Загружаем программу" placement="page" /></div>;
   if (loadError) {
     const notFound = loadError instanceof ProjectApiError && loadError.status === 404;
@@ -474,6 +496,54 @@ export function Program() {
   }
   if (!detail) return null;
   if (treeResult.error) return <div className="screen"><ErrorState title="Программа повреждена" message={treeResult.error} /></div>;
+  if (textbook) return (
+    <div className="program-shell">
+      <aside className="program-sidebar">
+        <header className="program-sidebar-head">
+          <Tooltip label="К списку проектов">
+            <IconButton label="К списку проектов" onClick={() => navigate("/projects")}><ArrowLeft size={16} /></IconButton>
+          </Tooltip>
+          <strong>{detail.project.name}</strong>
+        </header>
+        <ProjectNav
+          projectId={projectId}
+          active="program"
+          textbook
+          modules={detail.project.enabled_modules}
+          counts={{
+            program: detail.program.nodes.filter((node) => node.is_in_current_program && !node.is_archived && node.node_type !== "section").length,
+            materials: materials.materials.length,
+          }}
+          className="project-side-nav"
+        />
+      </aside>
+      <main className="program-main">
+        {conflict && <section className="program-plan-notice" role="alert"><span>Программа изменилась в другой вкладке.</span><Button onClick={() => void load()}>Загрузить серверную версию</Button></section>}
+        <TextbookProgramEditor
+          projectId={projectId}
+          projectName={detail.project.name ?? "Программа"}
+          program={detail.program}
+          latestUndoableAction={detail.latest_undoable_action}
+          materials={materials.materials}
+          busy={busy}
+          view={textbookView}
+          onViewChange={setTextbookView}
+          execute={runTextbookCommand}
+          onUndo={undo}
+          renderHeader={(actions) => <PageHead
+            eyebrow="Структура учебника"
+            title="Программа"
+            actions={<>
+              <Button variant="ghost" disabled={!actions.canUndo || actions.busy} onClick={() => void actions.undo()}><Undo2 size={15} />Отменить</Button>
+              <SegmentedTabs label="Режим составления программы" value={textbookMode} onChange={setTextbookMode} tabs={[{ value: "manual", label: "Вручную" }, { value: "ai", label: "С ИИ", disabled: true, tooltip: "ИИ-режим добавляется во второй части" }]} />
+              <Button variant="secondary" disabled={actions.busy} onClick={actions.openImport}><Files size={15} />Импортировать программу из оглавления</Button>
+              <Button variant="ghost" disabled={actions.busy || !actions.hasNodes} onClick={actions.openRemoveAll}><Trash2 size={15} />Удалить все</Button>
+            </>}
+          />}
+        />
+      </main>
+    </div>
+  );
 
   const currentFlat = flat.filter((node) => node.is_in_current_program && !node.is_archived);
   const filteredTree = filterProgramTree(treeResult.tree, query);
