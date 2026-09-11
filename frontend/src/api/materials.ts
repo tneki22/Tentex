@@ -253,6 +253,8 @@ export interface LibraryMaterialDetailRead extends LibraryMaterialRead {
   retrieved_at: string | null;
   updated_at: string;
   storage_path: string;
+  /** Метка растра страниц: меняется только вместе с самим файлом материала. */
+  raster_token: string;
   typst: TypstMaterialRead | null;
 }
 
@@ -637,7 +639,9 @@ export const materialPageImageUrl = (
   projectId: string,
   materialId: string,
   page: number,
-): string => `${materialPath(projectId, materialId)}/pages/${page}/image`;
+  rasterToken?: string | null,
+): string =>
+  `${materialPath(projectId, materialId)}/pages/${page}/image${rasterVersion(rasterToken)}`;
 
 export const getMaterialOutline = (
   projectId: string,
@@ -819,8 +823,19 @@ export const getLibraryPage = (
   return request(`${libraryPath(materialId)}/pages/${page}${suffix}`, { signal: options.signal });
 };
 
-export const libraryPageImageUrl = (materialId: string, page: number): string =>
-  `${libraryPath(materialId)}/pages/${page}/image`;
+/**
+ * Метка растра в адресе: пока файл материала не менялся, метка та же, и браузер
+ * отдаёт уже просмотренную страницу из своего кэша, не спрашивая сервер. Без
+ * метки сервер разрешает кэшировать всего минуту — листание опять идёт по сети.
+ */
+const rasterVersion = (rasterToken?: string | null): string =>
+  rasterToken ? `?v=${encodeURIComponent(rasterToken)}` : "";
+
+export const libraryPageImageUrl = (
+  materialId: string,
+  page: number,
+  rasterToken?: string | null,
+): string => `${libraryPath(materialId)}/pages/${page}/image${rasterVersion(rasterToken)}`;
 
 export const previewLibraryHeaderFooter = (
   materialId: string,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ViewerZoom } from "../components/domain/material-viewer";
+import type { PageFlowMode, ViewerZoom } from "../components/domain/material-viewer";
 import { useViewerFullscreen } from "./useViewerFullscreen";
 
 /** Размеры листа заданы в CSS сцены: держим их синхронно, иначе «вписать» промахнётся. */
@@ -8,6 +8,9 @@ const SHEET_HEIGHT = 900;
 /* Совпадает с padding области .viewer-sheet-scroll: если вычитать больше,
    «вписать страницу» оставляет полосу пустоты по краям. */
 const SHEET_PADDING = 48;
+/* Раскладка страниц — привычка чтения, а не свойство документа: она одна на
+   установку и переживает переход к другому материалу. */
+const FLOW_KEY = "tentex-viewer-page-flow";
 
 interface ViewportOptions {
   pageCount: number;
@@ -28,6 +31,9 @@ interface ViewportOptions {
  */
 export function useMaterialViewport({ pageCount, zoomable, pageAspect, textMode, navigationDisabled, onPageChange }: ViewportOptions) {
   const [page, setPage] = useState(1);
+  const [flow, setFlowState] = useState<PageFlowMode>(
+    () => (localStorage.getItem(FLOW_KEY) === "scroll" ? "scroll" : "paged"),
+  );
   const [zoom, setZoom] = useState<ViewerZoom>("fit-page");
   const { fullscreen, setFullscreen } = useViewerFullscreen();
   const [showRegions, setShowRegions] = useState(false);
@@ -76,14 +82,33 @@ export function useMaterialViewport({ pageCount, zoomable, pageAspect, textMode,
     return Math.min(2, Math.max(0.1, Math.min(byWidth, byHeight)));
   }, [zoom, zoomable, viewport, pageAspect, textMode]);
 
+  const setFlow = useCallback((next: PageFlowMode) => {
+    setFlowState(next);
+    localStorage.setItem(FLOW_KEY, next);
+  }, []);
+
   const goToPage = useCallback((next: number) => {
     if (navigationDisabled) return;
     setPage((current) => {
       const target = Math.min(Math.max(1, next), Math.max(1, pageCount));
       if (target !== current) {
-        scrollRef.current?.scrollTo({ top: 0 });
+        // В ленте страница выбирается прокруткой, и сброс в начало области
+        // отправлял бы читателя на первую страницу вместо запрошенной.
+        if (flow !== "scroll") scrollRef.current?.scrollTo({ top: 0 });
         onPageChange?.(target);
       }
+      return target;
+    });
+  }, [pageCount, onPageChange, navigationDisabled, flow]);
+
+  /* Лента сообщает страницу, на которой остановилась прокрутка. Через goToPage
+     это дало бы петлю: он сам прокручивает ленту к странице, которую она и
+     показывает. */
+  const reportPage = useCallback((next: number) => {
+    if (navigationDisabled) return;
+    setPage((current) => {
+      const target = Math.min(Math.max(1, next), Math.max(1, pageCount));
+      if (target !== current) onPageChange?.(target);
       return target;
     });
   }, [pageCount, onPageChange, navigationDisabled]);
@@ -145,6 +170,9 @@ export function useMaterialViewport({ pageCount, zoomable, pageAspect, textMode,
     page,
     setPage,
     goToPage,
+    reportPage,
+    flow,
+    setFlow,
     zoom,
     setZoom,
     effectiveZoom,

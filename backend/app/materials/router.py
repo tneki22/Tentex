@@ -288,9 +288,12 @@ def get_library_page(
 
 @router.get("/materials/{material_id}/pages/{page_number}/image")
 def get_library_page_image(
-    material_id: UUID, page_number: int, session: SessionDependency
+    material_id: UUID, page_number: int, session: SessionDependency, v: str | None = None
 ) -> FileResponse:
-    return FileResponse(library.library_page_image_path(session, material_id, page_number))
+    return FileResponse(
+        library.library_page_image_path(session, material_id, page_number),
+        headers=library.page_image_cache_headers(v, library.raster_token(session, material_id)),
+    )
 
 
 @router.put("/materials/{material_id}/pages/{page_number}", response_model=PageCorrectionRead)
@@ -627,8 +630,12 @@ def get_material_page_image(
     material_id: UUID,
     page_number: int,
     session: SessionDependency,
+    v: str | None = None,
 ) -> FileResponse:
-    return FileResponse(service.page_image_path(session, project_id, material_id, page_number))
+    return FileResponse(
+        service.page_image_path(session, project_id, material_id, page_number),
+        headers=library.page_image_cache_headers(v, library.raster_token(session, material_id)),
+    )
 
 
 @router.get(

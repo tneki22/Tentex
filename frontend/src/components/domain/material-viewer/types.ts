@@ -7,6 +7,9 @@ export type MaterialViewMode = "compare" | "source" | "text";
 
 export type ViewerZoom = number | "fit-page" | "fit-width";
 
+/** Как выложены страницы: по одной или лентой с вертикальной прокруткой. */
+export type PageFlowMode = "paged" | "scroll";
+
 /**
  * Как называть и показывать конкретный вид источника. Одна таблица вместо
  * проверок MIME по компонентам: подпись «Оригинал» у аудиозаписи и «Страница»

@@ -640,12 +640,16 @@
   outline: none;
 }
 
+.viewer-flow-toggle {
+  flex-shrink: 0;
+}
+
 .viewer-search {
   display: flex;
-  flex: 1 1 160px;
+  flex: 1 1 120px;
   align-items: center;
   gap: var(--space-2);
-  min-width: 120px;
+  min-width: 96px;
   height: var(--space-8);
   padding: 0 var(--space-3);
   color: var(--muted);
@@ -876,6 +880,88 @@
   width: 100%;
   height: auto;
   border-radius: var(--radius-sm);
+}
+
+/* Лента: высоту листа задаёт слот, поэтому страница нестандартных пропорций
+   вписывается в него, а не ломает расчёт прокрутки на тысяче страниц. */
+.viewer-sheet.is-fitted,
+.viewer-sheet.is-fitted img {
+  height: 100%;
+}
+
+.viewer-sheet.is-fitted img {
+  object-fit: contain;
+}
+
+/* Пока следующая страница не готова, на экране остаётся предыдущая. Полоса
+   ожидания появляется с задержкой: на прогретой странице подмена укладывается
+   в кадр, и мигать там нечему. */
+.viewer-sheet::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 0;
+  height: 2px;
+  background: linear-gradient(to right, transparent, var(--accent), transparent);
+  border-start-start-radius: var(--radius-sm);
+  border-start-end-radius: var(--radius-sm);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.viewer-sheet.is-pending::after {
+  animation: viewer-sheet-waiting 900ms ease-in-out 200ms infinite;
+}
+
+@keyframes viewer-sheet-waiting {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 0.75; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewer-sheet.is-pending::after {
+    animation: none;
+    opacity: 0.6;
+    transition: opacity var(--ease-fast) 200ms;
+  }
+}
+
+/* position: relative — от него лента считает положение страницы: смещение на
+   верхний отступ иначе пришлось бы измерять, а не знать. Отступы совпадают с
+   постраничным показом, чтобы «вписать страницу» считало одинаково в обоих. */
+.viewer-sheet-scroll.is-stream {
+  position: relative;
+  overscroll-behavior: contain;
+}
+
+.viewer-stream {
+  position: relative;
+}
+
+.viewer-stream-window {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 0;
+  will-change: transform;
+}
+
+.viewer-stream-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Просвет между листами совпадает с SHEET_GAP в PageFlow.tsx: в нём стоит
+     номер страницы, и расхождение сдвигало бы всю ленту. */
+  padding-block-end: 30px;
+}
+
+.viewer-stream-number {
+  position: absolute;
+  inset-block-end: 6px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+  user-select: none;
 }
 
 .viewer-region-layer {

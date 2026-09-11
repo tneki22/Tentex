@@ -10,8 +10,10 @@
 """
 
 import hashlib
+import os
 import shutil
-from collections import defaultdict
+import threading
+from collections import OrderedDict, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -115,6 +117,16 @@ TEXT_MEDIA_TYPES = {"text/plain", "text/markdown", "text/x-markdown"}
 # Оглавление из заголовков имеет смысл, пока его можно прочитать глазами.
 RECOGNIZED_OUTLINE_LIMIT = 400
 SEARCH_LIMIT_MAX = 100
+#: Форматы, у которых страница материала — готовый растр, а не разметка.
+RASTER_SOURCE_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png"}
+#: Качество WebP: на 88 текст и формулы читаются как в оригинале, а файл
+#: остаётся вдвое легче PNG.
+PAGE_IMAGE_QUALITY = 88
+#: Сколько документов держим открытыми. Просмотр — это один документ, изредка
+#: два рядом; больше нужно только чтобы соседний не выбрасывал текущий.
+OPEN_DOCUMENT_LIMIT = 3
+_OPEN_DOCUMENTS: "OrderedDict[str, _OpenDocument]" = OrderedDict()
+_OPEN_DOCUMENTS_GUARD = threading.Lock()
 
 
 # ── Материал и его вид ──────────────────────────────────────────────────────
@@ -503,6 +515,7 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
         retrieved_at=material.retrieved_at,
         updated_at=material.updated_at,
         storage_path=f"data/storage/{material.storage_path}",
+        raster_token=raster_token(session, material_id),
         typst=typst,
     )
 
@@ -653,30 +666,141 @@ def library_fragment_asset_path(session: Session, material_id: UUID, fragment_id
     return material_path(fragment.asset_path)
 
 
-def library_page_image_path(session: Session, material_id: UUID, page_number: int) -> Path:
+def raster_source(session: Session, material_id: UUID) -> Path | None:
+    """Файл, из которого берётся растр страницы, либо None, если растра нет.
+
+    У Typst-проекта исходник — ZIP, а страницу человек видит в собранном PDF.
+    Подмена источника здесь даёт просмотрщику ровно то же, что у обычного PDF:
+    растр страницы, масштаб, области фрагментов и переходы по оглавлению.
+
+    None — это и формат без страниц (текст, веб, аудио), и ещё не собранный
+    Typst-проект. Отсутствие сборки — обычное состояние только что загруженного
+    материала, и карточка обязана читаться: метка растра спрашивается при каждом
+    опросе карточки, в том числе пока сборка идёт.
+    """
     material = material_or_404(session, material_id)
-    # У Typst-проекта исходник — ZIP, а страницу человек видит в собранном PDF.
-    # Подмена источника здесь даёт просмотрщику ровно то же, что у обычного PDF:
-    # растр страницы, масштаб, области фрагментов и переходы по оглавлению.
-    source = (
-        typst_rendered_source(session, material_id).path
-        if material.source_kind == MaterialSourceKind.TYPST
-        else material_path(material.storage_path)
-    )
-    if source.suffix.lower() in {".jpg", ".jpeg", ".png"}:
-        return source
-    if source.suffix.lower() != ".pdf":
+    if material.source_kind == MaterialSourceKind.TYPST:
+        try:
+            return typst_rendered_source(session, material_id).path
+        except ProjectDomainError:
+            return None
+    source = material_path(material.storage_path)
+    return source if source.suffix.lower() in RASTER_SOURCE_SUFFIXES else None
+
+
+def raster_token(session: Session, material_id: UUID) -> str:
+    """Метка растра для адреса картинки: меняется ровно тогда, когда меняется файл.
+
+    Имя обычного исходника содержит хеш содержимого, поэтому при неизменном файле
+    метка постоянна и браузер не перезапрашивает уже полученные страницы. У Typst
+    путь указывает на конкретную сборку, и пересборка меняет метку сама.
+    """
+    source = raster_source(session, material_id)
+    if source is None:
+        return "none"
+    return hashlib.sha256(str(source).encode("utf-8")).hexdigest()[:12]
+
+
+def page_image_cache_headers(requested_token: str | None, actual: str) -> dict[str, str]:
+    """Год кэша адресу с актуальной меткой растра, минута — адресу без неё.
+
+    Просмотрщик листает страницы вперёд-назад, и каждый повторный заход за уже
+    полученной картинкой — лишний круг до сервера. С меткой в адресе повторов
+    нет вовсе: сменился файл — сменился адрес.
+    """
+    if requested_token is not None and requested_token == actual:
+        return {"Cache-Control": "private, max-age=31536000, immutable"}
+    return {"Cache-Control": "private, max-age=60"}
+
+
+def library_page_image_path(session: Session, material_id: UUID, page_number: int) -> Path:
+    source = raster_source(session, material_id)
+    if source is None:
         raise ProjectDomainError(
             "У этого формата нет исходной страницы", status=422, code="page_image_unavailable"
         )
-    cache = settings.storage_dir / "pages" / str(material_id) / f"{page_number}.png"
-    if not cache.exists():
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        document = fitz.open(source)
-        if page_number < 1 or page_number > len(document):
+    if source.suffix.lower() != ".pdf":
+        return source
+    return _rendered_pdf_page(source, material_id, page_number)
+
+
+def _rendered_pdf_page(source: Path, material_id: UUID, page_number: int) -> Path:
+    """Растр страницы PDF из кэша на диске; отсутствующий — рисуется и сохраняется.
+
+    WebP вместо PNG: при том же исходном пикселе он вдвое легче и кодируется
+    быстрее, а на тысячестраничном учебнике разница в кэше — сотни мегабайт.
+    Ранее нарисованные PNG остаются годными и не перерисовываются.
+    """
+    directory = settings.storage_dir / "pages" / str(material_id)
+    cache = directory / f"{page_number}.webp"
+    legacy = directory / f"{page_number}.png"
+    if cache.exists():
+        return cache
+    if legacy.exists():
+        return legacy
+
+    entry = _open_document(source)
+    # Документ MuPDF нельзя дёргать из двух потоков сразу, а соседние страницы
+    # предзагружаются — запросы приходят пачкой. Замок документа и решает обе
+    # задачи: рисует по одной странице и не даёт нарисовать одну дважды.
+    with entry.lock:
+        if cache.exists():
+            return cache
+        if page_number < 1 or page_number > len(entry.document):
             raise ProjectNotFoundError("Страница не найдена", code="material_page_not_found")
-        document[page_number - 1].get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False).save(cache)
+        pixmap = entry.document[page_number - 1].get_pixmap(
+            matrix=fitz.Matrix(1.5, 1.5), alpha=False
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+        # Пишем через временный файл: параллельный запрос иначе успевает отдать
+        # недописанную картинку, и страница приходит в браузер обрезанной.
+        staging = directory / f"{page_number}.{os.getpid()}.{threading.get_ident()}.part"
+        pixmap.pil_save(staging, format="WEBP", quality=PAGE_IMAGE_QUALITY, method=0)
+        os.replace(staging, cache)
     return cache
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenDocument:
+    document: fitz.Document
+    #: Путь, размер и время правки: по ним видно, что файл под кэшем подменили.
+    signature: tuple[str, int, float]
+    lock: threading.Lock
+
+
+def _open_document(source: Path) -> _OpenDocument:
+    """Открытый PDF из небольшого кэша процесса.
+
+    Разбор оглавления файла — самая дорогая часть показа страницы: у учебника
+    на тысячу страниц `open()` занимает около секунды, а сама отрисовка — десятые
+    доли. Открывая файл на каждый запрос, мы платили эту секунду за каждое
+    перелистывание.
+    """
+    stat = source.stat()
+    signature = (str(source), stat.st_size, stat.st_mtime)
+    key = str(source)
+    with _OPEN_DOCUMENTS_GUARD:
+        entry = _OPEN_DOCUMENTS.get(key)
+        if entry is not None and entry.signature == signature:
+            _OPEN_DOCUMENTS.move_to_end(key)
+            return entry
+        entry = _OpenDocument(fitz.open(source), signature, threading.Lock())
+        _OPEN_DOCUMENTS[key] = entry
+        _OPEN_DOCUMENTS.move_to_end(key)
+        while len(_OPEN_DOCUMENTS) > OPEN_DOCUMENT_LIMIT:
+            # Выброшенный документ закроется сам, когда его отпустит последний
+            # рисующий поток: явный close() здесь уронил бы чужую отрисовку.
+            _OPEN_DOCUMENTS.popitem(last=False)
+        return entry
+
+
+def drop_page_images(material_id: UUID) -> None:
+    """Забыть нарисованные страницы: исходный PDF материала стал другим.
+
+    Открытые документы отдельно сбрасывать не нужно: пересборка кладёт PDF по
+    новому пути, а подмену файла по прежнему пути ловит его сигнатура.
+    """
+    shutil.rmtree(settings.storage_dir / "pages" / str(material_id), ignore_errors=True)
 
 
 @dataclass(frozen=True, slots=True)

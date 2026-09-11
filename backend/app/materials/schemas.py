@@ -363,6 +363,9 @@ class LibraryMaterialDetailRead(LibraryMaterialRead):
     # Путь от корня проекта, а не абсолютный: инспектор — не про то, куда
     # установлен Tentex на этой машине, а про то, где файл лежит внутри `data/`.
     storage_path: str
+    #: Метка растра страниц для адреса картинки: пока она та же, браузер не
+    #: перезапрашивает уже показанные страницы.
+    raster_token: str
     typst: TypstMaterialRead | None = None
 
 

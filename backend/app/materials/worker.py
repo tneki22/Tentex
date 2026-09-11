@@ -510,6 +510,9 @@ def _register_typst_build(
             row.compiler_version = result.compiler_version
             row.build_hash = hashlib.sha256(material_path(render_path).read_bytes()).hexdigest()
             row.issues = result.diagnostics
+    # Пересобранный проект — другие страницы. Нарисованные по прошлой сборке
+    # растры иначе переживают её и показываются вместо нового документа.
+    library.drop_page_images(material_id)
 
 
 def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:

@@ -424,6 +424,10 @@ export function LibraryMaterialWorkspace() {
             focusedFragmentId={focusedFragmentId}
             currentTime={currentTime}
             onTimeUpdate={setCurrentTime}
+            flow={editOpen ? "paged" : view.flow}
+            pageCount={pageCount}
+            pageAspect={geometry.pageAspect}
+            onPageChange={view.reportPage}
             scrollRef={view.attachScroll}
           />
         )
@@ -510,6 +514,7 @@ export function LibraryMaterialWorkspace() {
           canCompare={!isVersionComparison && canCompare}
           page={activePage}
           pageCount={pageCount}
+          flow={view.flow}
           query={search.query}
           zoom={view.zoom}
           zoomPercent={view.zoomPercent}
@@ -530,6 +535,7 @@ export function LibraryMaterialWorkspace() {
           editing={editOpen}
           panelTools={panelTools}
           onModeChange={isVersionComparison ? () => undefined : setMode}
+          onFlowChange={view.setFlow}
           onPageChange={view.goToPage}
           onQueryChange={search.setQuery}
           onQuerySubmit={search.step}

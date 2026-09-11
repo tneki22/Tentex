@@ -10,7 +10,12 @@ import {
   type MaterialPageRead,
   type ParserMode,
 } from "../../api/materials";
-import { StructuredPage, TimedTranscript } from "../../components/domain/material-viewer";
+import {
+  PageFlow,
+  StructuredPage,
+  TimedTranscript,
+  type PageFlowMode,
+} from "../../components/domain/material-viewer";
 import { EmptyState, LoadingState, Switch } from "../../components/ui";
 import { AudioTranscriptView } from "./AudioTranscriptView";
 import { WebSnapshotView } from "./WebSnapshotView";
@@ -55,6 +60,12 @@ interface MaterialSourceViewProps {
   focusedFragmentId: string | null;
   currentTime: number;
   onTimeUpdate: (seconds: number) => void;
+  /** Постранично или лентой; имеет смысл только у растровых видов. */
+  flow?: PageFlowMode;
+  pageCount?: number;
+  pageAspect?: number;
+  /** Лента сама сообщает страницу, на которой остановилась прокрутка. */
+  onPageChange?: (page: number) => void;
   /** Замер «вписать страницу» идёт по этой области, а не по всей сцене:
       в режиме сравнения исходнику достаётся только половина ширины. */
   scrollRef?: (node: HTMLDivElement | null) => void;
@@ -75,6 +86,10 @@ export function MaterialSourceView({
   focusedFragmentId,
   currentTime,
   onTimeUpdate,
+  flow = "paged",
+  pageCount = 1,
+  pageAspect = 900 / 680,
+  onPageChange,
   scrollRef,
 }: MaterialSourceViewProps) {
   const audio = useRef<HTMLAudioElement>(null);
@@ -109,30 +124,39 @@ export function MaterialSourceView({
     case "pdf":
     case "image":
       return (
-        <div className="viewer-sheet-scroll" ref={scrollRef}>
-          <div className="viewer-sheet" style={{ "--viewer-zoom": zoom } as CSSProperties}>
-            <img
-              src={libraryPageImageUrl(material.id, page?.page_number ?? pageNumber)}
-              alt={`Исходное изображение страницы ${page?.page_number ?? pageNumber} — ${material.original_name}`}
-            />
-            {showRegions && page && (
-              <div className="viewer-region-layer" aria-hidden="true">
-                {page.fragments.map((fragment) => (
-                  <span
-                    key={fragment.id}
-                    className={fragment.id === focusedFragmentId ? "is-focused" : ""}
-                    style={{
-                      left: `${fragment.bbox[0] * 100}%`,
-                      top: `${fragment.bbox[1] * 100}%`,
-                      width: `${(fragment.bbox[2] - fragment.bbox[0]) * 100}%`,
-                      height: `${(fragment.bbox[3] - fragment.bbox[1]) * 100}%`,
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+        <PageFlow
+          mode={flow}
+          page={pageNumber}
+          pageCount={pageCount}
+          zoom={zoom}
+          aspect={pageAspect}
+          imageUrl={(number) => libraryPageImageUrl(material.id, number, material.raster_token)}
+          pageLabel={(number) => `Исходное изображение страницы ${number} — ${material.original_name}`}
+          overlay={(number) => (
+            // Рамки известны только для загруженной страницы: в ленте соседние
+            // листы показываются без них, а не с чужими координатами.
+            showRegions && page && page.page_number === number
+              ? (
+                <div className="viewer-region-layer" aria-hidden="true">
+                  {page.fragments.map((fragment) => (
+                    <span
+                      key={fragment.id}
+                      className={fragment.id === focusedFragmentId ? "is-focused" : ""}
+                      style={{
+                        left: `${fragment.bbox[0] * 100}%`,
+                        top: `${fragment.bbox[1] * 100}%`,
+                        width: `${(fragment.bbox[2] - fragment.bbox[0]) * 100}%`,
+                        height: `${(fragment.bbox[3] - fragment.bbox[1]) * 100}%`,
+                      }}
+                    />
+                  ))}
+                </div>
+              )
+              : null
+          )}
+          onPageChange={(next) => onPageChange?.(next)}
+          scrollRef={scrollRef}
+        />
       );
 
     case "document":

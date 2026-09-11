@@ -7,6 +7,7 @@
  */
 export { DocumentSearchField } from "./DocumentSearchField";
 export { DocumentStage } from "./DocumentStage";
+export { PageFlow } from "./PageFlow";
 export { PdfOutline } from "./PdfOutline";
 export { StructuredPage, MarkdownTable, highlight } from "./StructuredPage";
 export { TimedTranscript, formatTime } from "./TimedTranscript";
@@ -17,5 +18,6 @@ export type {
   MaterialPresentation,
   MaterialPresentationKind,
   MaterialViewMode,
+  PageFlowMode,
   ViewerZoom,
 } from "./types";
