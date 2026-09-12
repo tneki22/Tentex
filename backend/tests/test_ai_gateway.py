@@ -1,6 +1,9 @@
+import json
 from decimal import Decimal
 
+import httpx
 import pytest
+from openai import APIStatusError
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +16,7 @@ from app.ai.provider import (
     ProviderError,
     ProviderStreamEvent,
     ProviderUsage,
+    normalize_provider_error,
 )
 from app.ai.schemas import AiMessage, AiModelSelection
 from app.models import (
@@ -29,6 +33,13 @@ class ExampleResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     answer: str
+
+
+class ResultWithDefault(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str
+    notes: str = ""
 
 
 def _request(*, confirmed: bool = False, marker: str = "one") -> AiTextRequest:
@@ -54,6 +65,32 @@ def _completion(answer: str = "ok") -> ProviderCompletion:
             cost_usd=Decimal("0.01"),
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_complete_sends_provider_strict_schema(session: Session, ai_config: str) -> None:
+    del ai_config
+    fake = FakeTransport(completions=[_completion()])
+    request = AiTextRequest(
+        role="material_text_cleanup",
+        messages=[AiMessage(role="user", content="data")],
+        response_model=ResultWithDefault,
+    )
+    await ModelGateway(session, fake).complete(request)
+    schema = fake.complete_requests[0]["response_schema"]
+    assert set(schema["required"]) == set(schema["properties"])
+
+
+def test_openrouter_nested_provider_error_is_explained() -> None:
+    response = httpx.Response(400, request=httpx.Request("POST", "https://provider.invalid"))
+    raw = json.dumps({"error": {"message": "Invalid schema: missing required field"}})
+    error = APIStatusError(
+        "Provider returned error",
+        response=response,
+        body={"message": "Provider returned error", "metadata": {"raw": raw}},
+    )
+    normalized = normalize_provider_error(error)
+    assert normalized.detail.endswith("Invalid schema: missing required field")
 
 
 @pytest.mark.asyncio

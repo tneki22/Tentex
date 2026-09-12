@@ -16,6 +16,7 @@ from io import BytesIO
 from typing import Any
 from uuid import UUID
 
+from openai.lib._pydantic import to_strict_json_schema
 from PIL import Image
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
@@ -288,7 +289,8 @@ class ModelGateway:
         run = self._start_run(request, resolved, preflight)
         started = time.monotonic()
         messages = [item.model_dump() for item in request.messages]
-        response_schema = request.response_model.model_json_schema()
+        response_schema = self._response_schema(request)
+        assert response_schema is not None
         parameters = self._parameters(resolved, {
             **request.parameters,
             "max_output_tokens": preflight.estimated_output_tokens,
@@ -478,7 +480,7 @@ class ModelGateway:
 
     @staticmethod
     def _response_schema(request: AiTextRequest[Any]) -> dict[str, Any] | None:
-        return request.response_model.model_json_schema() if request.response_model else None
+        return to_strict_json_schema(request.response_model) if request.response_model else None
 
     @staticmethod
     def _estimate_input(messages: list[AiMessage], response_schema: dict[str, Any] | None) -> int:

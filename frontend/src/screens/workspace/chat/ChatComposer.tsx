@@ -12,7 +12,7 @@ interface ChatComposerProps {
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
-  onStop: () => void;
+  onStop?: () => void;
   /** Палитра навыков — только у экзаменационного чата; без неё кнопка `+` не рендерится. */
   onOpenPalette?: () => void;
   modes?: ChatCapability[];
@@ -96,9 +96,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               </IconButton>
             </Tooltip>
           )}
-          {sending ? (
+          {sending && onStop ? (
             <Button variant="secondary" className="chat-composer-send" onClick={onStop}>
               <Square size={13} />Остановить
+            </Button>
+          ) : sending ? (
+            <Button variant="secondary" className="chat-composer-send" disabled>
+              Отправляем…
             </Button>
           ) : (
             <Button className="chat-composer-send" onClick={onSend} disabled={disabled || !value.trim()}>

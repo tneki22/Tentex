@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import deque
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
@@ -137,8 +138,26 @@ def _provider_message(error: APIStatusError) -> str:
     for _ in range(2):
         if isinstance(body, dict):
             message = body.get("message")
-            if isinstance(message, str) and message.strip():
+            if (
+                isinstance(message, str)
+                and message.strip()
+                and message.strip() != "Provider returned error"
+            ):
                 return message.strip()
+            metadata = body.get("metadata")
+            raw = metadata.get("raw") if isinstance(metadata, dict) else None
+            if isinstance(raw, str):
+                try:
+                    nested = json.loads(raw)
+                except json.JSONDecodeError:
+                    nested = None
+                if isinstance(nested, dict):
+                    nested_error = nested.get("error")
+                    nested_message = (
+                        nested_error.get("message") if isinstance(nested_error, dict) else None
+                    )
+                    if isinstance(nested_message, str) and nested_message.strip():
+                        return nested_message.strip()
             body = body.get("error")
             continue
         break

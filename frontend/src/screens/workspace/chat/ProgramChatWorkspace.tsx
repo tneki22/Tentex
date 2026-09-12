@@ -18,9 +18,9 @@ import { parsePayload } from "./payload";
 
 const FLAG_META: Record<string, { title: string; icon: typeof BookOpen }> = {
   profile: { title: "Профиль цели", icon: Target },
-  primary_sources: { title: "Основные источники", icon: BookOpen },
-  secondary_sources: { title: "Дополнительные источники", icon: BookOpen },
-  reference_sources: { title: "Справочные источники", icon: BookOpen },
+  primary_sources: { title: "Оглавления основных", icon: BookOpen },
+  secondary_sources: { title: "Оглавления дополнительных", icon: BookOpen },
+  reference_sources: { title: "Оглавления справочных", icon: BookOpen },
 };
 
 function buildProgramChipList(
@@ -178,7 +178,6 @@ export function ProgramChatWorkspace({ projectId, program, execute, onMessagesCh
             value={chat.draft}
             onChange={chat.setDraft}
             onSend={() => void chat.sendMessage(chat.draft)}
-            onStop={() => undefined}
             showModeIndicator={false}
             showDictation={false}
             sending={chat.sending}

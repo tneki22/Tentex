@@ -125,7 +125,7 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft, activeSessionId]);
 
-  async function reloadDetail() {
+  function reloadDetail() {
     setDetailReloadKey((key) => key + 1);
   }
 
@@ -142,9 +142,10 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
     try {
       await sendProgramChatMessage(projectId, activeSessionId, text.trim());
       setDraft("");
-      await reloadDetail();
+      reloadDetail();
     } catch (error) {
       setSendError(error instanceof Error ? error.message : "Сообщение не отправилось");
+      reloadDetail();
     } finally {
       setSending(false);
     }
