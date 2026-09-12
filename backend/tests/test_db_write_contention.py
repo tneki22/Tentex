@@ -14,19 +14,39 @@
 сессии на нём, имитирующие два процесса (API и воркер).
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from uuid import uuid4
 
 import pytest
 from conftest import make_exam_project, make_material
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.db import Base, job_write_transaction, project_write_transaction
+from app.materials import library
+from app.materials import worker as worker_module
 from app.materials.parsers.base import ParsedPage
-from app.materials.worker import _save_page
-from app.models import BackgroundJob, BackgroundJobKind, BackgroundJobState, Project, ProjectStatus
+from app.materials.schemas import ProcessingStart
+from app.materials.worker import (
+    AI_JOB_KINDS,
+    LOCAL_JOB_KINDS,
+    WORKER_LANES,
+    _fill_slots,
+    _save_page,
+    claim_job,
+)
+from app.models import (
+    BackgroundJob,
+    BackgroundJobKind,
+    BackgroundJobState,
+    ParserMode,
+    Project,
+    ProjectStatus,
+)
+from app.projects.errors import ProjectConflictError
 
 
 def _make_engine(path: Path):
@@ -240,3 +260,130 @@ def test_job_write_transaction_without_id_reserves_before_claim_scan(db_path: Pa
     finally:
         engine_a.dispose()
         engine_b.dispose()
+
+
+def test_parallel_claimers_take_distinct_jobs(db_path: Path) -> None:
+    """Два реальных соединения не могут одновременно забрать одну queued-строку."""
+    engine = _make_engine(db_path)
+    try:
+        with Session(engine, expire_on_commit=False) as setup:
+            first = make_material(setup, "c0ffee3")
+            second = make_material(setup, "c0ffee4")
+            setup.add_all(
+                [
+                    BackgroundJob(kind=BackgroundJobKind.PARSE, material_id=first.id),
+                    BackgroundJob(kind=BackgroundJobKind.PARSE, material_id=second.id),
+                ]
+            )
+            setup.commit()
+
+        ready = Barrier(2)
+
+        def take(worker_id: str):
+            with Session(engine, expire_on_commit=False) as worker_session:
+                ready.wait()
+                job = claim_job(worker_session, worker_id)
+                assert job is not None
+                return job.id
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(take, "a"), pool.submit(take, "b")]
+            claimed = {future.result() for future in futures}
+        assert len(claimed) == 2
+    finally:
+        engine.dispose()
+
+
+def test_worker_lanes_cover_every_kind_and_claim_independently(db_path: Path) -> None:
+    """Новый вид задачи нельзя молча оставить без исполнительного слота."""
+    assert AI_JOB_KINDS.isdisjoint(LOCAL_JOB_KINDS)
+    assert AI_JOB_KINDS | LOCAL_JOB_KINDS | {BackgroundJobKind.PARSE} == set(
+        BackgroundJobKind
+    )
+
+    engine = _make_engine(db_path)
+    try:
+        with Session(engine, expire_on_commit=False) as session:
+            local_material = make_material(session, "c0ffee5")
+            cloud_material = make_material(session, "c0ffee6")
+            local = BackgroundJob(
+                kind=BackgroundJobKind.PARSE,
+                material_id=local_material.id,
+                parser_mode=ParserMode.FAST,
+            )
+            cloud = BackgroundJob(
+                kind=BackgroundJobKind.PARSE,
+                material_id=cloud_material.id,
+                parser_mode=ParserMode.CLOUD,
+            )
+            ai = BackgroundJob(kind=BackgroundJobKind.AI_PROGRAM_BUILD)
+            session.add_all([local, cloud, ai])
+            session.commit()
+
+            assert claim_job(session, "cloud", "cloud").id == cloud.id
+            assert claim_job(session, "ai", "ai").id == ai.id
+            assert claim_job(session, "local", "local").id == local.id
+    finally:
+        engine.dispose()
+
+
+def test_pool_fills_all_default_lanes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Настройка по умолчанию запускает local, два cloud и восемь AI-слотов."""
+    queues = {
+        "local": [BackgroundJob(kind=BackgroundJobKind.TYPST_COMPILE)],
+        "cloud": [
+            BackgroundJob(kind=BackgroundJobKind.PARSE, parser_mode=ParserMode.CLOUD)
+            for _ in range(2)
+        ],
+        "ai": [BackgroundJob(kind=BackgroundJobKind.AI_PROGRAM_BUILD) for _ in range(8)],
+    }
+    started = Barrier(12)
+
+    def claim(lane):
+        return queues[lane].pop() if queues[lane] else None
+
+    def process(_: BackgroundJob) -> None:
+        started.wait(timeout=3)
+
+    monkeypatch.setattr(worker_module, "_claim_one", claim)
+    monkeypatch.setattr(worker_module, "_process_claimed_job", process)
+    capacities = {"local": 1, "cloud": 2, "ai": 8}
+    active = {lane: set() for lane in WORKER_LANES}
+    with ThreadPoolExecutor(max_workers=11) as pool:
+        assert _fill_slots(pool, active, capacities) is True
+        started.wait(timeout=3)
+        assert {lane: len(futures) for lane, futures in active.items()} == capacities
+
+
+def test_parallel_starts_create_one_parse_per_material(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Два одновременных POST одного материала дают одну задачу и один conflict."""
+    monkeypatch.setattr(library.ocr_settings, "engine_ready", lambda *_: (True, None))
+    engine = _make_engine(db_path)
+    try:
+        with Session(engine, expire_on_commit=False) as setup:
+            material = make_material(setup, "c0ffee7")
+            material_id = material.id
+
+        ready = Barrier(2)
+
+        def start() -> str:
+            with Session(engine, expire_on_commit=False) as worker_session:
+                ready.wait()
+                try:
+                    library.start_library_processing(
+                        worker_session, material_id, ProcessingStart(parser_mode=ParserMode.FAST)
+                    )
+                except ProjectConflictError as error:
+                    assert error.code == "material_processing_active"
+                    return "conflict"
+                return "started"
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = [future.result() for future in [pool.submit(start), pool.submit(start)]]
+        assert sorted(results) == ["conflict", "started"]
+        with Session(engine) as check:
+            assert len(list(check.scalars(select(BackgroundJob)))) == 1
+    finally:
+        engine.dispose()

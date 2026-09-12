@@ -1,5 +1,4 @@
-"""Диспетчер фоновых задач-ролей ИИ: одна очередь, один воркер, общий словарь
-состояний (Ш2 плана, этап 3).
+"""Диспетчер фоновых задач-ролей ИИ в общей очереди и выделенной AI-полосе.
 
 Каждая роль (`program_ai`, `import_repair`, `preparation_ai`, `ai_cleanup`)
 уже умеет и оценить стоимость (`preflight`), и выполнить сам вызов (`run`) —
@@ -25,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.gateway import ModelGateway
 from app.bindings import answers_ai
+from app.db import job_write_transaction
 from app.materials import ai_cleanup
 from app.models import BackgroundJob, BackgroundJobKind, BackgroundJobState, utc_now
 from app.projects import import_repair, preparation_ai, program_ai, program_chat
@@ -145,7 +145,7 @@ def _mark_finished(session: Session, job_id: UUID, result: BaseModel) -> None:
     `_wire_to_suggestion`. Хранить здесь результат уже после этой сборки — то,
     что позволяет экрану вернуться к готовому предложению, не повторяя разбор.
     """
-    with session.begin():
+    with job_write_transaction(session, job_id):
         job = session.get(BackgroundJob, job_id)
         if job is None:
             return
@@ -165,7 +165,7 @@ def _mark_finished(session: Session, job_id: UUID, result: BaseModel) -> None:
 
 def _mark_failed(session: Session, job_id: UUID, message: str) -> None:
     session.rollback()
-    with session.begin():
+    with job_write_transaction(session, job_id):
         job = session.get(BackgroundJob, job_id)
         if job is None:
             return

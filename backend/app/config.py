@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
@@ -34,6 +35,12 @@ class Settings(BaseSettings):
     ai_timeout_seconds: float = 180.0
     # Typst живёт только в worker-образе; путь можно подменить в локальном smoke.
     typst_binary: Path = Path("typst")
+
+    # Фоновые задачи делят один процесс, но не один слот: локальная обработка
+    # ограничена железом, облачный разбор — сетью, остальные роли ИИ — провайдером.
+    worker_local_concurrency: int = Field(default=1, ge=1, le=32)
+    worker_cloud_concurrency: int = Field(default=2, ge=1, le=32)
+    worker_ai_concurrency: int = Field(default=8, ge=1, le=32)
 
     @property
     def database_path(self) -> Path:

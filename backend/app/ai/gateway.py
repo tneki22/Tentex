@@ -42,6 +42,7 @@ from app.ai.settings import (
     model_capabilities,
     resolve_model,
 )
+from app.db import job_write_transaction
 from app.models import (
     AiCacheEntry,
     AiModelCatalogEntry,
@@ -555,11 +556,18 @@ class ModelGateway:
                 AiRun.status == "succeeded", AiRun.created_at >= start
             )
         )
-        if estimate is not None and Decimal(spent or 0) + estimate > settings.daily_limit_usd:
+        reserved = self.session.scalar(
+            select(func.coalesce(func.sum(AiRun.estimated_cost_usd), 0)).where(
+                AiRun.status == "running", AiRun.created_at >= start
+            )
+        )
+        committed = Decimal(spent or 0)
+        pending = Decimal(reserved or 0)
+        if estimate is not None and committed + pending + estimate > settings.daily_limit_usd:
             raise AiGatewayError(
                 "Дневной лимит внешних моделей исчерпан",
                 code="ai_daily_limit",
-                context={"spent_usd": str(spent or 0)},
+                context={"spent_usd": str(committed), "reserved_usd": str(pending)},
             )
 
     @staticmethod
@@ -592,11 +600,14 @@ class ModelGateway:
     def _start_run(
         self, request: AiTextRequest[Any], resolved: ResolvedModel, preflight: AiPreflight
     ) -> AiRun:
-        settings = self.session.get(AiSettings, 1)
-        model = self.session.get(AiModelCatalogEntry, (resolved.provider.id, resolved.model_id))
-        assert settings is not None and model is not None
         self.session.commit()
-        with self.session.begin():
+        with job_write_transaction(self.session, request.job_id):
+            settings = self.session.get(AiSettings, 1)
+            model = self.session.get(AiModelCatalogEntry, (resolved.provider.id, resolved.model_id))
+            assert settings is not None and model is not None
+            # Preflight остаётся быстрым предпросмотром, но окончательная
+            # проверка и резерв стоимости атомарны с созданием running-записи.
+            self._check_limits(settings, preflight.estimated_cost_usd)
             run = AiRun(
                 project_id=request.project_id,
                 job_id=request.job_id,
@@ -630,7 +641,7 @@ class ModelGateway:
         assert request.response_model is not None
         value = request.response_model.model_validate(cache.response_payload)
         self.session.commit()
-        with self.session.begin():
+        with job_write_transaction(self.session, request.job_id):
             cache.hit_count += 1
             cache.last_used_at = utc_now()
             run = AiRun(
@@ -679,7 +690,7 @@ class ModelGateway:
         cache: bool,
     ) -> AiUsage:
         self.session.commit()
-        with self.session.begin():
+        with job_write_transaction(self.session):
             run = self.session.get(AiRun, run_id)
             assert run is not None
             actual_usd = provider_usage.cost_usd
@@ -721,7 +732,7 @@ class ModelGateway:
 
     def _fail_run(self, run_id: UUID, code: str, started: float, status: str = "failed") -> None:
         self.session.rollback()
-        with self.session.begin():
+        with job_write_transaction(self.session):
             run = self.session.get(AiRun, run_id)
             assert run is not None
             run.status = status

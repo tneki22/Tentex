@@ -274,6 +274,42 @@ async def test_daily_limit_stops_before_provider(session: Session, ai_config: st
 
 
 @pytest.mark.asyncio
+async def test_daily_limit_reserves_running_calls(session: Session, ai_config: str) -> None:
+    """Параллельный вызов учитывает оценку уже идущего, а не только прошлые расходы."""
+    del ai_config
+    gateway = ModelGateway(session, FakeTransport())
+    preflight = await gateway.preflight(_request(marker="reserved"))
+    assert preflight.estimated_cost_usd is not None
+    settings = session.get(AiSettings, 1)
+    assert settings is not None
+    settings.daily_limit_usd = preflight.estimated_cost_usd
+    session.add(
+        AiRun(
+            provider_id=preflight.provider_id,
+            provider_label_snapshot=preflight.provider_label,
+            role=preflight.role,
+            modality=preflight.modality,
+            status="running",
+            requested_model_id=preflight.model_id,
+            prompt_version="test",
+            request_hash=preflight.request_hash,
+            context_manifest=[],
+            estimated_input_tokens=preflight.estimated_input_tokens,
+            estimated_output_tokens=preflight.estimated_output_tokens,
+            estimated_cost_usd=preflight.estimated_cost_usd,
+        )
+    )
+    session.commit()
+
+    fake = FakeTransport(completions=[_completion()])
+    with pytest.raises(ProjectDomainError) as caught:
+        await ModelGateway(session, fake).complete(_request(marker="next"))
+    assert caught.value.code == "ai_daily_limit"
+    assert caught.value.context["reserved_usd"] == str(preflight.estimated_cost_usd)
+    assert fake.complete_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_stream_records_final_usage(session: Session, ai_config: str) -> None:
     del ai_config
     fake = FakeTransport(

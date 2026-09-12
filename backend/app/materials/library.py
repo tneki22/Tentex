@@ -38,6 +38,7 @@ from app.bindings.service import (
     transfer_bindings_on_revision,
 )
 from app.config import settings
+from app.db import job_write_transaction
 from app.materials import revisions as revision_registry
 from app.materials.external import fetch_web_page, fetch_youtube_transcript
 from app.materials.lexicon import index_text, prefix_term, query_terms
@@ -1582,7 +1583,7 @@ def start_library_processing(
     session: Session, material_id: UUID, command: ProcessingStart
 ) -> LibraryMaterialDetailRead:
     session.rollback()
-    with session.begin():
+    with job_write_transaction(session):
         start_processing_core(session, material_id, command)
     return read_library_material(session, material_id)
 
@@ -1591,7 +1592,7 @@ def control_library_task(
     session: Session, material_id: UUID, action: str
 ) -> LibraryMaterialDetailRead:
     session.rollback()
-    with session.begin():
+    with job_write_transaction(session):
         control_task_core(session, material_id, action)
     return read_library_material(session, material_id)
 

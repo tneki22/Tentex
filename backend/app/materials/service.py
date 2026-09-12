@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.gateway import ModelGateway
 from app.bindings.service import delete_project_material_bindings
-from app.db import project_write_transaction
+from app.db import job_write_transaction, project_write_transaction
 from app.materials import library, outline_ai
 from app.materials.library import (
     PURPOSE_VALUES,
@@ -337,7 +337,7 @@ def start_processing(
     session: Session, project_id: UUID, material_id: UUID, command: ProcessingStart
 ) -> MaterialRead:
     """Проектная обёртка над общим запуском: разбор один на всю установку."""
-    with session.begin():
+    with job_write_transaction(session):
         _project(session, project_id, writable=True)
         link = _link(session, project_id, material_id)
         library.start_processing_core(session, material_id, command)
@@ -348,7 +348,7 @@ def start_processing(
 def control_task(
     session: Session, project_id: UUID, material_id: UUID, action: str
 ) -> MaterialRead:
-    with session.begin():
+    with job_write_transaction(session):
         _project(session, project_id, writable=True)
         link = _link(session, project_id, material_id)
         library.control_task_core(session, material_id, action)

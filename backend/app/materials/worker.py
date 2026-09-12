@@ -6,11 +6,14 @@ import shutil
 import socket
 import tempfile
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import timedelta
 from pathlib import Path
+from threading import Event, Thread, get_native_id
+from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -18,6 +21,7 @@ from app.ai.jobs import process_ai_job
 from app.bindings.answers_link import link_answers_material
 from app.bindings.search import reindex_material
 from app.bindings.service import transfer_bindings_on_revision
+from app.config import settings
 from app.db import SessionLocal, job_write_transaction, retry_on_locked, upgrade_database
 from app.logging_config import configure_logging
 from app.materials import library
@@ -57,27 +61,64 @@ from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 log = logging.getLogger("tentex.worker")
 
 LEASE_SECONDS = 60
+HEARTBEAT_SECONDS = 20
+POLL_SECONDS = 0.75
+
+type WorkerLane = Literal["local", "cloud", "ai"]
+
+WORKER_LANES: tuple[WorkerLane, ...] = ("local", "cloud", "ai")
+AI_JOB_KINDS = frozenset(
+    {
+        BackgroundJobKind.AI_GROUPING,
+        BackgroundJobKind.AI_IMPORT_REPAIR,
+        BackgroundJobKind.AI_PREPARATION,
+        BackgroundJobKind.AI_CLEANUP,
+        BackgroundJobKind.AI_ANSWER_SECTIONS,
+        BackgroundJobKind.AI_PROGRAM_BUILD,
+    }
+)
+LOCAL_JOB_KINDS = frozenset(
+    {BackgroundJobKind.TYPST_COMPILE, BackgroundJobKind.LINK_ANSWERS}
+)
 
 
 def _worker_id() -> str:
-    return f"{socket.gethostname()}:{os.getpid()}"
+    return f"{socket.gethostname()}:{os.getpid()}:{get_native_id()}"
 
 
 def _selected(task: BackgroundJob) -> list[int]:
     return [int(value) for value in task.checkpoint.get("selected_pages") or []]
 
 
-def claim_job(session: Session, worker_id: str) -> BackgroundJob | None:
-    """Взять самую старую задачу в очереди — независимо от её вида (`kind`).
+def _lane_condition(lane: WorkerLane):
+    """SQL-условие одной ресурсной полосы без отдельного поля в таблице."""
+    if lane == "ai":
+        return BackgroundJob.kind.in_(AI_JOB_KINDS)
+    if lane == "cloud":
+        return and_(
+            BackgroundJob.kind == BackgroundJobKind.PARSE,
+            BackgroundJob.parser_mode == ParserMode.CLOUD,
+        )
+    return or_(
+        BackgroundJob.kind.in_(LOCAL_JOB_KINDS),
+        and_(
+            BackgroundJob.kind == BackgroundJobKind.PARSE,
+            or_(
+                BackgroundJob.parser_mode.is_(None),
+                BackgroundJob.parser_mode != ParserMode.CLOUD,
+            ),
+        ),
+    )
 
-    ВНИМАНИЕ (известное ограничение, не чинится в этом заходе): выбор читает
-    строку и пишет в неё в одной транзакции. Два воркера (`--scale worker=2`)
-    могут прочитать одну и ту же `queued`-строку до того, как первый успеет
-    выставить `state=running`, и оба возьмутся за одну задачу. Для одного
-    пользователя на одной машине это не заходит — лиз (`LEASE_SECONDS`)
-    защищает только от мёртвого воркера. Безопасный второй воркер потребует
-    условного взятия: `UPDATE ... WHERE id=? AND state='queued'` с проверкой
-    `rowcount == 1` вместо read-then-write.
+
+def claim_job(
+    session: Session, worker_id: str, lane: WorkerLane | None = None
+) -> BackgroundJob | None:
+    """Атомарно взять старейшую задачу выбранной ресурсной полосы.
+
+    `job_write_transaction` резервирует единственный SQLite-writer до чтения,
+    поэтому параллельные потоки и процессы не могут забрать одну строку дважды.
+    `lane=None` сохраняет поведение одноразовых проверочных запусков.
     """
     now = utc_now()
     with job_write_transaction(session):
@@ -93,12 +134,12 @@ def claim_job(session: Session, worker_id: str) -> BackgroundJob | None:
             expired_job.state = BackgroundJobState.QUEUED
             expired_job.lease_owner = None
             expired_job.lease_expires_at = None
-        job = session.scalar(
-            select(BackgroundJob)
-            .where(BackgroundJob.state == BackgroundJobState.QUEUED)
-            .order_by(BackgroundJob.created_at)
-            .limit(1)
+        statement = select(BackgroundJob).where(
+            BackgroundJob.state == BackgroundJobState.QUEUED
         )
+        if lane is not None:
+            statement = statement.where(_lane_condition(lane))
+        job = session.scalar(statement.order_by(BackgroundJob.created_at).limit(1))
         if job is None:
             return None
         job.state = BackgroundJobState.RUNNING
@@ -435,14 +476,20 @@ def _mark_typst_input_needed(
 
 
 def _save_typst_chunks(
-    session: Session, material_id: UUID, revision: int, bundle: Path, entrypoint: str, pages: int
+    session: Session,
+    task_id: UUID,
+    material_id: UUID,
+    revision: int,
+    bundle: Path,
+    entrypoint: str,
+    pages: int,
 ) -> None:
     """Сохраняет exact-code отдельной таблицей: FTS-представление к нему не подмешивается."""
     with tempfile.TemporaryDirectory(prefix="tentex-typst-source-") as raw:
         root = Path(raw)
         extract_bundle(bundle, root)
         chunks = source_chunks(root, entrypoint, pages)
-    with session.begin():
+    with job_write_transaction(session, task_id):
         for order, chunk in enumerate(chunks):
             session.add(
                 TypstSourceChunk(
@@ -467,7 +514,7 @@ def _mark_typst_failed(
     Активная ревизия не трогается: неудачная сборка не должна отбирать у
     пользователя тот PDF, который уже был собран.
     """
-    with session.begin():
+    with job_write_transaction(session, task_id):
         failed = session.get(BackgroundJob, task_id)
         material = session.get(Material, material_id)
         row = session.get(TypstMaterial, material_id)
@@ -486,6 +533,7 @@ def _mark_typst_failed(
 
 def _register_typst_build(
     session: Session,
+    task_id: UUID,
     material_id: UUID,
     revision: int,
     result: CompileResult,
@@ -493,7 +541,7 @@ def _register_typst_build(
     pages: int,
 ) -> None:
     """Отмечает уже активированную ревизию как собранную: PDF, версия, проблемы."""
-    with session.begin():
+    with job_write_transaction(session, task_id):
         material = session.get(Material, material_id)
         row = session.get(TypstMaterial, material_id)
         revision_registry.require_revision(
@@ -541,7 +589,7 @@ def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:
 
         revision = revision_registry.max_revision(session, material_id) + 1
         session.rollback()
-        with session.begin():
+        with job_write_transaction(session, task_id):
             current = session.get(BackgroundJob, task_id)
             assert current is not None
             current.checkpoint = {**current.checkpoint, "revision": revision, "selected_pages": []}
@@ -565,7 +613,7 @@ def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:
         # оставляла материал без заголовков, а без них не работают ни блоки, ни
         # автопривязка ответов. Владелец вырезов — хеш bundle, как у файлов.
         pages = list(text_layer_pages(result.pdf_path, Path(storage_path).stem))
-        with session.begin():
+        with job_write_transaction(session, task_id):
             material = session.get(Material, material_id)
             assert material is not None
             material.outline = extract_outline(result.pdf_path)
@@ -588,9 +636,13 @@ def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:
         # а у Typst каждая сборка даёт новый PDF — без сброса просмотрщик показывал
         # бы страницы прошлой версии.
         shutil.rmtree(material_path(f"pages/{material_id}"), ignore_errors=True)
-        _save_typst_chunks(session, material_id, revision, bundle, entrypoint, len(pages))
+        _save_typst_chunks(
+            session, task_id, material_id, revision, bundle, entrypoint, len(pages)
+        )
         _finish(session, task_id)
-        _register_typst_build(session, material_id, revision, result, render_path, len(pages))
+        _register_typst_build(
+            session, task_id, material_id, revision, result, render_path, len(pages)
+        )
     except Exception as error:
         session.rollback()
         log.exception("typst compile failed material=%s: %s", material_id, error)
@@ -612,7 +664,7 @@ def process_link_answers_job(session: Session, job: BackgroundJob) -> None:
     material_id = job.material_id
     try:
         assert project_id is not None and material_id is not None
-        with session.begin():
+        with job_write_transaction(session, job_id):
             link_answers_material(session, project_id, material_id)
             finished = session.get(BackgroundJob, job_id)
             if finished:
@@ -632,7 +684,7 @@ def process_link_answers_job(session: Session, job: BackgroundJob) -> None:
     except Exception as error:
         session.rollback()
         log.exception("link_answers job failed job=%s: %s", job_id, error)
-        with session.begin():
+        with job_write_transaction(session, job_id):
             failed = session.get(BackgroundJob, job_id)
             if failed:
                 failed.state = BackgroundJobState.FAILED
@@ -642,30 +694,122 @@ def process_link_answers_job(session: Session, job: BackgroundJob) -> None:
                 failed.updated_at = utc_now()
 
 
-def run_once() -> bool:
-    with SessionLocal() as session:
-        worker_id = _worker_id()
-        job = claim_job(session, worker_id)
-        if job is None:
+def _renew_lease(session: Session, job_id: UUID, worker_id: str) -> bool:
+    """Продлить лиз своей running-задачи; чужую или завершённую не трогать."""
+    with job_write_transaction(session, job_id):
+        job = session.get(BackgroundJob, job_id)
+        if (
+            job is None
+            or job.state != BackgroundJobState.RUNNING
+            or job.lease_owner != worker_id
+        ):
             return False
-        started = time.perf_counter()
-        # Одна очередь, один диспетчер: вид задачи решает, какой обработчик
-        # её доводит до конца, а состояние (`state`) остаётся общим для всех.
-        if job.kind == BackgroundJobKind.PARSE:
-            process_parse_job(session, job)
-        elif job.kind == BackgroundJobKind.TYPST_COMPILE:
-            process_typst_compile_job(session, job)
-        elif job.kind == BackgroundJobKind.LINK_ANSWERS:
-            process_link_answers_job(session, job)
-        else:
-            process_ai_job(session, job)
-        log.info(
-            "processed job=%s kind=%s %.1fms",
-            job.id,
-            job.kind,
-            (time.perf_counter() - started) * 1000,
-        )
+        now = utc_now()
+        job.heartbeat_at = now
+        job.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
+        job.updated_at = now
         return True
+
+
+def _heartbeat(job_id: UUID, worker_id: str, stopped: Event) -> None:
+    """Не дать параллельному claim повторно взять долгий сетевой вызов."""
+    while not stopped.wait(HEARTBEAT_SECONDS):
+        try:
+            with SessionLocal() as session:
+                if not _renew_lease(session, job_id, worker_id):
+                    return
+        except OperationalError as error:
+            log.warning("heartbeat delayed job=%s: %s", job_id, error)
+
+
+def _process_claimed_job(job: BackgroundJob) -> None:
+    """Выполнить уже взятую задачу в собственной SQLAlchemy-сессии."""
+    assert job.lease_owner is not None
+    stopped = Event()
+    heartbeat = Thread(
+        target=_heartbeat,
+        args=(job.id, job.lease_owner, stopped),
+        daemon=True,
+        name=f"lease-{job.id}",
+    )
+    heartbeat.start()
+    with SessionLocal() as session:
+        try:
+            started = time.perf_counter()
+            if job.kind == BackgroundJobKind.PARSE:
+                process_parse_job(session, job)
+            elif job.kind == BackgroundJobKind.TYPST_COMPILE:
+                process_typst_compile_job(session, job)
+            elif job.kind == BackgroundJobKind.LINK_ANSWERS:
+                process_link_answers_job(session, job)
+            else:
+                process_ai_job(session, job)
+            log.info(
+                "processed job=%s kind=%s %.1fms",
+                job.id,
+                job.kind,
+                (time.perf_counter() - started) * 1000,
+            )
+        finally:
+            stopped.set()
+            heartbeat.join()
+
+
+def _claim_one(lane: WorkerLane | None = None) -> BackgroundJob | None:
+    with SessionLocal() as session:
+        return claim_job(session, _worker_id(), lane)
+
+
+def run_once() -> bool:
+    """Синхронно выполнить старейшую задачу; используется smoke-скриптами."""
+    job = _claim_one()
+    if job is None:
+        return False
+    _process_claimed_job(job)
+    return True
+
+
+def _reap_finished(active: dict[WorkerLane, set[Future[None]]]) -> None:
+    """Освободить слоты; неожиданный сбой виден в логе и переживается лизом."""
+    for futures in active.values():
+        for future in tuple(item for item in futures if item.done()):
+            futures.remove(future)
+            try:
+                future.result()
+            except Exception:  # noqa: BLE001 — задача вернётся после истечения лиза
+                log.exception("worker slot crashed; leased job will be retried")
+
+
+def _fill_slots(
+    pool: ThreadPoolExecutor,
+    active: dict[WorkerLane, set[Future[None]]],
+    capacities: dict[WorkerLane, int],
+) -> bool:
+    """Взять задачи только для свободных слотов каждой полосы."""
+    claimed = False
+    for lane in WORKER_LANES:
+        while len(active[lane]) < capacities[lane]:
+            job = _claim_one(lane)
+            if job is None:
+                break
+            active[lane].add(pool.submit(_process_claimed_job, job))
+            claimed = True
+    return claimed
+
+
+def run_pool(capacities: dict[WorkerLane, int]) -> None:
+    """Постоянно заполнять независимые слоты локальных, облачных и AI-задач."""
+    active: dict[WorkerLane, set[Future[None]]] = {lane: set() for lane in WORKER_LANES}
+    with ThreadPoolExecutor(max_workers=sum(capacities.values()), thread_name_prefix="job") as pool:
+        while True:
+            _reap_finished(active)
+            if _fill_slots(pool, active, capacities):
+                continue
+            pending = set().union(*active.values())
+            if pending:
+                wait(pending, timeout=POLL_SECONDS, return_when=FIRST_COMPLETED)
+            else:
+                time.sleep(POLL_SECONDS)
 
 
 def main() -> None:
@@ -677,9 +821,13 @@ def main() -> None:
     if args.once:
         run_once()
         return
-    while True:
-        if not run_once():
-            time.sleep(0.75)
+    run_pool(
+        {
+            "local": settings.worker_local_concurrency,
+            "cloud": settings.worker_cloud_concurrency,
+            "ai": settings.worker_ai_concurrency,
+        }
+    )
 
 
 if __name__ == "__main__":

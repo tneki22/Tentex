@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.materials import library
 from app.materials.parsers.base import ParsedElement
-from app.materials.worker import _prepare_revision
+from app.materials.worker import _prepare_revision, _renew_lease
 from app.models import (
     BackgroundJob,
     BackgroundJobKind,
@@ -126,6 +126,20 @@ def test_cancel_discards_building_revision_and_frees_material(session: Session) 
         is not None
     )
     assert detail.task is None
+
+
+def test_running_job_renews_only_its_own_lease(session: Session) -> None:
+    material = make_material(session, "ca10")
+    task = _task(material, state=BackgroundJobState.RUNNING, selected=[1])
+    task.lease_owner = "worker-a"
+    session.add(task)
+    session.commit()
+
+    assert _renew_lease(session, task.id, "worker-b") is False
+    assert _renew_lease(session, task.id, "worker-a") is True
+    session.refresh(task)
+    assert task.heartbeat_at is not None
+    assert task.lease_expires_at is not None
 
 
 def test_cancel_of_first_parse_returns_material_to_ready_to_process(session: Session) -> None:

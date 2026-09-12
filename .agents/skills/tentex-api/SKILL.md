@@ -36,7 +36,7 @@ description: Правила бэкенда Tentex — слои, доменные
 
 ## Фоновые операции
 
-Долгая работа живёт в общей модели `BackgroundJob`, а не в HTTP-запросе или старом `ProcessingTask`; виды, состояния, review/result и маршруты описаны в `docs/architecture/background-jobs.md`. В поставке один worker и одна общая очередь. Второй worker сейчас небезопасен из-за read-then-write в `materials.worker.claim_job`, поэтому не масштабируй сервис без атомарного conditional claim.
+Долгая работа живёт в общей модели `BackgroundJob`, а не в HTTP-запросе или старом `ProcessingTask`; виды, состояния, review/result и маршруты описаны в `docs/architecture/background-jobs.md`. Один worker-процесс исполняет независимые полосы `local`, `cloud` и `ai` с настраиваемым числом слотов. `claim_job` безопасен для параллельных потоков и процессов благодаря предварительной резервации SQLite-writer; отдельные процессы обычно не нужны, потому что умножают пределы всех полос.
 
 ## Логирование
 

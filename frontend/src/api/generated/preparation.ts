@@ -3576,8 +3576,10 @@ export interface components {
         };
         /**
          * BackgroundJobKind
-         * @description Вид фоновой операции. Одна очередь и один воркер на все — модель разбора
-         *     материала (Р3/Р4) поднята до общего реестра, а не заведена рядом с ним.
+         * @description Вид фоновой операции в общем реестре с независимыми ресурсными полосами.
+         *
+         *     Модель разбора материала (Р3/Р4) поднята до общего реестра, а не заведена
+         *     рядом с ним.
          * @enum {string}
          */
         BackgroundJobKind: "parse" | "ai_grouping" | "ai_import_repair" | "ai_preparation" | "ai_cleanup" | "link_answers";
