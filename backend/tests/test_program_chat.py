@@ -145,6 +145,8 @@ async def test_send_message_creates_program_diff_message(session: Session, ai_co
     del ai_config
     project = _project(session)
     chat = program_chat.create_session(session, project.id)
+    chat.draft_text = "Составь программу"
+    session.commit()
     fake = FakeTransport(completions=[
         _reply_completion("Добавим раздел", [
             {"op": "add", "parent_node_id": None, "after_node_id": None, "node_type": "section",
@@ -158,6 +160,12 @@ async def test_send_message_creates_program_diff_message(session: Session, ai_co
     assert message.payload_kind == ChatPayloadKind.PROGRAM_DIFF
     assert message.payload["operations"][0]["op"] == "add"
     assert message.payload["operation_states"] == ["pending"]
+    session.refresh(chat)
+    assert chat.draft_text == ""
+    request = fake.complete_requests[0]
+    assert "oneOf" not in json.dumps(request["response_schema"])
+    schema = request["response_schema"]
+    assert set(schema["required"]) == set(schema["properties"])
 
 
 def test_outline_build_runs_as_background_job_and_appends_message(
