@@ -276,6 +276,13 @@ pros/cons — плюсы и минусы предложения, operations — 
 operations и ответь в summary.
 
 Правила:
+- Если программа пуста и пользователь просит составить её по своей цели,
+  выбери подходящие пункты из оглавлений с учётом паспорта цели и верни add.
+- Если программа уже есть, сохраняй не затронутые запросом ветви. Для просьбы
+  углубить тему добавь подходящие темы или подпункты из оглавления, а для
+  отказа от темы верни set_visibility с is_in_current_program=false.
+- Видимость меняется для всего поддерева: чтобы убрать или вернуть ветвь,
+  достаточно одной операции set_visibility для её верхнего узла.
 - add.outline_ref заполняй, только если формулировка и страница темы взяты
   из переданного оглавления источника — укажи его material_id и
   outline_item_key дословно, как они даны в контексте. Не изобретай ключи.
@@ -1164,6 +1171,10 @@ def _snapshot_touched(
         for node_id in op.node_ids:
             _snapshot_node(node_snapshots, nodes_by_id[node_id])
         return
+    if isinstance(op, ProgramChatSetVisibilityOperation):
+        for node_id in program._subtree_ids(list(nodes_by_id.values()), op.node_id):  # noqa: SLF001
+            _snapshot_node(node_snapshots, nodes_by_id[node_id])
+        return
     _snapshot_node(node_snapshots, nodes_by_id[op.node_id])
 
 
@@ -1336,11 +1347,21 @@ def _apply_set_goal(node: ProgramNode, op: ProgramChatSetGoalOperation) -> None:
     node.updated_at = utc_now()
 
 
-def _apply_set_visibility(node: ProgramNode, op: ProgramChatSetVisibilityOperation) -> None:
-    node.is_in_current_program = op.is_in_current_program
-    node.origin_kind = OriginKind.MODEL
-    node.origin_note = op.rationale[:500] if op.rationale else None
-    node.updated_at = utc_now()
+def _apply_set_visibility(
+    nodes: list[ProgramNode],
+    nodes_by_id: dict[UUID, ProgramNode],
+    op: ProgramChatSetVisibilityOperation,
+) -> None:
+    root = nodes_by_id[op.node_id]
+    if op.is_in_current_program:
+        program._visible_parent(nodes_by_id, root.parent_id)  # noqa: SLF001
+    now = utc_now()
+    for node_id in program._subtree_ids(nodes, op.node_id):  # noqa: SLF001
+        node = nodes_by_id[node_id]
+        node.is_in_current_program = op.is_in_current_program
+        node.origin_kind = OriginKind.MODEL
+        node.origin_note = op.rationale[:500] if op.rationale else None
+        node.updated_at = now
 
 
 def _apply_merge(
@@ -1474,7 +1495,7 @@ def apply_proposal(
             elif isinstance(op, ProgramChatSetGoalOperation):
                 _apply_set_goal(nodes_by_id[op.node_id], op)
             elif isinstance(op, ProgramChatSetVisibilityOperation):
-                _apply_set_visibility(nodes_by_id[op.node_id], op)
+                _apply_set_visibility(nodes, nodes_by_id, op)
             elif isinstance(op, ProgramChatMergeOperation):
                 _apply_merge(session, op, nodes_by_id, page_range_moves)
             states[index] = "applied"

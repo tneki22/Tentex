@@ -5643,6 +5643,7 @@ button.wizard-back-projects {
 /* --- Мастер проекта по учебнику --- */
 
 .wizard-flow { width: min(920px, 100%); margin: 0 auto; }
+.wizard-flow.is-program-editor { width: min(1480px, 100%); }
 .wizard-flow .wizard-step { display: grid; gap: var(--space-5); }
 
 /* Меньше пустоты под шапкой шага: ритм держит сетка, а собственный отступ
@@ -7328,7 +7329,7 @@ button.wizard-back-projects {
  * вместо Дерево/Текст/Вопросы. grid-row занимает всё, что осталось после header/error-slot,
  * независимо от того, что в режиме «Вручную» там же три отдельных ряда. */
 .textbook-program-ai-content { grid-row: 3 / -1; min-height: 0; display: flex; }
-.textbook-program-ai-layout { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); }
+.textbook-program-ai-layout { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 3fr) minmax(420px, 2fr); }
 .textbook-program-ai-layout > .program-chat-workspace { min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
 .textbook-program-ai-layout > .program-tree-preview { min-width: 0; min-height: 0; overflow-y: auto; padding: var(--space-4) var(--space-5); background: var(--paper-strong); }
 
@@ -7346,6 +7347,39 @@ button.wizard-back-projects {
   flex-direction: column;
   gap: 2px;
 }
+.program-tree-preview-children { flex-basis: 100%; }
+
+.program-tree-preview-head {
+  position: sticky;
+  z-index: 1;
+  top: calc(var(--space-4) * -1);
+  display: grid;
+  gap: var(--space-2);
+  margin: calc(var(--space-4) * -1) calc(var(--space-5) * -1) var(--space-3);
+  padding: var(--space-4) var(--space-5) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-strong);
+}
+
+.program-tree-preview-head h2,
+.program-tree-preview-head p { margin: 0; }
+.program-tree-preview-head h2 { font-size: var(--text-base); }
+.program-tree-preview-head p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.program-tree-preview-head p span {
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--ink-soft);
+}
+.program-tree-preview-head p span.is-new { background: var(--tone-success); }
+.program-tree-preview-head p span.is-removed { background: var(--tone-danger); }
 
 .program-tree-preview-row {
   display: flex;
@@ -7356,8 +7390,17 @@ button.wizard-back-projects {
   font-size: var(--text-sm);
 }
 
-.program-tree-preview-row.is-new {
+.program-tree-preview-row.is-new,
+.program-tree-preview-title.is-new,
+.program-tree-preview-type.is-new {
   color: var(--tone-success);
+}
+
+.program-tree-preview-row.is-removed,
+.program-tree-preview-title.is-removed,
+.program-tree-preview-type.is-removed {
+  color: var(--tone-danger);
+  text-decoration: line-through;
 }
 
 .program-tree-preview-type {
@@ -7367,15 +7410,6 @@ button.wizard-back-projects {
   letter-spacing: 0.02em;
 }
 
-.program-tree-preview-note {
-  font-size: var(--text-xs);
-  color: var(--tone-warning);
-}
-
-.program-tree-preview-note.is-hidden,
-.program-tree-preview-note.is-merged {
-  color: var(--tone-danger);
-}
 .textbook-program-error-slot:empty { min-height: 0; }
 .textbook-program-panel { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; }
 

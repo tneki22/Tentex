@@ -163,6 +163,9 @@ async def test_send_message_creates_program_diff_message(session: Session, ai_co
     session.refresh(chat)
     assert chat.draft_text == ""
     request = fake.complete_requests[0]
+    system_prompt = request["messages"][0]["content"]
+    assert "сохраняй не затронутые запросом ветви" in system_prompt
+    assert "set_visibility с is_in_current_program=false" in system_prompt
     assert "oneOf" not in json.dumps(request["response_schema"])
     schema = request["response_schema"]
     assert set(schema["required"]) == set(schema["properties"])
@@ -275,6 +278,37 @@ def test_apply_partial_then_conflict_then_reapply(session: Session, ai_config: s
     new_node = next(node for node in second.program.nodes if node.title == "Новая тема")
     assert new_node.basis_kind == ProgramBasisKind.CUSTOM
     assert new_node.needs_material is True
+
+
+def test_set_visibility_applies_to_subtree_and_undo_restores_it(
+    session: Session, ai_config: str,
+) -> None:
+    del ai_config
+    project = _project(session)
+    chat = program_chat.create_session(session, project.id)
+    parent = _node(session, project, "DNS")
+    child = _node(session, project, "Протокол DNS", parent_id=parent.id)
+    message = _diff_message(session, chat, [{
+        "op": "set_visibility",
+        "node_id": str(parent.id),
+        "is_in_current_program": False,
+        "rationale": "Не входит в цель",
+    }])
+
+    result = program_chat.apply_proposal(
+        session, project.id, message.id,
+        program_chat.ProgramChatApplyWrite(selected=[0], expected_program_revision=0),
+    )
+    visibility = {node.id: node.is_in_current_program for node in result.program.nodes}
+    assert not visibility[parent.id]
+    assert not visibility[child.id]
+
+    action = result.latest_undoable_action
+    assert action is not None
+    restored = program.undo_last_project_action(session, project.id, action.sequence)
+    restored_visibility = {node.id: node.is_in_current_program for node in restored.program.nodes}
+    assert restored_visibility[parent.id]
+    assert restored_visibility[child.id]
 
 
 def test_apply_rejects_stale_revision(session: Session, ai_config: str) -> None:

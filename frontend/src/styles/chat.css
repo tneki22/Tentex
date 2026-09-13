@@ -81,6 +81,25 @@
   text-align: center;
 }
 
+.chat-empty-invite h2,
+.chat-empty-invite p {
+  margin: 0;
+}
+
+.chat-empty-invite > p {
+  max-width: 58ch;
+  line-height: var(--leading-relaxed);
+}
+
+.chat-empty-context-note {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
 .chat-timeline-wrap {
   position: relative;
   flex: 1;
@@ -1067,11 +1086,6 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-}
-
-.program-chat-build-status {
-  padding: var(--space-3) var(--space-5);
-  border-bottom: 1px solid var(--line);
 }
 
 .program-diff-card {

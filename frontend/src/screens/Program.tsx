@@ -554,7 +554,7 @@ export function Program() {
             actions={<>
               <Button variant="ghost" disabled={!actions.canUndo || actions.busy} onClick={() => void actions.undo()}><Undo2 size={15} />Отменить</Button>
               <SegmentedTabs label="Режим составления программы" value={textbookMode} onChange={setTextbookMode} tabs={[{ value: "manual", label: "Вручную" }, { value: "ai", label: "С ИИ" }]} />
-              <Button variant="secondary" disabled={actions.busy} onClick={actions.openImport}><Files size={15} />Импортировать программу из оглавления</Button>
+              <Button variant="secondary" disabled={actions.busy} onClick={actions.openImport}><Files size={15} />Импортировать оглавление</Button>
               <Button variant="ghost" disabled={actions.busy || !actions.hasNodes} onClick={actions.openRemoveAll}><Trash2 size={15} />Удалить все</Button>
             </>}
           />}
