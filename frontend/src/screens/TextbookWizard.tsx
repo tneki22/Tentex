@@ -257,7 +257,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   const busy = controller.status === "saving";
 
   return (
-    <div className="wizard-flow">
+    <div className={`wizard-flow ${step === 4 ? "is-program-editor" : ""}`.trim()}>
       {step !== 4 && <PageHead title={step === 1 ? "Добавьте материалы, на которых строить программу" : step === 2 ? "Чему именно вы хотите научиться?" : step === 3 ? "Проверка" : "Итог"} />}
       {(actionError || controller.error) && <p className="inline-error" role="alert">{actionError || controller.error?.message}</p>}
       {controller.conflict && <Card><h2>Черновик изменился в другой вкладке</h2><Button onClick={() => void controller.reload()}>Загрузить серверную версию</Button></Card>}
@@ -426,7 +426,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
             renderHeader={(actions) => <header className="textbook-builder-head">
               <Button variant="ghost" disabled={!actions.canUndo || actions.busy} onClick={() => void actions.undo()}><Undo2 size={15} />Отменить</Button>
               <SegmentedTabs label="Режим составления программы" value={programMode} onChange={setProgramMode} tabs={[{ value: "manual", label: "Вручную" }, { value: "ai", label: "С ИИ" }]} />
-              <Button variant="secondary" disabled={actions.busy} onClick={actions.openImport}>Импортировать программу из оглавления</Button>
+              <Button variant="secondary" disabled={actions.busy} onClick={actions.openImport}>Импортировать оглавление</Button>
               <Button variant="ghost" disabled={actions.busy || !actions.hasNodes} onClick={actions.openRemoveAll}><Trash2 size={15} />Удалить все</Button>
               <Button className="textbook-builder-confirm" disabled={actions.busy} onClick={() => void go(5)}>{actions.hasNodes ? "Утвердить программу" : "Продолжить без программы"}</Button>
             </header>}

@@ -46,12 +46,6 @@ export interface ProgramChatContextPatch {
   context_flags?: Record<string, boolean>;
 }
 
-export type ProgramChatBuildScenario = "outline" | "goal";
-
-export interface ProgramChatBuildStart {
-  job_id: string;
-}
-
 const programChatPath = (projectId: string): string =>
   `/api/projects/${encodeURIComponent(projectId)}/program-chat`;
 
@@ -96,19 +90,6 @@ export const updateProgramChatContext = (
 ): Promise<ProgramChatSessionDetail> => request(
   `${programChatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/context`,
   { method: "PUT", body: JSON.stringify(patch) },
-);
-
-export const startProgramChatBuild = (
-  projectId: string,
-  sessionId: string,
-  scenario: ProgramChatBuildScenario,
-  expectedProgramRevision: number,
-): Promise<ProgramChatBuildStart> => request(
-  `${programChatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/build`,
-  {
-    method: "POST",
-    body: JSON.stringify({ scenario, expected_program_revision: expectedProgramRevision }),
-  },
 );
 
 export const sendProgramChatMessage = (

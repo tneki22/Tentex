@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BookOpen, ListTree, Target } from "lucide-react";
+import { BookOpen, Target } from "lucide-react";
 import type { ChatMessageRead, ProgramChatDiffPayload } from "../../../api/chat";
 import {
   applyProgramChatProposal,
@@ -81,14 +81,7 @@ export function ProgramChatWorkspace({ projectId, program, execute, onMessagesCh
   if (chat.sessions === null) return <LoadingState label="Загружаем чат" />;
 
   const nodeTitles = Object.fromEntries(program.nodes.map((node) => [node.id, node.title]));
-  const buildActive = Boolean(
-    chat.buildJob && ["queued", "running", "paused"].includes(chat.buildJob.state),
-  );
-  const isEmpty = (chat.session?.messages.length ?? 0) === 0 && !buildActive;
-
-  async function startBuild(scenario: "outline" | "goal") {
-    await chat.startBuild(scenario, program.revision);
-  }
+  const isEmpty = (chat.session?.messages.length ?? 0) === 0;
 
   async function handleApply(messageId: string, selected: number[]) {
     setProposalBusy(messageId);
@@ -131,27 +124,19 @@ export function ProgramChatWorkspace({ projectId, program, execute, onMessagesCh
 
       {chat.session && !chat.detailLoading && !chat.detailError && (
         <>
-          {chat.buildJob && chat.buildJob.state !== "completed" && (
-            <div className="program-chat-build-status" role="status">
-              {chat.buildJob.state === "failed" ? (
-                <p className="inline-error">Сборка не удалась: {chat.buildJob.error}</p>
-              ) : (
-                <LoadingState label={`Строим программу… ${chat.buildJob.done} из ${chat.buildJob.total || 1}`} />
-              )}
-            </div>
-          )}
-
           {isEmpty ? (
             <div className="chat-empty-invite">
-              <p>С чего начать?</p>
-              <div className="chat-empty-actions">
-                <Button onClick={() => void startBuild("outline")}>
-                  <ListTree size={14} />Составить по оглавлению
-                </Button>
-                <Button variant="secondary" onClick={() => void startBuild("goal")}>
-                  <Target size={14} />Составить по моей цели
-                </Button>
-              </div>
+              <h2>Составьте программу вместе с ИИ</h2>
+              <p>
+                Опишите, какие разделы вам интересны, или просто скажите:
+                «Составь программу по моей цели». Здесь же можно попросить добавить,
+                уточнить или убрать темы. ИИ сначала покажет изменения — вы сами
+                решите, какие из них принять.
+              </p>
+              <p className="chat-empty-context-note">
+                По умолчанию в контекст входят паспорт цели, оглавления подключённых
+                источников и текущее дерево программы. Полный текст учебников не передаётся.
+              </p>
             </div>
           ) : (
             <ChatTimeline
@@ -181,7 +166,6 @@ export function ProgramChatWorkspace({ projectId, program, execute, onMessagesCh
             showModeIndicator={false}
             showDictation={false}
             sending={chat.sending}
-            disabled={buildActive}
           />
         </>
       )}

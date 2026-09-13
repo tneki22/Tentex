@@ -7,14 +7,11 @@ import {
   listProgramChatSessions,
   saveProgramChatDraft,
   sendProgramChatMessage,
-  startProgramChatBuild,
   updateProgramChatContext,
-  type ProgramChatBuildScenario,
   type ProgramChatContextPreview,
   type ProgramChatSessionDetail,
   type ProgramChatSessionSummary,
 } from "../api/programChat";
-import { useBackgroundJob } from "./useBackgroundJob";
 
 const DRAFT_DEBOUNCE_MS = 800;
 
@@ -38,14 +35,10 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
-  const [buildJobId, setBuildJobId] = useState<string | null>(null);
-  const [proposalBusyMessageId, setProposalBusyMessageId] = useState<string | null>(null);
   const [sessionsReloadKey, setSessionsReloadKey] = useState(0);
   const [detailReloadKey, setDetailReloadKey] = useState(0);
 
   const loadToken = useRef(0);
-  const buildJob = useBackgroundJob(buildJobId);
-
   useEffect(() => {
     const controller = new AbortController();
     const token = ++loadToken.current;
@@ -151,22 +144,6 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
     }
   }
 
-  async function startBuild(scenario: ProgramChatBuildScenario, expectedProgramRevision: number) {
-    if (!activeSessionId) return;
-    const result = await startProgramChatBuild(
-      projectId, activeSessionId, scenario, expectedProgramRevision,
-    );
-    setBuildJobId(result.job_id);
-  }
-
-  useEffect(() => {
-    if (buildJob.job?.state === "completed") {
-      setBuildJobId(null);
-      void reloadDetail();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buildJob.job?.state]);
-
   function updateContextFlag(key: string, value: boolean) {
     if (!activeSessionId) return;
     setSession((current) => current
@@ -182,9 +159,7 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
     contextPreview, draft, setDraft,
     sending, sendError, sendMessage,
     startNewChat,
-    startBuild, buildJob: buildJob.job, buildJobError: buildJob.error,
     updateContextFlag,
-    proposalBusyMessageId, setProposalBusyMessageId,
     reloadSessions: () => setSessionsReloadKey((key) => key + 1),
   };
 }

@@ -8,7 +8,16 @@ const NODE_TYPE_LABELS: Record<string, string> = {
 };
 
 const GOAL_ROLE_LABELS: Record<string, string> = {
-  target: "цель", prerequisite: "предпосылка", related: "связанная",
+  target: "основная тема цели",
+  prerequisite: "необходимая основа",
+  related: "дополнительная тема",
+};
+
+const TARGET_LEVEL_LABELS: Record<string, string> = {
+  awareness: "ориентироваться",
+  understanding: "понимать",
+  application: "применять",
+  mastery: "освоить",
 };
 
 interface ProgramDiffCardProps {
@@ -48,13 +57,15 @@ function describeOperation(op: ProgramChatOperationView, titles: Record<string, 
       return `Изменить тип «${nodeLabel(op.node_id, titles)}» → ${kind}`;
     }
     case "set_goal": {
-      const role = op.goal_role ? GOAL_ROLE_LABELS[op.goal_role] ?? op.goal_role : "не задана";
-      return `Роль в цели «${nodeLabel(op.node_id, titles)}» → ${role}`;
+      const role = op.goal_role ? GOAL_ROLE_LABELS[op.goal_role] ?? op.goal_role : null;
+      const level = op.target_level ? TARGET_LEVEL_LABELS[op.target_level] ?? op.target_level : null;
+      const details = [role, level && `уровень «${level}»`].filter(Boolean).join(", ");
+      return `Настроить изучение темы «${nodeLabel(op.node_id, titles)}»${details ? `: ${details}` : ""}`;
     }
     case "set_visibility":
       return op.is_in_current_program
         ? `Вернуть в программу «${nodeLabel(op.node_id, titles)}»`
-        : `Вынести из программы «${nodeLabel(op.node_id, titles)}»`;
+        : `Убрать из программы «${nodeLabel(op.node_id, titles)}»`;
     case "merge": {
       const names = (op.node_ids ?? []).map((id) => nodeLabel(id, titles)).join(", ");
       const title = op.title ? ` → «${op.title}»` : "";

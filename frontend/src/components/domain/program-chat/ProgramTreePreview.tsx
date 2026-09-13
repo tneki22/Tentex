@@ -6,9 +6,10 @@ const NODE_TYPE_LABELS: Record<string, string> = {
   section: "раздел", topic: "тема", subpoint: "подпункт",
 };
 
-interface PendingNote {
-  kind: "rename" | "move" | "change_type" | "set_goal" | "hidden" | "merged";
-  text: string;
+interface PreviewChange {
+  removed: boolean;
+  nextTitle?: string;
+  nextType?: string;
 }
 
 interface PreviewRow {
@@ -16,51 +17,47 @@ interface PreviewRow {
   depth: number;
   title: string;
   nodeType: string;
-  isNew: boolean;
-  notes: PendingNote[];
+  status: "unchanged" | "new" | "removed";
+  nextTitle?: string;
+  nextType?: string;
   children: PreviewRow[];
 }
 
-function collectNotes(
+/** Сворачивает операции дифа в визуальные изменения существующих узлов. */
+function collectChanges(
   operations: ProgramChatOperationView[],
   states: Array<"pending" | "applied" | "conflicted">,
-): Map<string, PendingNote[]> {
-  const notes = new Map<string, PendingNote[]>();
-  function push(nodeId: string | undefined, note: PendingNote) {
-    if (!nodeId) return;
-    const list = notes.get(nodeId) ?? [];
-    list.push(note);
-    notes.set(nodeId, list);
-  }
+): Map<string, PreviewChange> {
+  const changes = new Map<string, PreviewChange>();
+  const change = (nodeId: string | undefined): PreviewChange | null => {
+    if (!nodeId) return null;
+    const current = changes.get(nodeId) ?? { removed: false };
+    changes.set(nodeId, current);
+    return current;
+  };
+
   operations.forEach((op, index) => {
     if (states[index] !== "pending") return;
-    switch (op.op) {
-      case "rename":
-        push(op.node_id, { kind: "rename", text: `→ переименовать в «${op.title}»` });
-        break;
-      case "move":
-        push(op.node_id, { kind: "move", text: "→ будет перенесено" });
-        break;
-      case "change_type":
-        push(op.node_id, {
-          kind: "change_type",
-          text: `→ тип: ${op.node_type ? NODE_TYPE_LABELS[op.node_type] ?? op.node_type : ""}`,
-        });
-        break;
-      case "set_goal":
-        push(op.node_id, { kind: "set_goal", text: "→ роль в цели изменится" });
-        break;
-      case "set_visibility":
-        if (!op.is_in_current_program) push(op.node_id, { kind: "hidden", text: "→ выйдет из программы" });
-        break;
-      case "merge":
-        (op.node_ids ?? []).slice(1).forEach((id) => push(id, { kind: "merged", text: "→ будет объединено" }));
-        break;
-      default:
-        break;
+    if (op.op === "rename" && op.title) {
+      const current = change(op.node_id);
+      if (current) current.nextTitle = op.title;
+    } else if (op.op === "change_type" && op.node_type) {
+      const current = change(op.node_id);
+      if (current) current.nextType = op.node_type;
+    } else if (op.op === "set_visibility" && !op.is_in_current_program) {
+      const current = change(op.node_id);
+      if (current) current.removed = true;
+    } else if (op.op === "merge") {
+      const [survivor, ...removed] = op.node_ids ?? [];
+      const survivorChange = change(survivor);
+      if (survivorChange && op.title) survivorChange.nextTitle = op.title;
+      removed.forEach((nodeId) => {
+        const current = change(nodeId);
+        if (current) current.removed = true;
+      });
     }
   });
-  return notes;
+  return changes;
 }
 
 function addRows(operations: ProgramChatOperationView[], depth: number, prefix: string): PreviewRow[] {
@@ -71,47 +68,49 @@ function addRows(operations: ProgramChatOperationView[], depth: number, prefix: 
       depth,
       title: op.title ?? "",
       nodeType: op.node_type ?? "topic",
-      isNew: true,
-      notes: [],
+      status: "new",
       children: addRows(op.children ?? [], depth + 1, `${prefix}-new-${index}`),
     }));
 }
 
+/** Строит дерево текущих узлов и добавляет предложенные ветви рядом с родителями. */
 function buildTree(
   program: ProgramState,
   pendingAdds: ProgramChatOperationView[],
-  notesById: Map<string, PendingNote[]>,
+  changes: Map<string, PreviewChange>,
 ): PreviewRow[] {
   const childrenByParent = new Map<string | null, ProgramNodeRead[]>();
   for (const node of program.nodes) {
     if (!node.is_in_current_program || node.is_archived) continue;
-    const key = node.parent_id;
-    const list = childrenByParent.get(key) ?? [];
+    const list = childrenByParent.get(node.parent_id) ?? [];
     list.push(node);
-    childrenByParent.set(key, list);
+    childrenByParent.set(node.parent_id, list);
   }
   for (const list of childrenByParent.values()) list.sort((a, b) => a.sort_order - b.sort_order);
 
   const addsByParent = new Map<string | null, ProgramChatOperationView[]>();
   for (const op of pendingAdds) {
-    const key = op.parent_node_id ?? null;
-    const list = addsByParent.get(key) ?? [];
+    const parentId = op.parent_node_id ?? null;
+    const list = addsByParent.get(parentId) ?? [];
     list.push(op);
-    addsByParent.set(key, list);
+    addsByParent.set(parentId, list);
   }
 
   function walk(parentId: string | null, depth: number): PreviewRow[] {
-    const rows: PreviewRow[] = (childrenByParent.get(parentId) ?? []).map((node) => ({
-      key: node.id,
-      depth,
-      title: node.title,
-      nodeType: node.node_type,
-      isNew: false,
-      notes: notesById.get(node.id) ?? [],
-      children: walk(node.id, depth + 1),
-    }));
-    const news = addsByParent.get(parentId) ?? [];
-    rows.push(...addRows(news, depth, parentId ?? "root"));
+    const rows: PreviewRow[] = (childrenByParent.get(parentId) ?? []).map((node) => {
+      const pending = changes.get(node.id);
+      return {
+        key: node.id,
+        depth,
+        title: node.title,
+        nodeType: node.node_type,
+        status: pending?.removed ? "removed" : "unchanged",
+        nextTitle: pending?.nextTitle,
+        nextType: pending?.nextType,
+        children: walk(node.id, depth + 1),
+      };
+    });
+    rows.push(...addRows(addsByParent.get(parentId) ?? [], depth, parentId ?? "root"));
     return rows;
   }
   return walk(null, 0);
@@ -119,12 +118,15 @@ function buildTree(
 
 function Row({ row }: { row: PreviewRow }) {
   return (
-    <li className={`program-tree-preview-row ${row.isNew ? "is-new" : ""}`} style={{ marginInlineStart: row.depth * 16 }}>
-      <span className="program-tree-preview-type">{NODE_TYPE_LABELS[row.nodeType] ?? row.nodeType}</span>
-      <span className="program-tree-preview-title">{row.title}</span>
-      {row.notes.map((note, index) => (
-        <span key={index} className={`program-tree-preview-note is-${note.kind}`}>{note.text}</span>
-      ))}
+    <li className={`program-tree-preview-row is-${row.status}`} style={{ marginInlineStart: row.depth * 16 }}>
+      <span className={`program-tree-preview-type ${row.nextType ? "is-removed" : ""}`}>
+        {NODE_TYPE_LABELS[row.nodeType] ?? row.nodeType}
+      </span>
+      <span className={`program-tree-preview-title ${row.nextTitle ? "is-removed" : ""}`}>{row.title}</span>
+      {row.nextType && (
+        <span className="program-tree-preview-type is-new">{NODE_TYPE_LABELS[row.nextType] ?? row.nextType}</span>
+      )}
+      {row.nextTitle && <span className="program-tree-preview-title is-new">{row.nextTitle}</span>}
       {row.children.length > 0 && (
         <ul className="program-tree-preview-children">
           {row.children.map((child) => <Row key={child.key} row={child} />)}
@@ -141,29 +143,38 @@ interface ProgramTreePreviewProps {
   pendingStates?: Array<"pending" | "applied" | "conflicted">;
 }
 
-/** Лёгкий read-only предпросмотр дерева для режима «С ИИ»: текущая программа
-
- * плюс визуальные пометки последнего непринятого дифа. Не переиспользует
- * интерактивные внутренности `TextbookProgramEditor` — тут не нужен CRUD.
- */
+/** Read-only предпросмотр текущей программы и последнего непринятого дифа. */
 export function ProgramTreePreview({ program, pendingOperations = [], pendingStates = [] }: ProgramTreePreviewProps) {
-  const notesById = collectNotes(pendingOperations, pendingStates);
-  const pendingAdds = pendingOperations.filter((_op, index) => pendingStates[index] === "pending" && _op.op === "add");
-  const rows = buildTree(program, pendingAdds, notesById);
+  const changes = collectChanges(pendingOperations, pendingStates);
+  const pendingAdds = pendingOperations.filter((op, index) => pendingStates[index] === "pending" && op.op === "add");
+  const rows = buildTree(program, pendingAdds, changes);
 
   if (rows.length === 0) {
     return (
-      <EmptyState title="Программа пока пуста">
-        <p>Дерево появится здесь по мере того, как чат его предложит.</p>
-      </EmptyState>
+      <div className="program-tree-preview">
+        <PreviewHeader />
+        <EmptyState title="Программа пока пуста">
+          <p>Предложенные разделы и темы появятся здесь до принятия изменений.</p>
+        </EmptyState>
+      </div>
     );
   }
 
   return (
     <div className="program-tree-preview" role="tree" aria-label="Предпросмотр программы">
+      <PreviewHeader />
       <ul className="program-tree-preview-root">
         {rows.map((row) => <Row key={row.key} row={row} />)}
       </ul>
     </div>
+  );
+}
+
+function PreviewHeader() {
+  return (
+    <header className="program-tree-preview-head">
+      <h2>Предпросмотр программы</h2>
+      <p><span />Без изменений <span className="is-new" />Добавится <span className="is-removed" />Удалится</p>
+    </header>
   );
 }
