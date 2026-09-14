@@ -179,7 +179,7 @@ export function ProjectWizard() {
         <Card className="wizard-success-card">
           <h1>Создан проект: {activatedProject.project.name || (textbook ? "Учебниковый проект" : "Экзаменационный проект")}</h1>
           {textbook && <p>{first ? "Паспорт цели и программа сохранены." : "Паспорт цели и источники сохранены. Программу можно составить позже."}</p>}
-          <p className="wizard-success-next">{textbook ? "Следующий шаг — открыть Программу и добавить первую тему, когда будете готовы." : "Следующий шаг: открыть проект, проверить вопросы, подготовить материалы и привязать ответы. Начать готовиться!"}</p>
+          <p className="wizard-success-next">{textbook ? (first ? "Следующий шаг — открыть Программу и начать заниматься по темам." : "Следующий шаг — открыть Программу и добавить первую тему, когда будете готовы.") : "Следующий шаг: открыть проект, проверить вопросы, подготовить материалы и привязать ответы. Начать готовиться!"}</p>
           <div className="wizard-success-actions">
             <Button onClick={() => navigate(destination)}>{textbook ? "Открыть программу" : "Открыть проект"}</Button>
             <Button variant="ghost" onClick={() => setActivatedProject(null)}>Вернуться к проверке</Button>
