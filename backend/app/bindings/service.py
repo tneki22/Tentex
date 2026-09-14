@@ -37,7 +37,6 @@ from app.models import (
     ProjectActionLog,
     ProjectMaterial,
     ProjectStatus,
-    WorkspaceVariant,
     utc_now,
 )
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
@@ -52,11 +51,6 @@ def _require_project(session: Session, project_id: UUID, *, writable: bool) -> P
     project = session.get(Project, project_id)
     if project is None or project.status == ProjectStatus.DRAFT:
         raise ProjectNotFoundError()
-    if project.workspace_variant != WorkspaceVariant.EXAM:
-        raise ProjectConflictError(
-            "Привязки доступны только экзаменационным проектам",
-            code="bindings_require_exam_project",
-        )
     if writable and project.status != ProjectStatus.ACTIVE:
         raise ProjectConflictError(
             "Архивный или завершённый проект нельзя изменять",

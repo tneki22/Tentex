@@ -4,6 +4,7 @@ from conftest import (
     link_material,
     make_exam_project,
     make_material,
+    make_textbook_project,
     make_topic_node,
 )
 from sqlalchemy import select
@@ -142,6 +143,27 @@ def test_remove_is_reversible_via_restore(session: Session) -> None:
     assert restored.bindings[0].status == BindingStatus.MANUAL
     active_again = service.list_bindings(session, project.id, node_id=node.id)
     assert len(active_again) == 1
+
+
+def test_textbook_manual_binding_cycle(session: Session) -> None:
+    project = make_textbook_project(session)
+    node = make_topic_node(session, project, title="Тема учебника")
+    material = make_material(session, "b1")
+    link_material(session, project, material)
+    page = add_page_with_fragments(
+        session, material, page_number=3, revision=1, fragments=["Текст темы."]
+    )
+
+    created = _bind(session, project, node, page.fragment_ids)
+    binding_id = created.bindings[0].id
+    assert service.list_bindings(session, project.id, node_id=node.id)[0].id == binding_id
+    assert service.get_summary(session, project.id)[0].fragment_count == 1
+    session.commit()
+    service.remove_binding(session, project.id, binding_id)
+    assert service.list_bindings(session, project.id, node_id=node.id) == []
+    session.commit()
+    service.restore_binding(session, project.id, binding_id)
+    assert service.list_bindings(session, project.id, node_id=node.id)[0].id == binding_id
 
 
 def test_undo_removes_a_whole_block_batch(session: Session) -> None:

@@ -215,6 +215,21 @@ def make_exam_project(
     return project
 
 
+def make_textbook_project(db_session: Session) -> Project:
+    project = Project(
+        id=uuid4(),
+        template_key=TemplateKey.TEXTBOOK,
+        workspace_variant=WorkspaceVariant.TEXTBOOK,
+        status=ProjectStatus.ACTIVE,
+        name="Учебник",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    db_session.add(project)
+    db_session.commit()
+    return project
+
+
 def make_topic_node(db_session: Session, project: Project, *, title: str) -> ProgramNode:
     node = ProgramNode(
         id=uuid4(),

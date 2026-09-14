@@ -72,6 +72,8 @@ interface TextbookProgramEditorProps {
    * режима/Импорт/Удалить все) и диалоги импорта/удаления остаются общими. */
   mode?: "manual" | "ai";
   aiContent?: ReactNode;
+  selectedNodeId?: string | null;
+  onSelectedNodeChange?: (nodeId: string) => void;
 }
 
 /** Общая поверхность учебниковой программы для мастера и активного проекта:
@@ -92,9 +94,11 @@ export function TextbookProgramEditor({
   renderHeader,
   mode = "manual",
   aiContent,
+  selectedNodeId,
+  onSelectedNodeChange,
 }: TextbookProgramEditorProps) {
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState("");
+  const [localSelectedId, setLocalSelectedId] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [actionError, setActionError] = useState("");
@@ -115,7 +119,8 @@ export function TextbookProgramEditor({
     () => flattenProgramTree(filterProgramTree(tree, query)),
     [query, tree],
   );
-  const selected = flat.find((node) => node.id === selectedId) ?? flat[0] ?? null;
+  const activeSelectedId = selectedNodeId === undefined ? localSelectedId : selectedNodeId ?? "";
+  const selected = flat.find((node) => node.id === activeSelectedId) ?? flat[0] ?? null;
   const siblings = selected ? flat.filter((node) => node.parent_id === selected.parent_id) : [];
   const selectedIndex = selected ? siblings.findIndex((node) => node.id === selected.id) : -1;
   const selectedParent = selected?.parent_id
@@ -123,9 +128,14 @@ export function TextbookProgramEditor({
     : null;
   const previousSibling = selectedIndex > 0 ? siblings[selectedIndex - 1] : null;
 
+  function selectNode(nodeId: string) {
+    setLocalSelectedId(nodeId);
+    onSelectedNodeChange?.(nodeId);
+  }
+
   useEffect(() => {
-    if (selected && selected.id !== selectedId) setSelectedId(selected.id);
-  }, [selected, selectedId]);
+    if (selected && selected.id !== activeSelectedId) selectNode(selected.id);
+  }, [selected, activeSelectedId]);
 
   async function run(command: (revision: number) => Promise<ProgramChangeResult>) {
     setActing(true);
@@ -168,7 +178,7 @@ export function TextbookProgramEditor({
       goal_role: "target",
     }));
     if (result?.changed_node) {
-      setSelectedId(result.changed_node.id);
+      selectNode(result.changed_node.id);
       setEditingId(result.changed_node.id);
       setEditingTitle(result.changed_node.title);
     }
@@ -219,11 +229,11 @@ export function TextbookProgramEditor({
       target_level: node.target_level,
       needs_material: node.needs_material,
     }));
-    if (result?.changed_node) setSelectedId(result.changed_node.id);
+    if (result?.changed_node) selectNode(result.changed_node.id);
   }
 
   function startRename(node: ProgramTreeNode) {
-    setSelectedId(node.id);
+    selectNode(node.id);
     setEditingId(node.id);
     setEditingTitle(node.title);
   }
@@ -329,7 +339,7 @@ export function TextbookProgramEditor({
                 selected: selected?.id === node.id,
                 editing: editingId === node.id,
                 editingTitle,
-                onSelect: setSelectedId,
+                onSelect: selectNode,
                 onStartRename: startRename,
                 onEditingTitle: setEditingTitle,
                 onRename: renameNode,

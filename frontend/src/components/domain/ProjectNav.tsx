@@ -47,7 +47,7 @@ export function ProjectNav({ projectId, active, textbook = false, modules, count
     { key: "materials", to: `/projects/${projectId}/materials`, icon: Files, label: "Материалы" },
     {
       key: "program",
-      to: `/projects/${projectId}/program${textbook ? "?mode=textbook" : ""}`,
+      to: `/projects/${projectId}/program`,
       icon: ListTree,
       label: textbook ? "Программа" : "Вопросы экзамена",
     },

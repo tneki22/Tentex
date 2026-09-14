@@ -13,7 +13,6 @@ from app.models import (
     ConspectImage,
     GoalPassport,
     Material,
-    NodeType,
     ProgramNode,
     Project,
     ProjectMaterial,
@@ -595,12 +594,8 @@ def save_workspace_state(
             raise ProjectInvariantError("Раскладка ссылается на узел другого проекта")
         if command.layout.selected_node_id is not None:
             selected = found[command.layout.selected_node_id]
-            if (
-                selected.node_type not in {NodeType.TOPIC, NodeType.SUBPOINT}
-                or not selected.is_in_current_program
-                or selected.is_archived
-            ):
-                raise ProjectInvariantError("Выбранным может быть только текущий изучаемый узел")
+            if not selected.is_in_current_program or selected.is_archived:
+                raise ProjectInvariantError("Выбранным может быть только текущий узел программы")
         layout = command.layout.model_dump(mode="json")
         layout["expanded_node_ids"] = [
             str(node_id) for node_id in dict.fromkeys(command.layout.expanded_node_ids)

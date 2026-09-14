@@ -22,7 +22,7 @@ git show ui-stage-1-baseline:frontend/src/app/views.ts
 | Рабочая область | `frontend/src/screens/ProjectWorkspace.tsx`, `frontend/src/screens/StudioPanel.tsx`, `frontend/src/screens/workspaceDemo.ts` | `layout.css`: `project-workspace`, `workspace-*`, `studio-*` | `SCREENS.md` — «Рабочая область проекта» |
 | Программа / вопросы экзамена | `frontend/src/screens/Program.tsx` | `layout.css`: `program-*` | `SCREENS.md` — «Вопросы экзамена» |
 | Материалы | `frontend/src/screens/Materials.tsx` | `layout.css`: `materials-*`, `project-materials` | `SCREENS.md` — «Материалы проекта» |
-| Уроки | `frontend/src/screens/lessons/Lessons.tsx`, `frontend/src/screens/lessons/LessonDocument.tsx`, `frontend/src/screens/lessons/lessonsDemo.ts` | `lessons.css`: `lessons-*` | `SCREENS.md` — «Уроки» |
+| Уроки | `frontend/src/screens/lessons/Lessons.tsx` | `layout.css`: стандартные `program-*`, `project-side-*` | `SCREENS.md` — «Уроки» |
 | Карточки | `frontend/src/screens/cards/Cards.tsx`, `frontend/src/screens/cards/BankMode.tsx`, `frontend/src/screens/cards/CreationMode.tsx`, `frontend/src/screens/cards/RepetitionMode.tsx`, `frontend/src/screens/cards/SessionScreen.tsx`, `frontend/src/screens/cards/mockCards.ts` | `cards.css`: `cards-*`, `repetition-*`, `bank-*`, `creation-*`, `manual-*`, `ai-*`, `fragment-*`, `session-*`, `question-*` | `SCREENS.md` — «Карточки» |
 | План подготовки | `frontend/src/screens/Plan.tsx` | `layout.css`: `plan-*` | `SCREENS.md` — «План подготовки» |
 | Настройки проекта | `frontend/src/screens/ProjectSettings.tsx` | `layout.css`: `project-settings-screen`, `settings-*` | `SCREENS.md` — «Настройки проекта» |
@@ -236,3 +236,11 @@ PDF с многоуровневыми ответами и подтвердил �
 ## Моя подготовка — 05.09.2026
 
 По прямому запросу пользователя изменены шапка и сводка: название слева, статусы по центру, цветная дата экзамена с расчётом часов над графиками. В проектную панель добавлены достижения и сворачиваемые события; стрелка возврата приведена к остальным разделам. Графики сокращены до 7/14 дней, аналитика строится по фактическим открытиям. Удалены наставник и неработающая кнопка «Пересчитать». Остальная структура — очередь, периоды и три вкладки — сохранена.
+
+## Учебниковая рабочая область — 14.09.2026
+
+По прямому запросу пользователя полноэкранное пустое состояние заменено постоянной
+проектной оболочкой: разделы выбираются и получают обзор, а рабочие вкладки открываются
+только для тем и подпунктов. Раздел «Программа» использует общий мастерский редактор
+в стандартной `project-side-panel` с последними изменёнными узлами. Старый локальный
+прототип Уроков удалён; маршрут сохраняет только честную заглушку до отдельной итерации.

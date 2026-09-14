@@ -112,6 +112,14 @@ function kindLabel(kind: AddKind) {
   }
 }
 
+function originLabel(origin: ProgramNodeRead["origin_kind"]): string {
+  return ({ manual: "вручную", import: "импорт", outline: "оглавление", pass1: "проход 1", catalog: "каталог", model: "ИИ" })[origin];
+}
+
+function recentTime(value: string): string {
+  return new Date(value).toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
 export function Program() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
@@ -203,6 +211,10 @@ export function Program() {
   const flat = useMemo(() => flattenProgramTree(treeResult.tree), [treeResult.tree]);
   const selected = detail?.program.nodes.find((node) => node.id === selectedId) ?? null;
   const textbook = detail?.project.workspace_variant === "textbook";
+  const recentTextbookNodes = useMemo(() => (detail?.program.nodes ?? [])
+    .filter((node) => node.is_in_current_program && !node.is_archived)
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+    .slice(0, 5), [detail?.program.nodes]);
   const kindOptions: Array<[AddKind, string]> = textbook
     ? [["section", "Раздел"], ["topic", "Тема"], ["subpoint", "Подпункт"]]
     : [["section", "Раздел"], ["ticket", "Билет"], ["question", "Вопрос"], ["task", "Задача"]];
@@ -501,14 +513,23 @@ export function Program() {
   if (!detail) return null;
   if (treeResult.error) return <div className="screen"><ErrorState title="Программа повреждена" message={treeResult.error} /></div>;
   if (textbook) return (
-    <div className="program-shell">
-      <aside className="program-sidebar">
-        <header className="program-sidebar-head">
-          <Tooltip label="К списку проектов">
-            <IconButton label="К списку проектов" onClick={() => navigate("/projects")}><ArrowLeft size={16} /></IconButton>
-          </Tooltip>
-          <strong>{detail.project.name}</strong>
-        </header>
+    <div className="program-screen">
+      <aside className="project-side-panel">
+        <header className="project-side-title"><Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong></header>
+        <section className="project-recent" aria-label="Последние изменения программы">
+          <header><span>Последние изменения</span><small>{recentTextbookNodes.length}</small></header>
+          <div className="project-recent-list">
+            {detail.latest_undoable_action && <p className="program-latest-action">Можно отменить: {detail.latest_undoable_action.target_title}</p>}
+            {recentTextbookNodes.length === 0
+              ? <p className="sidebar-empty">Изменённые узлы появятся здесь.</p>
+              : recentTextbookNodes.map((node) => (
+                <button type="button" className={`project-recent-item program-recent-node ${selectedId === node.id ? "is-active" : ""}`.trim()} key={node.id} onClick={() => setSelectedId(node.id)}>
+                  <span>{node.title}</span>
+                  <small>{kindLabel(node.node_type)} · {originLabel(node.origin_kind)} · <time dateTime={node.updated_at}>{recentTime(node.updated_at)}</time></small>
+                </button>
+              ))}
+          </div>
+        </section>
         <ProjectNav
           projectId={projectId}
           active="program"
@@ -535,6 +556,8 @@ export function Program() {
           execute={runTextbookCommand}
           onUndo={undo}
           mode={textbookMode}
+          selectedNodeId={selectedId}
+          onSelectedNodeChange={setSelectedId}
           aiContent={<div className="textbook-program-ai-layout">
             <ProgramChatWorkspace
               projectId={projectId}

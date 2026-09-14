@@ -13,7 +13,6 @@ import "./styles/base.css";
 import "./styles/ui-kit.css";
 import "./styles/chart.css";
 import "./styles/domain.css";
-import "./styles/lessons.css";
 import "./styles/cards.css";
 import "./styles/chat.css";
 import "./styles/library-viewer.css";
@@ -32,4 +31,3 @@ createRoot(container).render(
     </BrowserRouter>
   </StrictMode>,
 );
-
