@@ -19,6 +19,7 @@ import "./styles/library-viewer.css";
 import "./styles/ocr.css";
 import "./styles/conspects.css";
 import "./styles/preparation.css";
+import "./styles/lessons.css";
 import "./styles/layout.css";
 
 const container = document.getElementById("root");

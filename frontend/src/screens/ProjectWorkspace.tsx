@@ -55,6 +55,8 @@ import {
   answerScanGroups,
   PERSONAL_MARK_OPTIONS,
   PersonalMarkIcon,
+  ProgramSectionRow,
+  ProgramTopicRow,
   ProjectNav,
   QualityBadge,
   ReferenceAnswerBadge,
@@ -73,6 +75,7 @@ import {
   Tooltip,
 } from "../components/ui";
 import type { ContextMenuItem } from "../components/ui";
+import { LessonTab } from "./lessons/LessonTab";
 import { useBindings } from "../hooks/useBindings";
 import {
   buildProgramTree,
@@ -264,6 +267,7 @@ export function ProjectWorkspace() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const preferredTopic = searchParams.get("topic");
+  const preferredLesson = searchParams.get("lesson");
   const preferredTabParam = searchParams.get("tab");
   const preferredTab = isWorkspaceTab(preferredTabParam) ? preferredTabParam : null;
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
@@ -742,6 +746,9 @@ export function ProjectWorkspace() {
         </Suspense>
       );
     }
+    if (tab === "lesson" && textbook && selected) {
+      return <LessonTab projectId={projectId} node={selected} preferredLessonId={preferredLesson} />;
+    }
     return renderTabStub(tab);
   }
 
@@ -1011,11 +1018,15 @@ export function ProjectWorkspace() {
       if (node.node_type === "section") {
         return (
           <section className="workspace-tree-section" key={node.id}>
-            <div className={`workspace-section-row ${selectedNode?.id === node.id ? "is-active" : ""}`.trim()}>
-              <button type="button" className="workspace-section-toggle" aria-expanded={open} aria-label={open ? `Свернуть раздел «${node.title}»` : `Раскрыть раздел «${node.title}»`} onClick={() => toggleNode(node.id)}>{open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button>
-              <button type="button" className="workspace-section-select" onClick={() => selectNode(node.id)}><span>{node.number}. {node.title}</span></button>
-              <small>{flattenProgramTree(node.children).filter(isStudyNode).length}</small>
-            </div>
+            <ProgramSectionRow
+              number={node.number}
+              title={node.title}
+              open={open}
+              active={selectedNode?.id === node.id}
+              aside={flattenProgramTree(node.children).filter(isStudyNode).length}
+              onToggle={() => toggleNode(node.id)}
+              onSelect={() => void selectNode(node.id)}
+            />
             {open && <div className="workspace-question-list">{renderTree(node.children)}</div>}
           </section>
         );
@@ -1024,22 +1035,19 @@ export function ProjectWorkspace() {
       const hasMaterial = (bindingSummaryByNode.get(node.id)?.fragment_count ?? 0) > 0;
       const mark = marks[node.id];
       const row = (
-        <button
-          type="button"
-          className={`workspace-question-row depth-${Math.min(Math.max(node.depth - 2, 0), 3)} ${selected?.id === node.id ? "is-active" : ""}`.trim()}
+        <ProgramTopicRow
+          depth={node.depth}
+          active={selected?.id === node.id}
           onClick={() => selectNode(node.id)}
-        >
-          {answerStatus ? (
+          status={answerStatus ? (
             <Tooltip label={referenceAnswerStatusLabel(answerStatus)}>
               <span className={`workspace-question-status ${answerDotClass(answerStatus)}`.trim()} aria-label={referenceAnswerStatusLabel(answerStatus)} />
             </Tooltip>
           ) : <Tooltip label={hasMaterial ? "Есть привязанные фрагменты" : "Материал не привязан"}><span className={`workspace-question-status ${hasMaterial ? "is-has-material" : ""}`.trim()} aria-label={hasMaterial ? "Есть привязанные фрагменты" : "Материал не привязан"} /></Tooltip>}
-          <span className="workspace-question-copy">
-            <small>{textbook ? node.node_type === "subpoint" ? "Подпункт" : "Тема" : node.exam_kind === "task" ? "Задача" : "Вопрос"} {node.number}</small>
-            <span>{node.title}</span>
-          </span>
-          <span className="workspace-question-signals">{mark && <PersonalMarkIcon mark={mark} />}</span>
-        </button>
+          eyebrow={`${textbook ? node.node_type === "subpoint" ? "Подпункт" : "Тема" : node.exam_kind === "task" ? "Задача" : "Вопрос"} ${node.number}`}
+          title={node.title}
+          signals={mark && <PersonalMarkIcon mark={mark} />}
+        />
       );
       return (
         <div className="workspace-question-node" key={node.id}>

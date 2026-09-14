@@ -281,6 +281,50 @@ class BindingMechanism(StrEnum):
     # Разбор файла эталонных ответов по заголовкам: детерминированно, без модели.
     ANSWERS_FILE = "answers_file"
     PASS_TWO = "pass_two"
+    # Урок: выбор пользователя (`lesson`) и диапазон оглавления быстрого урока (`outline`).
+    LESSON = "lesson"
+    OUTLINE = "outline"
+
+
+class LessonStatus(StrEnum):
+    DRAFT = "draft"
+    READY = "ready"
+    ARCHIVED = "archived"
+
+
+class LessonBlockKind(StrEnum):
+    SOURCE = "source"
+    NOTE = "note"
+    MEDIA = "media"
+    ACTIVITY = "activity"
+
+
+class LessonNoteVariant(StrEnum):
+    TEXT = "text"
+    HEADING = "heading"
+    EXPLANATION = "explanation"
+    IMPORTANT = "important"
+    EXAMPLE = "example"
+    DEFINITION = "definition"
+    WARNING = "warning"
+
+
+class LessonBlockOrigin(StrEnum):
+    MANUAL = "manual"
+    OUTLINE = "outline"
+    MODEL = "model"
+    MIXED = "mixed"
+
+
+class LessonBasis(StrEnum):
+    SOURCES = "sources"
+    SOURCES_AND_MODEL = "sources_and_model"
+    MODEL_ONLY = "model_only"
+
+
+class LessonRefRole(StrEnum):
+    CONTENT = "content"
+    SUPPORT = "support"
 
 
 class ChatMessageRole(StrEnum):
@@ -1711,6 +1755,130 @@ class ConspectImage(Base):
     media_type: Mapped[str] = mapped_column(String)
     size_bytes: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class Lesson(Base):
+    """Урок — упорядоченный сценарий из ссылок на материал, пояснений, медиа и заданий."""
+
+    __tablename__ = "lessons"
+    __table_args__ = (
+        CheckConstraint("revision >= 1", name="revision_positive"),
+        CheckConstraint(
+            "duration_minutes IS NULL OR duration_minutes >= 0", name="duration_nonnegative"
+        ),
+        Index("ix_lessons_project", "project_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    )
+    title: Mapped[str] = mapped_column(String)
+    goal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[LessonStatus] = mapped_column(
+        enum_type(LessonStatus, "lesson_status"), default=LessonStatus.DRAFT
+    )
+    duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    # Позиция чтения: пользователь один, отдельная таблица прохождения не нужна.
+    last_block_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class LessonTopic(Base):
+    """Тема урока со снимком формулировки: расхождение даёт «Требует проверки»."""
+
+    __tablename__ = "lesson_topics"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "program_node_id"],
+            ["program_nodes.project_id", "program_nodes.id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("sort_order >= 0", name="sort_order_nonnegative"),
+        Index("ix_lesson_topics_project_node", "project_id", "program_node_id"),
+    )
+
+    lesson_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("lessons.id", ondelete="CASCADE"), primary_key=True
+    )
+    program_node_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    topic_title_snapshot: Mapped[str] = mapped_column(String)
+
+
+class LessonBlock(Base):
+    __tablename__ = "lesson_blocks"
+    __table_args__ = (
+        CheckConstraint("sort_order >= 0", name="sort_order_nonnegative"),
+        Index("ix_lesson_blocks_lesson_order", "lesson_id", "sort_order"),
+        Index("ix_lesson_blocks_ai_run", "ai_run_id"),
+        Index("ix_lesson_blocks_activity", "activity_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    lesson_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("lessons.id", ondelete="CASCADE")
+    )
+    sort_order: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[LessonBlockKind] = mapped_column(enum_type(LessonBlockKind, "lesson_block_kind"))
+    variant: Mapped[LessonNoteVariant | None] = mapped_column(
+        enum_type(LessonNoteVariant, "lesson_note_variant"), nullable=True
+    )
+    body_md: Mapped[str | None] = mapped_column(Text, nullable=True)
+    origin: Mapped[LessonBlockOrigin] = mapped_column(
+        enum_type(LessonBlockOrigin, "lesson_block_origin")
+    )
+    basis: Mapped[LessonBasis | None] = mapped_column(
+        enum_type(LessonBasis, "lesson_basis"), nullable=True
+    )
+    ai_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    activity_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), nullable=True
+    )
+    media_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    bound_program_node_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class LessonSourceRef(Base):
+    """Ссылка блока на материал. Удаление материала не каскадит: снимок остаётся."""
+
+    __tablename__ = "lesson_source_refs"
+    __table_args__ = (
+        CheckConstraint("page_from > 0 AND page_to >= page_from", name="page_range_valid"),
+        Index("ix_lesson_source_refs_block", "block_id"),
+        Index("ix_lesson_source_refs_material", "material_id"),
+        Index("ix_lesson_source_refs_from_fragment", "from_fragment_id"),
+        Index("ix_lesson_source_refs_to_fragment", "to_fragment_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    block_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("lesson_blocks.id", ondelete="CASCADE")
+    )
+    role: Mapped[LessonRefRole] = mapped_column(enum_type(LessonRefRole, "lesson_ref_role"))
+    material_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="SET NULL"), nullable=True
+    )
+    source_name_snapshot: Mapped[str] = mapped_column(String)
+    material_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_from: Mapped[int] = mapped_column(Integer)
+    page_to: Mapped[int] = mapped_column(Integer)
+    from_fragment_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("material_fragments.id", ondelete="SET NULL"), nullable=True
+    )
+    to_fragment_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("material_fragments.id", ondelete="SET NULL"), nullable=True
+    )
+    region_bbox: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    always_pages: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 # Регистрация таблиц подсистемы для create_all и Alembic.

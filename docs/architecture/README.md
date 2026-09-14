@@ -24,6 +24,7 @@
 | Оглавление источника (мастер учебника) | `textbook-outline.md` | pytest (`test_material_outline.py`) |
 | Ручная программа учебника и импорт оглавлений | `textbook-program.md` | pytest (`test_textbook_program.py`) |
 | Конспекты | `conspects.md` | pytest |
+| Уроки: быстрый урок и чтение | `lessons.md` | pytest (`test_lessons.py`), typecheck/build |
 | Карточки и сохраняемый сеанс | `cards.md` | pytest, миграции, typecheck/build |
 | Фоновые операции | `background-jobs.md` | pytest |
 | Моя подготовка: текущие данные, расчёты, экран и интеграции | `my-preparation.md` | профильные pytest, миграции, typecheck/build |

@@ -1,43 +1,239 @@
-import { useEffect, useState } from "react";
-import { ArrowLeft, GraduationCap } from "lucide-react";
-import { Link, useParams } from "react-router";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { ArrowLeft, GraduationCap, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { Link, useParams, useSearchParams } from "react-router";
+import { createQuickLesson } from "../../api/lessons";
 import { getProject, ProjectApiError, type ProjectDetail } from "../../api/projects";
 import { ProjectNav } from "../../components/domain";
-import { EmptyState, ErrorState, LoadingState, PageHead } from "../../components/ui";
+import { Button, EmptyState, ErrorState, IconButton, LoadingState, PanelResizeHandle } from "../../components/ui";
+import { useLessonsOverview } from "../../hooks/useLessons";
+import { buildProgramTree, flattenProgramTree } from "../programTree";
+import { LessonBulkTable } from "./LessonBulkTable";
+import { LessonMaterialPanel } from "./LessonMaterialPanel";
+import { LessonSectionOverview } from "./LessonSectionOverview";
+import { LessonSourcesDialog } from "./LessonSourcesDialog";
+import { LessonsTree } from "./LessonsTree";
+import { LessonTopicPane } from "./LessonTopicPane";
+import { errorText, isVisible, STUDY_TYPES } from "./lessonTree";
 
+const LAYOUT_KEY = "tentex:lessons-layout";
+
+interface LessonsLayout {
+  tree: number;
+  panel: number;
+  panelOpen: boolean;
+}
+
+function readLayout(): LessonsLayout {
+  const narrow = typeof window !== "undefined" && window.matchMedia?.("(max-width: 1100px)").matches;
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(LAYOUT_KEY) ?? "null") as Partial<LessonsLayout> | null;
+    return { tree: stored?.tree ?? 300, panel: stored?.panel ?? 360, panelOpen: narrow ? false : stored?.panelOpen ?? true };
+  } catch {
+    return { tree: 300, panel: 360, panelOpen: !narrow };
+  }
+}
+
+const clamp = (value: number, min: number, max: number) => Math.round(Math.min(max, Math.max(min, value)));
+
+/** Раздел «Уроки» — `/projects/:projectId/lessons?topic=&lesson=`. */
 export function Lessons() {
   const { projectId = "" } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  const [layout, setLayout] = useState<LessonsLayout>(readLayout);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [rangesKey, setRangesKey] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
+    setError(null);
     getProject(projectId, controller.signal).then(setDetail).catch((caught) => {
       if (!controller.signal.aborted) setError(caught);
     });
     return () => controller.abort();
-  }, [projectId]);
+  }, [projectId, attempt]);
+
+  const available = Boolean(detail && detail.project.workspace_variant === "textbook" && detail.project.enabled_modules.includes("lessons"));
+  const overview = useLessonsOverview(projectId, available);
+  const lessons = useMemo(() => overview.data?.lessons ?? [], [overview.data]);
+
+  const treeResult = useMemo(() => {
+    try { return { tree: buildProgramTree(detail?.program.nodes ?? []), error: "" }; }
+    catch (caught) { return { tree: [], error: errorText(caught, "Программа повреждена") }; }
+  }, [detail?.program.nodes]);
+  const flat = useMemo(() => flattenProgramTree(treeResult.tree).filter(isVisible), [treeResult.tree]);
+
+  const topicParam = searchParams.get("topic");
+  const lessonParam = searchParams.get("lesson");
+  const active = flat.find((node) => node.id === topicParam) ?? flat.find((node) => STUDY_TYPES.has(node.node_type)) ?? flat[0] ?? null;
+
+  const updateLayout = useCallback((change: (current: LessonsLayout) => LessonsLayout) => {
+    setLayout((current) => {
+      const next = change(current);
+      try { window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(next)); } catch { /* только в памяти */ }
+      return next;
+    });
+  }, []);
+
+  function navigateTo(topicId: string, lessonId: string | null = null) {
+    const next = new URLSearchParams();
+    next.set("topic", topicId);
+    if (lessonId) next.set("lesson", lessonId);
+    setSearchParams(next);
+  }
+
+  async function createLesson(materialIds?: string[]) {
+    if (!active) return;
+    setBusy(true);
+    setActionError("");
+    try {
+      const result = await createQuickLesson(projectId, active.id, materialIds);
+      setSourcesOpen(false);
+      overview.refresh();
+      setRangesKey((value) => value + 1);
+      navigateTo(active.id, result.lesson.id);
+    } catch (caught) {
+      setActionError(errorText(caught, "Не удалось создать урок"));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   if (error) {
     const notFound = error instanceof ProjectApiError && error.status === 404;
-    return <div className="screen"><ErrorState title={notFound ? "Проект не найден" : "Уроки не загрузились"} message={error instanceof Error ? error.message : "Не удалось загрузить проект"} /><Link className="secondary-button" to="/projects">К проектам</Link></div>;
+    return <div className="screen"><ErrorState title={notFound ? "Проект не найден" : "Уроки не загрузились"} message={errorText(error, "Не удалось загрузить проект")} /><Button variant="secondary" onClick={() => setAttempt((value) => value + 1)}>Повторить</Button><Link className="secondary-button" to="/projects">К проектам</Link></div>;
   }
   if (!detail) return <div className="screen"><LoadingState label="Загружаем проект" placement="page" /></div>;
 
   const textbook = detail.project.workspace_variant === "textbook";
+  if (!available) {
+    return (
+      <div className="program-screen">
+        <aside className="project-side-panel">
+          <header className="project-side-title"><Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong></header>
+          <ProjectNav projectId={projectId} active="lessons" textbook={textbook} modules={detail.project.enabled_modules} className="project-side-nav" />
+        </aside>
+        <main className="program-main">
+          <EmptyState title="Уроки недоступны в этом проекте" icon={<GraduationCap size={28} />}>
+            <p>{textbook ? "Раздел «Уроки» выключен в параметрах проекта." : "Уроки собираются из учебника: они есть только в учебниковом проекте. В экзаменационном проекте материал читается во вкладке «Источник»."}</p>
+            <Link className="primary-button" to={`/projects/${projectId}`}>В рабочую область</Link>
+          </EmptyState>
+        </main>
+      </div>
+    );
+  }
+
+  const selectedTopics = flat.filter((node) => selection.has(node.id));
+  let center;
+  if (treeResult.error) center = <ErrorState title="Программа повреждена" message={treeResult.error} />;
+  else if (!active) {
+    center = (
+      <EmptyState title="Программа пока пуста" icon={<GraduationCap size={28} />}>
+        <p>Уроки собираются по темам программы. Сначала постройте программу из оглавления учебника.</p>
+        <Link className="primary-button" to={`/projects/${projectId}/program`}>Открыть программу</Link>
+      </EmptyState>
+    );
+  } else if (overview.error) {
+    center = <><ErrorState message={errorText(overview.error, "Уроки не загрузились")} /><Button variant="secondary" onClick={overview.refresh}>Повторить</Button></>;
+  } else if (!overview.data) center = <LoadingState label="Загружаем уроки" />;
+  else if (selectedTopics.length > 0) center = <LessonBulkTable topics={selectedTopics} lessons={lessons} onClear={() => setSelection(new Set())} />;
+  else if (active.node_type === "section") {
+    center = <LessonSectionOverview section={active} lessons={lessons} onOpenTopic={(id) => navigateTo(id)} onSelectTopics={(ids) => setSelection(new Set(ids))} />;
+  } else {
+    center = (
+      <LessonTopicPane
+        projectId={projectId}
+        topic={active}
+        lessons={lessons}
+        lessonId={lessonParam}
+        busy={busy}
+        onSelectLesson={(id) => navigateTo(active.id, id)}
+        onQuickLesson={() => void createLesson()}
+        onFromSources={() => setSourcesOpen(true)}
+        onChanged={() => { overview.refresh(); setRangesKey((value) => value + 1); }}
+      />
+    );
+  }
+
+  const columns = layout.panelOpen
+    ? `${layout.tree}px 10px minmax(0, 1fr) 10px ${layout.panel}px`
+    : `${layout.tree}px 10px minmax(0, 1fr)`;
+
   return (
-    <div className="program-screen">
-      <aside className="project-side-panel">
-        <header className="project-side-title"><Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong></header>
-        <ProjectNav projectId={projectId} active="lessons" textbook={textbook} modules={detail.project.enabled_modules} className="project-side-nav" />
+    <div className="lessons-screen" style={{ gridTemplateColumns: columns } as CSSProperties}>
+      <aside className="workspace-tree-panel lessons-tree-panel">
+        <header className="workspace-tree-head">
+          <div className="workspace-tree-title is-textbook">
+            <Link className="workspace-back-button" to={`/projects/${projectId}${active ? `?topic=${active.id}` : ""}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link>
+            <strong>{detail.project.name}</strong>
+          </div>
+        </header>
+        <LessonsTree
+          tree={treeResult.tree}
+          lessons={lessons}
+          activeNodeId={selectedTopics.length > 0 ? null : active?.id ?? null}
+          selection={selection}
+          onSelectNode={(id) => { setSelection(new Set()); navigateTo(id); }}
+          onSelectionChange={setSelection}
+        />
+        <ProjectNav projectId={projectId} active="lessons" textbook={textbook} modules={detail.project.enabled_modules} />
       </aside>
-      <main className="program-main">
-        <PageHead eyebrow="Следующая итерация" title="Уроки" />
-        <EmptyState title="Мастер создания уроков ещё не готов" icon={<GraduationCap size={28} />}>
-          <p>Здесь появятся создание, редактирование и подготовка уроков. Пока раздел не создаёт черновики и не хранит демонстрационные данные.</p>
-          <Link className="primary-button" to={`/projects/${projectId}`}>В рабочую область</Link>
-        </EmptyState>
+      <PanelResizeHandle
+        className="lessons-resize"
+        label="Изменить ширину дерева тем"
+        value={layout.tree}
+        min={240}
+        max={440}
+        onDelta={(delta) => updateLayout((current) => ({ ...current, tree: clamp(current.tree + delta, 240, 440) }))}
+        onReset={() => updateLayout((current) => ({ ...current, tree: 300 }))}
+      />
+      <main className="lessons-center">
+        <div className="lessons-center-bar">
+          {actionError && <p className="inline-error" role="alert">{actionError}</p>}
+          <IconButton label={layout.panelOpen ? "Скрыть материал для урока" : "Показать материал для урока"} onClick={() => updateLayout((current) => ({ ...current, panelOpen: !current.panelOpen }))}>
+            {layout.panelOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
+          </IconButton>
+        </div>
+        {center}
       </main>
+      {layout.panelOpen && (
+        <>
+          <PanelResizeHandle
+            className="lessons-resize"
+            label="Изменить ширину панели материала"
+            value={layout.panel}
+            min={300}
+            max={560}
+            onDelta={(delta) => updateLayout((current) => ({ ...current, panel: clamp(current.panel - delta, 300, 560) }))}
+            onReset={() => updateLayout((current) => ({ ...current, panel: 360 }))}
+          />
+          <aside className="lessons-panel">
+            <LessonMaterialPanel
+              projectId={projectId}
+              topic={selectedTopics.length > 0 ? null : active}
+              busy={busy}
+              refreshKey={rangesKey}
+              onCreateFromRange={(materialId) => void createLesson([materialId])}
+            />
+          </aside>
+        </>
+      )}
+      {active && active.node_type !== "section" && (
+        <LessonSourcesDialog
+          projectId={projectId}
+          nodeId={active.id}
+          topicTitle={active.title}
+          open={sourcesOpen}
+          busy={busy}
+          onOpenChange={setSourcesOpen}
+          onCreate={(ids) => void createLesson(ids)}
+        />
+      )}
     </div>
   );
 }
