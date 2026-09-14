@@ -52,6 +52,9 @@ Thumbs.db
 # --- Local worktrees ---
 .worktrees/
 
+# --- Личные заметки, не часть репозитория ---
+TODO.md
+
 # --- Локальные инструменты и прогоны проверки ---
 .codebase-memory/
 output/

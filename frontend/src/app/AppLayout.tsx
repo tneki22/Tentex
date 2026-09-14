@@ -30,6 +30,7 @@ import {
   type BackgroundJobRead,
 } from "../api/backgroundJobs";
 import { TaskRow, type BackgroundTask, type TaskKind } from "../components/domain";
+import { estimateEtaMinutes } from "../hooks/backgroundTaskEta";
 
 const BACKGROUND_POLL_MS = 4000;
 
@@ -76,13 +77,7 @@ function backgroundJobSubject(job: BackgroundJobRead): string {
   return "фоновая операция";
 }
 
-// Столько секунд уходит на страницу; та же оценка, что и в панели обработки
-// материала (`LibraryProcessingPanel`), измерена прогоном `tentex-ocr-bench`.
-const PARSE_SECONDS_PER_PAGE: Record<string, number> = { fast: 16, cloud: 19 };
-
 function toBackgroundTask(job: BackgroundJobRead): BackgroundTask {
-  const left = Math.max(0, job.total - job.done);
-  const perPage = PARSE_SECONDS_PER_PAGE[job.parser_mode ?? ""] ?? 0;
   return {
     id: job.id,
     kind: job.kind as TaskKind,
@@ -92,7 +87,7 @@ function toBackgroundTask(job: BackgroundJobRead): BackgroundTask {
     unit: job.kind === "parse" || job.kind === "typst_compile" ? "страниц" : "",
     done: job.done,
     total: job.total,
-    etaMinutes: perPage && left > 0 ? Math.ceil((left * perPage) / 60) : null,
+    etaMinutes: estimateEtaMinutes(job.id, job.done, job.total, job.updated_at),
     state: job.needs_review ? "review" : (job.state as BackgroundTask["state"]),
     error: job.error ?? undefined,
   };

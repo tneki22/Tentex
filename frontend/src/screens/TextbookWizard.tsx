@@ -256,10 +256,16 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   if (controller.status === "loading" || (controller.status === "saving" && !controller.detail)) return <LoadingState label="Загружаем учебниковый черновик" placement="page" />;
   const busy = controller.status === "saving";
 
+  // Ошибка шага показывается прямо над кнопкой действия того же шага, а не
+  // баннером наверху страницы: пользователь смотрит на кнопку, которую только
+  // что нажал, а не листает вверх, чтобы понять, почему сохранение не прошло.
+  const errorBanner = (actionError || controller.error)
+    ? <p className="inline-error" role="alert">{actionError || controller.error?.message}</p>
+    : null;
+
   return (
     <div className={`wizard-flow ${step === 4 ? "is-program-editor" : ""}`.trim()}>
       {step !== 4 && <PageHead title={step === 1 ? "Добавьте материалы, на которых строить программу" : step === 2 ? "Чему именно вы хотите научиться?" : step === 3 ? "Проверка" : "Итог"} />}
-      {(actionError || controller.error) && <p className="inline-error" role="alert">{actionError || controller.error?.message}</p>}
       {controller.conflict && <Card><h2>Черновик изменился в другой вкладке</h2><Button onClick={() => void controller.reload()}>Загрузить серверную версию</Button></Card>}
 
       {step === 1 && (
@@ -310,6 +316,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
             <p><Info size={14} aria-hidden="true" />Подготовка идёт в фоне — можно перейти к следующему шагу, не дожидаясь конца. Прогресс виден в панели фоновых задач и в разделе «Материалы».</p>
           </Card>
 
+          {errorBanner}
           <div className="wizard-actions"><Button variant="ghost" onClick={() => navigate("/projects/new")}>Вернуться к выбору</Button><Button disabled={busy || materials.materials.length === 0} onClick={() => void go(2)}>Продолжить с источниками</Button></div>
         </section>
       )}
@@ -345,6 +352,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
               </div>
             </Card>
           </div>
+          {errorBanner}
           <div className="wizard-actions"><Button variant="ghost" onClick={() => void go(1)}>Назад</Button><Button disabled={busy || !form.name.trim() || !form.subject.trim() || (form.scope === "goal" && !form.goal.trim())} onClick={() => void go(3)}>Продолжить</Button></div>
         </section>
       )}
@@ -390,12 +398,16 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
             />
           )}
 
+          {errorBanner}
           <div className="wizard-actions"><Button variant="ghost" onClick={() => void go(2)}>Назад</Button><Button disabled={busy} onClick={() => void go(4)}>Перейти к программе</Button></div>
         </section>
       )}
 
       {step === 4 && (
         <section className="textbook-builder">
+          {/* Кнопка подтверждения этого шага — в шапке редактора, а не внизу
+              страницы, поэтому и ошибка нужна рядом с ней, а не под деревом. */}
+          {errorBanner}
           {controller.detail && <TextbookProgramEditor
             projectId={controller.detail.project.id}
             projectName={form.name || form.subject || "Программа"}
@@ -487,6 +499,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
           </Card>
 
           <Card className="textbook-summary-card"><h3>После создания</h3><p>Проект станет активным, а источники сохранят свои роли и настройки. {nodes.length === 0 ? "Программа останется пустой — её можно собрать вручную в разделе «Программа» после создания проекта." : "Программа сразу откроется для ручной работы."}</p></Card>
+          {errorBanner}
           <div className="wizard-actions"><Button variant="ghost" onClick={() => void go(4)}>Вернуться к программе</Button><Button disabled={busy} onClick={() => void activate()}>Создать проект</Button></div>
         </section>
       )}

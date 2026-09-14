@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
-import { ArrowLeft, Check, Sparkles, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, Trash2 } from "lucide-react";
 import { Link } from "react-router";
+import { BrandMark } from "../../app/BrandMark";
 import { Button } from "../../components/ui";
 
 interface WizardChromeProps {
@@ -51,7 +52,7 @@ export function WizardChrome({
             <span>К проектам</span>
           </Link>
         )}
-        <span className="wizard-brand"><Sparkles size={17} aria-hidden="true" />Tentex</span>
+        <span className="wizard-brand"><BrandMark size={20} />Tentex</span>
         <div className="wizard-topbar-actions">
           {(isLanding || trackLabel) && (
             <span className="wizard-step-caption">

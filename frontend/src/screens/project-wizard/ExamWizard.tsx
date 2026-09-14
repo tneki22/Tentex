@@ -1246,12 +1246,18 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
   const preparationForecast = getPreparationForecast(form, expectedCount ?? studyCount);
   const estimateDisabledReason = estimateUnavailableReason(aiSettings, aiSettingsLoaded, form, expectedCount ?? studyCount);
 
+  // Ошибка шага показывается прямо над кнопкой действия того же шага, а не
+  // баннером наверху страницы: пользователь смотрит на кнопку, которую только
+  // что нажал, а не листает вверх, чтобы понять, почему сохранение не прошло.
+  const errorBanner = (actionError || controller.error || projectMaterials.error)
+    ? <p className="inline-error" role="alert">{actionError || controller.error?.message || projectMaterials.error}</p>
+    : null;
+
   return (
     <div className="wizard-flow">
-      {(actionError || controller.error || projectMaterials.error) && <p className="inline-error" role="alert">{actionError || controller.error?.message || projectMaterials.error}</p>}
       {controller.conflict && <Card><h2>Черновик изменился в другой вкладке</h2><p>Загрузите серверную версию, чтобы не затереть изменения.</p><Button onClick={() => void controller.reload()}>Загрузить серверную версию</Button></Card>}
 
-      {step === 1 && <section className="wizard-step"><PageHead eyebrow="Сначала — структура" title="Как устроен ваш экзамен?" /><p>Это определит, как Tentex сохранит вопросы, задачи или билеты.</p><RadioCards label="Формат экзамена" value={trackFor(form.format)} options={FORMAT_OPTIONS} onChange={(track) => setForm((current) => ({ ...current, format: track === "combined" ? (current.taskList.selected ? "questions_tasks" : "questions") : track, hasTheory: track === "unknown" || current.hasTheory }))} className="wizard-format-options" />{form.format === "unknown" && <div className="wizard-context-note"><LibraryBig size={18} aria-hidden="true" /><span><b>Официальный список добавите позже</b>Сейчас сохраним учебные источники, а вопросы, задачи или билеты можно будет добавить позже.</span></div>}<div className="wizard-actions"><Button disabled={busy || !form.format} onClick={() => void go(2)}>Продолжить</Button></div></section>}
+      {step === 1 && <section className="wizard-step"><PageHead eyebrow="Сначала — структура" title="Как устроен ваш экзамен?" /><p>Это определит, как Tentex сохранит вопросы, задачи или билеты.</p><RadioCards label="Формат экзамена" value={trackFor(form.format)} options={FORMAT_OPTIONS} onChange={(track) => setForm((current) => ({ ...current, format: track === "combined" ? (current.taskList.selected ? "questions_tasks" : "questions") : track, hasTheory: track === "unknown" || current.hasTheory }))} className="wizard-format-options" />{form.format === "unknown" && <div className="wizard-context-note"><LibraryBig size={18} aria-hidden="true" /><span><b>Официальный список добавите позже</b>Сейчас сохраним учебные источники, а вопросы, задачи или билеты можно будет добавить позже.</span></div>}{errorBanner}<div className="wizard-actions"><Button disabled={busy || !form.format} onClick={() => void go(2)}>Продолжить</Button></div></section>}
 
       {step === 2 && (
         <section className="wizard-step">
@@ -1341,14 +1347,15 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
               />
             </div>
           )}
-          {trackFor(form.format) === "combined" && !form.questionList.selected && !form.taskList.selected && (
-            <p className="inline-error" role="alert">Добавьте список вопросов или список задач</p>
-          )}
           <div className="wizard-context-note is-hint">
             <Brain size={18} aria-hidden="true" />
             <span>{getMaterialOpinion(form)}</span>
           </div>
           {form.format === "unknown" && <p className="wizard-quiet-note">Если ваша цель — изучать конкретную методичку, удобнее соседний маршрут «Изучение по учебнику».</p>}
+          {trackFor(form.format) === "combined" && !form.questionList.selected && !form.taskList.selected && (
+            <p className="inline-error" role="alert">Добавьте список вопросов или список задач</p>
+          )}
+          {errorBanner}
           <div className="wizard-actions">
             <Button variant="ghost" onClick={() => changeStep(1)}>Назад</Button>
             <Button
@@ -1546,6 +1553,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
             )}
           </div>
 
+          {errorBanner}
           <div className="wizard-actions">
             <Button variant="ghost" onClick={() => changeStep(2)}>Назад</Button>
             {trackFor(form.format) !== "combined" && form.format !== "unknown" && !form.hasAnswers && !form.hasTheory && <Button variant="secondary" disabled={busy} onClick={() => void go(4)}>
@@ -1674,6 +1682,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
               </div>
             </Card>
           </div>
+          {errorBanner}
           <div className="wizard-actions">
             <Button variant="ghost" onClick={() => changeStep(3)}>Назад</Button>
             <Button disabled={busy || !form.subject.trim()} onClick={() => void go(5)}>Продолжить</Button>
@@ -1801,6 +1810,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
               </>
             )}
           </section>
+          {errorBanner}
           <div className="wizard-actions">
             <Button variant="ghost" onClick={() => changeStep(4)}>Назад</Button>
             <Button disabled={busy} onClick={() => void activate()}>Создать проект</Button>

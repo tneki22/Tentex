@@ -16,6 +16,7 @@ import {
 import { getMaterialPresentation } from "../../components/domain/material-viewer";
 import { TaskRow } from "../../components/domain";
 import type { BackgroundTask } from "../../components/domain";
+import { estimateEtaMinutes } from "../../hooks/backgroundTaskEta";
 import {
   Button,
   Disclosure,
@@ -208,8 +209,6 @@ export function LibraryProcessingPanel({
 
   const backgroundTask: BackgroundTask | null = useMemo(() => {
     if (!task || task.state === "completed") return null;
-    const left = Math.max(0, task.total - task.done);
-    const perPage = task.parser_mode ? SECONDS_PER_PAGE[task.parser_mode] : 0;
     return {
       id: task.id,
       kind: material.presentation_kind === "typst" ? "typst_compile" : "parse",
@@ -217,7 +216,7 @@ export function LibraryProcessingPanel({
       unit: "страниц",
       done: task.done,
       total: task.total,
-      etaMinutes: left > 0 && perPage > 0 ? Math.ceil((left * perPage) / 60) : null,
+      etaMinutes: estimateEtaMinutes(task.id, task.done, task.total, task.updated_at),
       state: task.state,
       error: task.error ?? undefined,
     };
