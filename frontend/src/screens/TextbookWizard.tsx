@@ -494,7 +494,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
               <div className="is-outside"><dt>Подпункты</dt><dd>{subpointCount}</dd></div>
               <div className="is-missing"><dt>Всего узлов</dt><dd>{nodes.length}</dd></div>
             </dl>
-            {flat.slice(0, 5).map((node) => <div key={node.id}><span>{node.number}</span><b>{node.title}</b><small>{node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}</small></div>)}
+            {flat.map((node) => <div key={node.id}><span>{node.number}</span><b>{node.title}</b><small>{node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}</small></div>)}
             {flat.length === 0 && <p>Программа пока пуста.</p>}
           </Card>
 

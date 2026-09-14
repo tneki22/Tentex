@@ -180,7 +180,7 @@ export function TextbookOutlineReview({ projectId, materials, values, onChange }
   function changeLevel(index: number, delta: 1 | -1) {
     if (!value) return;
     const item = value.items[index];
-    const nextLevel = Math.max(1, Math.min(4, item.level + delta));
+    const nextLevel = Math.max(1, item.level + delta);
     if (nextLevel === item.level) return;
     commit(value.items.map((current, itemIndex) => (itemIndex === index ? { ...current, level: nextLevel } : current)));
   }
@@ -412,7 +412,7 @@ function renderOutlineRows(items: OutlineItem[], actions: RowActions) {
           <IconButton label="Поднять" disabled={index <= 0} onClick={() => actions.onMove(index, -1)}><ArrowUp size={14} /></IconButton>
           <IconButton label="Опустить" disabled={index >= items.length - 1} onClick={() => actions.onMove(index, 1)}><ArrowDown size={14} /></IconButton>
           <IconButton label="Уменьшить вложенность" disabled={node.item.level <= 1} onClick={() => actions.onLevel(index, -1)}><ArrowLeft size={14} /></IconButton>
-          <IconButton label="Увеличить вложенность" disabled={node.item.level >= 4} onClick={() => actions.onLevel(index, 1)}><ArrowRight size={14} /></IconButton>
+          <IconButton label="Увеличить вложенность" onClick={() => actions.onLevel(index, 1)}><ArrowRight size={14} /></IconButton>
           <IconButton label="Добавить пункт после" onClick={() => actions.onAdd(index)}><Plus size={14} /></IconButton>
           <IconButton label="Удалить пункт" onClick={() => actions.onDelete(index)}><Trash2 size={14} /></IconButton>
         </div>

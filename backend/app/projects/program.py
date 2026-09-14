@@ -154,8 +154,6 @@ def _validate_tree(parent_by_id: dict[UUID, UUID | None]) -> None:
 
         for path_node_id in reversed(path):
             base_depth += 1
-            if base_depth > 4:
-                raise ProjectInvariantError("Глубина программы не может превышать четыре уровня")
             depths[path_node_id] = base_depth
 
 

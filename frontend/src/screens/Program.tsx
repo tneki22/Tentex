@@ -218,7 +218,7 @@ export function Program() {
   const kindOptions: Array<[AddKind, string]> = textbook
     ? [["section", "Раздел"], ["topic", "Тема"], ["subpoint", "Подпункт"]]
     : [["section", "Раздел"], ["ticket", "Билет"], ["question", "Вопрос"], ["task", "Задача"]];
-  const addParentOptions = flat.filter((node) => node.is_in_current_program && !node.is_archived && node.depth < 4);
+  const addParentOptions = flat.filter((node) => node.is_in_current_program && !node.is_archived);
 
   useEffect(() => setTitleDraft(selected?.title ?? ""), [selected?.id, selected?.title]);
 
@@ -433,11 +433,6 @@ export function Program() {
     });
   }
 
-  function subtreeHeight(nodeId: string): number {
-    const children = flat.filter((node) => node.parent_id === nodeId);
-    return children.length ? 1 + Math.max(...children.map((child) => subtreeHeight(child.id))) : 1;
-  }
-
   function duplicate(node: ProgramNodeRead) {
     if (!detail) return;
     const { index } = siblingInfo(node);
@@ -624,7 +619,7 @@ export function Program() {
   function nodeActions(node: ProgramNodeRead) {
     const info = siblingInfo(node);
     const previous = info.index > 0 ? flat.find((item) => item.id === info.siblings[info.index - 1]?.id) ?? null : null;
-    const canNest = Boolean(previous && previous.depth + subtreeHeight(node.id) <= 4);
+    const canNest = Boolean(previous);
     return (
       <div className="program-row-actions">
         <Button variant="ghost" aria-label="Вверх" disabled={busy || info.index <= 0} onClick={() => move(node, -1)}><ArrowUp size={14} /></Button>
@@ -640,14 +635,14 @@ export function Program() {
     const revision = detail.program.revision;
     const info = siblingInfo(node);
     const previous = info.index > 0 ? flat.find((item) => item.id === info.siblings[info.index - 1]?.id) ?? null : null;
-    const canNest = Boolean(previous && previous.depth + subtreeHeight(node.id) <= 4);
+    const canNest = Boolean(previous);
     return [
       {
         label: "Добавить внутрь",
         icon: <Plus size={14} />,
         items: kindOptions.map(([kind, label]) => ({
           label,
-          disabled: busy || node.depth >= 4,
+          disabled: busy,
           onSelect: () => openAddDialogFromMenu({ kind, parentId: node.id, position: null, placementLabel: `Внутрь «${node.title}»` }),
         })),
       },

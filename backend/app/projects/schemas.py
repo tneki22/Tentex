@@ -311,7 +311,7 @@ class ProgramOutlineItemWrite(ApiModel):
     outline_item_key: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
     ]
-    level: int = Field(ge=1, le=4)
+    level: int = Field(ge=1)
     title: NonBlank
     page: int = Field(ge=1)
     selected: bool = True

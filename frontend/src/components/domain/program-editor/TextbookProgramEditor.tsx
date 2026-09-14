@@ -150,16 +150,7 @@ export function TextbookProgramEditor({
     }
   }
 
-  function subtreeHeight(nodeId: string): number {
-    const children = flat.filter((node) => node.parent_id === nodeId);
-    return children.length
-      ? 1 + Math.max(...children.map((child) => subtreeHeight(child.id)))
-      : 1;
-  }
-
-  const canIndent = Boolean(
-    selected && previousSibling && previousSibling.depth + subtreeHeight(selected.id) <= 4,
-  );
+  const canIndent = Boolean(selected && previousSibling);
 
   async function createNode(
     nodeType: NodeType,
@@ -249,14 +240,14 @@ export function TextbookProgramEditor({
     const parent = node.parent_id
       ? flat.find((item) => item.id === node.parent_id) ?? null
       : null;
-    const canNest = Boolean(previous && previous.depth + subtreeHeight(node.id) <= 4);
+    const canNest = Boolean(previous);
     return [
       {
         label: "Добавить внутрь",
         icon: <Plus size={14} />,
         items: (["section", "topic", "subpoint"] as NodeType[]).map((nodeType) => ({
           label: nodeType === "section" ? "Раздел" : nodeType === "topic" ? "Тему" : "Подпункт",
-          disabled: busy || node.depth >= 4,
+          disabled: busy,
           onSelect: () => void createNode(nodeType, node.id),
         })),
       },
@@ -317,7 +308,7 @@ export function TextbookProgramEditor({
           <div className="textbook-manual-toolbar" aria-label="Ручные действия с узлом программы">
             <div className="textbook-add-actions">
               <Button disabled={busy} onClick={() => void createNode("section", null)}><Plus size={15} />Добавить раздел</Button>
-              <Button variant="secondary" disabled={busy || !selected || selected.depth >= 4} onClick={() => selected && void createNode(childType(selected), selected.id)}><Plus size={15} />{selected ? selected.node_type === "section" ? "Добавить тему" : "Добавить подпункт" : "Добавить внутрь"}</Button>
+              <Button variant="secondary" disabled={busy || !selected} onClick={() => selected && void createNode(childType(selected), selected.id)}><Plus size={15} />{selected ? selected.node_type === "section" ? "Добавить тему" : "Добавить подпункт" : "Добавить внутрь"}</Button>
               <Button variant="ghost" disabled={busy || !selected} onClick={() => selected && void createNode(selected.node_type, selected.parent_id, selectedIndex + 1)}>Добавить рядом</Button>
             </div>
             <span>Выбрано: <b>{selected?.title ?? "узел не выбран"}</b></span>
@@ -456,7 +447,6 @@ function TextbookOutlineImportDialog({
   const [sources, setSources] = useState<ImportSource[]>([]);
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
-  const [depth, setDepth] = useState(4);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -502,23 +492,14 @@ function TextbookOutlineImportDialog({
     .flatMap((node) => node.source_page_ranges.map((range) => `${range.material_id}:${range.outline_item_key}`))), [program.nodes]);
   const selectedCount = sources.reduce((count, source) => count + (
     selectedSources.has(source.material.id)
-      ? source.outline.items.filter((item) => item.level <= depth
-        && selectedKeys.has(item.outline_item_key)
+      ? source.outline.items.filter((item) => selectedKeys.has(item.outline_item_key)
         && !currentKeys.has(`${source.material.id}:${item.outline_item_key}`)).length
       : 0
   ), 0);
   const similarCount = similarPathCount(
     sources.filter((source) => selectedSources.has(source.material.id)),
-    depth,
     selectedKeys,
   );
-
-  function changeDepth(nextDepth: number) {
-    setDepth(nextDepth);
-    setSelectedKeys(new Set(sources.flatMap((source) => source.outline.items
-      .filter((item) => item.level <= nextDepth)
-      .map((item) => item.outline_item_key))));
-  }
 
   function toggleSource(source: ImportSource, checked: boolean) {
     setSelectedSources((current) => {
@@ -562,7 +543,7 @@ function TextbookOutlineImportDialog({
           level: item.level,
           title: item.title,
           page: item.page,
-          selected: item.level <= depth && selectedKeys.has(item.outline_item_key),
+          selected: selectedKeys.has(item.outline_item_key),
         })),
       }))
       .filter((source) => source.items.some((item) => item.selected));
@@ -578,7 +559,6 @@ function TextbookOutlineImportDialog({
       footer={<><Button variant="ghost" onClick={() => onOpenChange(false)}>Закрыть</Button><Button disabled={busy || loading || selectedCount === 0} onClick={() => void submit()}>Импортировать {selectedCount} {selectedCount === 1 ? "пункт" : "пунктов"}</Button></>}
     >
       {wizard && <p className="textbook-import-note">Проверить и исправить оглавления можно на предыдущем шаге.</p>}
-      <label className="textbook-import-depth"><span>Глубина импорта</span><select value={depth} onChange={(event) => changeDepth(Number(event.target.value))}><option value={1}>1 уровень</option><option value={2}>2 уровня</option><option value={3}>3 уровня</option><option value={4}>4 уровня</option></select></label>
       {loading && <LoadingState label="Загружаем оглавления" />}
       {error && <p className="inline-error" role="alert">{error}</p>}
       {!loading && <div className="textbook-import-sources">
@@ -587,10 +567,9 @@ function TextbookOutlineImportDialog({
           return <section key={source.material.id} className="textbook-import-source">
             <label className="textbook-import-source-head"><input type="checkbox" checked={enabled} disabled={source.outline.items.length === 0} onChange={(event) => toggleSource(source, event.target.checked)} /><span><b>{source.material.display_name}</b><small>{source.outline.items.length ? `${source.outline.items.length} пунктов · приоритет ${source.material.priority + 1}` : "Оглавление не найдено — источник можно оставить без импорта"}</small></span></label>
             {enabled && source.outline.items.length > 0 && <div className="textbook-import-tree">{source.outline.items.map((item, index) => {
-              const hiddenByDepth = item.level > depth;
               const already = currentKeys.has(`${source.material.id}:${item.outline_item_key}`);
-              return <label key={item.outline_item_key} style={{ "--outline-depth": Math.min(item.level - 1, 3) } as CSSProperties}>
-                <CascadeCheckbox checked={!hiddenByDepth && selectedKeys.has(item.outline_item_key)} disabled={hiddenByDepth || already} onChange={(checked) => toggleItem(source, index, checked)} />
+              return <label key={item.outline_item_key} style={{ "--outline-depth": item.level - 1 } as CSSProperties}>
+                <CascadeCheckbox checked={selectedKeys.has(item.outline_item_key)} disabled={already} onChange={(checked) => toggleItem(source, index, checked)} />
                 <span><b>{item.title}</b><small>стр. {item.page}{already ? " · уже импортирован" : ""}</small></span>
               </label>;
             })}</div>}
@@ -607,7 +586,7 @@ function CascadeCheckbox({ checked, disabled, onChange }: { checked: boolean; di
   return <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />;
 }
 
-function similarPathCount(sources: ImportSource[], depth: number, selectedKeys: Set<string>): number {
+function similarPathCount(sources: ImportSource[], selectedKeys: Set<string>): number {
   const seen = new Map<string, string>();
   let count = 0;
   for (const source of sources) {
@@ -615,7 +594,7 @@ function similarPathCount(sources: ImportSource[], depth: number, selectedKeys: 
     for (const item of source.outline.items) {
       path.length = Math.max(0, item.level - 1);
       path.push(item.title.trim().toLocaleLowerCase("ru").replace(/[^\p{L}\p{N}]+/gu, " "));
-      if (item.level > depth || !selectedKeys.has(item.outline_item_key)) continue;
+      if (!selectedKeys.has(item.outline_item_key)) continue;
       const key = path.join(" / ");
       const owner = seen.get(key);
       if (owner && owner !== source.material.id) count += 1;

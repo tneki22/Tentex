@@ -174,6 +174,45 @@ def test_remove_all_is_one_undo_and_manual_nodes_are_custom(session: Session) ->
     assert all(node.is_in_current_program for node in undone.program.nodes)
 
 
+def test_import_allows_fifth_outline_level(session: Session) -> None:
+    project = _project(session)
+    material = _material(session, project, "Глубокое оглавление", 0)
+    imported = program_outline.import_outlines(
+        session,
+        project.id,
+        ProgramOutlinesImportWrite(
+            expected_program_revision=0,
+            sources=[
+                ProgramOutlineSourceWrite(
+                    material_id=material.id,
+                    items=[
+                        _item("1", 1, "Раздел", 1),
+                        _item("1.1", 2, "Тема", 2),
+                        _item("1.1.1", 3, "Подпункт", 3),
+                        _item("1.1.1.1", 4, "Деталь", 4),
+                        _item("1.1.1.1.1", 5, "Уточнение", 5),
+                    ],
+                )
+            ],
+        ),
+    )
+
+    nodes = {node.title: node for node in imported.program.nodes}
+    assert nodes["Уточнение"].parent_id == nodes["Деталь"].id
+    extended = program.create_program_node(
+        session,
+        project.id,
+        ProgramNodeCreate(
+            expected_program_revision=imported.program.revision,
+            parent_id=nodes["Уточнение"].id,
+            node_type=NodeType.SUBPOINT,
+            title="Ещё глубже",
+        ),
+    )
+    assert extended.changed_node is not None
+    assert extended.changed_node.parent_id == nodes["Уточнение"].id
+
+
 def test_import_rejects_foreign_material_and_stale_revision(session: Session) -> None:
     project = _project(session)
     foreign_project = _project(session)
