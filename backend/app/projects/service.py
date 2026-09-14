@@ -12,6 +12,7 @@ from app.models import (
     ChatSession,
     ConspectImage,
     GoalPassport,
+    GoalScope,
     Material,
     ProgramNode,
     Project,
@@ -280,6 +281,7 @@ def _normalize_active_order(session: Session) -> int:
 def activate_wizard_draft(
     session: Session, project_id: UUID, expected_revision: int
 ) -> ProjectDetail:
+    """Активирует черновик, когда его паспорт соответствует типу проекта."""
     with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None:
@@ -306,8 +308,11 @@ def activate_wizard_draft(
             "purpose",
             "starting_level",
             "target_outcome",
-            "study_format",
         )
+        if project.workspace_variant == WorkspaceVariant.EXAM:
+            required_goal_fields += ("study_format",)
+        if goal_passport is not None and goal_passport.scope == GoalScope.GOAL:
+            required_goal_fields += ("goal",)
         if project.name is None or not project.name.strip():
             raise ProjectConflictError("Перед активацией укажите название проекта")
         if goal_passport is None or any(
