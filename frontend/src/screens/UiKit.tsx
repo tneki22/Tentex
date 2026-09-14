@@ -418,7 +418,7 @@ export function UiKit() {
             Подтверждение удаления
           </Button>
           <span className="kit-hint" style={{ margin: 0 }}>
-            Палитра поиска — <Kbd>Ctrl K</Kbd> из любого места
+            Палитра поиска — <Kbd>Ctrl X</Kbd> из любого места
           </span>
         </div>
 

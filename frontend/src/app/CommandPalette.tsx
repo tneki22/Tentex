@@ -9,9 +9,11 @@ import { SCREENS } from "./screens";
 import { SCREEN_VIEWS } from "./views";
 
 /**
- * Палитра поиска (Ctrl+K). Ищет по названиям — проекты, материалы Библиотеки,
- * разделы Параметров и экраны, — и не лезет в текст материалов: полнотекстовый
- * поиск по фрагментам проектный, у него своё место внутри проекта.
+ * Палитра поиска (Ctrl+X — Ctrl+K занят адресной строкой Chrome). Ищет по
+ * названиям — проекты, материалы Библиотеки, разделы Параметров и экраны, —
+ * и не лезет в текст материалов: полнотекстовый поиск по фрагментам
+ * проектный, у него своё место внутри проекта. Пустой запрос показывает
+ * недавно открытое отсюда же, а не статичный список по умолчанию.
  */
 
 interface PaletteItem {
@@ -23,13 +25,52 @@ interface PaletteItem {
   icon: typeof Search;
 }
 
+interface RecentEntry {
+  id: string;
+  group: PaletteItem["group"];
+  label: string;
+  hint?: string;
+  to: string;
+}
+
 /** ё=е: иначе «Пробелы» не найдутся по «проб», а «Учёбник» — по «уче». */
 function normalize(text: string): string {
   return text.toLowerCase().replaceAll("ё", "е");
 }
 
 const GROUP_ORDER: PaletteItem["group"][] = ["Проекты", "Материалы", "Параметры", "Экраны"];
+const GROUP_ICON: Record<PaletteItem["group"], typeof Search> = {
+  "Проекты": FolderOpen,
+  "Материалы": FileText,
+  "Параметры": SlidersHorizontal,
+  "Экраны": SquareDashed,
+};
 const PER_GROUP = 7;
+const RECENT_KEY = "tentex.palette.recent";
+const RECENT_LIMIT = 7;
+
+function loadRecent(): RecentEntry[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? (parsed as RecentEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecent(entries: RecentEntry[]) {
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(entries));
+  } catch {
+    // приватный режим или недоступный localStorage — просто не запоминаем
+  }
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+}
 
 const STATUS_HINTS: Record<LibraryMaterialRead["status"], string> = {
   ready_to_process: "не разобран",
@@ -64,6 +105,7 @@ export function CommandPalette() {
   const [active, setActive] = useState(0);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [materials, setMaterials] = useState<LibraryMaterialRead[]>([]);
+  const [recent, setRecent] = useState<RecentEntry[]>(() => loadRecent());
   const navigate = useNavigate();
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -109,13 +151,22 @@ export function CommandPalette() {
     icon: SlidersHorizontal,
   })), []);
 
-  const results = useMemo(() => {
-    const all = [...projectItems, ...materialItems, ...settingsItems, ...screens];
-    const needle = normalize(query.trim());
-    const matched = needle ? all.filter((item) => normalize(item.label).includes(needle)) : screens;
+  const recentItems: PaletteItem[] = useMemo(() => recent.map((entry) => ({
+    ...entry,
+    icon: GROUP_ICON[entry.group],
+  })), [recent]);
 
+  const showingRecent = query.trim() === "" && recentItems.length > 0;
+
+  const results = useMemo(() => {
+    const needle = normalize(query.trim());
+    if (!needle) {
+      return recentItems.length > 0 ? recentItems : screens;
+    }
+    const all = [...projectItems, ...materialItems, ...settingsItems, ...screens];
+    const matched = all.filter((item) => normalize(item.label).includes(needle));
     return GROUP_ORDER.flatMap((group) => matched.filter((item) => item.group === group).slice(0, PER_GROUP));
-  }, [projectItems, materialItems, settingsItems, query, screens]);
+  }, [projectItems, materialItems, settingsItems, query, screens, recentItems]);
 
   useEffect(() => {
     if (!open) return;
@@ -127,7 +178,8 @@ export function CommandPalette() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "x") {
+        if (isEditableTarget(event.target)) return;
         event.preventDefault();
         setOpen((prev) => !prev);
       }
@@ -143,6 +195,12 @@ export function CommandPalette() {
   function go(item: PaletteItem) {
     setOpen(false);
     setQuery("");
+    const nextRecent = [
+      { id: item.id, group: item.group, label: item.label, hint: item.hint, to: item.to },
+      ...recent.filter((entry) => entry.id !== item.id),
+    ].slice(0, RECENT_LIMIT);
+    setRecent(nextRecent);
+    saveRecent(nextRecent);
     navigate(item.to);
   }
 
@@ -171,7 +229,7 @@ export function CommandPalette() {
       >
         <Search size={15} aria-hidden="true" />
         Поиск
-        <Kbd>Ctrl K</Kbd>
+        <Kbd>Ctrl X</Kbd>
       </button>
 
       <RadixDialog.Root open={open} onOpenChange={setOpen}>
@@ -198,8 +256,9 @@ export function CommandPalette() {
 
             <div className="palette-list" ref={listRef} role="listbox" aria-label="Результаты">
               {results.length === 0 && <p className="palette-empty">Ничего с таким названием</p>}
+              {results.length > 0 && showingRecent && <p className="palette-group">Недавние</p>}
               {results.map((item, index) => {
-                const header = item.group !== lastGroup ? item.group : null;
+                const header = !showingRecent && item.group !== lastGroup ? item.group : null;
                 lastGroup = item.group;
                 return (
                   <div key={item.id}>
