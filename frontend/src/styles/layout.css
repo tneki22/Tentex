@@ -617,21 +617,6 @@
   text-align: center;
 }
 
-.palette-static-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  color: var(--muted);
-  font-size: var(--text-sm);
-  line-height: var(--leading-snug);
-}
-
-.palette-static-row svg {
-  flex: none;
-  color: var(--faint);
-}
-
 @keyframes palette-in {
   from {
     opacity: 0;

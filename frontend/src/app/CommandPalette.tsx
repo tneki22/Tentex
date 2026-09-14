@@ -1,23 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Dialog as RadixDialog } from "radix-ui";
-import { FileText, FolderOpen, Search, SquareDashed } from "lucide-react";
+import { FileText, FolderOpen, Search, SlidersHorizontal, SquareDashed } from "lucide-react";
 import { listProjects, type ProjectSummary } from "../api/projects";
+import { listLibraryMaterials, type LibraryMaterialRead } from "../api/materials";
 import { Kbd } from "../components/ui";
 import { SCREENS } from "./screens";
 import { SCREEN_VIEWS } from "./views";
 
 /**
- * Палитра поиска (Ctrl+K). Ищет по названиям — проекты, экраны, файлы, — и не
- * лезет в текст материалов: полнотекстовый поиск по фрагментам проектный, у него
- * своё место внутри проекта.
- *
- * Файлы появятся здесь после подключения Материалов на этапе 5.
+ * Палитра поиска (Ctrl+K). Ищет по названиям — проекты, материалы Библиотеки,
+ * разделы Параметров и экраны, — и не лезет в текст материалов: полнотекстовый
+ * поиск по фрагментам проектный, у него своё место внутри проекта.
  */
 
 interface PaletteItem {
   id: string;
-  group: "Проекты" | "Экраны";
+  group: "Проекты" | "Материалы" | "Параметры" | "Экраны";
   label: string;
   hint?: string;
   to: string;
@@ -29,14 +28,42 @@ function normalize(text: string): string {
   return text.toLowerCase().replaceAll("ё", "е");
 }
 
-const GROUP_ORDER: PaletteItem["group"][] = ["Проекты", "Экраны"];
+const GROUP_ORDER: PaletteItem["group"][] = ["Проекты", "Материалы", "Параметры", "Экраны"];
 const PER_GROUP = 7;
+
+const STATUS_HINTS: Record<LibraryMaterialRead["status"], string> = {
+  ready_to_process: "не разобран",
+  queued: "в очереди",
+  processing: "разбирается",
+  paused: "на паузе",
+  needs_input: "нужен выбор",
+  ready: "готов",
+  failed: "ошибка разбора",
+};
+
+const SETTINGS_ITEMS: { label: string; to: string }[] = [
+  { label: "Параметры → ИИ → Обзор", to: "/setup?section=ai&subsection=overview" },
+  { label: "Параметры → ИИ → Провайдеры", to: "/setup?section=ai&subsection=providers" },
+  { label: "Параметры → ИИ → Модели", to: "/setup?section=ai&subsection=models" },
+  { label: "Параметры → ИИ → По умолчанию", to: "/setup?section=ai&subsection=defaults" },
+  { label: "Параметры → ИИ → Функции", to: "/setup?section=ai&subsection=functions" },
+  { label: "Параметры → ИИ → Расходы", to: "/setup?section=ai&subsection=limits" },
+  { label: "Параметры → ИИ → История", to: "/setup?section=ai&subsection=usage" },
+  { label: "Параметры → Распознавание → Обзор", to: "/setup?section=ocr&subsection=overview" },
+  { label: "Параметры → Распознавание → Режимы", to: "/setup?section=ocr&subsection=engines" },
+  { label: "Параметры → Распознавание → Модели", to: "/setup?section=ocr&subsection=models" },
+  { label: "Параметры → Распознавание → Качество", to: "/setup?section=ocr&subsection=quality" },
+  { label: "Параметры → Бот", to: "/setup?section=bot" },
+  { label: "Параметры → Резервные копии", to: "/setup?section=backups" },
+  { label: "Параметры → Хранилище", to: "/setup?section=storage" },
+];
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [materials, setMaterials] = useState<LibraryMaterialRead[]>([]);
   const navigate = useNavigate();
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -63,18 +90,38 @@ export function CommandPalette() {
     icon: FolderOpen,
   })), [projects]);
 
+  const materialItems: PaletteItem[] = useMemo(() => materials.map((material) => ({
+    id: `m-${material.id}`,
+    group: "Материалы" as const,
+    label: material.original_name,
+    hint: material.usage.length > 0
+      ? `в ${material.usage.length} проект${material.usage.length === 1 ? "е" : material.usage.length < 5 ? "ах" : "ах"}`
+      : STATUS_HINTS[material.status],
+    to: `/library/${material.id}`,
+    icon: FileText,
+  })), [materials]);
+
+  const settingsItems: PaletteItem[] = useMemo(() => SETTINGS_ITEMS.map((entry, index) => ({
+    id: `set-${index}`,
+    group: "Параметры" as const,
+    label: entry.label,
+    to: entry.to,
+    icon: SlidersHorizontal,
+  })), []);
+
   const results = useMemo(() => {
-    const all = [...projectItems, ...screens];
+    const all = [...projectItems, ...materialItems, ...settingsItems, ...screens];
     const needle = normalize(query.trim());
     const matched = needle ? all.filter((item) => normalize(item.label).includes(needle)) : screens;
 
     return GROUP_ORDER.flatMap((group) => matched.filter((item) => item.group === group).slice(0, PER_GROUP));
-  }, [projectItems, query, screens]);
+  }, [projectItems, materialItems, settingsItems, query, screens]);
 
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
     void listProjects(controller.signal).then(setProjects).catch(() => undefined);
+    void listLibraryMaterials(controller.signal).then(setMaterials).catch(() => undefined);
     return () => controller.abort();
   }, [open]);
 
@@ -120,7 +167,7 @@ export function CommandPalette() {
         type="button"
         className="topbar-search"
         onClick={() => setOpen(true)}
-        aria-label="Поиск по проектам, экранам и файлам"
+        aria-label="Поиск по проектам, материалам и параметрам"
       >
         <Search size={15} aria-hidden="true" />
         Поиск
@@ -133,7 +180,7 @@ export function CommandPalette() {
           <RadixDialog.Content className="palette" aria-label="Поиск">
             <RadixDialog.Title hidden>Поиск</RadixDialog.Title>
             <RadixDialog.Description hidden>
-              Поиск по названиям проектов, экранов и файлов
+              Поиск по названиям проектов, материалов, разделов параметров и экранов
             </RadixDialog.Description>
 
             <div className="palette-input">
@@ -143,7 +190,7 @@ export function CommandPalette() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={onInputKeyDown}
-                placeholder="Проект, экран или файл"
+                placeholder="Проект, материал, параметр или экран"
                 aria-label="Что искать"
               />
               <Kbd>Esc</Kbd>
@@ -172,13 +219,6 @@ export function CommandPalette() {
                   </div>
                 );
               })}
-              <div className="palette-files-placeholder" aria-disabled="true">
-                <p className="palette-group">Файлы</p>
-                <div className="palette-static-row">
-                  <FileText size={15} aria-hidden="true" />
-                  <span>Файлы появятся после подключения Библиотеки к API</span>
-                </div>
-              </div>
             </div>
           </RadixDialog.Content>
         </RadixDialog.Portal>
