@@ -31,6 +31,9 @@ interface LessonTopicPaneProps {
   refreshKey: number;
   selectedBlockId: string | null;
   onSelectBlock(blockId: string | null): void;
+  /** Кнопка свёртки правой панели — встраивается в тулбар урока, а не висит отдельной пустой строкой. */
+  panelToggle: ReactNode;
+  actionError: string;
 }
 
 const STATUS_TONE: Record<LessonStatus, "warning" | "success" | "neutral"> = {
@@ -42,13 +45,13 @@ const STATUS_TONE: Record<LessonStatus, "warning" | "success" | "neutral"> = {
 function StageButton({ icon, label, stage }: { icon: ReactNode; label: string; stage: string }) {
   return (
     <Tooltip label={`Появится на этапе ${stage}`} side="bottom">
-      <span><Button variant="ghost" disabled>{icon}{label}</Button></span>
+      <span><Button variant="ghost" disabled aria-label={label}>{icon}<span className="toolbar-label">{label}</span></Button></span>
     </Tooltip>
   );
 }
 
 /** Центр для одной темы: формулировка, уроки темы и открытый урок (записка §2, бриф §12). */
-export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onChanged, refreshKey, selectedBlockId, onSelectBlock }: LessonTopicPaneProps) {
+export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onChanged, refreshKey, selectedBlockId, onSelectBlock, panelToggle, actionError }: LessonTopicPaneProps) {
   const topicLessons = lessons.filter((lesson) => lesson.program_node_ids.includes(topic.id));
   const defaultLesson = topicLessons.find((lesson) => lesson.status !== "archived") ?? topicLessons[0];
   const openId = topicLessons.some((lesson) => lesson.id === lessonId) ? lessonId : defaultLesson?.id ?? null;
@@ -175,7 +178,9 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
         <div className="lessons-topic-title-row">
           <h1>{topic.title}</h1>
           {newLessonMenu}
+          {!data && <span className="lessons-toolbar-end">{panelToggle}</span>}
         </div>
+        {actionError && <p className="inline-error" role="alert">{actionError}</p>}
       </header>
 
       {topicLessons.length > 1 && (
@@ -210,26 +215,27 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
               <header className="lessons-lesson-head">
                 <div className="lessons-lesson-toolbar">
                   <SegmentedTabs label="Способ показа урока" value={mode} tabs={VIEW_MODE_TABS} onChange={setMode} />
-                  {data.status === "draft" && <Button variant="secondary" disabled={saving} onClick={() => void change({ status: "ready" })}><CheckCircle2 size={14} />Готов</Button>}
-                  {data.status !== "draft" && <Button variant="secondary" disabled={saving} onClick={() => void change({ status: "draft" })}><RotateCcw size={14} />Вернуть в черновики</Button>}
-                  {data.status !== "archived" && <Button variant="ghost" disabled={saving} onClick={() => void change({ status: "archived" })}><Archive size={14} />В архив</Button>}
+                  {data.status === "draft" && <Button variant="secondary" aria-label="Готов" disabled={saving} onClick={() => void change({ status: "ready" })}><CheckCircle2 size={14} /><span className="toolbar-label">Готов</span></Button>}
+                  {data.status !== "draft" && <Button variant="secondary" aria-label="Вернуть в черновики" disabled={saving} onClick={() => void change({ status: "draft" })}><RotateCcw size={14} /><span className="toolbar-label">Вернуть в черновики</span></Button>}
+                  {data.status !== "archived" && <Button variant="ghost" aria-label="В архив" disabled={saving} onClick={() => void change({ status: "archived" })}><Archive size={14} /><span className="toolbar-label">В архив</span></Button>}
                   {data.undo_sequence
-                    ? <Button variant="ghost" disabled={saving} onClick={() => void undoCreate()}><Undo2 size={14} />Отменить</Button>
-                    : <Tooltip label="Отменить можно только последнее действие проекта" side="bottom"><span><Button variant="ghost" disabled><Undo2 size={14} />Отменить</Button></span></Tooltip>}
-                  <Link className="secondary-button" to={`/projects/${projectId}?topic=${topic.id}&tab=lesson&lesson=${data.id}`}><ExternalLink size={14} />Открыть в Рабочей области</Link>
+                    ? <Button variant="ghost" aria-label="Отменить" disabled={saving} onClick={() => void undoCreate()}><Undo2 size={14} /><span className="toolbar-label">Отменить</span></Button>
+                    : <Tooltip label="Отменить можно только последнее действие проекта" side="bottom"><span><Button variant="ghost" disabled aria-label="Отменить"><Undo2 size={14} /><span className="toolbar-label">Отменить</span></Button></span></Tooltip>}
+                  <Link className="secondary-button" aria-label="Открыть в Рабочей области" to={`/projects/${projectId}?topic=${topic.id}&tab=lesson&lesson=${data.id}`}><ExternalLink size={14} /><span className="toolbar-label">Открыть в Рабочей области</span></Link>
+                  <span className="lessons-toolbar-end">{panelToggle}</span>
                 </div>
                 <div className="lessons-block-toolbar" aria-label="Действия над блоком">
-                  <Menu label="Добавить пояснение" trigger={<Button variant="ghost" disabled={saving}><Plus size={14} />Добавить пояснение</Button>} items={[
+                  <Menu label="Добавить пояснение" trigger={<Button variant="ghost" disabled={saving} aria-label="Добавить пояснение"><Plus size={14} /><span className="toolbar-label">Добавить пояснение</span></Button>} items={[
                     { label: "Текст", onSelect: () => void edit({ operation: "add_note", after_block_id: selectedBlockId ?? undefined, variant: "text" }) },
                     { label: "Пояснение", onSelect: () => void edit({ operation: "add_note", after_block_id: selectedBlockId ?? undefined, variant: "explanation" }) },
                     { label: "Важно", onSelect: () => void edit({ operation: "add_note", after_block_id: selectedBlockId ?? undefined, variant: "important" }) },
                     { label: "Пример", onSelect: () => void edit({ operation: "add_note", after_block_id: selectedBlockId ?? undefined, variant: "example" }) },
                     { label: "Заголовок", onSelect: () => void edit({ operation: "add_note", after_block_id: selectedBlockId ?? undefined, variant: "heading" }) },
                   ]} />
-                  <Button variant="ghost" disabled={!selectedBlockId || saving || data.blocks[0]?.id === selectedBlockId} onClick={() => void edit({ operation: "move_up", block_id: selectedBlockId ?? undefined })}><ArrowRightLeft size={14} />Выше</Button>
-                  <Button variant="ghost" disabled={!selectedBlockId || saving || data.blocks.at(-1)?.id === selectedBlockId} onClick={() => void edit({ operation: "move_down", block_id: selectedBlockId ?? undefined })}><ArrowRightLeft size={14} />Ниже</Button>
+                  <Button variant="ghost" aria-label="Выше" disabled={!selectedBlockId || saving || data.blocks[0]?.id === selectedBlockId} onClick={() => void edit({ operation: "move_up", block_id: selectedBlockId ?? undefined })}><ArrowRightLeft size={14} /><span className="toolbar-label">Выше</span></Button>
+                  <Button variant="ghost" aria-label="Ниже" disabled={!selectedBlockId || saving || data.blocks.at(-1)?.id === selectedBlockId} onClick={() => void edit({ operation: "move_down", block_id: selectedBlockId ?? undefined })}><ArrowRightLeft size={14} /><span className="toolbar-label">Ниже</span></Button>
                   <StageButton icon={<Scissors size={14} />} label="Разрезать" stage="2 — ручной редактор" />
-                  <Button variant="ghost" disabled={!selectedBlockId || saving} onClick={() => void edit({ operation: "delete", block_id: selectedBlockId ?? undefined })}><Trash2 size={14} />Удалить</Button>
+                  <Button variant="ghost" aria-label="Удалить" disabled={!selectedBlockId || saving} onClick={() => void edit({ operation: "delete", block_id: selectedBlockId ?? undefined })}><Trash2 size={14} /><span className="toolbar-label">Удалить</span></Button>
                   <StageButton icon={<Sparkles size={14} />} label="Дополнить с ИИ" stage="5 — ИИ «Дополнить урок»" />
                   <StageButton icon={<Dumbbell size={14} />} label="Добавить практику" stage="6 — задания" />
                 </div>

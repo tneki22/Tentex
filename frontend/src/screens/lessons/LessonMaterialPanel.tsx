@@ -221,8 +221,10 @@ function SearchTab({ projectId, topic, busy, lessonId, onAdd }: { projectId: str
                 <p>{renderSearchHighlights(place.text, place.highlights)}</p>
                 <small>{place.materialName} · стр. {place.pageNumber} · {place.fragmentIds.length} совпад.</small>
               </div>
-              <QualityBadge quality={place.quality} />
-              <Button variant="ghost" disabled={!lessonId || busy} onClick={() => onAdd({ operation: "add_page", material_id: place.materialId, page_from: place.pageNumber })}><Plus size={14} />Добавить страницу в урок</Button>
+              <div className="lessons-search-result-actions">
+                <QualityBadge quality={place.quality} />
+                <Button variant="ghost" disabled={!lessonId || busy} onClick={() => onAdd({ operation: "add_page", material_id: place.materialId, page_from: place.pageNumber })}><Plus size={14} />Добавить страницу в урок</Button>
+              </div>
             </li>
           ))}
         </ul>
