@@ -5,7 +5,7 @@ import { createManualLesson, createQuickLesson, editLessonBlocks, getLesson, typ
 import { getProject, ProjectApiError, type ProjectDetail } from "../../api/projects";
 import { ProjectNav } from "../../components/domain";
 import { Button, EmptyState, ErrorState, IconButton, LoadingState, PanelResizeHandle } from "../../components/ui";
-import { useLessonsOverview } from "../../hooks/useLessons";
+import { useLesson, useLessonsOverview } from "../../hooks/useLessons";
 import { buildProgramTree, flattenProgramTree } from "../programTree";
 import { LessonBulkTable } from "./LessonBulkTable";
 import { LessonMaterialPanel } from "./LessonMaterialPanel";
@@ -73,6 +73,20 @@ export function Lessons() {
   const lessonParam = searchParams.get("lesson");
   const active = flat.find((node) => node.id === topicParam) ?? flat.find((node) => STUDY_TYPES.has(node.node_type)) ?? flat[0] ?? null;
   const activeLessonId = lessonParam ?? lessons.find((item) => item.program_node_ids.includes(active?.id ?? "") && item.status !== "archived")?.id ?? null;
+  const panelLesson = useLesson(projectId, activeLessonId);
+  // Страницы открытого урока — для пометки «в уроке» в поиске и на страницах панели.
+  const lessonPages = useMemo(() => {
+    const keys = new Set<string>();
+    for (const block of panelLesson.data?.blocks ?? []) {
+      for (const ref of block.refs) {
+        if (!ref.material_id || ref.role !== "content") continue;
+        for (let page = ref.page_from; page <= ref.page_to; page += 1) keys.add(`${ref.material_id}#${page}`);
+      }
+    }
+    return keys;
+  }, [panelLesson.data]);
+
+  useEffect(() => { panelLesson.refresh(); }, [rangesKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateLayout = useCallback((change: (current: LessonsLayout) => LessonsLayout) => {
     setLayout((current) => {
@@ -268,6 +282,7 @@ export function Lessons() {
               refreshKey={rangesKey}
               onCreateFromRange={(materialId) => void createLesson([materialId])}
               lessonId={activeLessonId}
+              lessonPages={lessonPages}
               onAdd={(command) => void addFromPanel(command)}
             />
           </aside>

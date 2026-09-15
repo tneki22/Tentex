@@ -976,3 +976,13 @@
     display: none;
   }
 }
+
+.lesson-save-state {
+  margin: var(--space-1) 0 0;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+.lesson-save-state.is-saved { color: var(--tone-success); }
+.lesson-save-state.is-failed { color: var(--tone-danger); }

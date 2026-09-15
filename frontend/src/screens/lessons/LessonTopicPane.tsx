@@ -78,6 +78,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [noteDraft, setNoteDraft] = useState<{ blockId: string; body: string } | null>(null);
+  const [noteState, setNoteState] = useState<{ blockId: string; state: "saving" | "saved" | "failed" } | null>(null);
   const [splitting, setSplitting] = useState(false);
   const [offer, setOffer] = useState<LessonUnbindOffer | null>(null);
   const [linkOpen, setLinkOpen] = useState(false);
@@ -107,6 +108,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
 
   useEffect(() => {
     if (!noteDraft) return;
+    setNoteState({ blockId: noteDraft.blockId, state: "saving" });
     const timer = window.setTimeout(() => {
       saveQueue.current = saveQueue.current.then(async () => {
         try {
@@ -114,8 +116,10 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
             expected_revision: revisionRef.current, body_md: noteDraft.body,
           });
           revisionRef.current = result.lesson.revision;
+          setNoteState({ blockId: noteDraft.blockId, state: "saved" });
           lesson.refresh();
         } catch (caught) {
+          setNoteState({ blockId: noteDraft.blockId, state: "failed" });
           setError(errorText(caught, "Текст не сохранился"));
           lesson.refresh();
         }
@@ -199,8 +203,15 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
   }
 
   function renderEditor(block: LessonBlockRead) {
+    const state = noteState?.blockId === block.id ? noteState.state : null;
+    const status = state && (
+      <p className={`lesson-save-state is-${state}`} role="status">
+        {state === "saving" ? "Сохраняется…" : state === "saved" ? "Сохранено" : "Не сохранилось — текст остался в редакторе"}
+      </p>
+    );
     if (block.kind === "media") {
       return (
+        <>
         <label className="lesson-media-caption">
           <span>Подпись</span>
           <input
@@ -210,12 +221,15 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
             onChange={(event) => setNoteDraft({ blockId: block.id, body: event.target.value })}
           />
         </label>
+        {status}
+        </>
       );
     }
     return (
       <Suspense fallback={<LoadingState label="Открываем редактор" />}>
         <LessonNoteEditor key={block.id} blockId={block.id} markdown={block.body_md ?? ""}
           onChange={(body) => { if (body !== block.body_md) setNoteDraft({ blockId: block.id, body }); }} />
+        {status}
       </Suspense>
     );
   }

@@ -4,7 +4,7 @@ import { getTopicSources, SOURCE_ROLE_LABELS, type LessonBlockCommand, type Less
 import { getMaterialPage, listMaterials, materialPageImageUrl, type MaterialPageRead, type MaterialRead } from "../../api/materials";
 import { searchProjectMaterials, type SearchResultRead } from "../../api/search";
 import { QualityBadge } from "../../components/domain";
-import { Button, EmptyState, ErrorState, IconButton, LoadingState, SegmentedTabs, Select, Tooltip } from "../../components/ui";
+import { Button, EmptyState, ErrorState, IconButton, LoadingState, SegmentedTabs, Select, StatusBadge, Tooltip } from "../../components/ui";
 import type { ProgramTreeNode } from "../programTree";
 import { toSourcePlaces } from "../workspace/sourcePlaces";
 import { renderSearchHighlights } from "../workspace/searchHighlights";
@@ -28,6 +28,8 @@ interface LessonMaterialPanelProps {
   refreshKey: number;
   onCreateFromRange(materialId: string): void;
   lessonId: string | null;
+  /** `${materialId}#${page}` страниц открытого урока: уже добавленное помечается «в уроке». */
+  lessonPages: Set<string>;
   onAdd(command: Omit<LessonBlockCommand, "expected_revision">): void;
 }
 
@@ -40,7 +42,7 @@ function Stage({ label, stage }: { label: string; stage: string }) {
 }
 
 /** Правая панель «Материал для урока»: четыре вкладки (записка §2). */
-export function LessonMaterialPanel({ projectId, topic, busy, refreshKey, onCreateFromRange, lessonId, onAdd }: LessonMaterialPanelProps) {
+export function LessonMaterialPanel({ projectId, topic, busy, refreshKey, onCreateFromRange, lessonId, lessonPages, onAdd }: LessonMaterialPanelProps) {
   const [tab, setTab] = useState<PanelTab>("search");
   return (
     <div className="lessons-material-panel">
@@ -50,8 +52,8 @@ export function LessonMaterialPanel({ projectId, topic, busy, refreshKey, onCrea
       </header>
       <div className="lessons-panel-body">
         {tab === "outline" && <OutlineTab projectId={projectId} topic={topic} busy={busy} refreshKey={refreshKey} onCreate={onCreateFromRange} lessonId={lessonId} onAdd={onAdd} />}
-        {tab === "pages" && <PagesTab projectId={projectId} busy={busy} lessonId={lessonId} onAdd={onAdd} />}
-        {tab === "search" && <SearchTab projectId={projectId} topic={topic} busy={busy} lessonId={lessonId} onAdd={onAdd} />}
+        {tab === "pages" && <PagesTab projectId={projectId} busy={busy} lessonId={lessonId} lessonPages={lessonPages} onAdd={onAdd} />}
+        {tab === "search" && <SearchTab projectId={projectId} topic={topic} busy={busy} lessonId={lessonId} lessonPages={lessonPages} onAdd={onAdd} />}
         {tab === "suggested" && (
           <EmptyState title="Предложений пока нет" icon={<Sparkles size={24} />}>
             <p>Предложения появятся после автоматического разбора материала (проход 2).</p>
@@ -108,7 +110,7 @@ function OutlineTab({ projectId, topic, busy, refreshKey, onCreate, lessonId, on
   );
 }
 
-function PagesTab({ projectId, busy, lessonId, onAdd }: { projectId: string; busy: boolean; lessonId: string | null; onAdd: LessonMaterialPanelProps["onAdd"] }) {
+function PagesTab({ projectId, busy, lessonId, lessonPages, onAdd }: { projectId: string; busy: boolean; lessonId: string | null; lessonPages: Set<string>; onAdd: LessonMaterialPanelProps["onAdd"] }) {
   const [materials, setMaterials] = useState<MaterialRead[] | null>(null);
   const [materialId, setMaterialId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -145,6 +147,7 @@ function PagesTab({ projectId, busy, lessonId, onAdd }: { projectId: string; bus
       <div className="lessons-pages-nav">
         <IconButton label="Предыдущая страница" disabled={page <= 1} onClick={() => setPage(page - 1)}><ChevronLeft size={15} /></IconButton>
         <span>Страница {page} из {pageCount}</span>
+        {lessonPages.has(`${material.id}#${page}`) && <StatusBadge tone="info">в уроке</StatusBadge>}
         <IconButton label="Следующая страница" disabled={page >= pageCount} onClick={() => setPage(page + 1)}><ChevronRight size={15} /></IconButton>
       </div>
       <SegmentedTabs label="Как показать страницу" value={view} tabs={PAGE_VIEW_TABS} onChange={setView} />
@@ -231,7 +234,7 @@ function FragmentPicker({ projectId, materialId, page, busy, lessonId, onAdd }: 
   );
 }
 
-function SearchTab({ projectId, topic, busy, lessonId, onAdd }: { projectId: string; topic: ProgramTreeNode | null; busy: boolean; lessonId: string | null; onAdd: LessonMaterialPanelProps["onAdd"] }) {
+function SearchTab({ projectId, topic, busy, lessonId, lessonPages, onAdd }: { projectId: string; topic: ProgramTreeNode | null; busy: boolean; lessonId: string | null; lessonPages: Set<string>; onAdd: LessonMaterialPanelProps["onAdd"] }) {
   const topicId = topic?.node_type === "section" ? undefined : topic?.id;
   const topicTitle = topic?.node_type === "section" ? "" : topic?.title ?? "";
   const [query, setQuery] = useState(topicTitle);
@@ -297,6 +300,7 @@ function SearchTab({ projectId, topic, busy, lessonId, onAdd }: { projectId: str
               </div>
               <div className="lessons-search-result-actions">
                 <QualityBadge quality={place.quality} />
+                {lessonPages.has(`${place.materialId}#${place.pageNumber}`) && <StatusBadge tone="info">в уроке</StatusBadge>}
                 <Button variant="ghost" disabled={!lessonId || busy} onClick={() => onAdd({ operation: "add_page", material_id: place.materialId, page_from: place.pageNumber })}><Plus size={14} />Страницу</Button>
                 <Button variant="ghost" disabled={!lessonId || busy} onClick={() => onAdd({ operation: "add_fragments", material_id: place.materialId, from_fragment_id: place.fragmentIds[0], to_fragment_id: place.fragmentIds.at(-1) })}><Plus size={14} />Найденные абзацы</Button>
                 <Button variant="ghost" disabled={!lessonId || busy} onClick={() => onAdd({ operation: "add_block", material_id: place.materialId, fragment_id: place.fragmentIds[0] })}><Plus size={14} />Блок</Button>

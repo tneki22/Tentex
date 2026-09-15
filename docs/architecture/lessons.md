@@ -1,39 +1,71 @@
 # Уроки — фактический контракт
 
-Реализованы этап 1 и итерация 2.1 вертикали «Уроки» (15.09.2026). Модель и решения —
-`TEXTBOOK_MODE.md` §8 и `docs/superpowers/plans/2026-09-14-lessons-vertical.md`; здесь только
-то, что работает в коде.
+Реализованы этап 1 и этап 2 (итерации 2.1 и 2.2) вертикали «Уроки» (15.09.2026). Модель и
+решения — `TEXTBOOK_MODE.md` §8 и `docs/superpowers/plans/2026-09-14-lessons-vertical.md`; здесь
+только то, что работает в коде.
 
 ## Хранение
 
-Миграция `20260914_0047_lessons`. Четыре таблицы заведены целиком, этапам 2–3 миграции не нужны.
+Миграции `20260914_0047_lessons` (четыре таблицы) и `20260915_0048_lesson_boundary_shift`
+(флаг сдвинутой границы).
 
 | Таблица | Что | Удаление |
 | --- | --- | --- |
 | `lessons` | название, цель, статус `draft · ready · archived`, длительность, ревизия, `last_block_id`, `completed_at` | каскад от проекта |
 | `lesson_topics` | темы урока со снимком формулировки; составной FK на `program_nodes(project_id, id)` | каскад от урока и узла |
-| `lesson_blocks` | порядок, вид `source · note · media · activity`, `variant`, `body_md`, происхождение, основание, `ai_run_id`, `activity_id`, `bound_program_node_id` | каскад от урока |
-| `lesson_source_refs` | роль `content · support`, материал, снимок имени, ревизия, `page_from/to`, `from/to_fragment_id`, `region_bbox`, `always_pages` | каскад от блока; материал и фрагменты — `SET NULL` |
+| `lesson_blocks` | порядок, вид `source · note · media · activity`, `variant`, `body_md`, происхождение, основание, `ai_run_id`, `activity_id`, `media_path`, `bound_program_node_id` | каскад от урока |
+| `lesson_source_refs` | роль `content · support`, материал, снимок имени, ревизия, `page_from/to`, `from/to_fragment_id`, `region_bbox`, `always_pages`, `boundary_shifted` | каскад от блока; материал и фрагменты — `SET NULL` |
 
 `BindingMechanism` дополнен `lesson` и `outline` в конце перечисления (CHECK в том же порядке).
+
+У `media`-блока `media_path` — либо путь файла в хранилище `lessons/<project_id>/…`, либо
+внешний адрес `http(s)://…`; `body_md` — подпись.
 
 ## API — `/api/projects/{project_id}/lessons`
 
 Все запросы требуют `workspace_variant = textbook` и модуль `lessons`, иначе 409
-`lessons_unavailable`. Запись — только в активном проекте (`project_read_only`).
+`lessons_unavailable`. Запись — только в активном проекте (`project_read_only`). Ответ всех
+изменений — `{lesson, latest_undoable_action, unbind_offer}`.
 
 | Метод | Путь | Ответ и ошибки |
 | --- | --- | --- |
 | GET | `/overview` | `lessons[]`: id, название, статус, длительность, `program_node_ids`, `needs_review`. Суммы по дереву считает клиент |
 | GET | `/sources?program_node_id=` | Диапазоны темы по источникам проекта: роль, приоритет, `outline_page_from/to`, уточнённые `page_from/to`, `starts_at_heading`, `ends_mid_page`, `is_parsed`, `default_selected` (справочный — `false`) |
-| POST | `/quick` `{program_node_id, material_ids?}` | 201 `{lesson, latest_undoable_action}`. Без `material_ids` — первый источник по роли и приоритету; со списком — «Из источников». 409 `lesson_no_ranges`, 422 `lesson_source_without_range`, 422 `lesson_requires_study_node` |
+| POST | `/quick` `{program_node_id, material_ids?}` | 201. Без `material_ids` — первый источник по роли и приоритету; со списком — «Из источников». 409 `lesson_no_ranges`, 422 `lesson_source_without_range`, 422 `lesson_requires_study_node` |
 | POST | `/manual` `{program_node_id}` | 201: пустой черновик по теме, включая тему без оглавления; одна запись `lesson_create` |
-| GET | `/{lesson_id}` | Урок с темами, блоками и ссылками: имя и роль источника, доступность, `is_parsed`, `low_quality_pages`, `needs_review`, `undo_sequence` |
+| GET | `/{lesson_id}` | Урок с темами, блоками и ссылками (см. «Чтение») |
 | PATCH | `/{lesson_id}` `{title?, status?, expected_revision}` | Ревизия +1; 409 `stale_lesson_revision`. В журнал не пишется |
-| POST | `/{lesson_id}/blocks` | `{expected_revision, operation, …}`: `add_note`, `add_page`, `add_outline`, `move_up`, `move_down`, `delete`. Одна запись `lesson_blocks` со снимком порядка и id новых привязок; отмена восстанавливает структуру, сохраняя текст существующих блоков |
-| PATCH | `/{lesson_id}/blocks/{block_id}` | `{expected_revision, body_md, variant?}`: автосохранение `note` без журнала, ревизия +1 |
+| POST | `/{lesson_id}/blocks` | Структурное действие `{expected_revision, operation, …}` — таблица ниже. Одна запись `lesson_blocks` |
+| PATCH | `/{lesson_id}/blocks/{block_id}` | `{expected_revision, body_md, variant?}`: текст `note` или подпись `media` без журнала, ревизия +1; 422 `lesson_not_note` |
+| POST | `/{lesson_id}/media` (multipart) | `file`, `expected_revision`, `after_block_id?`, `caption?`: изображение PNG/JPG/WEBP/GIF до 20 МБ → `media`-блок, запись `lesson_blocks`; 422 `lesson_image_unsupported` |
+| GET | `/{lesson_id}/media/{block_id}` | Файл изображения блока; 404, если блок не изображение |
+| POST | `/{lesson_id}/confirm` `{expected_revision}` | «Подтвердить»: снимки живых тем обновляются, тема вне программы уходит из урока, если остаются другие; `boundary_shifted` снимается. Без журнала |
+| POST | `/{lesson_id}/unbind` `{binding_ids}` | Снимает (`removed`) только активные привязки урока (`lesson`/`outline`) из списка; одна запись `lesson_unbind`, отмена возвращает прежние статусы; 422 `lesson_unbind_empty` |
 
 Страницы и фрагменты клиент читает существующими эндпоинтами материалов.
+
+### Операции `POST /{lesson_id}/blocks`
+
+Вставка — после `after_block_id`, без него — в конец.
+
+| `operation` | Поля | Что делает |
+| --- | --- | --- |
+| `add_note` | `variant` | Пустое пояснение: `text · heading · explanation · important · example · definition · warning` |
+| `add_page` | `material_id`, `page_from`, `page_to?` | Страницы целиком; `manual/lesson` на содержательные фрагменты. 422 `lesson_page_range`, `lesson_source_unavailable` |
+| `add_outline` | `material_id`, `program_node_id?` | Уточнённый диапазон оглавления темы урока; `machine/outline` по правилу быстрого урока |
+| `add_fragments` | `material_id`, `from_fragment_id`, `to_fragment_id` | Отрезок фрагментов активной ревизии (порядок краёв не важен); `manual/lesson` только на выбранное. 422 `lesson_fragment_not_found` |
+| `add_block` | `material_id`, `fragment_id` | Структурный блок материала, которому принадлежит фрагмент, — со всех его страниц |
+| `add_link` | `media_url`, `caption?` | Карточка внешней ссылки без предпросмотра; 422 `lesson_media_url` для не-http(s) |
+| `move_up` · `move_down` | `block_id` | Перестановка; 422 `lesson_block_edge` |
+| `delete` | `block_id` | Удаление; привязки не снимаются, в ответе `unbind_offer` |
+| `split` | `block_id`, `fragment_id` или `split_after_page`, `insert_note?`, `variant?` | Разрез куска после абзаца или страницы; с `insert_note` между частями встаёт пояснение. 422 `lesson_split_outside` |
+| `merge` | `block_id` | Склейка со следующим куском того же материала и темы, если он продолжает первый. 422 `lesson_merge_not_adjacent`, `lesson_merge_topics` |
+| `set_always_pages` | `block_id`, `always_pages` | «Всегда показывать страницами» |
+| `add_topic` | `program_node_id` | Тема в урок со снимком формулировки; 422 `lesson_topic_exists` |
+| `remove_topic` | `program_node_id` | 422 `lesson_topic_last`, `lesson_topic_in_use` (к теме привязаны куски) |
+| `set_topic` | `block_id`, `program_node_id` | Тема куска: новые привязки по происхождению (`outline` → `machine/outline`, иначе `manual/lesson`), для прежней темы — `unbind_offer` |
+
+`add_image` в этой ручке отклоняется (`lesson_block_operation`): изображение идёт через `/media`.
 
 ## Быстрый урок
 
@@ -60,25 +92,68 @@
 7. Одна запись журнала `lesson_create` `{lesson_id, binding_ids}`; отмена
    (`POST /actions/undo`, case в `projects/program.py`) удаляет урок и только эти привязки.
 
+## Ручной редактор
+
+`app/lessons/editing.py` — операции, текст, медиа, подтверждение и снятие привязок;
+`app/lessons/refs.py` — геометрия ссылки над фрагментами активной ревизии.
+
+- **Граница куска.** Пустая граница — край страницы. Выделение, совпавшее с краем страницы,
+  хранится как граница страницы, поэтому разрез после последнего абзаца страницы даёт
+  куски `…–p` и `p+1–…`, а склейка восстанавливает исходные границы.
+- **Привязки.** Ручной выбор (страница, фрагменты, блок) — `manual/lesson` только на
+  содержательные фрагменты выбранного; существующая пара (тема, фрагмент) не меняется в
+  любом статусе. В уроке по нескольким темам кусок идёт к теме, чей диапазон оглавления в
+  этом материале содержит первую страницу, иначе к первой теме урока.
+- **Предложение снять.** `unbind_offer` после `delete` и `set_topic` — активные привязки
+  механизмов `lesson`/`outline` к прежней теме на фрагментах куска, которые не держит ни один
+  другой кусок урока той же темы. Ручные привязки из других сценариев не предлагаются.
+- **Отмена.** Запись `lesson_blocks` хранит снимок блоков со ссылками и тем урока и id
+  созданных привязок. Отмена возвращает порядок, границы ссылок, тему куска и темы урока,
+  удаляет добавленные блоки и привязки; текст существующих пояснений и подписей не
+  откатывается — он сохранялся отдельно.
+- **Перенос при новой ревизии.** `transfer_bindings_on_revision` (все пять мест смены активной
+  ревизии) сначала переносит границы уроков тем же сопоставлением фрагментов в пределах
+  страницы. Пара не нашлась — граница становится краем страницы, `boundary_shifted = true`,
+  `material_revision` = новая ревизия.
+
+## Чтение
+
+`GET /{lesson_id}` и ответы изменений отдают:
+
+- у темы — `title_snapshot`, `current_title` (null, если узел вне программы) и `needs_review`;
+  `needs_review` урока — любая тема требует проверки (вычисляется при чтении);
+- у ссылки — имя и роль источника, `is_available` (материал в проекте), `is_parsed`,
+  `low_quality_pages`, `boundary_shifted` (флаг или ревизия ссылки старше активной при
+  граничных фрагментах) и `pages_shown` — листы, которые рисует эта ссылка в режиме
+  «Страницы»: лист принадлежит куску, где лежит его первый содержательный фрагмент, иначе
+  первому по порядку урока куску, содержащему страницу;
+- у блока — `media_kind` (`image · link`) и `media_url` для ссылки;
+- `undo_sequence` — последнее действие проекта относится к этому уроку
+  (`lesson_create`, `lesson_blocks`, `lesson_unbind`).
+
 ## Интерфейс
 
 - `components/domain/lesson/LessonDocument.tsx` — один рендер урока для раздела и вкладки.
-  «Страницы»: растры страниц, страница рисуется в первой ссылке, где встретилась. «Текст»:
-  `StructuredPage` с отсечением по граничным фрагментам, служебные блоки скрыты, у `ocr_low` —
-  вырезы оригинала; материал без разбора — «Текст ещё не распознан».
+  «Страницы»: растры по `pages_shown`. «Текст»: `StructuredPage` с отсечением по граничным
+  фрагментам, служебные блоки скрыты, у `ocr_low` — вырезы оригинала; материал без разбора —
+  «Текст ещё не распознан»; кусок «всегда страницами» рисует свой диапазон растрами. У куска —
+  «с абзаца / до абзаца», тема (в уроке с несколькими темами), «Разрез сдвинут»; недоступный
+  источник показывает имя и страницы. В режиме разреза у абзацев «Разрезать после», в режиме
+  «Страницы» — «Разрезать после страницы N».
+- `components/domain/lesson/LessonMarkdown.tsx` — пояснения в чтении: абзацы, заголовки,
+  списки, цитаты, код, ссылки и формулы `$…$`, `$$…$$`, ```latex через KaTeX (`trust: false`).
 - `components/domain/ProgramTreeRows.tsx` — общие строки дерева Рабочей области и Уроков.
 - `screens/lessons/` — раздел; `LessonTab.tsx` — вкладка «Урок» учебникового проекта.
+  `LessonTopicPane.tsx` — шапка урока, темы урока, «Требует проверки» с «Подтвердить»,
+  инструменты блока (пояснение, медиа, выше/ниже, разрезать, склеить, удалить), настройки
+  куска и предложение снять привязки. `LessonMaterialPanel.tsx` — «Страницы» с выбором
+  абзацев («Добавить выделенное», «Добавить блок») и «Поиск» с «Страницу / Найденные абзацы /
+  Блок»; страницы открытого урока помечены «в уроке».
 - `useLessonViewMode` — режим показа в `localStorage` по проекту; ширины колонок раздела и
   выбор урока темы во вкладке — тоже `localStorage`, только настройки показа.
-- Ручной урок создаётся из меню или пустого состояния. В панели можно добавить страницу
-  из просмотра/поиска или уточнённый диапазон оглавления после выбранного блока. Страница
-  создаёт `manual/lesson` только для содержательных фрагментов активной ревизии; диапазон
-  оглавления — `machine/outline`. Существующие привязки не переписываются. Пояснения
-  редактирует один Crepe на выбранном блоке; текст сохраняется с ожидаемой ревизией.
 
-## Открыто после итерации 2.1
+## Открыто после этапа 2
 
-Пометка «стр. N общая со следующей темой» не хранится (нет поля). «Требует проверки»
-вычисляется только по темам. Точный выбор структурных блоков/фрагментов, разрез и склейка,
-медиа, Markdown-рендер пояснения в чтении, перенос границ при новой ревизии и предложение
-снять привязки при удалении — итерация 2.2.
+Пометка «стр. N общая со следующей темой» не хранится (нет поля). Область страницы (`region_bbox`), массовая подготовка и
+прохождение — этап 3. Перенос границ при правке OCR проверен тестом, живьём на реальном
+материале — нет.
