@@ -4,7 +4,7 @@ import {
   Archive, ArrowRightLeft, CheckCircle2, ChevronDown, Dumbbell, ExternalLink, FilePlus2, Pencil,
   Plus, RotateCcw, Scissors, Sparkles, Trash2, Undo2,
 } from "lucide-react";
-import { editLessonBlocks, LESSON_STATUS_LABELS, updateLesson, updateLessonNote, type LessonBlockCommand, type LessonStatus, type LessonSummaryRead } from "../../api/lessons";
+import { editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, updateLesson, updateLessonNote, type LessonBlockCommand, type LessonStatus, type LessonSummaryRead } from "../../api/lessons";
 import { undoProjectAction } from "../../api/projects";
 import { LessonDocument } from "../../components/domain";
 import { Button, EmptyState, ErrorState, LoadingState, Menu, SegmentedTabs, StatusBadge, Tooltip } from "../../components/ui";
@@ -117,7 +117,9 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
     try {
       await undoProjectAction(projectId, data.undo_sequence);
       onSelectBlock(null);
-      lesson.refresh();
+      const overview = await getLessonsOverview(projectId);
+      if (overview.lessons.some((item) => item.id === data.id)) lesson.refresh();
+      else onSelectLesson(null);
       onChanged();
     } catch (caught) {
       setError(errorText(caught, "Отменить не удалось"));
