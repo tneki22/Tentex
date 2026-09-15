@@ -57,6 +57,7 @@ class Bounds:
 
 
 def load_order(session: Session, material: Material, page_from: int, page_to: int) -> MaterialOrder:
+    """Фрагменты страниц активной ревизии; у неразобранного материала — пусто."""
     if material.active_parse_revision <= 0:
         return MaterialOrder([], {})
     rows = session.execute(
@@ -94,6 +95,7 @@ def span(order: MaterialOrder, bounds: Bounds) -> tuple[int, int] | None:
 
 
 def content_fragment_ids(order: MaterialOrder, bounds: Bounds) -> list[UUID]:
+    """Фрагменты куска, которые можно привязывать к теме: служебные блоки не в счёт."""
     covered = span(order, bounds)
     if covered is None:
         return []
@@ -101,6 +103,7 @@ def content_fragment_ids(order: MaterialOrder, bounds: Bounds) -> list[UUID]:
 
 
 def bounds_of(ref: LessonSourceRef) -> Bounds:
+    """Границы сохранённой ссылки в виде, с которым работают функции модуля."""
     return Bounds(ref.page_from, ref.page_to, ref.from_fragment_id, ref.to_fragment_id)
 
 

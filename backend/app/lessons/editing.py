@@ -15,6 +15,7 @@ from fastapi import UploadFile
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.bindings.service import ACTIVE_STATUSES
 from app.lessons import boundaries
 from app.lessons import refs as refs_module
 from app.lessons.refs import Bounds
@@ -35,6 +36,7 @@ from app.lessons.service import (
     _plan_source,
     _require_lesson,
     _require_lessons_project,
+    _require_revision,
     _require_study_node,
     _source_name,
     media_kind,
@@ -61,10 +63,12 @@ from app.models import (
     ProjectMaterial,
     utc_now,
 )
-from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
+from app.projects.errors import ProjectDomainError, ProjectNotFoundError
 
-ACTIVE_STATUSES = {BindingStatus.MANUAL, BindingStatus.CONFIRMED, BindingStatus.MACHINE}
+# Снять из урока можно только то, что урок и создал: чужие ручные привязки не предлагаются.
 LESSON_MECHANISMS = {BindingMechanism.LESSON, BindingMechanism.OUTLINE}
+# Те же форматы и предел, что у изображений конспекта (`conspects.service`): фото доски
+# с телефона укладывается в 20 МБ, а форматы показывает любой браузер без конвертации.
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
 
@@ -121,14 +125,6 @@ def _ordered_blocks(session: Session, lesson_id: UUID) -> list[LessonBlock]:
         select(LessonBlock).where(LessonBlock.lesson_id == lesson_id)
         .order_by(LessonBlock.sort_order, LessonBlock.id)
     ))
-
-
-def _require_revision(lesson: Lesson, expected: int) -> None:
-    if lesson.revision != expected:
-        raise ProjectConflictError(
-            "Урок изменился в другом месте", code="stale_lesson_revision",
-            context={"current_revision": lesson.revision},
-        )
 
 
 def _content_ref(session: Session, block: LessonBlock) -> LessonSourceRef:
@@ -710,6 +706,7 @@ def _apply_edit(
 def edit_lesson_blocks(
     session: Session, project_id: UUID, lesson_id: UUID, command: LessonBlockWrite
 ) -> LessonChangeResult:
+    """Структурная правка урока по таблице `HANDLERS`; изображение идёт через `add_lesson_image`."""
     handler = HANDLERS.get(command.operation)
     if handler is None:
         raise _invalid("Изображение загружается отдельным запросом", "lesson_block_operation")
@@ -744,6 +741,7 @@ async def add_lesson_image(
 
 def lesson_image(session: Session, project_id: UUID, lesson_id: UUID, block_id: UUID
                  ) -> tuple[Path, str]:
+    """Путь и тип файла изображения блока; тип — по расширению, присланному не доверяем."""
     _require_lessons_project(session, project_id, writable=False)
     _require_lesson(session, project_id, lesson_id)
     block = session.get(LessonBlock, block_id)

@@ -786,18 +786,23 @@ def create_manual_lesson(
         return _change_result(session, lesson)
 
 
+def _require_revision(lesson: Lesson, expected: int) -> None:
+    """Правка по устаревшей ревизии не перезаписывает урок, а получает конфликт."""
+    if lesson.revision != expected:
+        raise ProjectConflictError(
+            "Урок изменился в другом месте", code="stale_lesson_revision",
+            context={"current_revision": lesson.revision},
+        )
+
+
 def update_lesson(
     session: Session, project_id: UUID, lesson_id: UUID, command: LessonUpdateWrite
 ) -> LessonChangeResult:
+    """Название и статус урока; без записи в журнал."""
     with session.begin():
         _require_lessons_project(session, project_id, writable=True)
         lesson = _require_lesson(session, project_id, lesson_id)
-        if command.expected_revision != lesson.revision:
-            raise ProjectConflictError(
-                "Урок изменился в другом месте",
-                code="stale_lesson_revision",
-                context={"current_revision": lesson.revision},
-            )
+        _require_revision(lesson, command.expected_revision)
         if command.title is not None:
             lesson.title = command.title
         if command.status is not None:

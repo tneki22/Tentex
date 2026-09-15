@@ -42,6 +42,7 @@ function inline(text: string, prefix: string): ReactNode[] {
   });
 }
 
+/** Markdown пояснения урока в режиме чтения; незакрытая формула или код рисуются как есть. */
 export function LessonMarkdown({ text, className = "" }: { text: string; className?: string }) {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
