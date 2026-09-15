@@ -221,7 +221,7 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
                   {data.undo_sequence
                     ? <Button variant="ghost" aria-label="Отменить" disabled={saving} onClick={() => void undoCreate()}><Undo2 size={14} /><span className="toolbar-label">Отменить</span></Button>
                     : <Tooltip label="Отменить можно только последнее действие проекта" side="bottom"><span><Button variant="ghost" disabled aria-label="Отменить"><Undo2 size={14} /><span className="toolbar-label">Отменить</span></Button></span></Tooltip>}
-                  <Link className="secondary-button" aria-label="Открыть в Рабочей области" to={`/projects/${projectId}?topic=${topic.id}&tab=lesson&lesson=${data.id}`}><ExternalLink size={14} /><span className="toolbar-label">Открыть в Рабочей области</span></Link>
+                  <Link className="secondary-button" aria-label="Открыть в Рабочей области" to={`/projects/${projectId}?topic=${topic.id}&tab=lesson&lesson=${data.id}`}><ExternalLink size={14} /><span className="toolbar-label toolbar-label-link">Открыть в Рабочей области</span></Link>
                   <span className="lessons-toolbar-end">{panelToggle}</span>
                 </div>
                 <div className="lessons-block-toolbar" aria-label="Действия над блоком">

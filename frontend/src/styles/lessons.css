@@ -260,7 +260,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 .lessons-block-toolbar {
@@ -285,14 +285,25 @@
   margin-left: auto;
 }
 
-/* Панель узкая — заголовок кнопок прячется, остаётся иконка (заголовок уходит в aria-label). */
-@container (max-width: 760px) {
+/* Пороги подобраны по фактической ширине рядов с подписями (см. проверку в браузере).
+   Первым узкое место — ссылка «Открыть в Рабочей области» (самая длинная подпись
+   ряда): она одна уходит в иконку при 700px, остальные подписи ряда держатся до
+   545px. Второй ряд из семи инструментов не расцепляется на приоритеты — ниже
+   800px (нужно ~770px) все подписи прячутся разом, иначе он переносится на вторую
+   строку. Текст уходит в aria-label, доступное имя не теряется. */
+@container (max-width: 700px) {
+  .lessons-lesson-toolbar .toolbar-label-link {
+    display: none;
+  }
+}
+
+@container (max-width: 545px) {
   .lessons-lesson-toolbar .toolbar-label {
     display: none;
   }
 }
 
-@container (max-width: 620px) {
+@container (max-width: 800px) {
   .lessons-block-toolbar .toolbar-label {
     display: none;
   }
