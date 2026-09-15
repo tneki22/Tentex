@@ -1,20 +1,23 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.lessons import service
+from app.lessons import editing, service
 from app.lessons.schemas import (
     LessonBlockWrite,
     LessonChangeResult,
+    LessonConfirmWrite,
     LessonManualWrite,
     LessonNoteWrite,
     LessonQuickWrite,
     LessonRead,
     LessonsOverviewRead,
     LessonTopicSourcesRead,
+    LessonUnbindWrite,
     LessonUpdateWrite,
 )
 
@@ -52,7 +55,7 @@ def create_manual_lesson(
 def edit_lesson_blocks(
     project_id: UUID, lesson_id: UUID, command: LessonBlockWrite, session: SessionDependency
 ) -> LessonChangeResult:
-    return service.edit_lesson_blocks(session, project_id, lesson_id, command)
+    return editing.edit_lesson_blocks(session, project_id, lesson_id, command)
 
 
 @router.patch("/{lesson_id}/blocks/{block_id}", response_model=LessonChangeResult)
@@ -60,7 +63,44 @@ def update_lesson_note(
     project_id: UUID, lesson_id: UUID, block_id: UUID,
     command: LessonNoteWrite, session: SessionDependency,
 ) -> LessonChangeResult:
-    return service.update_lesson_note(session, project_id, lesson_id, block_id, command)
+    return editing.update_lesson_note(session, project_id, lesson_id, block_id, command)
+
+
+@router.post("/{lesson_id}/media", response_model=LessonChangeResult)
+async def add_lesson_image(
+    project_id: UUID,
+    lesson_id: UUID,
+    session: SessionDependency,
+    file: Annotated[UploadFile, File()],
+    expected_revision: Annotated[int, Form(ge=1)],
+    after_block_id: Annotated[UUID | None, Form()] = None,
+    caption: Annotated[str | None, Form(max_length=2000)] = None,
+) -> LessonChangeResult:
+    return await editing.add_lesson_image(
+        session, project_id, lesson_id, file, expected_revision, after_block_id, caption
+    )
+
+
+@router.get("/{lesson_id}/media/{block_id}", response_class=FileResponse)
+def lesson_image(
+    project_id: UUID, lesson_id: UUID, block_id: UUID, session: SessionDependency
+) -> FileResponse:
+    path, media_type = editing.lesson_image(session, project_id, lesson_id, block_id)
+    return FileResponse(path, media_type=media_type)
+
+
+@router.post("/{lesson_id}/confirm", response_model=LessonChangeResult)
+def confirm_lesson(
+    project_id: UUID, lesson_id: UUID, command: LessonConfirmWrite, session: SessionDependency
+) -> LessonChangeResult:
+    return editing.confirm_lesson(session, project_id, lesson_id, command)
+
+
+@router.post("/{lesson_id}/unbind", response_model=LessonChangeResult)
+def unbind_lesson_bindings(
+    project_id: UUID, lesson_id: UUID, command: LessonUnbindWrite, session: SessionDependency
+) -> LessonChangeResult:
+    return editing.unbind_lesson_bindings(session, project_id, lesson_id, command)
 
 
 @router.get("/{lesson_id}", response_model=LessonRead)

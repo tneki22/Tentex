@@ -57,6 +57,10 @@ export interface LessonRefRead {
   is_available: boolean;
   is_parsed: boolean;
   low_quality_pages: number[];
+  /** Граница не нашла пары в новой ревизии и стала границей страницы: «Разрез сдвинут». */
+  boundary_shifted: boolean;
+  /** Листы, которые в режиме «Страницы» рисует именно эта ссылка — без дублей по уроку. */
+  pages_shown: number[];
 }
 
 export interface LessonBlockRead {
@@ -68,6 +72,9 @@ export interface LessonBlockRead {
   origin: LessonBlockOrigin;
   basis: "sources" | "sources_and_model" | "model_only" | null;
   bound_program_node_id: string | null;
+  media_kind: "image" | "link" | null;
+  /** Только у внешней ссылки; изображение — `lessonMediaUrl`. */
+  media_url: string | null;
   refs: LessonRefRead[];
 }
 
@@ -95,9 +102,17 @@ export interface LessonRead {
   updated_at: string;
 }
 
+export interface LessonUnbindOffer {
+  program_node_id: string;
+  topic_title: string;
+  binding_ids: string[];
+}
+
 export interface LessonChangeResult {
   lesson: LessonRead;
   latest_undoable_action: LatestUndoableAction | null;
+  /** Удалённый или перенесённый кусок оставил привязки к теме — предложить снять. */
+  unbind_offer: LessonUnbindOffer | null;
 }
 
 const lessonsPath = (projectId: string): string =>
@@ -136,15 +151,31 @@ export const createManualLesson = (projectId: string, nodeId: string): Promise<L
     method: "POST", body: JSON.stringify({ program_node_id: nodeId }),
   });
 
+export type LessonBlockOperation =
+  | "add_note" | "add_page" | "add_outline" | "add_fragments" | "add_block" | "add_link"
+  | "delete" | "move_up" | "move_down" | "split" | "merge"
+  | "set_topic" | "add_topic" | "remove_topic" | "set_always_pages";
+
 export interface LessonBlockCommand {
   expected_revision: number;
-  operation: "add_note" | "add_page" | "add_outline" | "delete" | "move_up" | "move_down";
+  operation: LessonBlockOperation;
   block_id?: string;
   after_block_id?: string;
   material_id?: string;
   page_from?: number;
   page_to?: number;
   variant?: LessonNoteVariant;
+  /** add_fragments — края выделения. */
+  from_fragment_id?: string;
+  to_fragment_id?: string;
+  /** add_block — любой фрагмент блока; split — абзац, после которого разрез. */
+  fragment_id?: string;
+  split_after_page?: number;
+  insert_note?: boolean;
+  program_node_id?: string;
+  always_pages?: boolean;
+  media_url?: string;
+  caption?: string;
 }
 
 export const editLessonBlocks = (
@@ -160,6 +191,32 @@ export const updateLessonNote = (
   `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/blocks/${encodeURIComponent(blockId)}`,
   { method: "PATCH", body: JSON.stringify(command) },
 );
+
+export const uploadLessonImage = (
+  projectId: string, lessonId: string,
+  command: { file: File; expected_revision: number; after_block_id?: string; caption?: string },
+): Promise<LessonChangeResult> => {
+  const form = new FormData();
+  form.append("file", command.file);
+  form.append("expected_revision", String(command.expected_revision));
+  if (command.after_block_id) form.append("after_block_id", command.after_block_id);
+  if (command.caption) form.append("caption", command.caption);
+  return request(`${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/media`, { method: "POST", body: form });
+};
+
+export const lessonMediaUrl = (projectId: string, lessonId: string, blockId: string): string =>
+  `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/media/${encodeURIComponent(blockId)}`;
+
+/** «Подтвердить»: снимки тем по текущей программе, пометки сдвинутых разрезов снимаются. */
+export const confirmLesson = (projectId: string, lessonId: string, expectedRevision: number): Promise<LessonChangeResult> =>
+  request(`${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/confirm`, {
+    method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }),
+  });
+
+export const unbindLessonBindings = (projectId: string, lessonId: string, bindingIds: string[]): Promise<LessonChangeResult> =>
+  request(`${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/unbind`, {
+    method: "POST", body: JSON.stringify({ binding_ids: bindingIds }),
+  });
 
 export const updateLesson = (
   projectId: string,

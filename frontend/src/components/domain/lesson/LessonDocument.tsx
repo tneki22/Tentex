@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import { AlertTriangle, BookOpen, FileText } from "lucide-react";
-import type { LessonBlockRead, LessonRead, LessonRefRead } from "../../../api/lessons";
+import { AlertTriangle, BookOpen, ExternalLink, FileText, Scissors } from "lucide-react";
+import { lessonMediaUrl, type LessonBlockRead, type LessonRead, type LessonRefRead } from "../../../api/lessons";
 import {
   getMaterialPage,
   materialFragmentAssetUrl,
@@ -11,8 +11,12 @@ import {
 import { ErrorState } from "../../ui";
 import { StructuredPage } from "../material-viewer";
 import { QualityBadge } from "../QualityBadge";
+import { LessonMarkdown } from "./LessonMarkdown";
 
 export type LessonDocumentMode = "pages" | "text";
+
+/** Место разреза: после абзаца (режим «Текст») или после страницы (режим «Страницы»). */
+export type LessonSplitPoint = { fragmentId: string } | { afterPage: number };
 
 interface LessonDocumentProps {
   projectId: string;
@@ -23,9 +27,10 @@ interface LessonDocumentProps {
   selectedBlockId?: string | null;
   onSelectBlock?: (blockId: string) => void;
   renderNoteEditor?: (block: LessonBlockRead) => ReactNode;
+  /** Кусок, в котором сейчас выбирают место разреза. */
+  splitBlockId?: string | null;
+  onSplit?: (blockId: string, point: LessonSplitPoint) => void;
 }
-
-const pageKey = (materialId: string, page: number) => `${materialId}#${page}`;
 
 function pageRange(ref: LessonRefRead): number[] {
   return Array.from({ length: ref.page_to - ref.page_from + 1 }, (_, index) => ref.page_from + index);
@@ -34,24 +39,17 @@ function pageRange(ref: LessonRefRead): number[] {
 /**
  * Один документ урока — два способа показа (записка «Уроки» §3.3).
  *
- * «Страницы» рисуют оригинал: разрез внутри страницы не дублирует её, лист
- * показывается в первом куске, где он встретился. «Текст» — фрагменты активной
- * ревизии с отсечением по граничным фрагментам ссылки; служебные блоки скрыты.
+ * «Страницы» рисуют оригинал: какой лист рисует какая ссылка, решает сервер
+ * (`pages_shown`), поэтому разрез внутри страницы её не дублирует. «Текст» —
+ * фрагменты активной ревизии с отсечением по граничным фрагментам; служебные
+ * блоки скрыты.
  */
-export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selectedBlockId, onSelectBlock, renderNoteEditor }: LessonDocumentProps) {
-  const pagesShownIn = useMemo(() => {
-    const owner = new Map<string, string>();
-    for (const block of lesson.blocks) {
-      for (const ref of block.refs) {
-        if (!ref.material_id || ref.role !== "content") continue;
-        for (const page of pageRange(ref)) {
-          const key = pageKey(ref.material_id, page);
-          if (!owner.has(key)) owner.set(key, ref.id);
-        }
-      }
-    }
-    return owner;
-  }, [lesson.blocks]);
+export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selectedBlockId, onSelectBlock, renderNoteEditor, splitBlockId, onSplit }: LessonDocumentProps) {
+  const topicTitles = useMemo(
+    () => new Map(lesson.topics.map((topic) => [topic.program_node_id, topic.current_title ?? topic.title_snapshot])),
+    [lesson.topics],
+  );
+  const multiTopic = lesson.topics.length > 1;
 
   if (lesson.blocks.length === 0) {
     return <p className="lesson-document-empty">В уроке пока нет блоков.</p>;
@@ -66,7 +64,16 @@ export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selecte
           </button>}
           {block.kind === "note" && selectedBlockId === block.id && renderNoteEditor
             ? renderNoteEditor(block)
-            : <LessonBlockView projectId={projectId} block={block} mode={mode} pagesShownIn={pagesShownIn} hiddenHeading={hiddenHeading} />}
+            : <LessonBlockView
+                projectId={projectId}
+                lessonId={lesson.id}
+                block={block}
+                mode={mode}
+                hiddenHeading={hiddenHeading}
+                topicTitle={multiTopic && block.bound_program_node_id ? topicTitles.get(block.bound_program_node_id) : undefined}
+                onSplit={splitBlockId === block.id && onSplit ? (point) => onSplit(block.id, point) : undefined}
+              />}
+          {block.kind === "media" && selectedBlockId === block.id && renderNoteEditor?.(block)}
         </section>
       ))}
     </div>
@@ -75,13 +82,15 @@ export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selecte
 
 interface LessonBlockViewProps {
   projectId: string;
+  lessonId: string;
   block: LessonBlockRead;
   mode: LessonDocumentMode;
-  pagesShownIn: Map<string, string>;
   hiddenHeading?: string;
+  topicTitle?: string;
+  onSplit?: (point: LessonSplitPoint) => void;
 }
 
-function LessonBlockView({ projectId, block, mode, pagesShownIn, hiddenHeading }: LessonBlockViewProps) {
+function LessonBlockView({ projectId, lessonId, block, mode, hiddenHeading, topicTitle, onSplit }: LessonBlockViewProps) {
   if (block.kind === "note") {
     const body = block.body_md ?? "";
     const heading = /^(#{1,6})\s+(.*)$/.exec(body);
@@ -91,8 +100,10 @@ function LessonBlockView({ projectId, block, mode, pagesShownIn, hiddenHeading }
       const Tag = `h${level}` as "h2" | "h3" | "h4";
       return <Tag className={`lesson-note-heading is-level-${level}`}>{heading[2]}</Tag>;
     }
-    return <div className={`lesson-note is-${block.variant ?? "text"}`}>{body}</div>;
+    if (!body.trim()) return <div className={`lesson-note is-${block.variant ?? "text"} is-empty`}>Пустое пояснение — выберите блок, чтобы написать текст.</div>;
+    return <LessonMarkdown className={`lesson-note is-${block.variant ?? "text"}`} text={body} />;
   }
+  if (block.kind === "media") return <LessonMediaView projectId={projectId} lessonId={lessonId} block={block} />;
   if (block.kind !== "source") return null;
   return (
     <>
@@ -101,11 +112,32 @@ function LessonBlockView({ projectId, block, mode, pagesShownIn, hiddenHeading }
           key={ref.id}
           projectId={projectId}
           sourceRef={ref}
-          mode={ref.always_pages ? "pages" : mode}
-          pagesShownIn={pagesShownIn}
+          mode={mode}
+          topicTitle={topicTitle}
+          onSplit={onSplit}
         />
       ))}
     </>
+  );
+}
+
+function LessonMediaView({ projectId, lessonId, block }: { projectId: string; lessonId: string; block: LessonBlockRead }) {
+  const caption = block.body_md?.trim();
+  if (block.media_kind === "link" && block.media_url) {
+    let host = block.media_url;
+    try { host = new URL(block.media_url).host; } catch { /* покажем адрес целиком */ }
+    return (
+      <a className="lesson-media-link" href={block.media_url} target="_blank" rel="noreferrer noopener">
+        <ExternalLink size={15} aria-hidden="true" />
+        <span><strong>{caption || host}</strong><small>{block.media_url}</small></span>
+      </a>
+    );
+  }
+  return (
+    <figure className="lesson-media-image">
+      <img src={lessonMediaUrl(projectId, lessonId, block.id)} alt={caption || "Изображение урока"} loading="lazy" />
+      {caption && <figcaption>{caption}</figcaption>}
+    </figure>
   );
 }
 
@@ -118,17 +150,21 @@ interface LessonSourceViewProps {
   projectId: string;
   sourceRef: LessonRefRead;
   mode: LessonDocumentMode;
-  pagesShownIn: Map<string, string>;
+  topicTitle?: string;
+  onSplit?: (point: LessonSplitPoint) => void;
 }
 
-function LessonSourceView({ projectId, sourceRef: ref, mode, pagesShownIn }: LessonSourceViewProps) {
+function LessonSourceView({ projectId, sourceRef: ref, mode, topicTitle, onSplit }: LessonSourceViewProps) {
   const materialId = ref.material_id;
   const head = (
     <header className="lesson-source-head">
       <BookOpen size={14} aria-hidden="true" />
       <span>{refLabel(ref)}</span>
-      {ref.from_fragment_id && <small>с заголовка</small>}
-      {ref.to_fragment_id && <small>до следующего пункта</small>}
+      {ref.from_fragment_id && <small>с абзаца</small>}
+      {ref.to_fragment_id && <small>до абзаца</small>}
+      {ref.always_pages && <small>всегда страницами</small>}
+      {topicTitle && <small className="lesson-source-topic">тема: {topicTitle}</small>}
+      {ref.boundary_shifted && <small className="lesson-source-shifted"><AlertTriangle size={12} aria-hidden="true" /> Разрез сдвинут</small>}
     </header>
   );
 
@@ -136,25 +172,34 @@ function LessonSourceView({ projectId, sourceRef: ref, mode, pagesShownIn }: Les
     return (
       <section className="lesson-source is-unavailable">
         {head}
-        <p className="lesson-source-notice"><AlertTriangle size={14} aria-hidden="true" /> Источник недоступен: материал убран из проекта.</p>
+        <p className="lesson-source-notice"><AlertTriangle size={14} aria-hidden="true" /> Источник недоступен: материал убран из проекта. Остались имя и страницы.</p>
       </section>
     );
   }
 
-  if (mode === "pages") {
-    const pages = pageRange(ref).filter((page) => pagesShownIn.get(pageKey(materialId, page)) === ref.id);
+  if (mode === "pages" || ref.always_pages) {
+    // В режиме «Текст» кусок «всегда страницами» рисует свой диапазон целиком.
+    const pages = mode === "pages" ? ref.pages_shown : pageRange(ref);
     return (
       <section className="lesson-source">
         {head}
+        {ref.boundary_shifted && <ShiftNotice />}
         {pages.map((page) => (
-          <figure className="lesson-page" key={page}>
-            <figcaption>Страница {page}</figcaption>
-            <img
-              src={materialPageImageUrl(projectId, materialId, page)}
-              alt={`${ref.source_name}, страница ${page}`}
-              loading="lazy"
-            />
-          </figure>
+          <div key={page}>
+            <figure className="lesson-page">
+              <figcaption>Страница {page}</figcaption>
+              <img
+                src={materialPageImageUrl(projectId, materialId, page)}
+                alt={`${ref.source_name}, страница ${page}`}
+                loading="lazy"
+              />
+            </figure>
+            {onSplit && page < ref.page_to && (
+              <button type="button" className="lesson-split-marker" onClick={() => onSplit({ afterPage: page })}>
+                <Scissors size={13} aria-hidden="true" /> Разрезать после страницы {page}
+              </button>
+            )}
+          </div>
         ))}
         {pages.length === 0 && <p className="lesson-source-notice">Страница {ref.page_from} показана выше.</p>}
       </section>
@@ -176,12 +221,21 @@ function LessonSourceView({ projectId, sourceRef: ref, mode, pagesShownIn }: Les
   return (
     <section className="lesson-source">
       {head}
-      <LessonSourceText projectId={projectId} materialId={materialId} sourceRef={ref} />
+      {ref.boundary_shifted && <ShiftNotice />}
+      <LessonSourceText projectId={projectId} materialId={materialId} sourceRef={ref} onSplit={onSplit} />
     </section>
   );
 }
 
-function LessonSourceText({ projectId, materialId, sourceRef: ref }: { projectId: string; materialId: string; sourceRef: LessonRefRead }) {
+function ShiftNotice() {
+  return (
+    <p className="lesson-source-notice is-warning">
+      <AlertTriangle size={14} aria-hidden="true" /> Материал распознан заново, и граничный абзац не нашёлся — кусок начинается или кончается на границе страницы. Проверьте и подтвердите урок.
+    </p>
+  );
+}
+
+function LessonSourceText({ projectId, materialId, sourceRef: ref, onSplit }: { projectId: string; materialId: string; sourceRef: LessonRefRead; onSplit?: (point: LessonSplitPoint) => void }) {
   const [pages, setPages] = useState<MaterialPageRead[] | null>(null);
   const [error, setError] = useState("");
 
@@ -197,23 +251,27 @@ function LessonSourceText({ projectId, materialId, sourceRef: ref }: { projectId
     return () => controller.abort();
   }, [projectId, materialId, ref]);
 
+  const visible = useMemo(() => (pages ?? []).map((page) => {
+    const serviceBlocks = new Set(page.blocks.filter((block) => block.block_class === "service").map((block) => block.id));
+    let fragments = page.fragments;
+    if (page.page_number === ref.page_from && ref.from_fragment_id) {
+      const start = fragments.findIndex((fragment) => fragment.id === ref.from_fragment_id);
+      if (start >= 0) fragments = fragments.slice(start);
+    }
+    if (page.page_number === ref.page_to && ref.to_fragment_id) {
+      const end = fragments.findIndex((fragment) => fragment.id === ref.to_fragment_id);
+      if (end >= 0) fragments = fragments.slice(0, end + 1);
+    }
+    return { page, fragments: fragments.filter((fragment) => !serviceBlocks.has(fragment.block_id)) };
+  }), [pages, ref]);
+
   if (error) return <ErrorState message={error} />;
   if (!pages) return <p className="lesson-source-notice">Загружаем текст…</p>;
+  const lastFragmentId = visible.flatMap((item) => item.fragments).at(-1)?.id;
 
   return (
     <>
-      {pages.map((page) => {
-        const serviceBlocks = new Set(page.blocks.filter((block) => block.block_class === "service").map((block) => block.id));
-        let fragments = page.fragments;
-        if (page.page_number === ref.page_from && ref.from_fragment_id) {
-          const start = fragments.findIndex((fragment) => fragment.id === ref.from_fragment_id);
-          if (start >= 0) fragments = fragments.slice(start);
-        }
-        if (page.page_number === ref.page_to && ref.to_fragment_id) {
-          const end = fragments.findIndex((fragment) => fragment.id === ref.to_fragment_id);
-          if (end >= 0) fragments = fragments.slice(0, end + 1);
-        }
-        fragments = fragments.filter((fragment) => !serviceBlocks.has(fragment.block_id));
+      {visible.map(({ page, fragments }) => {
         if (fragments.length === 0) return null;
         const lowQuality = page.quality === "ocr_low";
         return (
@@ -226,6 +284,12 @@ function LessonSourceText({ projectId, materialId, sourceRef: ref }: { projectId
               pageImageUrl={lowQuality ? materialPageImageUrl(projectId, materialId, page.page_number) : undefined}
               showSourceCrops={lowQuality}
               assetUrl={(fragmentId) => materialFragmentAssetUrl(projectId, materialId, fragmentId)}
+              fragmentProps={onSplit ? () => ({ className: "is-splittable" }) : undefined}
+              renderFragmentOverlay={onSplit ? (fragment) => fragment.id !== lastFragmentId && (
+                <button type="button" className="lesson-split-marker is-inline" onClick={() => onSplit({ fragmentId: fragment.id })}>
+                  <Scissors size={12} aria-hidden="true" /> Разрезать после
+                </button>
+              ) : undefined}
             />
           </div>
         );

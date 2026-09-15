@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.bindings.answers_link import apply_answers_link_undo
 from app.bindings.service import apply_undo as apply_binding_undo
+from app.lessons.editing import apply_blocks_undo as apply_lesson_blocks_undo
+from app.lessons.editing import apply_unbind_undo as apply_lesson_unbind_undo
 from app.lessons.service import apply_undo as apply_lesson_undo
 from app.models import (
     ChatMessage,
@@ -978,8 +980,9 @@ def undo_last_project_action(
             case "lesson_create":
                 apply_lesson_undo(session, project_id, data)
             case "lesson_blocks":
-                from app.lessons.service import apply_blocks_undo
-                apply_blocks_undo(session, project_id, data)
+                apply_lesson_blocks_undo(session, project_id, data)
+            case "lesson_unbind":
+                apply_lesson_unbind_undo(session, project_id, data)
             case "active_exam_import" | "ai_import_repair":
                 old_ids = {UUID(item["id"]) for item in data["nodes"]}
                 for item in data["nodes"]:

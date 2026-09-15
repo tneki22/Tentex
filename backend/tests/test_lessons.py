@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import db
 from app.config import BACKEND_ROOT, settings
-from app.lessons import service
+from app.lessons import editing, service
 from app.lessons.schemas import (
     LessonBlockWrite,
     LessonManualWrite,
@@ -88,6 +88,7 @@ class Book:
         )
         self.block: MaterialBlock | None = None
         self.block_order = 0
+        self.revision = 1
         self.ids: dict[str, UUID] = {}
         session.commit()
 
@@ -95,7 +96,7 @@ class Book:
         block = MaterialBlock(
             id=uuid4(),
             material_id=self.material.id,
-            revision=1,
+            revision=self.revision,
             sort_order=self.block_order,
             title=title,
             block_class=block_class,
@@ -111,7 +112,7 @@ class Book:
         page = MaterialPage(
             id=uuid4(),
             material_id=self.material.id,
-            revision=1,
+            revision=self.revision,
             page_number=number,
             width=595,
             height=842,
@@ -457,7 +458,7 @@ def test_manual_lesson_page_binding_and_undo(session, project):
         session, project.id, LessonManualWrite(program_node_id=topic.id)
     ).lesson
     assert lesson.blocks == []
-    added = service.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+    added = editing.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
         expected_revision=1, operation="add_page", material_id=book.material.id, page_from=4,
     )).lesson
     assert added.blocks[0].refs[0].page_from == 4
@@ -482,16 +483,16 @@ def test_move_undo_keeps_note_text_saved_after_move(session, project):
     lesson = service.create_manual_lesson(
         session, project.id, LessonManualWrite(program_node_id=topic.id)
     ).lesson
-    first = service.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+    first = editing.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
         expected_revision=1, operation="add_note",
     )).lesson
-    second = service.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+    second = editing.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
         expected_revision=first.revision, operation="add_note",
     )).lesson
-    moved = service.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+    moved = editing.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
         expected_revision=second.revision, operation="move_up", block_id=second.blocks[1].id,
     )).lesson
-    service.update_lesson_note(session, project.id, lesson.id, second.blocks[0].id,
+    editing.update_lesson_note(session, project.id, lesson.id, second.blocks[0].id,
         LessonNoteWrite(expected_revision=moved.revision, body_md="Пояснение после перемещения"))
     undo_last_project_action(session, project.id, moved.undo_sequence)
     restored = service.get_lesson(session, project.id, lesson.id)
@@ -506,10 +507,10 @@ def test_delete_undo_restores_source_ref(session, project):
     lesson = service.create_manual_lesson(
         session, project.id, LessonManualWrite(program_node_id=topic.id)
     ).lesson
-    added = service.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+    added = editing.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
         expected_revision=1, operation="add_page", material_id=book.material.id, page_from=8,
     )).lesson
-    deleted = service.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+    deleted = editing.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
         expected_revision=added.revision, operation="delete", block_id=added.blocks[0].id,
     )).lesson
     assert deleted.blocks == []

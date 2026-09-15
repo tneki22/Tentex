@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -66,15 +66,42 @@ class LessonManualWrite(ApiModel):
     program_node_id: UUID
 
 
+LessonBlockOperation = Literal[
+    "add_note", "add_page", "add_outline", "add_fragments", "add_block", "add_link", "add_image",
+    "delete", "move_up", "move_down", "split", "merge",
+    "set_topic", "add_topic", "remove_topic", "set_always_pages",
+]
+
+
 class LessonBlockWrite(ApiModel):
+    """Структурное действие над уроком; поля нужны по операции (контракт — lessons.md)."""
+
     expected_revision: int = Field(ge=1)
-    operation: str
+    operation: LessonBlockOperation
     block_id: UUID | None = None
     after_block_id: UUID | None = None
     material_id: UUID | None = None
     page_from: int | None = Field(default=None, ge=1)
     page_to: int | None = Field(default=None, ge=1)
     variant: LessonNoteVariant = LessonNoteVariant.TEXT
+    # add_fragments — края выделения; add_block и split — фрагмент блока или разреза.
+    from_fragment_id: UUID | None = None
+    to_fragment_id: UUID | None = None
+    fragment_id: UUID | None = None
+    split_after_page: int | None = Field(default=None, ge=1)
+    insert_note: bool = False
+    program_node_id: UUID | None = None
+    always_pages: bool | None = None
+    media_url: str | None = Field(default=None, max_length=2000)
+    caption: str | None = Field(default=None, max_length=2000)
+
+
+class LessonUnbindWrite(ApiModel):
+    binding_ids: list[UUID] = Field(min_length=1, max_length=5000)
+
+
+class LessonConfirmWrite(ApiModel):
+    expected_revision: int = Field(ge=1)
 
 
 class LessonNoteWrite(ApiModel):
@@ -107,6 +134,10 @@ class LessonRefRead(ApiModel):
     is_available: bool
     is_parsed: bool
     low_quality_pages: list[int]
+    # Граница не нашла пары в новой ревизии и стала границей страницы.
+    boundary_shifted: bool
+    # Режим «Страницы»: листы, которые рисует именно эта ссылка (без дублей по уроку).
+    pages_shown: list[int]
 
 
 class LessonBlockRead(ApiModel):
@@ -118,6 +149,9 @@ class LessonBlockRead(ApiModel):
     origin: LessonBlockOrigin
     basis: LessonBasis | None
     bound_program_node_id: UUID | None
+    media_kind: Literal["image", "link"] | None
+    # Только у внешней ссылки; изображение отдаёт `GET …/media/{block_id}`.
+    media_url: str | None
     refs: list[LessonRefRead]
 
 
@@ -145,6 +179,15 @@ class LessonRead(ApiModel):
     updated_at: datetime
 
 
+class LessonUnbindOffer(ApiModel):
+    """Удалённый или перенесённый кусок оставил привязки к теме — снять их молча нельзя."""
+
+    program_node_id: UUID
+    topic_title: str
+    binding_ids: list[UUID]
+
+
 class LessonChangeResult(ApiModel):
     lesson: LessonRead
     latest_undoable_action: LatestUndoableAction | None
+    unbind_offer: LessonUnbindOffer | None = None

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { ChevronLeft, ChevronRight, Plus, Search, Sparkles } from "lucide-react";
 import { getTopicSources, SOURCE_ROLE_LABELS, type LessonBlockCommand, type LessonSourceRangeRead } from "../../api/lessons";
-import { listMaterials, materialPageImageUrl, type MaterialRead } from "../../api/materials";
+import { getMaterialPage, listMaterials, materialPageImageUrl, type MaterialPageRead, type MaterialRead } from "../../api/materials";
 import { searchProjectMaterials, type SearchResultRead } from "../../api/search";
 import { QualityBadge } from "../../components/domain";
 import { Button, EmptyState, ErrorState, IconButton, LoadingState, SegmentedTabs, Select, Tooltip } from "../../components/ui";
@@ -112,6 +112,7 @@ function PagesTab({ projectId, busy, lessonId, onAdd }: { projectId: string; bus
   const [materials, setMaterials] = useState<MaterialRead[] | null>(null);
   const [materialId, setMaterialId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [view, setView] = useState<"original" | "fragments">("original");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -146,12 +147,85 @@ function PagesTab({ projectId, busy, lessonId, onAdd }: { projectId: string; bus
         <span>Страница {page} из {pageCount}</span>
         <IconButton label="Следующая страница" disabled={page >= pageCount} onClick={() => setPage(page + 1)}><ChevronRight size={15} /></IconButton>
       </div>
-      <img className="lessons-pages-image" src={materialPageImageUrl(projectId, material.id, page)} alt={`${material.original_name}, страница ${page}`} />
+      <SegmentedTabs label="Как показать страницу" value={view} tabs={PAGE_VIEW_TABS} onChange={setView} />
+      {view === "original" && <img className="lessons-pages-image" src={materialPageImageUrl(projectId, material.id, page)} alt={`${material.original_name}, страница ${page}`} />}
       <div className="lessons-outline-actions">
         <Button variant="ghost" disabled={!lessonId || busy} onClick={() => onAdd({ operation: "add_page", material_id: material.id, page_from: page })}><Plus size={14} />Добавить страницу</Button>
-        <Stage label="Добавить блок" stage="2 — ручной редактор" />
-        <Stage label="Добавить фрагменты" stage="2 — ручной редактор" />
+        {view === "original" && <Button variant="ghost" onClick={() => setView("fragments")}>Выбрать абзацы или блок…</Button>}
         <Stage label="Добавить область" stage="3 — массовая подготовка" />
+      </div>
+      {view === "fragments" && (
+        <FragmentPicker key={`${material.id}#${page}`} projectId={projectId} materialId={material.id} page={page} busy={busy} lessonId={lessonId} onAdd={onAdd} />
+      )}
+    </div>
+  );
+}
+
+const PAGE_VIEW_TABS: Array<{ value: "original" | "fragments"; label: string }> = [
+  { value: "original", label: "Оригинал" },
+  { value: "fragments", label: "Абзацы" },
+];
+
+/**
+ * Выбор абзацев страницы: первый щелчок отмечает абзац, следующий расширяет
+ * отрезок до себя. Кусок урока непрерывен, поэтому выделение всегда отрезок.
+ */
+function FragmentPicker({ projectId, materialId, page, busy, lessonId, onAdd }: { projectId: string; materialId: string; page: number; busy: boolean; lessonId: string | null; onAdd: LessonMaterialPanelProps["onAdd"] }) {
+  const [data, setData] = useState<MaterialPageRead | null>(null);
+  const [error, setError] = useState("");
+  const [range, setRange] = useState<[number, number] | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getMaterialPage(projectId, materialId, page, controller.signal)
+      .then((result) => { if (!controller.signal.aborted) setData(result); })
+      .catch((caught: unknown) => { if (!controller.signal.aborted) setError(errorText(caught, "Текст страницы не загрузился")); });
+    return () => controller.abort();
+  }, [projectId, materialId, page]);
+
+  if (error) return <p className="lessons-panel-hint">{error} Страницу можно добавить целиком.</p>;
+  if (!data) return <LoadingState label="Загружаем абзацы" />;
+  if (data.fragments.length === 0) return <p className="lessons-panel-hint">Текст страницы не распознан — добавьте её целиком.</p>;
+  const serviceBlocks = new Set(data.blocks.filter((block) => block.block_class === "service").map((block) => block.id));
+  const fragments = data.fragments;
+
+  function toggle(index: number) {
+    setRange((current) => {
+      if (!current) return [index, index];
+      if (current[0] === index && current[1] === index) return null;
+      return [Math.min(current[0], index), Math.max(current[1], index)];
+    });
+  }
+
+  const inRange = (index: number) => range !== null && index >= range[0] && index <= range[1];
+  const selectedBlock = range ? data.blocks.find((block) => block.id === fragments[range[0]].block_id) : undefined;
+
+  return (
+    <div className="lessons-fragment-picker">
+      <p className="lessons-panel-hint">Щёлкните первый и последний абзац. Служебные строки видны в уроке страницами, но к теме не привязываются.</p>
+      <ol className="lessons-fragment-list">
+        {fragments.map((fragment, index) => (
+          <li key={fragment.id}>
+            <button
+              type="button"
+              aria-pressed={inRange(index)}
+              className={[inRange(index) ? "is-selected" : "", serviceBlocks.has(fragment.block_id) ? "is-service" : "", fragment.element_kind === "heading" ? "is-heading" : ""].filter(Boolean).join(" ")}
+              onClick={() => toggle(index)}
+            >
+              {fragment.text.length > 220 ? `${fragment.text.slice(0, 220)}…` : fragment.text || "[изображение]"}
+            </button>
+          </li>
+        ))}
+      </ol>
+      <div className="lessons-outline-actions">
+        <Button variant="secondary" disabled={!lessonId || busy || !range}
+          onClick={() => { if (range) { onAdd({ operation: "add_fragments", material_id: materialId, from_fragment_id: fragments[range[0]].id, to_fragment_id: fragments[range[1]].id }); setRange(null); } }}>
+          <Plus size={14} />Добавить выделенное{range ? ` · ${range[1] - range[0] + 1}` : ""}
+        </Button>
+        <Button variant="ghost" disabled={!lessonId || busy || !selectedBlock}
+          onClick={() => { if (range) { onAdd({ operation: "add_block", material_id: materialId, fragment_id: fragments[range[0]].id }); setRange(null); } }}>
+          <Plus size={14} />Добавить блок{selectedBlock?.title ? ` «${selectedBlock.title}»` : ""}{selectedBlock && selectedBlock.page_to > selectedBlock.page_from ? ` · стр. ${selectedBlock.page_from}–${selectedBlock.page_to}` : ""}
+        </Button>
       </div>
     </div>
   );
@@ -222,7 +296,11 @@ function SearchTab({ projectId, topic, busy, lessonId, onAdd }: { projectId: str
                 <small>{place.materialName} · стр. {place.pageNumber} · {place.fragmentIds.length} совпад.</small>
               </div>
               <QualityBadge quality={place.quality} />
-              <Button variant="ghost" disabled={!lessonId || busy} onClick={() => onAdd({ operation: "add_page", material_id: place.materialId, page_from: place.pageNumber })}><Plus size={14} />Добавить страницу в урок</Button>
+              <div className="lessons-search-result-actions">
+                <Button variant="ghost" disabled={!lessonId || busy} onClick={() => onAdd({ operation: "add_page", material_id: place.materialId, page_from: place.pageNumber })}><Plus size={14} />Страницу</Button>
+                <Button variant="ghost" disabled={!lessonId || busy} onClick={() => onAdd({ operation: "add_fragments", material_id: place.materialId, from_fragment_id: place.fragmentIds[0], to_fragment_id: place.fragmentIds.at(-1) })}><Plus size={14} />Найденные абзацы</Button>
+                <Button variant="ghost" disabled={!lessonId || busy} onClick={() => onAdd({ operation: "add_block", material_id: place.materialId, fragment_id: place.fragmentIds[0] })}><Plus size={14} />Блок</Button>
+              </div>
             </li>
           ))}
         </ul>

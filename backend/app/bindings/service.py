@@ -20,6 +20,7 @@ from app.bindings.schemas import (
     SearchResultPageRead,
     SearchResultRead,
 )
+from app.lessons.refs import transfer_refs_on_revision
 from app.marker_labels import material_image_label
 from app.materials.schemas import MaterialPurpose
 from app.models import (
@@ -611,7 +612,20 @@ def transfer_bindings_on_revision(
     fragments_by_page_old: dict[int, list[MaterialFragment]],
     fragments_by_page_new: dict[int, list[MaterialFragment]],
 ) -> TransferResult:
-    """Р6: вызывается из materials.service.update_page_text в той же транзакции."""
+    """Р6: вызывается из materials.service.update_page_text в той же транзакции.
+
+    Тем же сопоставлением переносятся границы кусков уроков (`lessons.refs`).
+    """
+    mapping: dict[UUID, MaterialFragment] = {}
+    for page_number, olds in fragments_by_page_old.items():
+        news = fragments_by_page_new.get(page_number, [])
+        mapping.update(_match_fragments_on_page(olds, news))
+    transfer_refs_on_revision(
+        session,
+        material_id,
+        mapping,
+        {fragment.id for fragments in fragments_by_page_new.values() for fragment in fragments},
+    )
     bindings = list(
         session.scalars(
             select(Binding).where(
@@ -627,10 +641,6 @@ def transfer_bindings_on_revision(
         for fragments in fragments_by_page_old.values()
         for fragment in fragments
     }
-    mapping: dict[UUID, MaterialFragment] = {}
-    for page_number, olds in fragments_by_page_old.items():
-        news = fragments_by_page_new.get(page_number, [])
-        mapping.update(_match_fragments_on_page(olds, news))
 
     now = utc_now()
     transferred = 0

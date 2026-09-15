@@ -1879,6 +1879,8 @@ class LessonSourceRef(Base):
     )
     region_bbox: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
     always_pages: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Граничный фрагмент не нашёлся в новой ревизии — граница стала границей страницы.
+    boundary_shifted: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 # Регистрация таблиц подсистемы для create_all и Alembic.

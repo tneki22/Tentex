@@ -182,6 +182,7 @@ export function Lessons() {
       <LessonTopicPane
         projectId={projectId}
         topic={active}
+        studyNodes={flat.filter((node) => STUDY_TYPES.has(node.node_type))}
         lessons={lessons}
         lessonId={lessonParam}
         busy={busy}
