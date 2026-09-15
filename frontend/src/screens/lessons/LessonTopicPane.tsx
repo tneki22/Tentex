@@ -62,7 +62,7 @@ const NOTE_VARIANTS: Array<{ value: LessonNoteVariant; label: string }> = [
 function StageButton({ icon, label, stage }: { icon: ReactNode; label: string; stage: string }) {
   return (
     <Tooltip label={`Появится на этапе ${stage}`} side="bottom">
-      <span><Button variant="ghost" disabled aria-label={label}>{icon}<span className="toolbar-label">{label}</span></Button></span>
+      <span><Button variant="ghost" disabled aria-label={label}>{icon}<span className="toolbar-label toolbar-label-stage">{label}</span></Button></span>
     </Tooltip>
   );
 }
@@ -349,7 +349,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                       <Scissors size={14} /><span className="toolbar-label">{splitting ? "Отменить разрез" : "Разрезать"}</span>
                     </Button></span>
                   </Tooltip>
-                  <Button variant="ghost" aria-label="Склеить со следующим" disabled={!selectedRef || nextBlock?.kind !== "source" || saving} onClick={() => void edit({ operation: "merge", block_id: selectedBlockId ?? undefined })}><Combine size={14} /><span className="toolbar-label">Склеить со следующим</span></Button>
+                  <Button variant="ghost" aria-label="Склеить со следующим" disabled={!selectedRef || nextBlock?.kind !== "source" || saving} onClick={() => void edit({ operation: "merge", block_id: selectedBlockId ?? undefined })}><Combine size={14} /><span className="toolbar-label">Склеить</span></Button>
                   <Button variant="ghost" aria-label="Удалить" disabled={!selected || saving} onClick={() => void edit({ operation: "delete", block_id: selectedBlockId ?? undefined })}><Trash2 size={14} /><span className="toolbar-label">Удалить</span></Button>
                   <StageButton icon={<Sparkles size={14} />} label="Дополнить с ИИ" stage="5 — ИИ «Дополнить урок»" />
                   <StageButton icon={<Dumbbell size={14} />} label="Добавить практику" stage="6 — задания" />

@@ -956,3 +956,23 @@
   min-height: 120px;
   padding: var(--space-3);
 }
+
+/* Строки урока под тулбаром: выбор темы и настройки куска не растягиваются на всю ширину. */
+.lessons-lesson-topics .select-trigger,
+.lessons-inline-select .select-trigger {
+  width: auto;
+  min-width: 150px;
+  min-height: 30px;
+  font-size: var(--text-xs);
+}
+
+.lessons-inline-select {
+  white-space: nowrap;
+}
+
+/* Кнопки будущих этапов недоступны — их подписи уходят первыми, подсказка остаётся. */
+@container (max-width: 1000px) {
+  .lessons-block-toolbar .toolbar-label-stage {
+    display: none;
+  }
+}
