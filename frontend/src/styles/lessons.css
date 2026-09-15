@@ -568,3 +568,36 @@
     grid-template-columns: minmax(0, 1fr) auto;
   }
 }
+
+.lesson-edit-block {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.lesson-edit-block.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.lesson-block-select {
+  display: block;
+  margin: var(--space-1) 0;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.lesson-block-select:hover,
+.lesson-block-select:focus-visible {
+  color: var(--accent);
+}
+
+.lesson-note-editor {
+  min-height: 120px;
+  padding: var(--space-3);
+}

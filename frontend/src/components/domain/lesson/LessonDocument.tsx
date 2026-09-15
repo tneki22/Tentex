@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { AlertTriangle, BookOpen, FileText } from "lucide-react";
 import type { LessonBlockRead, LessonRead, LessonRefRead } from "../../../api/lessons";
@@ -20,6 +20,9 @@ interface LessonDocumentProps {
   mode: LessonDocumentMode;
   /** Название текущей темы уже показано шапкой поверхности, второй раз не нужно. */
   hiddenHeading?: string;
+  selectedBlockId?: string | null;
+  onSelectBlock?: (blockId: string) => void;
+  renderNoteEditor?: (block: LessonBlockRead) => ReactNode;
 }
 
 const pageKey = (materialId: string, page: number) => `${materialId}#${page}`;
@@ -35,7 +38,7 @@ function pageRange(ref: LessonRefRead): number[] {
  * показывается в первом куске, где он встретился. «Текст» — фрагменты активной
  * ревизии с отсечением по граничным фрагментам ссылки; служебные блоки скрыты.
  */
-export function LessonDocument({ projectId, lesson, mode, hiddenHeading }: LessonDocumentProps) {
+export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selectedBlockId, onSelectBlock, renderNoteEditor }: LessonDocumentProps) {
   const pagesShownIn = useMemo(() => {
     const owner = new Map<string, string>();
     for (const block of lesson.blocks) {
@@ -57,14 +60,14 @@ export function LessonDocument({ projectId, lesson, mode, hiddenHeading }: Lesso
   return (
     <div className={`lesson-document is-${mode}`}>
       {lesson.blocks.map((block) => (
-        <LessonBlockView
-          key={block.id}
-          projectId={projectId}
-          block={block}
-          mode={mode}
-          pagesShownIn={pagesShownIn}
-          hiddenHeading={hiddenHeading}
-        />
+        <section key={block.id} className={`lesson-edit-block${selectedBlockId === block.id ? " is-selected" : ""}`}>
+          {onSelectBlock && <button type="button" className="lesson-block-select" onClick={() => onSelectBlock(block.id)}>
+            Выбрать блок {block.sort_order + 1}
+          </button>}
+          {block.kind === "note" && selectedBlockId === block.id && renderNoteEditor
+            ? renderNoteEditor(block)
+            : <LessonBlockView projectId={projectId} block={block} mode={mode} pagesShownIn={pagesShownIn} hiddenHeading={hiddenHeading} />}
+        </section>
       ))}
     </div>
   );

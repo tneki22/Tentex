@@ -1,10 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import {
   Archive, ArrowRightLeft, CheckCircle2, ChevronDown, Dumbbell, ExternalLink, FilePlus2, Pencil,
   CircleHelp, Plus, RotateCcw, Scissors, Sparkles, Trash2, Undo2,
 } from "lucide-react";
-import { LESSON_STATUS_LABELS, updateLesson, type LessonStatus, type LessonSummaryRead } from "../../api/lessons";
+import { editLessonBlocks, LESSON_STATUS_LABELS, updateLesson, updateLessonNote, type LessonBlockCommand, type LessonStatus, type LessonSummaryRead } from "../../api/lessons";
 import { undoProjectAction } from "../../api/projects";
 import { LessonDocument } from "../../components/domain";
 import { Button, EmptyState, ErrorState, IconButton, LoadingState, Menu, SegmentedTabs, StatusBadge, Tooltip } from "../../components/ui";
@@ -13,6 +13,9 @@ import { useLessonViewMode } from "../../hooks/useLessonViewMode";
 import type { ProgramTreeNode } from "../programTree";
 import { VIEW_MODE_TABS } from "./LessonTab";
 import { errorText } from "./lessonTree";
+
+const LessonNoteEditor = lazy(() => import("../../components/domain/lesson/LessonNoteEditor")
+  .then((module) => ({ default: module.LessonNoteEditor })));
 
 interface LessonTopicPaneProps {
   projectId: string;
@@ -23,7 +26,11 @@ interface LessonTopicPaneProps {
   onSelectLesson(lessonId: string | null): void;
   onQuickLesson(): void;
   onFromSources(): void;
+  onManual(): void;
   onChanged(): void;
+  refreshKey: number;
+  selectedBlockId: string | null;
+  onSelectBlock(blockId: string | null): void;
 }
 
 const STATUS_TONE: Record<LessonStatus, "warning" | "success" | "neutral"> = {
@@ -41,7 +48,7 @@ function StageButton({ icon, label, stage }: { icon: ReactNode; label: string; s
 }
 
 /** Центр для одной темы: формулировка, уроки темы и открытый урок (записка §2, бриф §12). */
-export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onChanged }: LessonTopicPaneProps) {
+export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onChanged, refreshKey, selectedBlockId, onSelectBlock }: LessonTopicPaneProps) {
   const topicLessons = lessons.filter((lesson) => lesson.program_node_ids.includes(topic.id));
   const defaultLesson = topicLessons.find((lesson) => lesson.status !== "archived") ?? topicLessons[0];
   const openId = topicLessons.some((lesson) => lesson.id === lessonId) ? lessonId : defaultLesson?.id ?? null;
@@ -50,8 +57,36 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
   const { mode, setMode } = useLessonViewMode(projectId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [noteDraft, setNoteDraft] = useState<{ blockId: string; body: string } | null>(null);
+  const revisionRef = useRef(1);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const hasRange = topic.source_page_ranges.length > 0;
   const data = lesson.data && lesson.data.id === openId ? lesson.data : null;
+
+  useEffect(() => { lesson.refresh(); }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (data && data.revision > revisionRef.current) revisionRef.current = data.revision;
+  }, [data]);
+  useEffect(() => { revisionRef.current = data?.revision ?? 1; setNoteDraft(null); }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!noteDraft) return;
+    const timer = window.setTimeout(() => {
+      saveQueue.current = saveQueue.current.then(async () => {
+        try {
+          const result = await updateLessonNote(projectId, openId ?? "", noteDraft.blockId, {
+            expected_revision: revisionRef.current, body_md: noteDraft.body,
+          });
+          revisionRef.current = result.lesson.revision;
+          lesson.refresh();
+        } catch (caught) {
+          setError(errorText(caught, "Пояснение не сохранилось"));
+          lesson.refresh();
+        }
+      });
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [noteDraft, projectId, openId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setError("");
@@ -62,7 +97,9 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
     setSaving(true);
     setError("");
     try {
-      await updateLesson(projectId, data.id, { ...command, expected_revision: data.revision });
+      await saveQueue.current;
+      const result = await updateLesson(projectId, data.id, { ...command, expected_revision: revisionRef.current });
+      revisionRef.current = result.lesson.revision;
       lesson.refresh();
       onChanged();
     } catch (caught) {
@@ -79,13 +116,33 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
     setError("");
     try {
       await undoProjectAction(projectId, data.undo_sequence);
-      onSelectLesson(null);
+      onSelectBlock(null);
+      lesson.refresh();
       onChanged();
     } catch (caught) {
       setError(errorText(caught, "Отменить не удалось"));
     } finally {
       setSaving(false);
     }
+  }
+
+  async function edit(command: Omit<LessonBlockCommand, "expected_revision">) {
+    if (!data) return;
+    setSaving(true);
+    setError("");
+    try {
+      await saveQueue.current;
+      const result = await editLessonBlocks(projectId, data.id, {
+        ...command, expected_revision: revisionRef.current,
+      });
+      revisionRef.current = result.lesson.revision;
+      if (command.operation === "delete") onSelectBlock(null);
+      lesson.refresh();
+      onChanged();
+    } catch (caught) {
+      setError(errorText(caught, "Блок не изменился"));
+      lesson.refresh();
+    } finally { setSaving(false); }
   }
 
   const newLessonMenu = (
@@ -95,7 +152,7 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
       items={[
         { label: hasRange ? "Быстрый урок" : "Быстрый урок — у темы нет страниц из оглавления", icon: <FilePlus2 size={14} />, disabled: !hasRange, onSelect: onQuickLesson },
         { label: "Из источников…", icon: <ArrowRightLeft size={14} />, disabled: !hasRange, onSelect: onFromSources },
-        { label: "Вручную — этап 2", icon: <Pencil size={14} />, disabled: true, onSelect: () => undefined },
+        { label: "Вручную", icon: <Pencil size={14} />, onSelect: onManual },
         { label: "Собрать с ИИ — этап 7", icon: <Sparkles size={14} />, disabled: true, onSelect: () => undefined },
       ]}
     />
@@ -137,7 +194,8 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
 
       {topicLessons.length === 0 && (
         <EmptyState title="У темы ещё нет урока">
-          <p>{hasRange ? "Быстрый урок соберёт страницы темы из оглавления без модели." : "У темы нет страниц из оглавления — соберите урок вручную (этап 2)."}</p>
+          <p>{hasRange ? "Быстрый урок соберёт страницы темы из оглавления без модели." : "У темы нет страниц из оглавления — соберите урок вручную."}</p>
+          <Button variant="secondary" disabled={busy} onClick={onManual}><Pencil size={15} />Собрать вручную</Button>
           {hasRange && <div className="lessons-topic-actions"><Button onClick={onQuickLesson} disabled={busy}><FilePlus2 size={15} />Быстрый урок</Button><Tooltip label="Быстрый урок берёт связанные страницы основного источника из диапазона оглавления." side="bottom"><span><IconButton label="Как составляется быстрый урок"><CircleHelp size={15} /></IconButton></span></Tooltip></div>}
         </EmptyState>
       )}
@@ -160,16 +218,29 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
                   <Link className="secondary-button" to={`/projects/${projectId}?topic=${topic.id}&tab=lesson&lesson=${data.id}`}><ExternalLink size={14} />Открыть в Рабочей области</Link>
                 </div>
                 <div className="lessons-block-toolbar" aria-label="Действия над блоком">
-                  <StageButton icon={<Plus size={14} />} label="Добавить блок" stage="2 — ручной редактор" />
-                  <StageButton icon={<ArrowRightLeft size={14} />} label="Переместить" stage="2 — ручной редактор" />
+                  <Menu label="Добавить пояснение" trigger={<Button variant="ghost" disabled={saving}><Plus size={14} />Добавить пояснение</Button>} items={[
+                    { label: "Текст", onSelect: () => void edit({ operation: "add_note", after_block_id: selectedBlockId ?? undefined, variant: "text" }) },
+                    { label: "Пояснение", onSelect: () => void edit({ operation: "add_note", after_block_id: selectedBlockId ?? undefined, variant: "explanation" }) },
+                    { label: "Важно", onSelect: () => void edit({ operation: "add_note", after_block_id: selectedBlockId ?? undefined, variant: "important" }) },
+                    { label: "Пример", onSelect: () => void edit({ operation: "add_note", after_block_id: selectedBlockId ?? undefined, variant: "example" }) },
+                    { label: "Заголовок", onSelect: () => void edit({ operation: "add_note", after_block_id: selectedBlockId ?? undefined, variant: "heading" }) },
+                  ]} />
+                  <Button variant="ghost" disabled={!selectedBlockId || saving || data.blocks[0]?.id === selectedBlockId} onClick={() => void edit({ operation: "move_up", block_id: selectedBlockId ?? undefined })}><ArrowRightLeft size={14} />Выше</Button>
+                  <Button variant="ghost" disabled={!selectedBlockId || saving || data.blocks.at(-1)?.id === selectedBlockId} onClick={() => void edit({ operation: "move_down", block_id: selectedBlockId ?? undefined })}><ArrowRightLeft size={14} />Ниже</Button>
                   <StageButton icon={<Scissors size={14} />} label="Разрезать" stage="2 — ручной редактор" />
-                  <StageButton icon={<Trash2 size={14} />} label="Удалить" stage="2 — ручной редактор" />
+                  <Button variant="ghost" disabled={!selectedBlockId || saving} onClick={() => void edit({ operation: "delete", block_id: selectedBlockId ?? undefined })}><Trash2 size={14} />Удалить</Button>
                   <StageButton icon={<Sparkles size={14} />} label="Дополнить с ИИ" stage="5 — ИИ «Дополнить урок»" />
                   <StageButton icon={<Dumbbell size={14} />} label="Добавить практику" stage="6 — задания" />
                 </div>
                 {error && <p className="inline-error" role="alert">{error}</p>}
               </header>
-              <LessonDocument projectId={projectId} lesson={data} mode={mode} hiddenHeading={topic.title} />
+              <LessonDocument projectId={projectId} lesson={data} mode={mode} hiddenHeading={topic.title}
+                selectedBlockId={selectedBlockId} onSelectBlock={onSelectBlock}
+                renderNoteEditor={(block) => <Suspense fallback={<LoadingState label="Открываем редактор" />}>
+                  <LessonNoteEditor key={block.id} blockId={block.id} markdown={block.body_md ?? ""}
+                    onChange={(body) => { if (body !== block.body_md) setNoteDraft({ blockId: block.id, body }); }} />
+                </Suspense>}
+              />
             </>
           )}
         </section>

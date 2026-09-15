@@ -1,4 +1,4 @@
-"""Уроки учебникового проекта: обзор, чтение, быстрый урок и урок из источников.
+"""Уроки учебникового проекта: чтение, быстрая и ручная сборка.
 
 Контракт — `docs/architecture/lessons.md`; модель и правила границ — записка
 вертикали «Уроки» (§3, §4.1, §4.4).
@@ -17,7 +17,10 @@ from app.lessons import boundaries
 from app.lessons.boundaries import FragmentView, NextItem, OutlineRange, Pages, Piece, Position
 from app.lessons.schemas import (
     LessonBlockRead,
+    LessonBlockWrite,
     LessonChangeResult,
+    LessonManualWrite,
+    LessonNoteWrite,
     LessonQuickWrite,
     LessonRead,
     LessonRefRead,
@@ -66,6 +69,7 @@ from app.projects.schemas import LatestUndoableAction
 STUDY_NODE_TYPES = {NodeType.TOPIC, NodeType.SUBPOINT}
 ROLE_ORDER = {SourceRole.MAIN: 0, SourceRole.ADDITIONAL: 1, SourceRole.REFERENCE: 2}
 ACTION_LESSON_CREATE = "lesson_create"
+ACTION_LESSON_BLOCKS = "lesson_blocks"
 SECTION_NUMBER_RE = re.compile(r"^\s*(?:§\s*)?\d+(?:\.\d+)*\.?\s+")
 
 
@@ -397,7 +401,7 @@ def _lesson_read(session: Session, lesson: Lesson) -> LessonRead:
     undo_sequence = (
         action.sequence
         if action is not None
-        and action.action_type == ACTION_LESSON_CREATE
+        and action.action_type in {ACTION_LESSON_CREATE, ACTION_LESSON_BLOCKS}
         and action.inverse_data.get("lesson_id") == str(lesson.id)
         else None
     )
@@ -722,6 +726,319 @@ def _change_result(session: Session, lesson: Lesson) -> LessonChangeResult:
             LatestUndoableAction.model_validate(action) if action is not None else None
         ),
     )
+
+
+def create_manual_lesson(
+    session: Session, project_id: UUID, command: LessonManualWrite
+) -> LessonChangeResult:
+    """Пустой черновик доступен и для темы без диапазона оглавления."""
+    with session.begin():
+        project = _require_lessons_project(session, project_id, writable=True)
+        node = _require_study_node(session, project_id, command.program_node_id)
+        now = utc_now()
+        lesson = Lesson(
+            id=uuid4(), project_id=project.id, title=node.title,
+            status=LessonStatus.DRAFT, revision=1, created_at=now, updated_at=now,
+        )
+        session.add(lesson)
+        session.add(LessonTopic(
+            lesson_id=lesson.id, program_node_id=node.id, project_id=project.id,
+            sort_order=0, topic_title_snapshot=node.title,
+        ))
+        session.flush()
+        session.add(ProjectActionLog(
+            project_id=project.id, action_type=ACTION_LESSON_CREATE,
+            phase="active", payload_version=1, target_title=lesson.title,
+            inverse_data={"lesson_id": str(lesson.id), "binding_ids": []},
+        ))
+        session.flush()
+        return _change_result(session, lesson)
+
+
+def _ordered_blocks(session: Session, lesson_id: UUID) -> list[LessonBlock]:
+    return list(session.scalars(
+        select(LessonBlock).where(LessonBlock.lesson_id == lesson_id)
+        .order_by(LessonBlock.sort_order, LessonBlock.id)
+    ))
+
+
+def _require_revision(lesson: Lesson, expected: int) -> None:
+    if lesson.revision != expected:
+        raise ProjectConflictError(
+            "Урок изменился в другом месте", code="stale_lesson_revision",
+            context={"current_revision": lesson.revision},
+        )
+
+
+def _require_block(blocks: list[LessonBlock], block_id: UUID | None) -> LessonBlock:
+    block = next((item for item in blocks if item.id == block_id), None)
+    if block is None:
+        raise ProjectNotFoundError("Блок урока не найден")
+    return block
+
+
+def _source_ref_data(ref: LessonSourceRef) -> dict:
+    return {
+        "id": str(ref.id), "role": ref.role.value,
+        "material_id": str(ref.material_id) if ref.material_id else None,
+        "source_name_snapshot": ref.source_name_snapshot,
+        "material_revision": ref.material_revision, "page_from": ref.page_from,
+        "page_to": ref.page_to,
+        "from_fragment_id": str(ref.from_fragment_id) if ref.from_fragment_id else None,
+        "to_fragment_id": str(ref.to_fragment_id) if ref.to_fragment_id else None,
+        "region_bbox": ref.region_bbox, "always_pages": ref.always_pages,
+    }
+
+
+def _block_data(session: Session, block: LessonBlock) -> dict:
+    return {
+        "id": str(block.id), "sort_order": block.sort_order, "kind": block.kind.value,
+        "variant": block.variant.value if block.variant else None,
+        "body_md": block.body_md, "origin": block.origin.value,
+        "basis": block.basis.value if block.basis else None,
+        "ai_run_id": str(block.ai_run_id) if block.ai_run_id else None,
+        "activity_id": str(block.activity_id) if block.activity_id else None,
+        "media_path": block.media_path,
+        "bound_program_node_id": str(block.bound_program_node_id)
+        if block.bound_program_node_id else None,
+        "refs": [_source_ref_data(ref) for ref in session.scalars(
+            select(LessonSourceRef).where(LessonSourceRef.block_id == block.id)
+        )],
+    }
+
+
+def _manual_bind_page(
+    session: Session, project_id: UUID, node_id: UUID,
+    material: Material, page_from: int, page_to: int,
+) -> list[UUID]:
+    """Ручной выбор привязывает содержательные фрагменты, не меняя существующие пары."""
+    fragments = list(session.execute(
+        select(MaterialFragment, MaterialBlock)
+        .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+        .join(MaterialBlock, MaterialBlock.id == MaterialFragment.block_id)
+        .where(MaterialPage.material_id == material.id,
+               MaterialPage.revision == material.active_parse_revision,
+               MaterialPage.page_number.between(page_from, page_to),
+               MaterialBlock.block_class == BlockClass.CONTENT)
+    )) if material.active_parse_revision else []
+    existing = set(session.scalars(select(Binding.fragment_id).where(
+        Binding.project_id == project_id, Binding.program_node_id == node_id,
+        Binding.fragment_id.in_([fragment.id for fragment, _ in fragments]),
+    )))
+    created: list[UUID] = []
+    now = utc_now()
+    for fragment, block in fragments:
+        if fragment.id in existing:
+            continue
+        binding = Binding(
+            id=uuid4(), project_id=project_id, program_node_id=node_id,
+            fragment_id=fragment.id, material_id=material.id, block_id=block.id,
+            status=BindingStatus.MANUAL, mechanism=BindingMechanism.LESSON,
+            created_at=now, updated_at=now,
+        )
+        session.add(binding)
+        created.append(binding.id)
+        existing.add(fragment.id)
+    return created
+
+
+def _add_source_block(
+    session: Session, lesson: Lesson, command: LessonBlockWrite,
+    node_id: UUID,
+) -> tuple[LessonBlock, list[UUID]]:
+    """Проверяет источник в проекте и создаёт ссылку с привязками выбранного пути."""
+    if command.material_id is None or command.page_from is None:
+        raise ProjectDomainError(
+            "Выберите материал и страницу", status=422, code="lesson_source_required"
+        )
+    material = session.get(Material, command.material_id)
+    link = session.get(ProjectMaterial, (lesson.project_id, command.material_id))
+    if material is None or link is None:
+        raise ProjectDomainError(
+            "Материал не входит в проект", status=422, code="lesson_source_unavailable"
+        )
+    page_from = command.page_from
+    page_to = command.page_to or page_from
+    if page_to < page_from or page_to > (material.page_count or 0):
+        raise ProjectDomainError(
+            "Диапазон выходит за страницы материала", status=422, code="lesson_page_range"
+        )
+    is_outline = command.operation == "add_outline"
+    from_fragment_id = to_fragment_id = None
+    if is_outline:
+        program = _load_program(session, lesson.project_id)
+        if material.id not in program.ranges.get(node_id, {}):
+            raise ProjectDomainError("У темы нет диапазона в этом источнике", status=422,
+                                     code="lesson_source_without_range")
+        node = _require_study_node(session, lesson.project_id, node_id)
+        plan = _plan_source(session, program, node, material, link)
+        segment = boundaries.to_segment(plan.pages, plan.start, plan.end)
+        if segment:
+            page_from, page_to = segment.page_from, segment.page_to
+            from_fragment_id, to_fragment_id = segment.from_fragment_id, segment.to_fragment_id
+    now = utc_now()
+    block = LessonBlock(
+        id=uuid4(), lesson_id=lesson.id, sort_order=0, kind=LessonBlockKind.SOURCE,
+        origin=LessonBlockOrigin.OUTLINE if is_outline else LessonBlockOrigin.MANUAL,
+        bound_program_node_id=node_id, created_at=now, updated_at=now,
+    )
+    session.add(block)
+    session.flush()
+    session.add(LessonSourceRef(
+        id=uuid4(), block_id=block.id, role=LessonRefRole.CONTENT,
+        material_id=material.id,
+        source_name_snapshot=_source_name(material, link, material.original_name),
+        material_revision=material.active_parse_revision or None,
+        page_from=page_from, page_to=page_to,
+        from_fragment_id=from_fragment_id, to_fragment_id=to_fragment_id,
+        always_pages=False,
+    ))
+    if is_outline:
+        ids, _ = (
+            _bind_segment_fragments(session, lesson.project_id, node_id, plan, segment)
+            if segment else ([], 0)
+        )
+    else:
+        ids = _manual_bind_page(session, lesson.project_id, node_id, material,
+                                page_from, page_to)
+    return block, ids
+
+
+def edit_lesson_blocks(
+    session: Session, project_id: UUID, lesson_id: UUID, command: LessonBlockWrite
+) -> LessonChangeResult:
+    """Структурное действие — один снимок порядка и одна запись отмены."""
+    with session.begin():
+        _require_lessons_project(session, project_id, writable=True)
+        lesson = _require_lesson(session, project_id, lesson_id)
+        _require_revision(lesson, command.expected_revision)
+        blocks = _ordered_blocks(session, lesson.id)
+        before = [_block_data(session, block) for block in blocks]
+        binding_ids: list[UUID] = []
+        if command.operation in {"add_note", "add_page", "add_outline"}:
+            if command.operation == "add_note":
+                now = utc_now()
+                block = LessonBlock(
+                    id=uuid4(), lesson_id=lesson.id, sort_order=0,
+                    kind=LessonBlockKind.NOTE, variant=command.variant, body_md="",
+                    origin=LessonBlockOrigin.MANUAL, created_at=now, updated_at=now,
+                )
+                session.add(block)
+            else:
+                node_id = session.scalar(select(LessonTopic.program_node_id).where(
+                    LessonTopic.lesson_id == lesson.id).order_by(LessonTopic.sort_order).limit(1)
+                )
+                if node_id is None:
+                    raise ProjectNotFoundError("Тема урока не найдена")
+                block, binding_ids = _add_source_block(session, lesson, command, node_id)
+            index = next((i + 1 for i, item in enumerate(blocks)
+                          if item.id == command.after_block_id), len(blocks))
+            blocks.insert(index, block)
+        elif command.operation == "delete":
+            block = _require_block(blocks, command.block_id)
+            blocks.remove(block)
+            session.execute(delete(LessonSourceRef).where(LessonSourceRef.block_id == block.id))
+            session.delete(block)
+        elif command.operation in {"move_up", "move_down"}:
+            block = _require_block(blocks, command.block_id)
+            index = blocks.index(block)
+            next_index = index + (-1 if command.operation == "move_up" else 1)
+            if next_index < 0 or next_index >= len(blocks):
+                raise ProjectDomainError(
+                    "Блок уже на краю урока", status=422, code="lesson_block_edge"
+                )
+            blocks[index], blocks[next_index] = blocks[next_index], blocks[index]
+        else:
+            raise ProjectDomainError("Неизвестное действие над блоком", status=422,
+                                     code="lesson_block_operation")
+        session.flush()
+        for index, block in enumerate(blocks):
+            block.sort_order = index
+        lesson.revision += 1
+        lesson.updated_at = utc_now()
+        session.add(ProjectActionLog(
+            project_id=project_id, action_type=ACTION_LESSON_BLOCKS,
+            phase="active", payload_version=1, target_title=lesson.title,
+            inverse_data={"lesson_id": str(lesson.id), "blocks": before,
+                          "binding_ids": [str(item) for item in binding_ids]},
+        ))
+        session.flush()
+        return _change_result(session, lesson)
+
+
+def update_lesson_note(
+    session: Session, project_id: UUID, lesson_id: UUID,
+    block_id: UUID, command: LessonNoteWrite,
+) -> LessonChangeResult:
+    """Текст сохраняется с ревизией без записи каждого нажатия в журнал."""
+    with session.begin():
+        _require_lessons_project(session, project_id, writable=True)
+        lesson = _require_lesson(session, project_id, lesson_id)
+        _require_revision(lesson, command.expected_revision)
+        block = _require_block(_ordered_blocks(session, lesson_id), block_id)
+        if block.kind != LessonBlockKind.NOTE:
+            raise ProjectDomainError("Текст можно менять только у пояснения", status=422,
+                                     code="lesson_not_note")
+        block.body_md = command.body_md
+        if command.variant is not None:
+            block.variant = command.variant
+        block.updated_at = utc_now()
+        lesson.revision += 1
+        lesson.updated_at = utc_now()
+        session.flush()
+        return _change_result(session, lesson)
+
+
+def apply_blocks_undo(session: Session, project_id: UUID, data: dict) -> None:
+    """Возвращает структуру урока и убирает лишь привязки этого добавления."""
+    lesson = session.get(Lesson, UUID(data["lesson_id"]))
+    if lesson is None or lesson.project_id != project_id:
+        raise ProjectNotFoundError("Урок для отмены не найден")
+    binding_ids = [UUID(item) for item in data["binding_ids"]]
+    if binding_ids:
+        session.execute(delete(Binding).where(Binding.project_id == project_id,
+                                             Binding.id.in_(binding_ids)))
+    current = {block.id: block for block in _ordered_blocks(session, lesson.id)}
+    previous_ids = {UUID(item["id"]) for item in data["blocks"]}
+    added_ids = set(current) - previous_ids
+    if added_ids:
+        session.execute(delete(LessonSourceRef).where(LessonSourceRef.block_id.in_(added_ids)))
+        session.execute(delete(LessonBlock).where(LessonBlock.id.in_(added_ids)))
+        for block_id in added_ids:
+            session.expunge(current[block_id])
+    for item in data["blocks"]:
+        existing = current.get(UUID(item["id"]))
+        if existing is not None:
+            existing.sort_order = item["sort_order"]
+            continue
+        block = LessonBlock(
+            id=UUID(item["id"]), lesson_id=lesson.id, sort_order=item["sort_order"],
+            kind=LessonBlockKind(item["kind"]),
+            variant=LessonNoteVariant(item["variant"]) if item["variant"] else None,
+            body_md=item["body_md"], origin=LessonBlockOrigin(item["origin"]),
+            basis=item["basis"],
+            ai_run_id=UUID(item["ai_run_id"]) if item["ai_run_id"] else None,
+            activity_id=UUID(item["activity_id"]) if item["activity_id"] else None,
+            media_path=item["media_path"],
+            bound_program_node_id=UUID(item["bound_program_node_id"])
+            if item["bound_program_node_id"] else None,
+        )
+        session.add(block)
+        for ref in item["refs"]:
+            session.add(LessonSourceRef(
+                id=UUID(ref["id"]), block_id=block.id, role=LessonRefRole(ref["role"]),
+                material_id=UUID(ref["material_id"]) if ref["material_id"] else None,
+                source_name_snapshot=ref["source_name_snapshot"],
+                material_revision=ref["material_revision"],
+                page_from=ref["page_from"], page_to=ref["page_to"],
+                from_fragment_id=UUID(ref["from_fragment_id"])
+                if ref["from_fragment_id"] else None,
+                to_fragment_id=UUID(ref["to_fragment_id"])
+                if ref["to_fragment_id"] else None,
+                region_bbox=ref["region_bbox"], always_pages=ref["always_pages"],
+            ))
+    lesson.revision += 1
+    lesson.updated_at = utc_now()
 
 
 def update_lesson(

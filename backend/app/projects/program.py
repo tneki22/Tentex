@@ -977,6 +977,9 @@ def undo_last_project_action(
                 apply_answers_link_undo(session, project_id, data)
             case "lesson_create":
                 apply_lesson_undo(session, project_id, data)
+            case "lesson_blocks":
+                from app.lessons.service import apply_blocks_undo
+                apply_blocks_undo(session, project_id, data)
             case "active_exam_import" | "ai_import_repair":
                 old_ids = {UUID(item["id"]) for item in data["nodes"]}
                 for item in data["nodes"]:

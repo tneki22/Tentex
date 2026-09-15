@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { ArrowLeft, GraduationCap, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
-import { createQuickLesson } from "../../api/lessons";
+import { createManualLesson, createQuickLesson, editLessonBlocks, getLesson, type LessonBlockCommand } from "../../api/lessons";
 import { getProject, ProjectApiError, type ProjectDetail } from "../../api/projects";
 import { ProjectNav } from "../../components/domain";
 import { Button, EmptyState, ErrorState, IconButton, LoadingState, PanelResizeHandle } from "../../components/ui";
@@ -48,6 +48,7 @@ export function Lessons() {
   const [actionError, setActionError] = useState("");
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [rangesKey, setRangesKey] = useState(0);
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -71,6 +72,7 @@ export function Lessons() {
   const topicParam = searchParams.get("topic");
   const lessonParam = searchParams.get("lesson");
   const active = flat.find((node) => node.id === topicParam) ?? flat.find((node) => STUDY_TYPES.has(node.node_type)) ?? flat[0] ?? null;
+  const activeLessonId = lessonParam ?? lessons.find((item) => item.program_node_ids.includes(active?.id ?? "") && item.status !== "archived")?.id ?? null;
 
   const updateLayout = useCallback((change: (current: LessonsLayout) => LessonsLayout) => {
     setLayout((current) => {
@@ -81,6 +83,7 @@ export function Lessons() {
   }, []);
 
   function navigateTo(topicId: string, lessonId: string | null = null) {
+    setSelectedBlockId(null);
     const next = new URLSearchParams();
     next.set("topic", topicId);
     if (lessonId) next.set("lesson", lessonId);
@@ -102,6 +105,36 @@ export function Lessons() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function createManual() {
+    if (!active) return;
+    setBusy(true);
+    setActionError("");
+    try {
+      const result = await createManualLesson(projectId, active.id);
+      overview.refresh();
+      navigateTo(active.id, result.lesson.id);
+    } catch (caught) {
+      setActionError(errorText(caught, "Не удалось создать урок"));
+    } finally { setBusy(false); }
+  }
+
+  async function addFromPanel(command: Omit<LessonBlockCommand, "expected_revision">) {
+    if (!activeLessonId) return;
+    setBusy(true);
+    setActionError("");
+    try {
+      const current = await getLesson(projectId, activeLessonId);
+      await editLessonBlocks(projectId, activeLessonId, {
+        ...command, after_block_id: selectedBlockId ?? undefined,
+        expected_revision: current.revision,
+      });
+      overview.refresh();
+      setRangesKey((value) => value + 1);
+    } catch (caught) {
+      setActionError(errorText(caught, "Не удалось добавить источник"));
+    } finally { setBusy(false); }
   }
 
   if (error) {
@@ -155,7 +188,11 @@ export function Lessons() {
         onSelectLesson={(id) => navigateTo(active.id, id)}
         onQuickLesson={() => void createLesson()}
         onFromSources={() => setSourcesOpen(true)}
+        onManual={() => void createManual()}
         onChanged={() => { overview.refresh(); setRangesKey((value) => value + 1); }}
+        refreshKey={rangesKey}
+        selectedBlockId={selectedBlockId}
+        onSelectBlock={setSelectedBlockId}
       />
     );
   }
@@ -219,6 +256,8 @@ export function Lessons() {
               busy={busy}
               refreshKey={rangesKey}
               onCreateFromRange={(materialId) => void createLesson([materialId])}
+              lessonId={activeLessonId}
+              onAdd={(command) => void addFromPanel(command)}
             />
           </aside>
         </>

@@ -131,6 +131,36 @@ export const createQuickLesson = (
   body: JSON.stringify({ program_node_id: nodeId, material_ids: materialIds ?? null }),
 });
 
+export const createManualLesson = (projectId: string, nodeId: string): Promise<LessonChangeResult> =>
+  request(`${lessonsPath(projectId)}/manual`, {
+    method: "POST", body: JSON.stringify({ program_node_id: nodeId }),
+  });
+
+export interface LessonBlockCommand {
+  expected_revision: number;
+  operation: "add_note" | "add_page" | "add_outline" | "delete" | "move_up" | "move_down";
+  block_id?: string;
+  after_block_id?: string;
+  material_id?: string;
+  page_from?: number;
+  page_to?: number;
+  variant?: LessonNoteVariant;
+}
+
+export const editLessonBlocks = (
+  projectId: string, lessonId: string, command: LessonBlockCommand,
+): Promise<LessonChangeResult> => request(`${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/blocks`, {
+  method: "POST", body: JSON.stringify(command),
+});
+
+export const updateLessonNote = (
+  projectId: string, lessonId: string, blockId: string,
+  command: { expected_revision: number; body_md: string; variant?: LessonNoteVariant },
+): Promise<LessonChangeResult> => request(
+  `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/blocks/${encodeURIComponent(blockId)}`,
+  { method: "PATCH", body: JSON.stringify(command) },
+);
+
 export const updateLesson = (
   projectId: string,
   lessonId: string,
