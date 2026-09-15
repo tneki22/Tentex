@@ -161,8 +161,15 @@ export function Lessons() {
     );
   }
 
+  const panelToggle = (
+    <IconButton label={layout.panelOpen ? "Скрыть материал для урока" : "Показать материал для урока"} onClick={() => updateLayout((current) => ({ ...current, panelOpen: !current.panelOpen }))}>
+      {layout.panelOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
+    </IconButton>
+  );
+
   const selectedTopics = flat.filter((node) => selection.has(node.id));
   let center;
+  let isTopicPane = false;
   if (treeResult.error) center = <ErrorState title="Программа повреждена" message={treeResult.error} />;
   else if (!active) {
     center = (
@@ -194,8 +201,11 @@ export function Lessons() {
         refreshKey={rangesKey}
         selectedBlockId={selectedBlockId}
         onSelectBlock={setSelectedBlockId}
+        panelToggle={panelToggle}
+        actionError={actionError}
       />
     );
+    isTopicPane = true;
   }
 
   const columns = layout.panelOpen
@@ -231,12 +241,12 @@ export function Lessons() {
         onReset={() => updateLayout((current) => ({ ...current, tree: 300 }))}
       />
       <main className="lessons-center">
-        <div className="lessons-center-bar">
-          {actionError && <p className="inline-error" role="alert">{actionError}</p>}
-          <IconButton label={layout.panelOpen ? "Скрыть материал для урока" : "Показать материал для урока"} onClick={() => updateLayout((current) => ({ ...current, panelOpen: !current.panelOpen }))}>
-            {layout.panelOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
-          </IconButton>
-        </div>
+        {!isTopicPane && (
+          <div className="lessons-center-bar">
+            {actionError && <p className="inline-error" role="alert">{actionError}</p>}
+            {panelToggle}
+          </div>
+        )}
         {center}
       </main>
       {layout.panelOpen && (
