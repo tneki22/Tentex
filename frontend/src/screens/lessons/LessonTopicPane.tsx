@@ -348,7 +348,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                 )}
 
                 <div className="lessons-block-toolbar" aria-label="Действия над блоком">
-                  <Menu label="Добавить пояснение" trigger={<Button aria-label="Пояснение" variant="ghost" disabled={saving}><Plus size={14} /><span className="toolbar-label">Пояснение</span><ChevronDown size={13} /></Button>}
+                  <Menu label="Добавить блок" trigger={<Button aria-label="Блок" variant="ghost" disabled={saving}><Plus size={14} /><span className="toolbar-label">Блок</span><ChevronDown size={13} /></Button>}
                     items={NOTE_VARIANTS.map((item) => ({ label: item.label, onSelect: () => void edit({ operation: "add_note", after_block_id: after, variant: item.value }) }))} />
                   <Menu label="Добавить медиа" trigger={<Button aria-label="Медиа" variant="ghost" disabled={saving}><Image size={14} /><span className="toolbar-label">Медиа</span><ChevronDown size={13} /></Button>} items={[
                     { label: "Изображение или фото…", icon: <Image size={14} />, onSelect: () => imageInput.current?.click() },
