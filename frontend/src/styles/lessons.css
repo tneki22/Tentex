@@ -136,14 +136,28 @@
   gap: var(--space-3);
 }
 
+.lessons-topic-meta-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
 .lessons-topic-summary {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  margin-left: auto;
   color: var(--muted);
   font-size: var(--text-xs);
+}
+
+.lessons-topic-meta-row .lessons-topic-summary {
+  grid-column: 2;
+}
+
+.lessons-topic-title-row > .button {
+  margin-left: auto;
 }
 
 .lessons-center-head p {
@@ -348,6 +362,31 @@
 .lessons-search-results span {
   color: var(--tone-info);
   font-size: var(--text-xs);
+}
+
+.lessons-search-results li {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.lessons-search-result-copy {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.lessons-search-result-copy p {
+  overflow-wrap: anywhere;
+}
+
+.lessons-search-result-copy small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lessons-search-results mark {
+  border-radius: var(--radius-xs);
+  background: var(--accent-wash);
+  color: var(--ink);
 }
 
 .lessons-source-choice li {

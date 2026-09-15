@@ -2,12 +2,12 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import {
   Archive, ArrowRightLeft, CheckCircle2, ChevronDown, Dumbbell, ExternalLink, FilePlus2, Pencil,
-  CircleHelp, Plus, RotateCcw, Scissors, Sparkles, Trash2, Undo2,
+  Plus, RotateCcw, Scissors, Sparkles, Trash2, Undo2,
 } from "lucide-react";
 import { LESSON_STATUS_LABELS, updateLesson, type LessonStatus, type LessonSummaryRead } from "../../api/lessons";
 import { undoProjectAction } from "../../api/projects";
 import { LessonDocument } from "../../components/domain";
-import { Button, EmptyState, ErrorState, IconButton, LoadingState, Menu, SegmentedTabs, StatusBadge, Tooltip } from "../../components/ui";
+import { Button, EmptyState, ErrorState, LoadingState, Menu, SegmentedTabs, StatusBadge, Tooltip } from "../../components/ui";
 import { useLesson } from "../../hooks/useLessons";
 import { useLessonViewMode } from "../../hooks/useLessonViewMode";
 import type { ProgramTreeNode } from "../programTree";
@@ -104,9 +104,8 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
   return (
     <div className="lessons-center-scroll">
       <header className="lessons-center-head">
-        <span className="lessons-eyebrow">{topic.node_type === "subpoint" ? "Подпункт" : "Тема"} {topic.number}</span>
-        <div className="lessons-topic-title-row">
-          <h1>{topic.title}</h1>
+        <div className="lessons-topic-meta-row">
+          <span className="lessons-eyebrow">{topic.node_type === "subpoint" ? "Подпункт" : "Тема"} {topic.number}</span>
           <div className="lessons-topic-summary">
             <span>{topic.basis_kind === "outline" ? "из оглавления" : "вручную"}</span>
             {openLesson && <StatusBadge tone={STATUS_TONE[openLesson.status]}>{LESSON_STATUS_LABELS[openLesson.status]}</StatusBadge>}
@@ -114,9 +113,9 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
             {openLesson?.duration_minutes && <span>≈ {openLesson.duration_minutes} мин</span>}
           </div>
         </div>
-        <div className="lessons-topic-actions">
+        <div className="lessons-topic-title-row">
+          <h1>{topic.title}</h1>
           {newLessonMenu}
-          {hasRange && <Tooltip label="Быстрый урок берёт связанные страницы основного источника из диапазона оглавления." side="bottom"><span><IconButton label="Как составляется быстрый урок"><CircleHelp size={15} /></IconButton></span></Tooltip>}
         </div>
       </header>
 
@@ -138,7 +137,7 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
       {topicLessons.length === 0 && (
         <EmptyState title="У темы ещё нет урока">
           <p>{hasRange ? "Быстрый урок соберёт страницы темы из оглавления без модели." : "У темы нет страниц из оглавления — соберите урок вручную (этап 2)."}</p>
-          {hasRange && <div className="lessons-topic-actions"><Button onClick={onQuickLesson} disabled={busy}><FilePlus2 size={15} />Быстрый урок</Button><Tooltip label="Быстрый урок берёт связанные страницы основного источника из диапазона оглавления." side="bottom"><span><IconButton label="Как составляется быстрый урок"><CircleHelp size={15} /></IconButton></span></Tooltip></div>}
+          {hasRange && <div className="lessons-topic-actions"><Button onClick={onQuickLesson} disabled={busy}><FilePlus2 size={15} />Быстрый урок</Button></div>}
         </EmptyState>
       )}
 

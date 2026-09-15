@@ -3,9 +3,11 @@ import { ChevronLeft, ChevronRight, Plus, Search, Sparkles } from "lucide-react"
 import { getTopicSources, SOURCE_ROLE_LABELS, type LessonSourceRangeRead } from "../../api/lessons";
 import { listMaterials, materialPageImageUrl, type MaterialRead } from "../../api/materials";
 import { searchProjectMaterials, type SearchResultRead } from "../../api/search";
+import { QualityBadge } from "../../components/domain";
 import { Button, EmptyState, ErrorState, IconButton, LoadingState, SegmentedTabs, Select, Tooltip } from "../../components/ui";
 import type { ProgramTreeNode } from "../programTree";
 import { toSourcePlaces } from "../workspace/sourcePlaces";
+import { renderSearchHighlights } from "../workspace/searchHighlights";
 import { errorText } from "./lessonTree";
 import { pagesLabel } from "./LessonSourcesDialog";
 
@@ -213,9 +215,11 @@ function SearchTab({ projectId, topic }: { projectId: string; topic: ProgramTree
         <ul className="lessons-search-results">
           {places.map((place) => (
             <li key={place.key}>
-              <strong>{place.materialName} · стр. {place.pageNumber}</strong>
-              <p>{place.text.slice(0, 220)}{place.text.length > 220 ? "…" : ""}</p>
-              <span>{place.fragmentIds.length} совпад.</span>
+              <div className="lessons-search-result-copy">
+                <p>{renderSearchHighlights(place.text, place.highlights)}</p>
+                <small>{place.materialName} · стр. {place.pageNumber} · {place.fragmentIds.length} совпад.</small>
+              </div>
+              <QualityBadge quality={place.quality} />
               <Stage label="Добавить в урок" stage="2 — ручной редактор" />
             </li>
           ))}

@@ -48,7 +48,7 @@ import {
   type WorkspaceLayout,
   type WorkspaceTab,
 } from "../api/projects";
-import type { SearchHighlightRead, SearchResultRead } from "../api/search";
+import type { SearchResultRead } from "../api/search";
 import { searchProjectMaterials } from "../api/search";
 import {
   AnswerScanPages,
@@ -92,6 +92,7 @@ import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
 import { BoundSourceReader } from "./workspace/BoundSourceReader";
 import { SourcePreviewDialog } from "./workspace/SourcePreviewDialog";
 import { toSourcePlaces, type SourcePlace } from "./workspace/sourcePlaces";
+import { renderSearchHighlights } from "./workspace/searchHighlights";
 import type { ConspectEditorHandle } from "../components/domain/ConspectEditor";
 
 // Прямой динамический импорт файла, а не барреля components/domain: так Milkdown
@@ -189,20 +190,6 @@ function ancestorSectionIds(nodes: ProgramNodeRead[], nodeId: string | null): st
   }
 
   return sectionIds;
-}
-
-function renderHighlighted(text: string, highlights: SearchHighlightRead[]): ReactNode {
-  if (highlights.length === 0) return text;
-  const sorted = [...highlights].sort((left, right) => left.start - right.start);
-  const nodes: ReactNode[] = [];
-  let cursor = 0;
-  sorted.forEach((range, index) => {
-    if (range.start > cursor) nodes.push(text.slice(cursor, range.start));
-    nodes.push(<mark key={index}>{text.slice(range.start, range.end)}</mark>);
-    cursor = Math.max(cursor, range.end);
-  });
-  if (cursor < text.length) nodes.push(text.slice(cursor));
-  return nodes;
 }
 
 function sanitizeLayout(
@@ -970,7 +957,7 @@ export function ProjectWorkspace() {
                       className="workspace-source-tab-result-copy"
                       onClick={() => setPreviewKey(place.key)}
                     >
-                      <p>{renderHighlighted(place.text, place.highlights)}</p>
+                      <p>{renderSearchHighlights(place.text, place.highlights)}</p>
                       <small>
                         {place.materialName} · стр. {place.pageNumber}
                         {" · "}
