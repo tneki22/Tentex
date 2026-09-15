@@ -62,6 +62,27 @@ class LessonQuickWrite(ApiModel):
     material_ids: list[UUID] | None = None
 
 
+class LessonManualWrite(ApiModel):
+    program_node_id: UUID
+
+
+class LessonBlockWrite(ApiModel):
+    expected_revision: int = Field(ge=1)
+    operation: str
+    block_id: UUID | None = None
+    after_block_id: UUID | None = None
+    material_id: UUID | None = None
+    page_from: int | None = Field(default=None, ge=1)
+    page_to: int | None = Field(default=None, ge=1)
+    variant: LessonNoteVariant = LessonNoteVariant.TEXT
+
+
+class LessonNoteWrite(ApiModel):
+    expected_revision: int = Field(ge=1)
+    body_md: str = Field(max_length=100_000)
+    variant: LessonNoteVariant | None = None
+
+
 class LessonUpdateWrite(ApiModel):
     title: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)

@@ -11,7 +11,13 @@ from sqlalchemy.orm import Session
 from app import db
 from app.config import BACKEND_ROOT, settings
 from app.lessons import service
-from app.lessons.schemas import LessonQuickWrite, LessonUpdateWrite
+from app.lessons.schemas import (
+    LessonBlockWrite,
+    LessonManualWrite,
+    LessonNoteWrite,
+    LessonQuickWrite,
+    LessonUpdateWrite,
+)
 from app.models import (
     Binding,
     BindingMechanism,
@@ -435,6 +441,82 @@ def test_update_lesson_checks_revision(session, project):
         service.update_lesson(
             session, project.id, lesson.id, LessonUpdateWrite(title="x", expected_revision=1)
         )
+
+
+def test_manual_lesson_page_binding_and_undo(session, project):
+    book = Book(session, project, "Методичка")
+    book.page(4, "h:Тема", "p:содержательное", "s:колонтитул")
+    topic = add_node(session, project, "Тема", 0)
+    session.add(Binding(
+        project_id=project.id, program_node_id=topic.id,
+        fragment_id=book.ids["содержательное"], material_id=book.material.id,
+        status=BindingStatus.REMOVED, mechanism=BindingMechanism.MANUAL,
+    ))
+    session.commit()
+    lesson = service.create_manual_lesson(
+        session, project.id, LessonManualWrite(program_node_id=topic.id)
+    ).lesson
+    assert lesson.blocks == []
+    added = service.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+        expected_revision=1, operation="add_page", material_id=book.material.id, page_from=4,
+    )).lesson
+    assert added.blocks[0].refs[0].page_from == 4
+    bindings = list(session.scalars(select(Binding).where(Binding.project_id == project.id)))
+    assert {(item.fragment_id, item.status) for item in bindings} == {
+        (book.ids["содержательное"], BindingStatus.REMOVED),
+        (book.ids["Тема"], BindingStatus.MANUAL),
+    }
+    project_id = project.id
+    lesson_id = lesson.id
+    sequence = added.undo_sequence
+    session.rollback()
+    undo_last_project_action(session, project_id, sequence)
+    assert service.get_lesson(session, project_id, lesson_id).blocks == []
+    assert {item.fragment_id for item in session.scalars(select(Binding))} == {
+        book.ids["содержательное"]
+    }
+
+
+def test_move_undo_keeps_note_text_saved_after_move(session, project):
+    topic = add_node(session, project, "Тема", 0)
+    lesson = service.create_manual_lesson(
+        session, project.id, LessonManualWrite(program_node_id=topic.id)
+    ).lesson
+    first = service.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+        expected_revision=1, operation="add_note",
+    )).lesson
+    second = service.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+        expected_revision=first.revision, operation="add_note",
+    )).lesson
+    moved = service.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+        expected_revision=second.revision, operation="move_up", block_id=second.blocks[1].id,
+    )).lesson
+    service.update_lesson_note(session, project.id, lesson.id, second.blocks[0].id,
+        LessonNoteWrite(expected_revision=moved.revision, body_md="Пояснение после перемещения"))
+    undo_last_project_action(session, project.id, moved.undo_sequence)
+    restored = service.get_lesson(session, project.id, lesson.id)
+    assert [block.id for block in restored.blocks] == [item.id for item in second.blocks]
+    assert restored.blocks[0].body_md == "Пояснение после перемещения"
+
+
+def test_delete_undo_restores_source_ref(session, project):
+    book = Book(session, project, "Учебник")
+    book.page(8, "h:Тема", "p:текст")
+    topic = add_node(session, project, "Тема", 0)
+    lesson = service.create_manual_lesson(
+        session, project.id, LessonManualWrite(program_node_id=topic.id)
+    ).lesson
+    added = service.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+        expected_revision=1, operation="add_page", material_id=book.material.id, page_from=8,
+    )).lesson
+    deleted = service.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+        expected_revision=added.revision, operation="delete", block_id=added.blocks[0].id,
+    )).lesson
+    assert deleted.blocks == []
+    undo_last_project_action(session, project.id, deleted.undo_sequence)
+    restored = service.get_lesson(session, project.id, lesson.id)
+    assert restored.blocks[0].id == added.blocks[0].id
+    assert restored.blocks[0].refs[0].material_id == book.material.id
 
 
 def test_topic_without_ranges_and_exam_project_are_refused(session, project):
