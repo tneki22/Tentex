@@ -13,6 +13,8 @@
     "build": "cd frontend && npm run build"
   },
   "devDependencies": {
+    "@playwright/cli": "^0.1.20",
+    "@playwright/test": "^1.63.0",
     "concurrently": "^10.0.0"
   }
 }
