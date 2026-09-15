@@ -231,13 +231,13 @@ function MaterialCatalog({
           </section>
         )}
       </nav>
-      <ProjectNav
+      {project && <ProjectNav
         projectId={projectId}
         active="materials"
         textbook={textbook}
-        modules={project?.project.enabled_modules}
+        modules={project.project.enabled_modules}
         counts={{ materials: materials.length }}
-      />
+      />}
     </aside>
   );
 }

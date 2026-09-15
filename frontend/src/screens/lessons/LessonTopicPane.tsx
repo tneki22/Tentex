@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import {
   Archive, ArrowRightLeft, CheckCircle2, ChevronDown, Dumbbell, ExternalLink, FilePlus2, Pencil,
-  Plus, RotateCcw, Scissors, Sparkles, Trash2, Undo2,
+  CircleHelp, Plus, RotateCcw, Scissors, Sparkles, Trash2, Undo2,
 } from "lucide-react";
 import { LESSON_STATUS_LABELS, updateLesson, type LessonStatus, type LessonSummaryRead } from "../../api/lessons";
 import { undoProjectAction } from "../../api/projects";
@@ -45,17 +45,15 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
   const topicLessons = lessons.filter((lesson) => lesson.program_node_ids.includes(topic.id));
   const defaultLesson = topicLessons.find((lesson) => lesson.status !== "archived") ?? topicLessons[0];
   const openId = topicLessons.some((lesson) => lesson.id === lessonId) ? lessonId : defaultLesson?.id ?? null;
+  const openLesson = topicLessons.find((lesson) => lesson.id === openId) ?? null;
   const lesson = useLesson(projectId, openId);
   const { mode, setMode } = useLessonViewMode(projectId);
-  const [renaming, setRenaming] = useState(false);
-  const [title, setTitle] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const hasRange = topic.source_page_ranges.length > 0;
   const data = lesson.data && lesson.data.id === openId ? lesson.data : null;
 
   useEffect(() => {
-    setRenaming(false);
     setError("");
   }, [openId]);
 
@@ -65,7 +63,6 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
     setError("");
     try {
       await updateLesson(projectId, data.id, { ...command, expected_revision: data.revision });
-      setRenaming(false);
       lesson.refresh();
       onChanged();
     } catch (caught) {
@@ -108,11 +105,22 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
     <div className="lessons-center-scroll">
       <header className="lessons-center-head">
         <span className="lessons-eyebrow">{topic.node_type === "subpoint" ? "Подпункт" : "Тема"} {topic.number}</span>
-        <h1>{topic.title}</h1>
-        <div className="lessons-topic-actions">{newLessonMenu}</div>
+        <div className="lessons-topic-title-row">
+          <h1>{topic.title}</h1>
+          <div className="lessons-topic-summary">
+            <span>{topic.basis_kind === "outline" ? "из оглавления" : "вручную"}</span>
+            {openLesson && <StatusBadge tone={STATUS_TONE[openLesson.status]}>{LESSON_STATUS_LABELS[openLesson.status]}</StatusBadge>}
+            {openLesson?.needs_review && <StatusBadge tone="warning">Требует проверки</StatusBadge>}
+            {openLesson?.duration_minutes && <span>≈ {openLesson.duration_minutes} мин</span>}
+          </div>
+        </div>
+        <div className="lessons-topic-actions">
+          {newLessonMenu}
+          {hasRange && <Tooltip label="Быстрый урок берёт связанные страницы основного источника из диапазона оглавления." side="bottom"><span><IconButton label="Как составляется быстрый урок"><CircleHelp size={15} /></IconButton></span></Tooltip>}
+        </div>
       </header>
 
-      {topicLessons.length > 0 && (
+      {topicLessons.length > 1 && (
         <ul className="lessons-lesson-list" aria-label="Уроки темы">
           {topicLessons.map((item) => (
             <li key={item.id}>
@@ -130,7 +138,7 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
       {topicLessons.length === 0 && (
         <EmptyState title="У темы ещё нет урока">
           <p>{hasRange ? "Быстрый урок соберёт страницы темы из оглавления без модели." : "У темы нет страниц из оглавления — соберите урок вручную (этап 2)."}</p>
-          {hasRange && <Button onClick={onQuickLesson} disabled={busy}><FilePlus2 size={15} />Быстрый урок</Button>}
+          {hasRange && <div className="lessons-topic-actions"><Button onClick={onQuickLesson} disabled={busy}><FilePlus2 size={15} />Быстрый урок</Button><Tooltip label="Быстрый урок берёт связанные страницы основного источника из диапазона оглавления." side="bottom"><span><IconButton label="Как составляется быстрый урок"><CircleHelp size={15} /></IconButton></span></Tooltip></div>}
         </EmptyState>
       )}
 
@@ -141,23 +149,6 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
           {data && (
             <>
               <header className="lessons-lesson-head">
-                {renaming ? (
-                  <form className="lessons-rename" onSubmit={(event) => { event.preventDefault(); if (title.trim()) void change({ title: title.trim() }); }}>
-                    <input aria-label="Название урока" value={title} maxLength={200} autoFocus onChange={(event) => setTitle(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setRenaming(false); }} />
-                    <Button type="submit" disabled={saving || !title.trim()}>Сохранить</Button>
-                    <Button type="button" variant="ghost" onClick={() => setRenaming(false)}>Отмена</Button>
-                  </form>
-                ) : (
-                  <h2>
-                    {data.title}
-                    <IconButton label="Переименовать урок" onClick={() => { setTitle(data.title); setRenaming(true); }}><Pencil size={14} /></IconButton>
-                  </h2>
-                )}
-                <div className="lessons-lesson-meta">
-                  <StatusBadge tone={STATUS_TONE[data.status]}>{LESSON_STATUS_LABELS[data.status]}</StatusBadge>
-                  {data.needs_review && <StatusBadge tone="warning">Требует проверки</StatusBadge>}
-                  {data.duration_minutes && <span>≈ {data.duration_minutes} мин</span>}
-                </div>
                 <div className="lessons-lesson-toolbar">
                   <SegmentedTabs label="Способ показа урока" value={mode} tabs={VIEW_MODE_TABS} onChange={setMode} />
                   {data.status === "draft" && <Button variant="secondary" disabled={saving} onClick={() => void change({ status: "ready" })}><CheckCircle2 size={14} />Готов</Button>}
@@ -178,7 +169,7 @@ export function LessonTopicPane({ projectId, topic, lessons, lessonId, busy, onS
                 </div>
                 {error && <p className="inline-error" role="alert">{error}</p>}
               </header>
-              <LessonDocument projectId={projectId} lesson={data} mode={mode} />
+              <LessonDocument projectId={projectId} lesson={data} mode={mode} hiddenHeading={topic.title} />
             </>
           )}
         </section>

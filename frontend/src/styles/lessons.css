@@ -1,7 +1,9 @@
 /* Раздел «Уроки» и вкладка «Урок» Рабочей области. Только токены из tokens.css. */
 
 .lessons-screen {
-  height: 100vh;
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
   display: grid;
   overflow: hidden;
   background: var(--canvas);
@@ -111,7 +113,7 @@
 }
 
 .lessons-center-head {
-  max-width: 820px;
+  width: min(820px, 100%);
   display: grid;
   justify-items: start;
   gap: var(--space-2);
@@ -124,6 +126,24 @@
   font-size: var(--text-2xl);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
+}
+
+.lessons-topic-title-row {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.lessons-topic-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
 }
 
 .lessons-center-head p {
@@ -217,26 +237,6 @@
   background: var(--canvas);
 }
 
-.lessons-lesson-head h2 {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0;
-  font-size: var(--text-lg);
-  font-weight: var(--weight-semibold);
-}
-
-.lessons-rename {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.lessons-rename input {
-  min-width: 0;
-  flex: 1;
-}
-
-.lessons-lesson-meta,
 .lessons-lesson-toolbar,
 .lessons-block-toolbar,
 .lessons-topic-actions,
@@ -246,11 +246,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-}
-
-.lessons-lesson-meta span {
-  color: var(--muted);
-  font-size: var(--text-xs);
 }
 
 .lessons-block-toolbar {
@@ -265,6 +260,7 @@
 .lessons-panel {
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   border-left: 1px solid var(--line);
   background: var(--paper);
 }
@@ -290,8 +286,15 @@
 }
 
 .lessons-panel-tabs {
-  max-width: 100%;
+  width: 100%;
+  display: flex;
   overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.lessons-panel-tabs button {
+  flex: none;
+  white-space: nowrap;
 }
 
 .lessons-panel-body {

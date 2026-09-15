@@ -18,6 +18,8 @@ interface LessonDocumentProps {
   projectId: string;
   lesson: LessonRead;
   mode: LessonDocumentMode;
+  /** Название текущей темы уже показано шапкой поверхности, второй раз не нужно. */
+  hiddenHeading?: string;
 }
 
 const pageKey = (materialId: string, page: number) => `${materialId}#${page}`;
@@ -33,7 +35,7 @@ function pageRange(ref: LessonRefRead): number[] {
  * показывается в первом куске, где он встретился. «Текст» — фрагменты активной
  * ревизии с отсечением по граничным фрагментам ссылки; служебные блоки скрыты.
  */
-export function LessonDocument({ projectId, lesson, mode }: LessonDocumentProps) {
+export function LessonDocument({ projectId, lesson, mode, hiddenHeading }: LessonDocumentProps) {
   const pagesShownIn = useMemo(() => {
     const owner = new Map<string, string>();
     for (const block of lesson.blocks) {
@@ -61,6 +63,7 @@ export function LessonDocument({ projectId, lesson, mode }: LessonDocumentProps)
           block={block}
           mode={mode}
           pagesShownIn={pagesShownIn}
+          hiddenHeading={hiddenHeading}
         />
       ))}
     </div>
@@ -72,13 +75,15 @@ interface LessonBlockViewProps {
   block: LessonBlockRead;
   mode: LessonDocumentMode;
   pagesShownIn: Map<string, string>;
+  hiddenHeading?: string;
 }
 
-function LessonBlockView({ projectId, block, mode, pagesShownIn }: LessonBlockViewProps) {
+function LessonBlockView({ projectId, block, mode, pagesShownIn, hiddenHeading }: LessonBlockViewProps) {
   if (block.kind === "note") {
     const body = block.body_md ?? "";
     const heading = /^(#{1,6})\s+(.*)$/.exec(body);
     if (block.variant === "heading" && heading) {
+      if (heading[2] === hiddenHeading) return null;
       const level = Math.min(4, Math.max(2, heading[1].length));
       const Tag = `h${level}` as "h2" | "h3" | "h4";
       return <Tag className={`lesson-note-heading is-level-${level}`}>{heading[2]}</Tag>;

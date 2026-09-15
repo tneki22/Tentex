@@ -1,20 +1,21 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { ChevronLeft, ChevronRight, Plus, Search, Sparkles } from "lucide-react";
 import { getTopicSources, SOURCE_ROLE_LABELS, type LessonSourceRangeRead } from "../../api/lessons";
 import { listMaterials, materialPageImageUrl, type MaterialRead } from "../../api/materials";
 import { searchProjectMaterials, type SearchResultRead } from "../../api/search";
 import { Button, EmptyState, ErrorState, IconButton, LoadingState, SegmentedTabs, Select, Tooltip } from "../../components/ui";
 import type { ProgramTreeNode } from "../programTree";
+import { toSourcePlaces } from "../workspace/sourcePlaces";
 import { errorText } from "./lessonTree";
 import { pagesLabel } from "./LessonSourcesDialog";
 
 type PanelTab = "outline" | "pages" | "search" | "suggested";
 
 const PANEL_TABS: Array<{ value: PanelTab; label: string }> = [
-  { value: "outline", label: "Оглавление" },
-  { value: "pages", label: "Страницы" },
   { value: "search", label: "Поиск" },
   { value: "suggested", label: "Предложено" },
+  { value: "pages", label: "Страницы" },
+  { value: "outline", label: "Оглавление" },
 ];
 
 interface LessonMaterialPanelProps {
@@ -36,7 +37,7 @@ function Stage({ label, stage }: { label: string; stage: string }) {
 
 /** Правая панель «Материал для урока»: четыре вкладки (записка §2). */
 export function LessonMaterialPanel({ projectId, topic, busy, refreshKey, onCreateFromRange }: LessonMaterialPanelProps) {
-  const [tab, setTab] = useState<PanelTab>("outline");
+  const [tab, setTab] = useState<PanelTab>("search");
   return (
     <div className="lessons-material-panel">
       <header className="lessons-panel-head">
@@ -153,25 +154,46 @@ function PagesTab({ projectId }: { projectId: string }) {
 }
 
 function SearchTab({ projectId, topic }: { projectId: string; topic: ProgramTreeNode | null }) {
-  const [query, setQuery] = useState("");
+  const topicId = topic?.node_type === "section" ? undefined : topic?.id;
+  const topicTitle = topic?.node_type === "section" ? "" : topic?.title ?? "";
+  const [query, setQuery] = useState(topicTitle);
   const [results, setResults] = useState<SearchResultRead[] | null>(null);
+  const [terms, setTerms] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!query.trim()) return;
+  const search = useCallback(async (value: string, signal?: AbortSignal) => {
+    if (!value.trim()) return;
     setLoading(true);
     setError("");
     try {
-      const response = await searchProjectMaterials(projectId, query.trim(), { nodeId: topic && topic.node_type !== "section" ? topic.id : undefined, limit: 20 });
+      const response = await searchProjectMaterials(projectId, value.trim(), { nodeId: topicId, limit: 20 }, signal);
+      if (signal?.aborted) return;
       setResults(response.results);
+      setTerms(response.terms);
     } catch (caught) {
-      setError(errorText(caught, "Поиск не выполнился"));
+      if (!signal?.aborted) setError(errorText(caught, "Поиск не выполнился"));
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
+  }, [projectId, topicId]);
+
+  useEffect(() => {
+    setQuery(topicTitle);
+    setResults(null);
+    setTerms([]);
+    if (!topicTitle) return;
+    const controller = new AbortController();
+    void search(topicTitle, controller.signal);
+    return () => controller.abort();
+  }, [topicTitle, search]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    await search(query);
   }
+
+  const places = useMemo(() => results ? toSourcePlaces(results) : [], [results]);
 
   return (
     <div className="lessons-search-tab">
@@ -185,14 +207,15 @@ function SearchTab({ projectId, topic }: { projectId: string; topic: ProgramTree
       </form>
       {error && <ErrorState message={error} />}
       {loading && <LoadingState label="Ищем" />}
-      {results && results.length === 0 && <p className="lessons-panel-hint">Ничего не найдено.</p>}
-      {results && results.length > 0 && (
+      {terms.length > 0 && !loading && <p className="lessons-panel-hint">Искали по: {terms.join(" · ")}</p>}
+      {results && places.length === 0 && <p className="lessons-panel-hint">Ничего не найдено.</p>}
+      {places.length > 0 && (
         <ul className="lessons-search-results">
-          {results.map((result) => (
-            <li key={`${result.block_id}-${result.page_from}`}>
-              <strong>{result.material_name} · {pagesLabel(result.page_from, result.page_to)}</strong>
-              {result.block_title && <span>{result.block_title}</span>}
-              <p>{result.text.slice(0, 220)}{result.text.length > 220 ? "…" : ""}</p>
+          {places.map((place) => (
+            <li key={place.key}>
+              <strong>{place.materialName} · стр. {place.pageNumber}</strong>
+              <p>{place.text.slice(0, 220)}{place.text.length > 220 ? "…" : ""}</p>
+              <span>{place.fragmentIds.length} совпад.</span>
               <Stage label="Добавить в урок" stage="2 — ручной редактор" />
             </li>
           ))}

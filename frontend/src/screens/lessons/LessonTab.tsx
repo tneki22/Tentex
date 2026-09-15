@@ -128,7 +128,7 @@ export function LessonTab({ projectId, node, preferredLessonId }: LessonTabProps
         {lesson.error
           ? <ErrorState message={lesson.error instanceof Error ? lesson.error.message : "Урок не загрузился"} />
           : lesson.data && lesson.data.id === current.id
-            ? <LessonDocument projectId={projectId} lesson={lesson.data} mode={mode} />
+            ? <LessonDocument projectId={projectId} lesson={lesson.data} mode={mode} hiddenHeading={node.title} />
             : <LoadingState label="Загружаем урок" />}
       </div>
     </div>

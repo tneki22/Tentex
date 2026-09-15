@@ -388,6 +388,7 @@ export function ProjectSettings() {
         <ProjectNav
           projectId={projectId}
           active="settings"
+          textbook={detail.project.workspace_variant === "textbook"}
           modules={detail.project.enabled_modules}
           className="project-side-nav"
         />
