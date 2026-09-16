@@ -6,13 +6,17 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.lessons import editing, service
+from app.lessons import bulk, editing, progress, service
 from app.lessons.schemas import (
     LessonBlockWrite,
+    LessonBulkResult,
+    LessonBulkWrite,
     LessonChangeResult,
+    LessonCompletionWrite,
     LessonConfirmWrite,
     LessonManualWrite,
     LessonNoteWrite,
+    LessonProgressWrite,
     LessonQuickWrite,
     LessonRead,
     LessonsOverviewRead,
@@ -49,6 +53,13 @@ def create_manual_lesson(
     project_id: UUID, command: LessonManualWrite, session: SessionDependency
 ) -> LessonChangeResult:
     return service.create_manual_lesson(session, project_id, command)
+
+
+@router.post("/bulk", response_model=LessonBulkResult, status_code=201)
+def create_bulk_lessons(
+    project_id: UUID, command: LessonBulkWrite, session: SessionDependency
+) -> LessonBulkResult:
+    return bulk.create_bulk_lessons(session, project_id, command)
 
 
 @router.post("/{lesson_id}/blocks", response_model=LessonChangeResult)
@@ -94,6 +105,20 @@ def confirm_lesson(
     project_id: UUID, lesson_id: UUID, command: LessonConfirmWrite, session: SessionDependency
 ) -> LessonChangeResult:
     return editing.confirm_lesson(session, project_id, lesson_id, command)
+
+
+@router.post("/{lesson_id}/progress", response_model=LessonChangeResult)
+def save_lesson_position(
+    project_id: UUID, lesson_id: UUID, command: LessonProgressWrite, session: SessionDependency
+) -> LessonChangeResult:
+    return progress.save_position(session, project_id, lesson_id, command)
+
+
+@router.post("/{lesson_id}/completion", response_model=LessonChangeResult)
+def set_lesson_completed(
+    project_id: UUID, lesson_id: UUID, command: LessonCompletionWrite, session: SessionDependency
+) -> LessonChangeResult:
+    return progress.set_completed(session, project_id, lesson_id, command)
 
 
 @router.post("/{lesson_id}/unbind", response_model=LessonChangeResult)

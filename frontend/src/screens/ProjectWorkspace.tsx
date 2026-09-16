@@ -75,6 +75,7 @@ import {
   Tooltip,
 } from "../components/ui";
 import type { ContextMenuItem } from "../components/ui";
+import { LessonHistoryTab } from "./lessons/LessonHistoryTab";
 import { LessonTab } from "./lessons/LessonTab";
 import { useBindings } from "../hooks/useBindings";
 import {
@@ -735,6 +736,9 @@ export function ProjectWorkspace() {
     }
     if (tab === "lesson" && textbook && selected) {
       return <LessonTab projectId={projectId} node={selected} preferredLessonId={preferredLesson} />;
+    }
+    if (tab === "history" && textbook && selected) {
+      return <LessonHistoryTab projectId={projectId} node={selected} />;
     }
     return renderTabStub(tab);
   }

@@ -1,7 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import { CheckCircle2, GraduationCap, PencilLine, Zap } from "lucide-react";
-import { createQuickLesson, LESSON_STATUS_LABELS, type LessonSummaryRead } from "../../api/lessons";
+import { CheckCircle2, GraduationCap, PencilLine, RotateCcw, Zap } from "lucide-react";
+import {
+  createQuickLesson,
+  LESSON_STATUS_LABELS,
+  saveLessonPosition,
+  setLessonCompleted,
+  type LessonRead,
+  type LessonSummaryRead,
+} from "../../api/lessons";
 import type { ProgramNodeRead } from "../../api/projects";
 import { LessonDocument } from "../../components/domain";
 import { Button, EmptyState, ErrorState, LoadingState, SegmentedTabs, Select, StatusBadge, Tooltip } from "../../components/ui";
@@ -61,6 +68,7 @@ export function LessonTab({ projectId, node, preferredLessonId }: LessonTabProps
   const selectedId = lessons.find((lesson) => lesson.id === choice)?.id ?? lessons[0]?.id ?? null;
   const lesson = useLesson(projectId, selectedId);
   const sectionLink = `/projects/${projectId}/lessons?topic=${node.id}`;
+  const progress = useLessonProgress(projectId, lesson.data);
 
   async function quickLesson() {
     setCreating(true);
@@ -122,15 +130,83 @@ export function LessonTab({ projectId, node, preferredLessonId }: LessonTabProps
         <Link className="secondary-button" to={`${sectionLink}&lesson=${current.id}`}>
           <PencilLine size={14} />{current.status === "draft" ? "Продолжить редактирование" : "Редактировать"}
         </Link>
-        <Tooltip label="Появится на этапе 3 — прохождение урока"><span><Button variant="ghost" disabled><CheckCircle2 size={15} />Урок пройден</Button></span></Tooltip>
+        {progress.completed
+          ? (
+            <Button variant="ghost" onClick={() => void progress.setCompleted(false)} disabled={progress.busy}>
+              <RotateCcw size={15} />Пройден · снять отметку
+            </Button>
+          )
+          : (
+            <Button variant="secondary" onClick={() => void progress.setCompleted(true)} disabled={progress.busy || !lesson.data}>
+              <CheckCircle2 size={15} />{progress.busy ? "Отмечаем…" : "Урок пройден"}
+            </Button>
+          )}
       </header>
+      {progress.error && <p className="inline-error" role="alert">{progress.error}</p>}
       <div className="lesson-tab-body">
         {lesson.error
           ? <ErrorState message={lesson.error instanceof Error ? lesson.error.message : "Урок не загрузился"} />
           : lesson.data && lesson.data.id === current.id
-            ? <LessonDocument projectId={projectId} lesson={lesson.data} mode={mode} hiddenHeading={node.title} />
+            ? (
+              <LessonDocument
+                projectId={projectId}
+                lesson={lesson.data}
+                mode={mode}
+                hiddenHeading={node.title}
+                startBlockId={progress.startBlockId}
+                onReadBlock={progress.onReadBlock}
+              />
+            )
             : <LoadingState label="Загружаем урок" />}
       </div>
     </div>
   );
+}
+
+/**
+ * Прохождение урока: позиция чтения и «Урок пройден».
+ *
+ * Позиция сохраняется не чаще раза в пять секунд и только при смене блока —
+ * прокрутка не должна бить в сервер на каждый кадр.
+ */
+function useLessonProgress(projectId: string, lesson: LessonRead | null) {
+  const [completedAt, setCompletedAt] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [startBlockId, setStartBlockId] = useState<string | null>(null);
+  const saved = useRef<{ lessonId: string; blockId: string; at: number } | null>(null);
+
+  const lessonId = lesson?.id ?? null;
+  useEffect(() => {
+    setCompletedAt(lesson?.completed_at ?? null);
+    setStartBlockId(lesson?.last_block_id ?? null);
+    setError("");
+  }, [lessonId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onReadBlock = useCallback((blockId: string) => {
+    if (!lessonId) return;
+    const previous = saved.current;
+    const now = Date.now();
+    if (previous && previous.lessonId === lessonId
+      && (previous.blockId === blockId || now - previous.at < 5000)) return;
+    saved.current = { lessonId, blockId, at: now };
+    // Позиция чтения — удобство: сорвавшийся запрос не стоит показывать ошибкой.
+    void saveLessonPosition(projectId, lessonId, blockId).catch(() => undefined);
+  }, [projectId, lessonId]);
+
+  async function setCompleted(completed: boolean) {
+    if (!lessonId) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await setLessonCompleted(projectId, lessonId, completed);
+      setCompletedAt(result.lesson.completed_at);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Не удалось отметить урок");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return { completed: Boolean(completedAt), busy, error, startBlockId, onReadBlock, setCompleted };
 }

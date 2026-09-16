@@ -102,6 +102,40 @@ def content_fragment_ids(order: MaterialOrder, bounds: Bounds) -> list[UUID]:
     return [item.id for item in order.fragments[covered[0] : covered[1] + 1] if item.is_content]
 
 
+def fragments_in_region(
+    session: Session, material: Material, page: int, region: list[float]
+) -> list[UUID]:
+    """Содержательные фрагменты, центр которых попал в выделенную область страницы.
+
+    Центр, а не пересечение: рамка, проведённая по схеме, почти всегда задевает края
+    соседних абзацев, и привязывать их к теме было бы неправдой.
+    """
+    if material.active_parse_revision <= 0:
+        return []
+    x0, y0, x1, y1 = region
+    rows = session.execute(
+        select(MaterialFragment.id, MaterialFragment.bbox)
+        .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+        .join(MaterialBlock, MaterialBlock.id == MaterialFragment.block_id)
+        .where(
+            MaterialPage.material_id == material.id,
+            MaterialPage.revision == material.active_parse_revision,
+            MaterialPage.page_number == page,
+            MaterialBlock.block_class == BlockClass.CONTENT,
+        )
+        .order_by(MaterialFragment.sort_order)
+    )
+    inside = []
+    for fragment_id, bbox in rows:
+        if not bbox or len(bbox) != 4:
+            continue
+        center_x = (bbox[0] + bbox[2]) / 2
+        center_y = (bbox[1] + bbox[3]) / 2
+        if x0 <= center_x <= x1 and y0 <= center_y <= y1:
+            inside.append(fragment_id)
+    return inside
+
+
 def bounds_of(ref: LessonSourceRef) -> Bounds:
     """Границы сохранённой ссылки в виде, с которым работают функции модуля."""
     return Bounds(ref.page_from, ref.page_to, ref.from_fragment_id, ref.to_fragment_id)
@@ -204,7 +238,8 @@ def shown_pages(session: Session, refs: list[LessonSourceRef]) -> dict[UUID, lis
     starts: dict[tuple[UUID, int], UUID] = {}
     any_owner: dict[tuple[UUID, int], UUID] = {}
     for ref in refs:
-        if ref.material_id is None:
+        # Область рисует свой вырез и лист целиком не занимает — иначе страница пропала бы.
+        if ref.material_id is None or ref.region_bbox is not None:
             continue
         starts_top = owns_page_start(session, ref)
         for page in range(ref.page_from, ref.page_to + 1):

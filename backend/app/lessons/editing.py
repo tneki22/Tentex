@@ -385,6 +385,13 @@ def _project_material(session: Session, project_id: UUID, material_id: UUID | No
     return material, link
 
 
+def _require_whole_piece(ref: LessonSourceRef) -> LessonSourceRef:
+    """Область страницы — картинка: резать, склеивать и показывать текстом её нечем."""
+    if ref.region_bbox is not None:
+        raise _invalid("Область страницы — картинка: её можно только удалить", "lesson_ref_region")
+    return ref
+
+
 def _node_for_page(edit: _Edit, material_id: UUID, page: int) -> UUID:
     """Урок по нескольким темам: кусок идёт к теме, чей диапазон содержит страницу (§4.4)."""
     topic_ids = edit.topic_ids()
@@ -401,7 +408,7 @@ def _node_for_page(edit: _Edit, material_id: UUID, page: int) -> UUID:
 
 def _create_source(
     edit: _Edit, material: Material, link: ProjectMaterial, bounds: Bounds, node_id: UUID,
-    origin: LessonBlockOrigin,
+    origin: LessonBlockOrigin, region_bbox: list[float] | None = None,
 ) -> LessonBlock:
     block = edit.new_block(LessonBlockKind.SOURCE, origin=origin, bound_program_node_id=node_id)
     edit.insert(block, edit.command.after_block_id)
@@ -412,7 +419,9 @@ def _create_source(
         material_revision=material.active_parse_revision or None,
         page_from=bounds.page_from, page_to=bounds.page_to,
         from_fragment_id=bounds.from_fragment_id, to_fragment_id=bounds.to_fragment_id,
-        always_pages=False, boundary_shifted=False,
+        region_bbox=region_bbox,
+        # Область — вырез оригинала: текстового представления у неё нет.
+        always_pages=region_bbox is not None, boundary_shifted=False,
     ))
     return block
 
@@ -438,6 +447,25 @@ def _add_page(edit: _Edit) -> None:
     if page_to < command.page_from or page_to > (material.page_count or 0):
         raise _invalid("Диапазон выходит за страницы материала", "lesson_page_range")
     _add_manual_bounds(edit, material, link, Bounds(command.page_from, page_to, None, None))
+
+
+def _add_region(edit: _Edit) -> None:
+    """Область страницы — схема или таблица, которой нет в текстовом слое (записка §4.3)."""
+    command = edit.command
+    material, link = _project_material(edit.session, edit.lesson.project_id, command.material_id)
+    page = command.page_from
+    if page is None or page > (material.page_count or 0):
+        raise _invalid("Область берётся с одной страницы материала", "lesson_page_range")
+    if command.region_bbox is None:
+        raise _invalid("Область не выделена", "lesson_region_required")
+    node_id = _node_for_page(edit, material.id, page)
+    _create_source(edit, material, link, Bounds(page, page, None, None), node_id,
+                   LessonBlockOrigin.MANUAL, region_bbox=command.region_bbox)
+    edit.binding_ids += _bind_fragments(
+        edit.session, edit.lesson.project_id, node_id, material.id,
+        refs_module.fragments_in_region(edit.session, material, page, command.region_bbox),
+        manual=True,
+    )
 
 
 def _fragment_page(session: Session, material: Material, fragment_id: UUID | None
@@ -544,7 +572,7 @@ def _move(edit: _Edit) -> None:
 def _split(edit: _Edit) -> None:
     session = edit.session
     block = edit.block(LessonBlockKind.SOURCE)
-    ref = _content_ref(session, block)
+    ref = _require_whole_piece(_content_ref(session, block))
     material = _ref_material(session, edit.lesson.project_id, ref)
     order = refs_module.load_order(session, material, ref.page_from, ref.page_to)
     first, second = refs_module.split(
@@ -576,7 +604,8 @@ def _merge(edit: _Edit) -> None:
     following = edit.blocks[index + 1] if index + 1 < len(edit.blocks) else None
     if following is None or following.kind != LessonBlockKind.SOURCE:
         raise _invalid("Следующий блок — не кусок материала", "lesson_merge_not_adjacent")
-    first_ref, second_ref = _content_ref(session, block), _content_ref(session, following)
+    first_ref = _require_whole_piece(_content_ref(session, block))
+    second_ref = _require_whole_piece(_content_ref(session, following))
     if first_ref.material_id != second_ref.material_id:
         raise _invalid("Склеить можно только куски одного материала", "lesson_merge_not_adjacent")
     if block.bound_program_node_id != following.bound_program_node_id:
@@ -597,9 +626,8 @@ def _merge(edit: _Edit) -> None:
 def _set_always_pages(edit: _Edit) -> None:
     if edit.command.always_pages is None:
         raise _invalid("Не указано, как показывать кусок", "lesson_always_pages_required")
-    _content_ref(edit.session, edit.block(LessonBlockKind.SOURCE)).always_pages = (
-        edit.command.always_pages
-    )
+    ref = _require_whole_piece(_content_ref(edit.session, edit.block(LessonBlockKind.SOURCE)))
+    ref.always_pages = edit.command.always_pages
 
 
 def _set_topic(edit: _Edit) -> None:
@@ -662,6 +690,7 @@ HANDLERS: dict[str, Callable[[_Edit], None]] = {
     "add_outline": _add_outline,
     "add_fragments": _add_fragments,
     "add_block": _add_structure_block,
+    "add_region": _add_region,
     "add_link": _add_link,
     "delete": _delete,
     "move_up": _move,

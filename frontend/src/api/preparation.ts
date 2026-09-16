@@ -112,6 +112,7 @@ export const activityLabels: Record<string, string> = {
   chat: "Чат",
   answer: "Ответ",
   manual: "Ручное занятие",
+  lesson: "Урок",
   day_start: "Начало дня",
   plan_change: "Изменение плана",
   understood: "Разобрался",

@@ -988,3 +988,100 @@
 
 .lesson-save-state.is-saved { color: var(--tone-success); }
 .lesson-save-state.is-failed { color: var(--tone-danger); }
+
+/* Выбор области страницы: рамка поверх растра, координаты — доли листа. */
+.lessons-region-picker {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.lessons-region-frame {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-strong);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.lessons-region-frame img {
+  display: block;
+  width: 100%;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.lessons-region-box {
+  position: absolute;
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  pointer-events: none;
+}
+
+/* Вырез страницы в уроке: картинка сдвинута внутри коробки с пропорциями области. */
+.page-region {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  min-height: 2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.page-region img {
+  position: absolute;
+  max-width: none;
+}
+
+.lessons-bulk-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-strong);
+  color: var(--ink);
+}
+
+/* «История» темы учебника: пока её ведут только отметки «Урок пройден». */
+.lesson-history {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  overflow-y: auto;
+}
+
+.lesson-history-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lesson-history-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-strong);
+}
+
+.lesson-history-list time {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.lesson-history-list span {
+  color: var(--faint);
+  font-size: var(--text-xs);
+}

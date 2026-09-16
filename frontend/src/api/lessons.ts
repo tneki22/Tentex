@@ -14,6 +14,7 @@ export interface LessonSummaryRead {
   duration_minutes: number | null;
   program_node_ids: string[];
   needs_review: boolean;
+  completed_at: string | null;
   updated_at: string;
 }
 
@@ -52,6 +53,7 @@ export interface LessonRefRead {
   page_to: number;
   from_fragment_id: string | null;
   to_fragment_id: string | null;
+  /** Вырез страницы `[x0, y0, x1, y1]` в долях листа; у обычного куска — `null`. */
   region_bbox: number[] | null;
   always_pages: boolean;
   is_available: boolean;
@@ -94,6 +96,9 @@ export interface LessonRead {
   duration_minutes: number | null;
   revision: number;
   needs_review: boolean;
+  /** Прохождение: где остановились и когда отметили «Урок пройден». */
+  last_block_id: string | null;
+  completed_at: string | null;
   /** Последнее действие журнала — создание этого урока: доступно «Отменить». */
   undo_sequence: number | null;
   topics: LessonTopicRead[];
@@ -153,6 +158,7 @@ export const createManualLesson = (projectId: string, nodeId: string): Promise<L
 
 export type LessonBlockOperation =
   | "add_note" | "add_page" | "add_outline" | "add_fragments" | "add_block" | "add_link"
+  | "add_region"
   | "delete" | "move_up" | "move_down" | "split" | "merge"
   | "set_topic" | "add_topic" | "remove_topic" | "set_always_pages";
 
@@ -176,6 +182,8 @@ export interface LessonBlockCommand {
   always_pages?: boolean;
   media_url?: string;
   caption?: string;
+  /** add_region — доля страницы `[x0, y0, x1, y1]`. */
+  region_bbox?: number[];
 }
 
 export const editLessonBlocks = (
@@ -217,6 +225,37 @@ export const unbindLessonBindings = (projectId: string, lessonId: string, bindin
   request(`${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/unbind`, {
     method: "POST", body: JSON.stringify({ binding_ids: bindingIds }),
   });
+
+export type LessonBulkAction = "quick" | "manual";
+
+export interface LessonBulkResult {
+  lessons: LessonSummaryRead[];
+  latest_undoable_action: LatestUndoableAction | null;
+}
+
+/** Массовая подготовка: «пропустить» не присылается, всё остальное — одной транзакцией. */
+export const createBulkLessons = (
+  projectId: string,
+  items: Array<{ program_node_id: string; action: LessonBulkAction }>,
+): Promise<LessonBulkResult> => request(`${lessonsPath(projectId)}/bulk`, {
+  method: "POST", body: JSON.stringify({ items }),
+});
+
+/** Позиция чтения: ни ревизии, ни записи в журнал проекта. */
+export const saveLessonPosition = (
+  projectId: string, lessonId: string, lastBlockId: string | null,
+): Promise<LessonChangeResult> => request(
+  `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/progress`,
+  { method: "POST", body: JSON.stringify({ last_block_id: lastBlockId }) },
+);
+
+/** «Урок пройден» — отметка и запись занятия в «Историю»; снятие убирает обе. */
+export const setLessonCompleted = (
+  projectId: string, lessonId: string, completed: boolean,
+): Promise<LessonChangeResult> => request(
+  `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/completion`,
+  { method: "POST", body: JSON.stringify({ completed }) },
+);
 
 export const updateLesson = (
   projectId: string,

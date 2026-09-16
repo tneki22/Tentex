@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { AlertTriangle, BookOpen, ExternalLink, FileText, Scissors } from "lucide-react";
 import { lessonMediaUrl, type LessonBlockRead, type LessonRead, type LessonRefRead } from "../../../api/lessons";
@@ -9,7 +9,7 @@ import {
   type MaterialPageRead,
 } from "../../../api/materials";
 import { ErrorState } from "../../ui";
-import { StructuredPage } from "../material-viewer";
+import { PageRegion, StructuredPage } from "../material-viewer";
 import { QualityBadge } from "../QualityBadge";
 import { LessonMarkdown } from "./LessonMarkdown";
 
@@ -30,6 +30,9 @@ interface LessonDocumentProps {
   /** Кусок, в котором сейчас выбирают место разреза. */
   splitBlockId?: string | null;
   onSplit?: (blockId: string, point: LessonSplitPoint) => void;
+  /** Позиция чтения: куда прокрутить при открытии и кому сообщать о новой. */
+  startBlockId?: string | null;
+  onReadBlock?: (blockId: string) => void;
 }
 
 function pageRange(ref: LessonRefRead): number[] {
@@ -44,12 +47,14 @@ function pageRange(ref: LessonRefRead): number[] {
  * фрагменты активной ревизии с отсечением по граничным фрагментам; служебные
  * блоки скрыты.
  */
-export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selectedBlockId, onSelectBlock, renderNoteEditor, splitBlockId, onSplit }: LessonDocumentProps) {
+export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selectedBlockId, onSelectBlock, renderNoteEditor, splitBlockId, onSplit, startBlockId, onReadBlock }: LessonDocumentProps) {
   const topicTitles = useMemo(
     () => new Map(lesson.topics.map((topic) => [topic.program_node_id, topic.current_title ?? topic.title_snapshot])),
     [lesson.topics],
   );
   const multiTopic = lesson.topics.length > 1;
+  const blockRefs = useRef(new Map<string, HTMLElement>());
+  useReadingPosition(lesson.id, blockRefs, startBlockId, onReadBlock);
 
   if (lesson.blocks.length === 0) {
     return <p className="lesson-document-empty">В уроке пока нет блоков.</p>;
@@ -58,7 +63,15 @@ export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selecte
   return (
     <div className={`lesson-document is-${mode}`}>
       {lesson.blocks.map((block) => (
-        <section key={block.id} className={`lesson-edit-block${selectedBlockId === block.id ? " is-selected" : ""}`}>
+        <section
+          key={block.id}
+          data-block-id={block.id}
+          ref={(node) => {
+            if (node) blockRefs.current.set(block.id, node);
+            else blockRefs.current.delete(block.id);
+          }}
+          className={`lesson-edit-block${selectedBlockId === block.id ? " is-selected" : ""}`}
+        >
           {onSelectBlock && <button type="button" className="lesson-block-select" onClick={() => onSelectBlock(block.id)}>
             Выбрать блок {block.sort_order + 1}
           </button>}
@@ -78,6 +91,51 @@ export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selecte
       ))}
     </div>
   );
+}
+
+/**
+ * Позиция чтения: открыть урок там, где остановились, и сообщать о новом месте.
+ *
+ * Верхний видимый блок, а не прокрутка в пикселях: страницы и текст дают разную
+ * высоту, а блок — то же место в обоих режимах.
+ */
+function useReadingPosition(
+  lessonId: string,
+  blocks: { current: Map<string, HTMLElement> },
+  startBlockId: string | null | undefined,
+  onReadBlock: ((blockId: string) => void) | undefined,
+) {
+  const restored = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!startBlockId || restored.current === lessonId) return;
+    const node = blocks.current.get(startBlockId);
+    if (!node) return;
+    restored.current = lessonId;
+    node.scrollIntoView({ block: "start" });
+  }, [lessonId, startBlockId, blocks]);
+
+  useEffect(() => {
+    if (!onReadBlock || typeof IntersectionObserver === "undefined") return;
+    const visible = new Set<string>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const id = (entry.target as HTMLElement).dataset.blockId;
+          if (!id) continue;
+          if (entry.isIntersecting) visible.add(id);
+          else visible.delete(id);
+        }
+        const first = [...blocks.current.keys()].find((id) => visible.has(id));
+        if (first) onReadBlock(first);
+      },
+      // Узкая полоса посреди экрана промахивается по коротким блокам: берём весь экран,
+      // а текущим считаем первый по порядку урока видимый блок.
+      { threshold: 0 },
+    );
+    for (const node of blocks.current.values()) observer.observe(node);
+    return () => observer.disconnect();
+  }, [lessonId, onReadBlock, blocks]);
 }
 
 interface LessonBlockViewProps {
@@ -162,7 +220,7 @@ function LessonSourceView({ projectId, sourceRef: ref, mode, topicTitle, onSplit
       <span>{refLabel(ref)}</span>
       {ref.from_fragment_id && <small>с абзаца</small>}
       {ref.to_fragment_id && <small>до абзаца</small>}
-      {ref.always_pages && <small>всегда страницами</small>}
+      {ref.region_bbox ? <small>область страницы</small> : ref.always_pages && <small>всегда страницами</small>}
       {topicTitle && <small className="lesson-source-topic">тема: {topicTitle}</small>}
       {ref.boundary_shifted && <small className="lesson-source-shifted"><AlertTriangle size={12} aria-hidden="true" /> Разрез сдвинут</small>}
     </header>
@@ -173,6 +231,20 @@ function LessonSourceView({ projectId, sourceRef: ref, mode, topicTitle, onSplit
       <section className="lesson-source is-unavailable">
         {head}
         <p className="lesson-source-notice"><AlertTriangle size={14} aria-hidden="true" /> Источник недоступен: материал убран из проекта. Остались имя и страницы.</p>
+      </section>
+    );
+  }
+
+  if (ref.region_bbox) {
+    return (
+      <section className="lesson-source is-region">
+        {head}
+        <PageRegion
+          className="lesson-region"
+          pageUrl={materialPageImageUrl(projectId, materialId, ref.page_from)}
+          bbox={ref.region_bbox}
+          alt={`${ref.source_name}, область страницы ${ref.page_from}`}
+        />
       </section>
     );
   }
@@ -202,6 +274,11 @@ function LessonSourceView({ projectId, sourceRef: ref, mode, topicTitle, onSplit
           </div>
         ))}
         {pages.length === 0 && <p className="lesson-source-notice">Страница {ref.page_from} показана выше.</p>}
+        {onSplit && !pages.some((page) => page < ref.page_to) && (
+          <p className="lesson-source-notice">
+            <Scissors size={14} aria-hidden="true" /> Между страницами этого куска резать нечего — переключитесь на «Текст» и разрежьте после нужного абзаца.
+          </p>
+        )}
       </section>
     );
   }
@@ -267,10 +344,16 @@ function LessonSourceText({ projectId, materialId, sourceRef: ref, onSplit }: { 
 
   if (error) return <ErrorState message={error} />;
   if (!pages) return <p className="lesson-source-notice">Загружаем текст…</p>;
-  const lastFragmentId = visible.flatMap((item) => item.fragments).at(-1)?.id;
+  const shownFragments = visible.flatMap((item) => item.fragments);
+  const lastFragmentId = shownFragments.at(-1)?.id;
 
   return (
     <>
+      {onSplit && shownFragments.length < 2 && (
+        <p className="lesson-source-notice">
+          <Scissors size={14} aria-hidden="true" /> В куске один абзац — разрезать нечего.
+        </p>
+      )}
       {visible.map(({ page, fragments }) => {
         if (fragments.length === 0) return null;
         const lowQuality = page.quality === "ocr_low";

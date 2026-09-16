@@ -178,7 +178,8 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
 
   const edit = (command: Omit<LessonBlockCommand, "expected_revision">) => data && run(async () => {
     const result = await editLessonBlocks(projectId, data.id, { ...command, expected_revision: revisionRef.current });
-    if (command.operation === "delete" || command.operation === "merge") onSelectBlock(null);
+    // Склейка оставляет тот же блок — снимать с него выбор незачем; удалённого блока уже нет.
+    if (command.operation === "delete") onSelectBlock(null);
     return result;
   }, "Блок не изменился");
 

@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { ChevronLeft, ChevronRight, Plus, Search, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { ChevronLeft, ChevronRight, Crop, Plus, Search, Sparkles } from "lucide-react";
 import { getTopicSources, SOURCE_ROLE_LABELS, type LessonBlockCommand, type LessonSourceRangeRead } from "../../api/lessons";
 import { getMaterialPage, listMaterials, materialPageImageUrl, type MaterialPageRead, type MaterialRead } from "../../api/materials";
 import { searchProjectMaterials, type SearchResultRead } from "../../api/search";
 import { QualityBadge } from "../../components/domain";
-import { Button, EmptyState, ErrorState, IconButton, LoadingState, SegmentedTabs, Select, StatusBadge, Tooltip } from "../../components/ui";
+import { Button, EmptyState, ErrorState, IconButton, LoadingState, SegmentedTabs, Select, StatusBadge } from "../../components/ui";
 import type { ProgramTreeNode } from "../programTree";
 import { toSourcePlaces } from "../workspace/sourcePlaces";
 import { renderSearchHighlights } from "../workspace/searchHighlights";
@@ -31,14 +31,6 @@ interface LessonMaterialPanelProps {
   /** `${materialId}#${page}` страниц открытого урока: уже добавленное помечается «в уроке». */
   lessonPages: Set<string>;
   onAdd(command: Omit<LessonBlockCommand, "expected_revision">): void;
-}
-
-function Stage({ label, stage }: { label: string; stage: string }) {
-  return (
-    <Tooltip label={`Появится на этапе ${stage}`} side="left">
-      <span><Button variant="ghost" disabled><Plus size={14} />{label}</Button></span>
-    </Tooltip>
-  );
 }
 
 /** Правая панель «Материал для урока»: четыре вкладки (записка §2). */
@@ -114,7 +106,7 @@ function PagesTab({ projectId, busy, lessonId, lessonPages, onAdd }: { projectId
   const [materials, setMaterials] = useState<MaterialRead[] | null>(null);
   const [materialId, setMaterialId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
-  const [view, setView] = useState<"original" | "fragments">("original");
+  const [view, setView] = useState<PageView>("original");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -155,19 +147,91 @@ function PagesTab({ projectId, busy, lessonId, lessonPages, onAdd }: { projectId
       <div className="lessons-outline-actions">
         <Button variant="ghost" disabled={!lessonId || busy} onClick={() => onAdd({ operation: "add_page", material_id: material.id, page_from: page })}><Plus size={14} />Добавить страницу</Button>
         {view === "original" && <Button variant="ghost" onClick={() => setView("fragments")}>Выбрать абзацы или блок…</Button>}
-        <Stage label="Добавить область" stage="3 — массовая подготовка" />
       </div>
       {view === "fragments" && (
         <FragmentPicker key={`${material.id}#${page}`} projectId={projectId} materialId={material.id} page={page} busy={busy} lessonId={lessonId} onAdd={onAdd} />
+      )}
+      {view === "region" && (
+        <RegionPicker key={`${material.id}#${page}`} projectId={projectId} material={material} page={page} busy={busy} lessonId={lessonId} onAdd={onAdd} />
       )}
     </div>
   );
 }
 
-const PAGE_VIEW_TABS: Array<{ value: "original" | "fragments"; label: string }> = [
+type PageView = "original" | "fragments" | "region";
+
+const PAGE_VIEW_TABS: Array<{ value: PageView; label: string }> = [
   { value: "original", label: "Оригинал" },
   { value: "fragments", label: "Абзацы" },
+  { value: "region", label: "Область" },
 ];
+
+/**
+ * Выбор области страницы рамкой: схема или таблица, которой нет в текстовом слое.
+ *
+ * Координаты хранятся долями листа, как `bbox` фрагмента, поэтому рамка не зависит
+ * от масштаба картинки в панели.
+ */
+function RegionPicker({ projectId, material, page, busy, lessonId, onAdd }: { projectId: string; material: MaterialRead; page: number; busy: boolean; lessonId: string | null; onAdd: LessonMaterialPanelProps["onAdd"] }) {
+  // Якорь рамки — ref, а не состояние: первый `pointermove` приходит до перерисовки.
+  const start = useRef<[number, number] | null>(null);
+  const [box, setBox] = useState<number[] | null>(null);
+
+  function pointAt(event: ReactPointerEvent<HTMLDivElement>): [number, number] {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return [
+      Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width)),
+      Math.min(1, Math.max(0, (event.clientY - bounds.top) / bounds.height)),
+    ];
+  }
+
+  function stretchTo(event: ReactPointerEvent<HTMLDivElement>) {
+    const from = start.current;
+    if (!from) return;
+    const [x, y] = pointAt(event);
+    setBox([
+      Math.min(from[0], x), Math.min(from[1], y),
+      Math.max(from[0], x), Math.max(from[1], y),
+    ]);
+  }
+
+  // Рамка тоньше 2 % листа — это промах мимо картинки, а не выделение.
+  const usable = box !== null && box[2] - box[0] > 0.02 && box[3] - box[1] > 0.02;
+  const overlay = box && {
+    left: `${box[0] * 100}%`, top: `${box[1] * 100}%`,
+    width: `${(box[2] - box[0]) * 100}%`, height: `${(box[3] - box[1]) * 100}%`,
+  };
+
+  return (
+    <div className="lessons-region-picker">
+      <p className="lessons-panel-hint">Обведите схему или таблицу. В уроке область встанет вырезом страницы; абзацы внутри рамки привяжутся к теме.</p>
+      <div
+        className="lessons-region-frame"
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          start.current = pointAt(event);
+          stretchTo(event);
+        }}
+        onPointerMove={stretchTo}
+        onPointerUp={(event) => {
+          stretchTo(event);
+          start.current = null;
+        }}
+        onPointerCancel={() => { start.current = null; }}
+      >
+        <img src={materialPageImageUrl(projectId, material.id, page)} alt={`${material.original_name}, страница ${page}`} draggable={false} />
+        {overlay && <span className="lessons-region-box" style={overlay} />}
+      </div>
+      <div className="lessons-outline-actions">
+        <Button variant="secondary" disabled={!lessonId || busy || !usable}
+          onClick={() => { if (box) { onAdd({ operation: "add_region", material_id: material.id, page_from: page, region_bbox: box }); setBox(null); } }}>
+          <Crop size={14} />Добавить область
+        </Button>
+        <Button variant="ghost" disabled={!box} onClick={() => setBox(null)}>Сбросить рамку</Button>
+      </div>
+    </div>
+  );
+}
 
 /**
  * Выбор абзацев страницы: первый щелчок отмечает абзац, следующий расширяет

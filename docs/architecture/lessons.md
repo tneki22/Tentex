@@ -1,8 +1,8 @@
 # Уроки — фактический контракт
 
-Реализованы этап 1 и этап 2 (итерации 2.1 и 2.2) вертикали «Уроки» (15.09.2026). Модель и
-решения — `TEXTBOOK_MODE.md` §8 и `docs/superpowers/plans/2026-09-14-lessons-vertical.md`; здесь
-только то, что работает в коде.
+Реализованы этапы 1–3 вертикали «Уроки» (этап 2 — итерации 2.1 и 2.2, 15.09.2026; этап 3 —
+16.09.2026). Модель и решения — `TEXTBOOK_MODE.md` §8 и
+`docs/superpowers/plans/2026-09-14-lessons-vertical.md`; здесь только то, что работает в коде.
 
 ## Хранение
 
@@ -15,6 +15,9 @@
 | `lesson_topics` | темы урока со снимком формулировки; составной FK на `program_nodes(project_id, id)` | каскад от урока и узла |
 | `lesson_blocks` | порядок, вид `source · note · media · activity`, `variant`, `body_md`, происхождение, основание, `ai_run_id`, `activity_id`, `media_path`, `bound_program_node_id` | каскад от урока |
 | `lesson_source_refs` | роль `content · support`, материал, снимок имени, ревизия, `page_from/to`, `from/to_fragment_id`, `region_bbox`, `always_pages`, `boundary_shifted` | каскад от блока; материал и фрагменты — `SET NULL` |
+
+Этап 3 миграции не потребовал: `last_block_id`, `completed_at` и `region_bbox` заведены
+миграцией `0047` вместе с таблицами.
 
 `BindingMechanism` дополнен `lesson` и `outline` в конце перечисления (CHECK в том же порядке).
 
@@ -33,12 +36,15 @@
 | GET | `/sources?program_node_id=` | Диапазоны темы по источникам проекта: роль, приоритет, `outline_page_from/to`, уточнённые `page_from/to`, `starts_at_heading`, `ends_mid_page`, `is_parsed`, `default_selected` (справочный — `false`) |
 | POST | `/quick` `{program_node_id, material_ids?}` | 201. Без `material_ids` — первый источник по роли и приоритету; со списком — «Из источников». 409 `lesson_no_ranges`, 422 `lesson_source_without_range`, 422 `lesson_requires_study_node` |
 | POST | `/manual` `{program_node_id}` | 201: пустой черновик по теме, включая тему без оглавления; одна запись `lesson_create` |
+| POST | `/bulk` `{items:[{program_node_id, action}]}` | 201 (`app/lessons/bulk.py`): черновики по списку тем одной транзакцией, `action` — `quick` или `manual` («пропустить» не присылается). Ответ — `{lessons[], latest_undoable_action}`; одна запись `lesson_bulk_create`. 422 `lesson_bulk_duplicate`; 409 `lesson_no_ranges` с `program_node_id` в контексте — тогда не создаётся ничего |
 | GET | `/{lesson_id}` | Урок с темами, блоками и ссылками (см. «Чтение») |
 | PATCH | `/{lesson_id}` `{title?, status?, expected_revision}` | Ревизия +1; 409 `stale_lesson_revision`. В журнал не пишется |
 | POST | `/{lesson_id}/blocks` | Структурное действие `{expected_revision, operation, …}` — таблица ниже. Одна запись `lesson_blocks` |
 | PATCH | `/{lesson_id}/blocks/{block_id}` | `{expected_revision, body_md, variant?}`: текст `note` или подпись `media` без журнала, ревизия +1; 422 `lesson_not_note` |
 | POST | `/{lesson_id}/media` (multipart) | `file`, `expected_revision`, `after_block_id?`, `caption?`: изображение PNG/JPG/WEBP/GIF до 20 МБ → `media`-блок, запись `lesson_blocks`; 422 `lesson_image_unsupported` |
 | GET | `/{lesson_id}/media/{block_id}` | Файл изображения блока; 404, если блок не изображение |
+| POST | `/{lesson_id}/progress` `{last_block_id}` | Позиция чтения (`app/lessons/progress.py`): без ревизии и без журнала. 422 `lesson_block_foreign` |
+| POST | `/{lesson_id}/completion` `{completed}` | «Урок пройден»: `completed_at` и одна запись `StudyActivity` вида `lesson`; `false` убирает обе |
 | POST | `/{lesson_id}/confirm` `{expected_revision}` | «Подтвердить»: снимки живых тем обновляются, тема вне программы уходит из урока, если остаются другие; `boundary_shifted` снимается. Без журнала |
 | POST | `/{lesson_id}/unbind` `{binding_ids}` | Снимает (`removed`) только активные привязки урока (`lesson`/`outline`) из списка; одна запись `lesson_unbind`, отмена возвращает прежние статусы; 422 `lesson_unbind_empty` |
 
@@ -55,6 +61,7 @@
 | `add_outline` | `material_id`, `program_node_id?` | Уточнённый диапазон оглавления темы урока; `machine/outline` по правилу быстрого урока |
 | `add_fragments` | `material_id`, `from_fragment_id`, `to_fragment_id` | Отрезок фрагментов активной ревизии (порядок краёв не важен); `manual/lesson` только на выбранное. 422 `lesson_fragment_not_found` |
 | `add_block` | `material_id`, `fragment_id` | Структурный блок материала, которому принадлежит фрагмент, — со всех его страниц |
+| `add_region` | `material_id`, `page_from`, `region_bbox` | Область одной страницы долями листа `[x0, y0, x1, y1]`: ссылка с `region_bbox` и `always_pages = true`; `manual/lesson` на содержательные фрагменты, **центр** которых внутри рамки. 422 `lesson_page_range`, `lesson_region_required` |
 | `add_link` | `media_url`, `caption?` | Карточка внешней ссылки без предпросмотра; 422 `lesson_media_url` для не-http(s) |
 | `move_up` · `move_down` | `block_id` | Перестановка; 422 `lesson_block_edge` |
 | `delete` | `block_id` | Удаление; привязки не снимаются, в ответе `unbind_offer` |
@@ -66,6 +73,7 @@
 | `set_topic` | `block_id`, `program_node_id` | Тема куска: новые привязки по происхождению (`outline` → `machine/outline`, иначе `manual/lesson`), для прежней темы — `unbind_offer` |
 
 `add_image` в этой ручке отклоняется (`lesson_block_operation`): изображение идёт через `/media`.
+Кусок-область — картинка: `split`, `merge` и `set_always_pages` отвечают 422 `lesson_ref_region`.
 
 ## Быстрый урок
 
@@ -149,11 +157,25 @@
   куска и предложение снять привязки. `LessonMaterialPanel.tsx` — «Страницы» с выбором
   абзацев («Добавить выделенное», «Добавить блок») и «Поиск» с «Страницу / Найденные абзацы /
   Блок»; страницы открытого урока помечены «в уроке».
+- `screens/lessons/LessonBulkTable.tsx` — массовая подготовка: умолчание «пропустить» для темы
+  с любым уроком, «Создать по порядку» возвращает умолчания, после создания рядом встаёт
+  «Создано черновиков: N · Открыть первый · Отменить», и повторное нажатие «Создать» закрыто,
+  пока план не изменили.
+- `screens/lessons/LessonHistoryTab.tsx` — «История» темы учебника: пройденные уроки с датой.
+  Лента «Моей подготовки» доступна только экзамену (`preparation_exam_only`), поэтому
+  учебниковую часть журнала показывает эта вкладка.
+- `components/domain/material-viewer/PageRegion.tsx` — вырез страницы: полноразмерный растр
+  сдвигается внутри коробки, пропорции берутся у загруженной картинки.
+- Позиция чтения — `IntersectionObserver` над блоками урока: текущим считается первый видимый
+  блок, запись уходит не чаще раза в пять секунд и только при смене блока; ошибка сохранения
+  не показывается — это удобство, а не правка.
 - `useLessonViewMode` — режим показа в `localStorage` по проекту; ширины колонок раздела и
   выбор урока темы во вкладке — тоже `localStorage`, только настройки показа.
 
-## Открыто после этапа 2
+## Открыто после этапа 3
 
-Пометка «стр. N общая со следующей темой» не хранится (нет поля). Область страницы (`region_bbox`), массовая подготовка и
-прохождение — этап 3. Перенос границ при правке OCR проверен тестом, живьём на реальном
-материале — нет.
+Пометка «стр. N общая со следующей темой» не хранится (нет поля). Перенос границ при правке OCR
+проверен тестом, живьём на реальном материале — нет. Запись `StudyActivity` вида `lesson`
+пишется в общий журнал, но лента «Моей подготовки» её не покажет, пока подготовка доступна
+только экзаменационному проекту, — учебниковый вид журнала ведёт вкладка «История» темы.
+Время занятия не считается: `seconds = 0`, таймер придёт с вертикалью «Занятия».

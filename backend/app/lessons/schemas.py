@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from app.models import (
     LessonBasis,
@@ -27,6 +27,7 @@ class LessonSummaryRead(ApiModel):
     duration_minutes: int | None
     program_node_ids: list[UUID]
     needs_review: bool
+    completed_at: datetime | None
     updated_at: datetime
 
 
@@ -66,8 +67,30 @@ class LessonManualWrite(ApiModel):
     program_node_id: UUID
 
 
+class LessonBulkItem(ApiModel):
+    """Строка таблицы массовой подготовки; «пропустить» просто не присылается."""
+
+    program_node_id: UUID
+    action: Literal["quick", "manual"]
+
+
+class LessonBulkWrite(ApiModel):
+    items: list[LessonBulkItem] = Field(min_length=1, max_length=500)
+
+
+class LessonProgressWrite(ApiModel):
+    """Позиция чтения: блок урока или `null`, если читать начали сначала."""
+
+    last_block_id: UUID | None = None
+
+
+class LessonCompletionWrite(ApiModel):
+    completed: bool = True
+
+
 LessonBlockOperation = Literal[
     "add_note", "add_page", "add_outline", "add_fragments", "add_block", "add_link", "add_image",
+    "add_region",
     "delete", "move_up", "move_down", "split", "merge",
     "set_topic", "add_topic", "remove_topic", "set_always_pages",
 ]
@@ -94,6 +117,19 @@ class LessonBlockWrite(ApiModel):
     always_pages: bool | None = None
     media_url: str | None = Field(default=None, max_length=2000)
     caption: str | None = Field(default=None, max_length=2000)
+    # add_region — доля страницы `[x0, y0, x1, y1]` в тех же координатах, что bbox фрагмента.
+    region_bbox: list[float] | None = None
+
+    @field_validator("region_bbox")
+    @classmethod
+    def _valid_region(cls, value: list[float] | None) -> list[float] | None:
+        if value is None:
+            return None
+        if len(value) != 4 or any(not 0.0 <= number <= 1.0 for number in value):
+            raise ValueError("Область задаётся четырьмя долями страницы от 0 до 1")
+        if value[0] >= value[2] or value[1] >= value[3]:
+            raise ValueError("Область должна быть непустым прямоугольником")
+        return value
 
 
 class LessonUnbindWrite(ApiModel):
@@ -171,6 +207,9 @@ class LessonRead(ApiModel):
     duration_minutes: int | None
     revision: int
     needs_review: bool
+    # Прохождение: где остановились и когда урок отметили пройденным.
+    last_block_id: UUID | None
+    completed_at: datetime | None
     # Последнее действие журнала — создание именно этого урока: «Отменить» доступно.
     undo_sequence: int | None
     topics: list[LessonTopicRead]
@@ -185,6 +224,13 @@ class LessonUnbindOffer(ApiModel):
     program_node_id: UUID
     topic_title: str
     binding_ids: list[UUID]
+
+
+class LessonBulkResult(ApiModel):
+    """Результат массовой подготовки: созданные уроки и одна общая отмена."""
+
+    lessons: list[LessonSummaryRead]
+    latest_undoable_action: LatestUndoableAction | None
 
 
 class LessonChangeResult(ApiModel):

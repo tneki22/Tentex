@@ -7,6 +7,7 @@
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 from uuid import UUID, uuid4
 
@@ -71,6 +72,7 @@ ROLE_ORDER = {SourceRole.MAIN: 0, SourceRole.ADDITIONAL: 1, SourceRole.REFERENCE
 ACTION_LESSON_CREATE = "lesson_create"
 ACTION_LESSON_BLOCKS = "lesson_blocks"
 ACTION_LESSON_UNBIND = "lesson_unbind"
+ACTION_LESSON_BULK = "lesson_bulk_create"
 LESSON_ACTIONS = {ACTION_LESSON_CREATE, ACTION_LESSON_BLOCKS, ACTION_LESSON_UNBIND}
 SECTION_NUMBER_RE = re.compile(r"^\s*(?:§\s*)?\d+(?:\.\d+)*\.?\s+")
 
@@ -433,6 +435,8 @@ def _lesson_read(session: Session, lesson: Lesson) -> LessonRead:
         duration_minutes=lesson.duration_minutes,
         revision=lesson.revision,
         needs_review=any(topic.needs_review for topic in topics),
+        last_block_id=lesson.last_block_id,
+        completed_at=lesson.completed_at,
         undo_sequence=undo_sequence,
         topics=topics,
         blocks=[
@@ -508,6 +512,7 @@ def lessons_overview(session: Session, project_id: UUID) -> LessonsOverviewRead:
                 duration_minutes=lesson.duration_minutes,
                 program_node_ids=[topic.program_node_id for topic in topics_by_lesson[lesson.id]],
                 needs_review=any(needs_review(topic) for topic in topics_by_lesson[lesson.id]),
+                completed_at=lesson.completed_at,
                 updated_at=lesson.updated_at,
             )
             for lesson in lessons
@@ -613,6 +618,132 @@ def _heading_markdown(title: str, depth: int) -> str:
     return f"{'#' * min(6, depth + 2)} {title}"
 
 
+def new_lesson(
+    session: Session, project_id: UUID, node: ProgramNode, now: datetime
+) -> Lesson:
+    """Пустой черновик по одной теме со снимком её формулировки."""
+    lesson = Lesson(
+        id=uuid4(),
+        project_id=project_id,
+        title=node.title,
+        status=LessonStatus.DRAFT,
+        revision=1,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(lesson)
+    session.add(
+        LessonTopic(
+            lesson_id=lesson.id,
+            program_node_id=node.id,
+            project_id=project_id,
+            sort_order=0,
+            topic_title_snapshot=node.title,
+        )
+    )
+    session.flush()
+    return lesson
+
+
+def quick_sources(
+    session: Session, program: _Program, node: ProgramNode, material_ids: list[UUID] | None
+) -> list[tuple[Material, ProjectMaterial]]:
+    """Источники быстрого урока: первый по роли и приоритету либо выбранные вручную."""
+    sources = _topic_sources(session, program, node)
+    if not sources:
+        raise ProjectConflictError(
+            "У темы нет страниц из оглавления — соберите урок вручную",
+            code="lesson_no_ranges",
+            context={"program_node_id": str(node.id), "title": node.title},
+        )
+    if material_ids is None:
+        return sources[:1]
+    wanted = set(material_ids)
+    unknown = wanted - {material.id for material, _ in sources}
+    if unknown or not wanted:
+        raise ProjectDomainError(
+            "У темы нет диапазона в выбранном источнике",
+            status=422,
+            code="lesson_source_without_range",
+        )
+    return [pair for pair in sources if pair[0].id in wanted]
+
+
+def fill_quick_lesson(
+    session: Session,
+    program: _Program,
+    node: ProgramNode,
+    sources: list[tuple[Material, ProjectMaterial]],
+    lesson: Lesson,
+    now: datetime,
+) -> list[UUID]:
+    """Блоки быстрого урока по плану каждого источника; возвращает созданные привязки."""
+    project_id = lesson.project_id
+    topic_depth = program.ordered[program.index_of(node.id)][1]
+    order = 0
+
+    def add_block(**fields: object) -> LessonBlock:
+        nonlocal order
+        block = LessonBlock(
+            id=uuid4(),
+            lesson_id=lesson.id,
+            sort_order=order,
+            origin=LessonBlockOrigin.OUTLINE,
+            created_at=now,
+            updated_at=now,
+            **fields,
+        )
+        order += 1
+        session.add(block)
+        return block
+
+    add_block(
+        kind=LessonBlockKind.NOTE,
+        variant=LessonNoteVariant.HEADING,
+        body_md=_heading_markdown(node.title, 0),
+    )
+    created_bindings: list[UUID] = []
+    characters = 0
+    for material, link in sources:
+        plan = _plan_source(session, program, node, material, link)
+        for piece in plan.pieces:
+            if piece.heading is not None:
+                add_block(
+                    kind=LessonBlockKind.NOTE,
+                    variant=LessonNoteVariant.HEADING,
+                    body_md=_heading_markdown(
+                        piece.heading.title, piece.heading.depth - topic_depth
+                    ),
+                    bound_program_node_id=piece.heading.node_id,
+                )
+            if piece.segment is None:
+                continue
+            block = add_block(kind=LessonBlockKind.SOURCE, bound_program_node_id=node.id)
+            session.flush()
+            session.add(
+                LessonSourceRef(
+                    id=uuid4(),
+                    block_id=block.id,
+                    role=LessonRefRole.CONTENT,
+                    material_id=material.id,
+                    source_name_snapshot=_source_name(material, link, material.original_name),
+                    material_revision=material.active_parse_revision or None,
+                    page_from=piece.segment.page_from,
+                    page_to=piece.segment.page_to,
+                    from_fragment_id=piece.segment.from_fragment_id,
+                    to_fragment_id=piece.segment.to_fragment_id,
+                    always_pages=False,
+                )
+            )
+            ids, segment_characters = _bind_segment_fragments(
+                session, project_id, node.id, plan, piece.segment
+            )
+            created_bindings.extend(ids)
+            characters += segment_characters
+    lesson.duration_minutes = boundaries.estimate_minutes(characters)
+    return created_bindings
+
+
 def create_quick_lesson(
     session: Session, project_id: UUID, command: LessonQuickWrite
 ) -> LessonChangeResult:
@@ -620,108 +751,10 @@ def create_quick_lesson(
         project = _require_lessons_project(session, project_id, writable=True)
         node = _require_study_node(session, project_id, command.program_node_id)
         program = _load_program(session, project_id)
-        sources = _topic_sources(session, program, node)
-        if not sources:
-            raise ProjectConflictError(
-                "У темы нет страниц из оглавления — соберите урок вручную",
-                code="lesson_no_ranges",
-            )
-        if command.material_ids is None:
-            sources = sources[:1]
-        else:
-            wanted = set(command.material_ids)
-            unknown = wanted - {material.id for material, _ in sources}
-            if unknown or not wanted:
-                raise ProjectDomainError(
-                    "У темы нет диапазона в выбранном источнике",
-                    status=422,
-                    code="lesson_source_without_range",
-                )
-            sources = [pair for pair in sources if pair[0].id in wanted]
-
+        sources = quick_sources(session, program, node, command.material_ids)
         now = utc_now()
-        lesson = Lesson(
-            id=uuid4(),
-            project_id=project_id,
-            title=node.title,
-            status=LessonStatus.DRAFT,
-            revision=1,
-            created_at=now,
-            updated_at=now,
-        )
-        session.add(lesson)
-        session.add(
-            LessonTopic(
-                lesson_id=lesson.id,
-                program_node_id=node.id,
-                project_id=project_id,
-                sort_order=0,
-                topic_title_snapshot=node.title,
-            )
-        )
-        session.flush()
-        topic_depth = program.ordered[program.index_of(node.id)][1]
-        order = 0
-
-        def add_block(**fields: object) -> LessonBlock:
-            nonlocal order
-            block = LessonBlock(
-                id=uuid4(),
-                lesson_id=lesson.id,
-                sort_order=order,
-                origin=LessonBlockOrigin.OUTLINE,
-                created_at=now,
-                updated_at=now,
-                **fields,
-            )
-            order += 1
-            session.add(block)
-            return block
-
-        add_block(
-            kind=LessonBlockKind.NOTE,
-            variant=LessonNoteVariant.HEADING,
-            body_md=_heading_markdown(node.title, 0),
-        )
-        created_bindings: list[UUID] = []
-        characters = 0
-        for material, link in sources:
-            plan = _plan_source(session, program, node, material, link)
-            for piece in plan.pieces:
-                if piece.heading is not None:
-                    add_block(
-                        kind=LessonBlockKind.NOTE,
-                        variant=LessonNoteVariant.HEADING,
-                        body_md=_heading_markdown(
-                            piece.heading.title, piece.heading.depth - topic_depth
-                        ),
-                        bound_program_node_id=piece.heading.node_id,
-                    )
-                if piece.segment is None:
-                    continue
-                block = add_block(kind=LessonBlockKind.SOURCE, bound_program_node_id=node.id)
-                session.flush()
-                session.add(
-                    LessonSourceRef(
-                        id=uuid4(),
-                        block_id=block.id,
-                        role=LessonRefRole.CONTENT,
-                        material_id=material.id,
-                        source_name_snapshot=_source_name(material, link, material.original_name),
-                        material_revision=material.active_parse_revision or None,
-                        page_from=piece.segment.page_from,
-                        page_to=piece.segment.page_to,
-                        from_fragment_id=piece.segment.from_fragment_id,
-                        to_fragment_id=piece.segment.to_fragment_id,
-                        always_pages=False,
-                    )
-                )
-                ids, segment_characters = _bind_segment_fragments(
-                    session, project_id, node.id, plan, piece.segment
-                )
-                created_bindings.extend(ids)
-                characters += segment_characters
-        lesson.duration_minutes = boundaries.estimate_minutes(characters)
+        lesson = new_lesson(session, project_id, node, now)
+        created_bindings = fill_quick_lesson(session, program, node, sources, lesson, now)
         session.add(
             ProjectActionLog(
                 project_id=project.id,
@@ -814,16 +847,19 @@ def update_lesson(
 
 
 def apply_undo(session: Session, project_id: UUID, data: dict) -> None:
-    """Отмена `lesson_create`: урок и только созданные им привязки.
+    """Отмена `lesson_create` и `lesson_bulk_create`: уроки и только созданные ими привязки.
 
-    Вызывается из `projects.program.undo_last_project_action`.
+    Вызывается из `projects.program.undo_last_project_action`. Массовая подготовка пишет
+    `lesson_ids`, одиночное создание — `lesson_id`; остальное у них общее.
     """
     binding_ids = [UUID(raw_id) for raw_id in data.get("binding_ids", [])]
     if binding_ids:
         session.execute(
             delete(Binding).where(Binding.project_id == project_id, Binding.id.in_(binding_ids))
         )
-    lesson = session.get(Lesson, UUID(data["lesson_id"]))
-    if lesson is not None and lesson.project_id == project_id:
-        session.execute(delete(Lesson).where(Lesson.id == lesson.id))
-        session.expunge(lesson)
+    raw_lessons = data.get("lesson_ids") or [data["lesson_id"]]
+    for raw_id in raw_lessons:
+        lesson = session.get(Lesson, UUID(raw_id))
+        if lesson is not None and lesson.project_id == project_id:
+            session.execute(delete(Lesson).where(Lesson.id == lesson.id))
+            session.expunge(lesson)

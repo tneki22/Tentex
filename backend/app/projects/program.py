@@ -977,7 +977,7 @@ def undo_last_project_action(
                 apply_binding_undo(session, project_id, action.action_type, data)
             case "answers_link":
                 apply_answers_link_undo(session, project_id, data)
-            case "lesson_create":
+            case "lesson_create" | "lesson_bulk_create":
                 apply_lesson_undo(session, project_id, data)
             case "lesson_blocks":
                 apply_lesson_blocks_undo(session, project_id, data)

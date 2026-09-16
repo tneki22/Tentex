@@ -195,7 +195,18 @@ export function Lessons() {
   } else if (overview.error) {
     center = <><ErrorState message={errorText(overview.error, "Уроки не загрузились")} /><Button variant="secondary" onClick={overview.refresh}>Повторить</Button></>;
   } else if (!overview.data) center = <LoadingState label="Загружаем уроки" />;
-  else if (selectedTopics.length > 0) center = <LessonBulkTable topics={selectedTopics} lessons={lessons} onClear={() => setSelection(new Set())} />;
+  else if (selectedTopics.length > 0) {
+    center = (
+      <LessonBulkTable
+        projectId={projectId}
+        topics={selectedTopics}
+        lessons={lessons}
+        onClear={() => setSelection(new Set())}
+        onChanged={() => { overview.refresh(); setRangesKey((value) => value + 1); }}
+        onOpenLesson={(nodeId, lessonId) => { setSelection(new Set()); navigateTo(nodeId, lessonId); }}
+      />
+    );
+  }
   else if (active.node_type === "section") {
     center = <LessonSectionOverview section={active} lessons={lessons} onOpenTopic={(id) => navigateTo(id)} onSelectTopics={(ids) => setSelection(new Set(ids))} />;
   } else {
