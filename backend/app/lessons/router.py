@@ -138,3 +138,8 @@ def update_lesson(
     project_id: UUID, lesson_id: UUID, command: LessonUpdateWrite, session: SessionDependency
 ) -> LessonChangeResult:
     return service.update_lesson(session, project_id, lesson_id, command)
+
+
+@router.delete("/{lesson_id}", status_code=204)
+def delete_lesson(project_id: UUID, lesson_id: UUID, session: SessionDependency) -> None:
+    service.delete_lesson(session, project_id, lesson_id)

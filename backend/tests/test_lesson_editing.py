@@ -14,6 +14,7 @@ from app.models import (
     BindingStatus,
     LessonBlockKind,
     Project,
+    ProjectActionLog,
 )
 from app.projects.errors import ProjectDomainError
 from app.projects.program import undo_last_project_action
@@ -282,3 +283,37 @@ def test_link_media_requires_http_and_always_pages_toggles(session, project, boo
         "link", "https://example.org/ethernet", "Схема"
     )
     assert source.refs[0].always_pages
+
+
+def test_before_block_id_inserts_above_the_very_first_block(session, project, book):
+    topic = add_node(session, project, "Сети", 0)
+    lesson = manual_lesson(session, project, topic)
+    lesson = edit(session, project, lesson, operation="add_page", material_id=book.material.id,
+                  page_from=10).lesson
+    first = lesson.blocks[0]
+
+    lesson = edit(session, project, lesson, operation="add_note", variant="heading",
+                  before_block_id=first.id).lesson
+
+    assert [block.kind for block in lesson.blocks] == [LessonBlockKind.NOTE, LessonBlockKind.SOURCE]
+    assert lesson.blocks[1].id == first.id
+
+
+def test_delete_lesson_removes_it_and_disarms_its_undo(session, project, book):
+    topic = add_node(session, project, "Сети", 0)
+    lesson = manual_lesson(session, project, topic)
+    lesson = edit(session, project, lesson, operation="add_page", material_id=book.material.id,
+                  page_from=10).lesson
+    session.rollback()
+
+    service.delete_lesson(session, project.id, lesson.id)
+
+    assert service.lessons_overview(session, project.id).lessons == []
+    session.rollback()
+    # Отменять нечего: записи журнала об этом уроке погашены вместе с ним.
+    live = session.scalars(
+        select(ProjectActionLog).where(
+            ProjectActionLog.project_id == project.id, ProjectActionLog.undone_at.is_(None)
+        )
+    )
+    assert all(item.inverse_data.get("lesson_id") != str(lesson.id) for item in live)

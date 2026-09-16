@@ -10,6 +10,8 @@ import { QualityBadge } from "../QualityBadge";
 interface StructuredPageProps {
   page: MaterialPageRead;
   showOcrReview?: boolean;
+  /** «Текст из файла» — шум там, где виден сам текст; отметки распознавания остаются. */
+  showNativeQuality?: boolean;
   /** Подсветка совпадений поиска. Пустая строка — ничего не подсвечивать. */
   /** Словоформы для подсветки — их считает поиск, здесь морфологии нет. */
   terms?: string[];
@@ -41,6 +43,7 @@ interface StructuredPageProps {
 export function StructuredPage({
   page,
   showOcrReview = true,
+  showNativeQuality = true,
   terms = [],
   assetUrl,
   focusedFragmentId = null,
@@ -57,7 +60,8 @@ export function StructuredPage({
     <article className={`structured-page ${withCrops ? "with-crops" : ""} ${spatial ? "is-spatial" : ""} ${className}`.trim()}>
       <header className="structured-page-head">
         <span>Страница {page.page_number}</span>
-        <QualityBadge quality={page.quality} showReview={showOcrReview} />
+        {(showNativeQuality || page.quality !== "native")
+          && <QualityBadge quality={page.quality} showReview={showOcrReview} />}
       </header>
       <div
         className={spatial ? "structured-page-canvas" : "structured-page-flow"}

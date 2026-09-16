@@ -91,9 +91,15 @@ class _Edit:
 
     def insert(self, block: LessonBlock, after: UUID | None) -> None:
         self.session.add(block)
-        index = next(
-            (i + 1 for i, item in enumerate(self.blocks) if item.id == after), len(self.blocks)
-        )
+        before = self.command.before_block_id
+        if before is not None:
+            index = next(
+                (i for i, item in enumerate(self.blocks) if item.id == before), len(self.blocks)
+            )
+        else:
+            index = next(
+                (i + 1 for i, item in enumerate(self.blocks) if item.id == after), len(self.blocks)
+            )
         self.blocks.insert(index, block)
 
     def block(self, kind: LessonBlockKind | None = None) -> LessonBlock:

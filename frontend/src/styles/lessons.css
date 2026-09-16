@@ -202,7 +202,13 @@
   font-size: var(--text-xs);
 }
 
-.lessons-lesson-list button {
+.lessons-lesson-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.lessons-lesson-list button:not(.icon-button) {
   width: 100%;
   display: flex;
   flex-wrap: wrap;
@@ -218,7 +224,7 @@
   transition: border-color var(--ease-fast), background-color var(--ease-fast);
 }
 
-.lessons-lesson-list button:hover {
+.lessons-lesson-list button:not(.icon-button):hover {
   background: var(--surface-hover);
 }
 
@@ -228,10 +234,19 @@
   color: var(--ink);
 }
 
-.lessons-lesson-list button > span:last-child {
+.lessons-lesson-list button:not(.icon-button) > span:last-child {
   margin-left: auto;
   color: var(--muted);
   font-size: var(--text-xs);
+}
+
+/* Удаление урока — рядом со строкой, а не внутри неё: одна строка, одно действие. */
+.lessons-lesson-remove {
+  flex: none;
+}
+
+.lessons-lesson-remove:hover:not(:disabled) {
+  color: var(--tone-danger);
 }
 
 .lessons-lesson {
@@ -278,6 +293,12 @@
   min-height: 32px;
   padding: 0 var(--space-2);
   font-size: var(--text-xs);
+}
+
+/* Обёртка кнопки тулбара нужна подсказке над выключенной кнопкой и не должна
+   ломать ряд: она ведёт себя как сама кнопка. */
+.lessons-tool {
+  display: inline-flex;
 }
 
 /* Кнопка свёртки правой панели встроена в тулбар, а не висит отдельной строкой сверху. */
@@ -817,21 +838,24 @@
   gap: var(--space-3);
 }
 
+/* Подпись источника — служебная строка над содержанием, а не заголовок: мельче
+   самого текста и приглушённее его. */
 .lesson-source-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
-  color: var(--tone-info);
+  gap: var(--space-1) var(--space-2);
+  color: color-mix(in srgb, var(--tone-info) 70%, var(--muted));
   font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-normal);
 }
 
 .lesson-source-head small {
-  padding: 1px var(--space-2);
-  border: 1px solid color-mix(in srgb, var(--tone-info) 30%, var(--line));
+  padding: 0 var(--space-1);
+  border: 1px solid color-mix(in srgb, var(--tone-info) 24%, var(--line));
   border-radius: var(--radius-pill);
-  color: var(--muted);
+  color: var(--faint);
+  font-size: inherit;
   font-weight: var(--weight-normal);
 }
 
@@ -932,26 +956,41 @@
   border-radius: var(--radius-sm);
 }
 
-.lesson-edit-block.is-selected {
+/* Выбор блока — клик по любому его месту, отдельной кнопки выбора нет. Рамка
+   при наведении показывает границы того, что выберется. */
+.lesson-edit-block.is-pickable {
+  padding: var(--space-2);
+  transition: border-color var(--ease-fast), background-color var(--ease-fast);
+}
+
+.lesson-edit-block.is-pickable:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+
+.lesson-edit-block.is-selected,
+.lesson-edit-block.is-pickable.is-selected:hover {
   border-color: var(--accent);
   background: var(--accent-wash);
 }
 
-.lesson-block-select {
-  display: block;
-  margin: var(--space-1) 0;
-  padding: var(--space-1) var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--surface-hover);
-  color: var(--muted);
+/* Пустое место под уроком: сюда правая кнопка мыши вставляет блок в конец. */
+.lesson-document-tail {
+  min-height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
+  color: var(--faint);
   font-size: var(--text-xs);
-  cursor: pointer;
+  text-align: center;
 }
 
-.lesson-block-select:hover,
-.lesson-block-select:focus-visible {
-  color: var(--accent);
+.lesson-document-tail:hover {
+  border-color: var(--line-strong);
+  color: var(--muted);
 }
 
 .lesson-note-editor {

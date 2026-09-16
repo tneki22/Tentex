@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { DropdownMenu } from "radix-ui";
+import { Tooltip } from "./Tooltip";
 
 export interface MenuItem {
   label: string;
@@ -14,16 +15,21 @@ interface MenuProps {
   trigger: ReactNode;
   label: string;
   items: MenuItem[];
+  /** Подсказка по наведению — когда у триггера видна только иконка. */
+  tooltip?: string;
 }
 
 /**
  * Меню редких действий над объектом: архивировать проект, завершить, экспорт.
  * Частому действию в меню не место — оно живёт кнопкой на виду.
  */
-export function Menu({ trigger, label, items }: MenuProps) {
+export function Menu({ trigger, label, items, tooltip }: MenuProps) {
+  // Подсказка оборачивает именно триггер меню: оба примитива отдают свои props
+  // одному и тому же элементу через asChild, как в рецепте композиции Radix.
+  const triggerNode = <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>;
   return (
     <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
+      {tooltip ? <Tooltip label={tooltip} side="bottom">{triggerNode}</Tooltip> : triggerNode}
       <DropdownMenu.Portal>
         <DropdownMenu.Content className="menu" align="end" sideOffset={6} aria-label={label}>
           {items.map((item) => (

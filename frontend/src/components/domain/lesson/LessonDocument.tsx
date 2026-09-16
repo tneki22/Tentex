@@ -8,7 +8,7 @@ import {
   materialPageImageUrl,
   type MaterialPageRead,
 } from "../../../api/materials";
-import { ErrorState } from "../../ui";
+import { ContextMenu, ErrorState, type ContextMenuItem } from "../../ui";
 import { PageRegion, StructuredPage } from "../material-viewer";
 import { QualityBadge } from "../QualityBadge";
 import { LessonMarkdown } from "./LessonMarkdown";
@@ -25,7 +25,11 @@ interface LessonDocumentProps {
   /** Название текущей темы уже показано шапкой поверхности, второй раз не нужно. */
   hiddenHeading?: string;
   selectedBlockId?: string | null;
-  onSelectBlock?: (blockId: string) => void;
+  onSelectBlock?: (blockId: string | null) => void;
+  /** Действия над блоком по правой кнопке мыши. */
+  blockMenuItems?: (block: LessonBlockRead) => ContextMenuItem[];
+  /** Действия на пустом месте под уроком — вставка блока в конец. */
+  tailMenuItems?: ContextMenuItem[];
   renderNoteEditor?: (block: LessonBlockRead) => ReactNode;
   /** Кусок, в котором сейчас выбирают место разреза. */
   splitBlockId?: string | null;
@@ -47,7 +51,7 @@ function pageRange(ref: LessonRefRead): number[] {
  * фрагменты активной ревизии с отсечением по граничным фрагментам; служебные
  * блоки скрыты.
  */
-export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selectedBlockId, onSelectBlock, renderNoteEditor, splitBlockId, onSplit, startBlockId, onReadBlock }: LessonDocumentProps) {
+export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selectedBlockId, onSelectBlock, blockMenuItems, tailMenuItems, renderNoteEditor, splitBlockId, onSplit, startBlockId, onReadBlock }: LessonDocumentProps) {
   const topicTitles = useMemo(
     () => new Map(lesson.topics.map((topic) => [topic.program_node_id, topic.current_title ?? topic.title_snapshot])),
     [lesson.topics],
@@ -56,39 +60,64 @@ export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selecte
   const blockRefs = useRef(new Map<string, HTMLElement>());
   useReadingPosition(lesson.id, blockRefs, startBlockId, onReadBlock);
 
-  if (lesson.blocks.length === 0) {
+  if (lesson.blocks.length === 0 && !tailMenuItems) {
     return <p className="lesson-document-empty">В уроке пока нет блоков.</p>;
   }
 
   return (
-    <div className={`lesson-document is-${mode}`}>
-      {lesson.blocks.map((block) => (
-        <section
-          key={block.id}
-          data-block-id={block.id}
-          ref={(node) => {
-            if (node) blockRefs.current.set(block.id, node);
-            else blockRefs.current.delete(block.id);
-          }}
-          className={`lesson-edit-block${selectedBlockId === block.id ? " is-selected" : ""}`}
-        >
-          {onSelectBlock && <button type="button" className="lesson-block-select" onClick={() => onSelectBlock(block.id)}>
-            Выбрать блок {block.sort_order + 1}
-          </button>}
-          {block.kind === "note" && selectedBlockId === block.id && renderNoteEditor
-            ? renderNoteEditor(block)
-            : <LessonBlockView
-                projectId={projectId}
-                lessonId={lesson.id}
-                block={block}
-                mode={mode}
-                hiddenHeading={hiddenHeading}
-                topicTitle={multiTopic && block.bound_program_node_id ? topicTitles.get(block.bound_program_node_id) : undefined}
-                onSplit={splitBlockId === block.id && onSplit ? (point) => onSplit(block.id, point) : undefined}
-              />}
-          {block.kind === "media" && selectedBlockId === block.id && renderNoteEditor?.(block)}
-        </section>
-      ))}
+    <div
+      className={`lesson-document is-${mode}`}
+      // Средняя кнопка снимает выбор; preventDefault убирает автопрокрутку Windows.
+      onMouseDown={onSelectBlock && ((event) => { if (event.button === 1) event.preventDefault(); })}
+      onAuxClick={onSelectBlock && ((event) => { if (event.button === 1) onSelectBlock(null); })}
+    >
+      {lesson.blocks.map((block) => {
+        const body = (
+          <section
+            key={block.id}
+            data-block-id={block.id}
+            ref={(node) => {
+              if (node) blockRefs.current.set(block.id, node);
+              else blockRefs.current.delete(block.id);
+            }}
+            className={`lesson-edit-block${selectedBlockId === block.id ? " is-selected" : ""}${onSelectBlock ? " is-pickable" : ""}`}
+            tabIndex={onSelectBlock ? 0 : undefined}
+            aria-label={onSelectBlock ? `Блок ${block.sort_order + 1}` : undefined}
+            onClick={onSelectBlock && (() => onSelectBlock(block.id))}
+            onContextMenu={onSelectBlock && (() => onSelectBlock(block.id))}
+            // Пробел и стрелки нужны редактору пояснения внутри — берём только свой Enter.
+            onKeyDown={onSelectBlock && ((event) => {
+              if (event.key === "Enter" && event.target === event.currentTarget) onSelectBlock(block.id);
+            })}
+          >
+            {block.kind === "note" && selectedBlockId === block.id && renderNoteEditor
+              ? renderNoteEditor(block)
+              : <LessonBlockView
+                  projectId={projectId}
+                  lessonId={lesson.id}
+                  block={block}
+                  mode={mode}
+                  hiddenHeading={hiddenHeading}
+                  topicTitle={multiTopic && block.bound_program_node_id ? topicTitles.get(block.bound_program_node_id) : undefined}
+                  onSplit={splitBlockId === block.id && onSplit ? (point) => onSplit(block.id, point) : undefined}
+                />}
+            {block.kind === "media" && selectedBlockId === block.id && renderNoteEditor?.(block)}
+          </section>
+        );
+        if (!blockMenuItems) return body;
+        return <ContextMenu key={block.id} label={`Действия над блоком ${block.sort_order + 1}`} items={blockMenuItems(block)} trigger={body} />;
+      })}
+      {tailMenuItems && (
+        <ContextMenu
+          label="Действия на пустом месте урока"
+          items={tailMenuItems}
+          trigger={
+            <div className="lesson-document-tail" onClick={() => onSelectBlock?.(null)}>
+              {lesson.blocks.length === 0 ? "В уроке пока нет блоков — правая кнопка мыши добавит первый." : "Правая кнопка мыши добавит блок в конец урока."}
+            </div>
+          }
+        />
+      )}
     </div>
   );
 }
@@ -199,9 +228,9 @@ function LessonMediaView({ projectId, lessonId, block }: { projectId: string; le
   );
 }
 
-function refLabel(ref: LessonRefRead): string {
-  const pages = ref.page_from === ref.page_to ? `стр. ${ref.page_from}` : `стр. ${ref.page_from}–${ref.page_to}`;
-  return `${ref.source_name} · ${pages}`;
+/** Номер страницы у имени источника не пишется: его несёт сам лист под шапкой. */
+function pagesLabel(ref: LessonRefRead): string {
+  return ref.page_from === ref.page_to ? `стр. ${ref.page_from}` : `стр. ${ref.page_from}–${ref.page_to}`;
 }
 
 interface LessonSourceViewProps {
@@ -216,11 +245,12 @@ function LessonSourceView({ projectId, sourceRef: ref, mode, topicTitle, onSplit
   const materialId = ref.material_id;
   const head = (
     <header className="lesson-source-head">
-      <BookOpen size={14} aria-hidden="true" />
-      <span>{refLabel(ref)}</span>
+      <BookOpen size={12} aria-hidden="true" />
+      <span>{ref.source_name}</span>
+      {!ref.is_available && <small>{pagesLabel(ref)}</small>}
       {ref.from_fragment_id && <small>с абзаца</small>}
       {ref.to_fragment_id && <small>до абзаца</small>}
-      {ref.region_bbox ? <small>область страницы</small> : ref.always_pages && <small>всегда страницами</small>}
+      {ref.region_bbox ? <small>область {pagesLabel(ref)}</small> : ref.always_pages && <small>всегда страницами</small>}
       {topicTitle && <small className="lesson-source-topic">тема: {topicTitle}</small>}
       {ref.boundary_shifted && <small className="lesson-source-shifted"><AlertTriangle size={12} aria-hidden="true" /> Разрез сдвинут</small>}
     </header>
@@ -288,7 +318,7 @@ function LessonSourceView({ projectId, sourceRef: ref, mode, topicTitle, onSplit
       <section className="lesson-source">
         {head}
         <p className="lesson-source-notice">
-          <FileText size={14} aria-hidden="true" /> Текст ещё не распознан.{" "}
+          <FileText size={14} aria-hidden="true" /> {pagesLabel(ref)}: текст ещё не распознан.{" "}
           <Link to={`/projects/${projectId}/materials/${materialId}?page=${ref.page_from}`}>Открыть в материалах</Link>
         </p>
       </section>
@@ -364,6 +394,7 @@ function LessonSourceText({ projectId, materialId, sourceRef: ref, onSplit }: { 
               className="lesson-structured-page"
               page={{ ...page, fragments }}
               showOcrReview={false}
+              showNativeQuality={false}
               pageImageUrl={lowQuality ? materialPageImageUrl(projectId, materialId, page.page_number) : undefined}
               showSourceCrops={lowQuality}
               assetUrl={(fragmentId) => materialFragmentAssetUrl(projectId, materialId, fragmentId)}

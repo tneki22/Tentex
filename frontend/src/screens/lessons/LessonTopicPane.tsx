@@ -2,17 +2,20 @@ import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "rea
 import { Link } from "react-router";
 import {
   AlertTriangle, Archive, ArrowDown, ArrowRightLeft, ArrowUp, CheckCircle2, ChevronDown, Combine, Dumbbell, ExternalLink,
-  FilePlus2, Image, Link2, Pencil, Plus, RotateCcw, Scissors, Sparkles, Trash2, Undo2, X,
+  FilePlus2, Image, Link2, MoreHorizontal, Pencil, Plus, RotateCcw, Scissors, Sparkles, SquareDashed, Trash2, Undo2, X,
 } from "lucide-react";
 import {
-  confirmLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, unbindLessonBindings, updateLesson,
-  updateLessonNote, uploadLessonImage, type LessonBlockCommand, type LessonBlockRead, type LessonChangeResult,
-  type LessonNoteVariant, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
+  confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, unbindLessonBindings,
+  updateLesson, updateLessonNote, uploadLessonImage, type LessonBlockCommand, type LessonBlockRead,
+  type LessonChangeResult, type LessonNoteVariant, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
 } from "../../api/lessons";
 import { undoProjectAction } from "../../api/projects";
 import { LessonDocument } from "../../components/domain";
 import type { LessonSplitPoint } from "../../components/domain/lesson/LessonDocument";
-import { Button, Dialog, EmptyState, ErrorState, LoadingState, Menu, SegmentedTabs, Select, StatusBadge, Tooltip } from "../../components/ui";
+import {
+  Button, ConfirmDialog, Dialog, EmptyState, ErrorState, IconButton, LoadingState, Menu, SegmentedTabs, Select,
+  StatusBadge, Tooltip, type ContextMenuItem,
+} from "../../components/ui";
 import { useLesson } from "../../hooks/useLessons";
 import { useLessonViewMode } from "../../hooks/useLessonViewMode";
 import type { ProgramTreeNode } from "../programTree";
@@ -67,6 +70,34 @@ function StageButton({ icon, label, stage }: { icon: ReactNode; label: string; s
   );
 }
 
+interface ToolButtonProps {
+  icon: ReactNode;
+  label: string;
+  /** Что показать в подсказке, если одной подписи мало: почему кнопка выключена. */
+  hint?: string;
+  variant?: "secondary" | "ghost";
+  disabled?: boolean;
+  onClick(): void;
+  labelClassName?: string;
+}
+
+/**
+ * Кнопка тулбара урока. Подписи рядом с иконкой скрывает CSS — без подсказки по
+ * наведению у такой кнопки не остаётся названия вообще. Обёртка `span` нужна
+ * выключенной кнопке: она не получает событий мыши, и подсказка бы не появилась.
+ */
+function ToolButton({ icon, label, hint, variant = "ghost", disabled, onClick, labelClassName = "toolbar-label" }: ToolButtonProps) {
+  return (
+    <Tooltip label={hint ?? label} side="bottom">
+      <span className="lessons-tool">
+        <Button variant={variant} aria-label={label} disabled={disabled} onClick={onClick}>
+          {icon}<span className={labelClassName}>{label}</span>
+        </Button>
+      </span>
+    </Tooltip>
+  );
+}
+
 /** Центр для одной темы: формулировка, уроки темы и открытый урок (записка §2, бриф §12). */
 export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onChanged, refreshKey, selectedBlockId, onSelectBlock, panelToggle, actionError }: LessonTopicPaneProps) {
   const topicLessons = lessons.filter((lesson) => lesson.program_node_ids.includes(topic.id));
@@ -83,6 +114,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
   const [offer, setOffer] = useState<LessonUnbindOffer | null>(null);
   const [linkOpen, setLinkOpen] = useState(false);
   const [link, setLink] = useState({ url: "", caption: "" });
+  const [removing, setRemoving] = useState<LessonSummaryRead | null>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const revisionRef = useRef(1);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
@@ -203,6 +235,52 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
     setLink({ url: "", caption: "" });
   }
 
+  async function removeLesson(target: LessonSummaryRead) {
+    setSaving(true);
+    setError("");
+    try {
+      await deleteLesson(projectId, target.id);
+      if (target.id === openId) onSelectLesson(null);
+      onSelectBlock(null);
+      onChanged();
+    } catch (caught) {
+      setError(errorText(caught, "Урок не удалился"));
+      throw caught;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** Варианты пояснения для подменю «Добавить блок». */
+  function noteItems(place: Omit<LessonBlockCommand, "expected_revision" | "operation" | "variant">): ContextMenuItem[] {
+    return NOTE_VARIANTS.map((item) => ({
+      label: item.label,
+      onSelect: () => void edit({ ...place, operation: "add_note", variant: item.value }),
+    }));
+  }
+
+  function blockMenuItems(block: LessonBlockRead): ContextMenuItem[] {
+    const index = data?.blocks.indexOf(block) ?? -1;
+    const after = index >= 0 ? data!.blocks[index + 1] : undefined;
+    const isSource = block.kind === "source";
+    return [
+      { label: "Добавить блок выше", icon: <Plus size={14} />, items: noteItems({ before_block_id: block.id }) },
+      { label: "Добавить блок ниже", icon: <Plus size={14} />, items: noteItems({ after_block_id: block.id }) },
+      { label: "Переместить выше", icon: <ArrowUp size={14} />, disabled: index <= 0, onSelect: () => void edit({ operation: "move_up", block_id: block.id }) },
+      { label: "Переместить ниже", icon: <ArrowDown size={14} />, disabled: !after, onSelect: () => void edit({ operation: "move_down", block_id: block.id }) },
+      { label: "Разрезать кусок", icon: <Scissors size={14} />, disabled: !isSource, onSelect: () => setSplitting(true) },
+      { label: "Склеить со следующим", icon: <Combine size={14} />, disabled: !isSource || after?.kind !== "source", onSelect: () => void edit({ operation: "merge", block_id: block.id }) },
+      { label: "Снять выбор", icon: <SquareDashed size={14} />, onSelect: () => onSelectBlock(null) },
+      { label: "Удалить блок", icon: <Trash2 size={14} />, destructive: true, onSelect: () => void edit({ operation: "delete", block_id: block.id }) },
+    ];
+  }
+
+  const tailMenuItems: ContextMenuItem[] = [
+    { label: "Добавить блок в конец", icon: <Plus size={14} />, items: noteItems({}) },
+    { label: "Изображение или фото…", icon: <Image size={14} />, onSelect: () => { onSelectBlock(null); imageInput.current?.click(); } },
+    { label: "Внешняя ссылка…", icon: <Link2 size={14} />, onSelect: () => { onSelectBlock(null); setLinkOpen(true); } },
+  ];
+
   function renderEditor(block: LessonBlockRead) {
     const state = noteState?.blockId === block.id ? noteState.state : null;
     const status = state && (
@@ -282,6 +360,9 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                 {item.needs_review && <StatusBadge tone="warning">Требует проверки</StatusBadge>}
                 <span>{item.duration_minutes ? `≈ ${item.duration_minutes} мин` : "длительность не оценена"}</span>
               </button>
+              <IconButton className="lessons-lesson-remove" label={`Удалить урок «${item.title}»`} disabled={saving} onClick={() => setRemoving(item)}>
+                <Trash2 size={15} />
+              </IconButton>
             </li>
           ))}
         </ul>
@@ -304,13 +385,29 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
               <header className="lessons-lesson-head">
                 <div className="lessons-lesson-toolbar">
                   <SegmentedTabs label="Способ показа урока" value={mode} tabs={VIEW_MODE_TABS} onChange={setMode} />
-                  {data.status === "draft" && <Button variant="secondary" aria-label="Готов" disabled={saving} onClick={() => void change({ status: "ready" })}><CheckCircle2 size={14} /><span className="toolbar-label">Готов</span></Button>}
-                  {data.status !== "draft" && <Button variant="secondary" aria-label="Вернуть в черновики" disabled={saving} onClick={() => void change({ status: "draft" })}><RotateCcw size={14} /><span className="toolbar-label">Вернуть в черновики</span></Button>}
-                  {data.status !== "archived" && <Button variant="ghost" aria-label="В архив" disabled={saving} onClick={() => void change({ status: "archived" })}><Archive size={14} /><span className="toolbar-label">В архив</span></Button>}
-                  {data.undo_sequence
-                    ? <Button variant="ghost" aria-label="Отменить" disabled={saving} onClick={() => void undoLast()}><Undo2 size={14} /><span className="toolbar-label">Отменить</span></Button>
-                    : <Tooltip label="Отменить можно только последнее действие проекта" side="bottom"><span><Button aria-label="Отменить" variant="ghost" disabled><Undo2 size={14} /><span className="toolbar-label">Отменить</span></Button></span></Tooltip>}
-                  <Link className="secondary-button" aria-label="Открыть в Рабочей области" to={`/projects/${projectId}?topic=${topic.id}&tab=lesson&lesson=${data.id}`}><ExternalLink size={14} /><span className="toolbar-label toolbar-label-link">Открыть в Рабочей области</span></Link>
+                  {data.status === "draft"
+                    ? <ToolButton variant="secondary" icon={<CheckCircle2 size={14} />} label="Готов" hint="Урок готов — снять пометку черновика" disabled={saving} onClick={() => void change({ status: "ready" })} />
+                    : <ToolButton variant="secondary" icon={<RotateCcw size={14} />} label="Вернуть в черновики" disabled={saving} onClick={() => void change({ status: "draft" })} />}
+                  {data.status !== "archived" && <ToolButton icon={<Archive size={14} />} label="В архив" disabled={saving} onClick={() => void change({ status: "archived" })} />}
+                  <ToolButton
+                    icon={<Undo2 size={14} />}
+                    label="Отменить"
+                    hint={data.undo_sequence ? "Отменить последнее действие" : "Отменить можно только последнее действие проекта"}
+                    disabled={saving || !data.undo_sequence}
+                    onClick={() => void undoLast()}
+                  />
+                  <Tooltip label="Открыть в Рабочей области" side="bottom">
+                    <Link className="secondary-button" aria-label="Открыть в Рабочей области" to={`/projects/${projectId}?topic=${topic.id}&tab=lesson&lesson=${data.id}`}><ExternalLink size={14} /><span className="toolbar-label toolbar-label-link">Открыть в Рабочей области</span></Link>
+                  </Tooltip>
+                  <Menu
+                    label="Действия над уроком"
+                    tooltip="Действия над уроком"
+                    trigger={<Button variant="ghost" aria-label="Действия над уроком" disabled={saving}><MoreHorizontal size={14} /></Button>}
+                    items={[{
+                      label: "Удалить урок", icon: <Trash2 size={14} />, destructive: true,
+                      onSelect: () => setRemoving(openLesson ?? null),
+                    }]}
+                  />
                   <span className="lessons-toolbar-end">{panelToggle}</span>
                 </div>
 
@@ -349,23 +446,29 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                 )}
 
                 <div className="lessons-block-toolbar" aria-label="Действия над блоком">
-                  <Menu label="Добавить блок" trigger={<Button aria-label="Блок" variant="ghost" disabled={saving}><Plus size={14} /><span className="toolbar-label">Блок</span><ChevronDown size={13} /></Button>}
+                  <Menu label="Добавить блок" tooltip={selected ? "Добавить блок после выбранного" : "Добавить блок в конец урока"}
+                    trigger={<Button aria-label="Блок" variant="ghost" disabled={saving}><Plus size={14} /><span className="toolbar-label">Блок</span><ChevronDown size={13} /></Button>}
                     items={NOTE_VARIANTS.map((item) => ({ label: item.label, onSelect: () => void edit({ operation: "add_note", after_block_id: after, variant: item.value }) }))} />
-                  <Menu label="Добавить медиа" trigger={<Button aria-label="Медиа" variant="ghost" disabled={saving}><Image size={14} /><span className="toolbar-label">Медиа</span><ChevronDown size={13} /></Button>} items={[
+                  <Menu label="Добавить медиа" tooltip="Изображение или внешняя ссылка"
+                    trigger={<Button aria-label="Медиа" variant="ghost" disabled={saving}><Image size={14} /><span className="toolbar-label">Медиа</span><ChevronDown size={13} /></Button>} items={[
                     { label: "Изображение или фото…", icon: <Image size={14} />, onSelect: () => imageInput.current?.click() },
                     { label: "Внешняя ссылка…", icon: <Link2 size={14} />, onSelect: () => setLinkOpen(true) },
                   ]} />
                   <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden
                     onChange={(event) => { addImage(event.target.files?.[0]); event.target.value = ""; }} />
-                  <Button variant="ghost" aria-label="Выше" disabled={!selected || saving || selectedIndex === 0} onClick={() => void edit({ operation: "move_up", block_id: selectedBlockId ?? undefined })}><ArrowUp size={14} /><span className="toolbar-label">Выше</span></Button>
-                  <Button variant="ghost" aria-label="Ниже" disabled={!selected || saving || !nextBlock} onClick={() => void edit({ operation: "move_down", block_id: selectedBlockId ?? undefined })}><ArrowDown size={14} /><span className="toolbar-label">Ниже</span></Button>
-                  <Tooltip label={selectedRef ? (mode === "text" ? "Нажмите «Разрезать после» у абзаца" : "Нажмите «Разрезать после страницы»") : "Выберите кусок материала"} side="bottom">
-                    <span><Button variant={splitting ? "secondary" : "ghost"} aria-label={splitting ? "Отменить разрез" : "Разрезать"} disabled={!selectedRef?.is_available || saving} onClick={() => setSplitting((value) => !value)}>
-                      <Scissors size={14} /><span className="toolbar-label">{splitting ? "Отменить разрез" : "Разрезать"}</span>
-                    </Button></span>
-                  </Tooltip>
-                  <Button variant="ghost" aria-label="Склеить со следующим" disabled={!selectedRef || nextBlock?.kind !== "source" || saving} onClick={() => void edit({ operation: "merge", block_id: selectedBlockId ?? undefined })}><Combine size={14} /><span className="toolbar-label">Склеить</span></Button>
-                  <Button variant="ghost" aria-label="Удалить" disabled={!selected || saving} onClick={() => void edit({ operation: "delete", block_id: selectedBlockId ?? undefined })}><Trash2 size={14} /><span className="toolbar-label">Удалить</span></Button>
+                  <ToolButton icon={<ArrowUp size={14} />} label="Выше" hint="Переместить выбранный блок выше" disabled={!selected || saving || selectedIndex === 0} onClick={() => void edit({ operation: "move_up", block_id: selectedBlockId ?? undefined })} />
+                  <ToolButton icon={<ArrowDown size={14} />} label="Ниже" hint="Переместить выбранный блок ниже" disabled={!selected || saving || !nextBlock} onClick={() => void edit({ operation: "move_down", block_id: selectedBlockId ?? undefined })} />
+                  <ToolButton
+                    variant={splitting ? "secondary" : "ghost"}
+                    icon={<Scissors size={14} />}
+                    label={splitting ? "Отменить разрез" : "Разрезать"}
+                    hint={selectedRef ? (mode === "text" ? "Нажмите «Разрезать после» у абзаца" : "Нажмите «Разрезать после страницы»") : "Выберите кусок материала"}
+                    disabled={!selectedRef?.is_available || saving}
+                    onClick={() => setSplitting((value) => !value)}
+                  />
+                  <ToolButton icon={<Combine size={14} />} label="Склеить" hint="Склеить со следующим куском" disabled={!selectedRef || nextBlock?.kind !== "source" || saving} onClick={() => void edit({ operation: "merge", block_id: selectedBlockId ?? undefined })} />
+                  <ToolButton icon={<Trash2 size={14} />} label="Удалить" hint="Удалить выбранный блок" disabled={!selected || saving} onClick={() => void edit({ operation: "delete", block_id: selectedBlockId ?? undefined })} />
+                  <ToolButton icon={<SquareDashed size={14} />} label="Снять выбор" hint="Снять выбор блока — то же делает средняя кнопка мыши" disabled={!selectedBlockId} onClick={() => onSelectBlock(null)} />
                   <StageButton icon={<Sparkles size={14} />} label="Дополнить с ИИ" stage="5 — ИИ «Дополнить урок»" />
                   <StageButton icon={<Dumbbell size={14} />} label="Добавить практику" stage="6 — задания" />
                 </div>
@@ -405,6 +508,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
               </header>
               <LessonDocument projectId={projectId} lesson={data} mode={mode} hiddenHeading={topic.title}
                 selectedBlockId={selectedBlockId} onSelectBlock={onSelectBlock}
+                blockMenuItems={blockMenuItems} tailMenuItems={tailMenuItems}
                 renderNoteEditor={renderEditor}
                 splitBlockId={splitting ? selectedBlockId : null}
                 onSplit={split}
@@ -413,6 +517,17 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
           )}
         </section>
       )}
+
+      <ConfirmDialog
+        open={removing !== null}
+        onOpenChange={(open) => { if (!open) setRemoving(null); }}
+        title={removing ? `Удалить урок «${removing.title}»?` : "Удалить урок?"}
+        confirmLabel="Удалить урок"
+        destructive
+        onConfirm={() => removing ? removeLesson(removing) : Promise.resolve()}
+      >
+        <p>Блоки, пояснения и разрезы урока пропадут без отмены. Привязки темы к материалу остаются — их снимают отдельно.</p>
+      </ConfirmDialog>
 
       <Dialog
         open={linkOpen}

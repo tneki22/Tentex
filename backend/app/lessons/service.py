@@ -846,6 +846,29 @@ def update_lesson(
         return _change_result(session, lesson)
 
 
+def delete_lesson(session: Session, project_id: UUID, lesson_id: UUID) -> None:
+    """Удалить урок целиком: блоки, ссылки и темы уносит каскад.
+
+    Привязки, сделанные уроком, остаются фактами проекта — снимать их молча нельзя,
+    для этого есть отдельное предложение при удалении куска. Записи журнала об этом
+    уроке гасятся: их отмена восстановить уже нечего.
+    """
+    with session.begin():
+        _require_lessons_project(session, project_id, writable=True)
+        lesson = _require_lesson(session, project_id, lesson_id)
+        now = utc_now()
+        for action in session.scalars(
+            select(ProjectActionLog).where(
+                ProjectActionLog.project_id == project_id,
+                ProjectActionLog.action_type.in_(LESSON_ACTIONS),
+                ProjectActionLog.undone_at.is_(None),
+            )
+        ):
+            if action.inverse_data.get("lesson_id") == str(lesson_id):
+                action.undone_at = now
+        session.execute(delete(Lesson).where(Lesson.id == lesson.id))
+
+
 def apply_undo(session: Session, project_id: UUID, data: dict) -> None:
     """Отмена `lesson_create` и `lesson_bulk_create`: уроки и только созданные ими привязки.
 

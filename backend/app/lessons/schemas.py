@@ -103,6 +103,9 @@ class LessonBlockWrite(ApiModel):
     operation: LessonBlockOperation
     block_id: UUID | None = None
     after_block_id: UUID | None = None
+    # Вставка перед блоком; задан — важнее `after_block_id`. Нужен для «добавить выше»
+    # у самого первого блока: «после предыдущего» там выразить нечем.
+    before_block_id: UUID | None = None
     material_id: UUID | None = None
     page_from: int | None = Field(default=None, ge=1)
     page_to: int | None = Field(default=None, ge=1)

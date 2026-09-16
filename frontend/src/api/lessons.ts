@@ -167,6 +167,8 @@ export interface LessonBlockCommand {
   operation: LessonBlockOperation;
   block_id?: string;
   after_block_id?: string;
+  /** Вставка перед блоком; задан — важнее `after_block_id`. */
+  before_block_id?: string;
   material_id?: string;
   page_from?: number;
   page_to?: number;
@@ -265,6 +267,10 @@ export const updateLesson = (
   method: "PATCH",
   body: JSON.stringify(command),
 });
+
+/** Привязки урока остаются фактами проекта: удаляется сам урок. */
+export const deleteLesson = (projectId: string, lessonId: string): Promise<void> =>
+  request(`${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}`, { method: "DELETE" });
 
 export const LESSON_STATUS_LABELS: Record<LessonStatus, string> = {
   draft: "Черновик",
