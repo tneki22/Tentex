@@ -8,6 +8,7 @@ import { Button, EmptyState, ErrorState, IconButton, LoadingState, PanelResizeHa
 import { useLesson, useLessonsOverview } from "../../hooks/useLessons";
 import { buildProgramTree, flattenProgramTree } from "../programTree";
 import { LessonBulkTable } from "./LessonBulkTable";
+import { insertPlacement, INSERT_AT_END, type LessonInsertPoint } from "./lessonBlocks";
 import { LessonMaterialPanel } from "./LessonMaterialPanel";
 import { LessonSectionOverview } from "./LessonSectionOverview";
 import { LessonSourcesDialog } from "./LessonSourcesDialog";
@@ -49,6 +50,7 @@ export function Lessons() {
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [rangesKey, setRangesKey] = useState(0);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  const [insertPoint, setInsertPoint] = useState<LessonInsertPoint>(INSERT_AT_END);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -97,7 +99,7 @@ export function Lessons() {
   }, []);
 
   function navigateTo(topicId: string, lessonId: string | null = null) {
-    setSelectedBlockId(null);
+    chooseBlock(null);
     const next = new URLSearchParams();
     next.set("topic", topicId);
     if (lessonId) next.set("lesson", lessonId);
@@ -134,21 +136,42 @@ export function Lessons() {
     } finally { setBusy(false); }
   }
 
-  async function addFromPanel(command: Omit<LessonBlockCommand, "expected_revision">) {
-    if (!activeLessonId) return;
+  /**
+   * Добавление из правой панели: место вставки выбирается явно, а следующий
+   * кусок встаёт за только что добавленным — подряд собранный урок сохраняет
+   * порядок, в котором его собирали.
+   */
+  async function addFromPanel(command: Omit<LessonBlockCommand, "expected_revision">): Promise<boolean> {
+    if (!activeLessonId) return false;
     setBusy(true);
     setActionError("");
     try {
       const current = await getLesson(projectId, activeLessonId);
-      await editLessonBlocks(projectId, activeLessonId, {
-        ...command, after_block_id: selectedBlockId ?? undefined,
+      const result = await editLessonBlocks(projectId, activeLessonId, {
+        ...command, ...insertPlacement(insertPoint, current.blocks),
         expected_revision: current.revision,
       });
+      const known = new Set(current.blocks.map((block) => block.id));
+      const added = result.lesson.blocks.find((block) => !known.has(block.id));
+      if (added) chooseInsertPoint({ kind: "after", blockId: added.id });
       overview.refresh();
       setRangesKey((value) => value + 1);
+      return true;
     } catch (caught) {
       setActionError(errorText(caught, "Не удалось добавить источник"));
+      return false;
     } finally { setBusy(false); }
+  }
+
+  /** Выбранный блок и место вставки — одно и то же: выбор в уроке виден в панели и наоборот. */
+  function chooseBlock(blockId: string | null) {
+    setSelectedBlockId(blockId);
+    setInsertPoint(blockId ? { kind: "after", blockId } : INSERT_AT_END);
+  }
+
+  function chooseInsertPoint(point: LessonInsertPoint) {
+    setInsertPoint(point);
+    setSelectedBlockId(point.kind === "after" ? point.blockId : null);
   }
 
   if (error) {
@@ -225,7 +248,7 @@ export function Lessons() {
         onChanged={() => { overview.refresh(); setRangesKey((value) => value + 1); }}
         refreshKey={rangesKey}
         selectedBlockId={selectedBlockId}
-        onSelectBlock={setSelectedBlockId}
+        onSelectBlock={chooseBlock}
         panelToggle={panelToggle}
         actionError={actionError}
       />
@@ -280,9 +303,10 @@ export function Lessons() {
             className="lessons-resize"
             label="Изменить ширину панели материала"
             value={layout.panel}
-            min={300}
+            /* Уже 320px четыре вкладки панели не помещаются в один ряд и начинают прокручиваться. */
+            min={320}
             max={560}
-            onDelta={(delta) => updateLayout((current) => ({ ...current, panel: clamp(current.panel - delta, 300, 560) }))}
+            onDelta={(delta) => updateLayout((current) => ({ ...current, panel: clamp(current.panel - delta, 320, 560) }))}
             onReset={() => updateLayout((current) => ({ ...current, panel: 360 }))}
           />
           <aside className="lessons-panel">
@@ -294,7 +318,10 @@ export function Lessons() {
               onCreateFromRange={(materialId) => void createLesson([materialId])}
               lessonId={activeLessonId}
               lessonPages={lessonPages}
-              onAdd={(command) => void addFromPanel(command)}
+              blocks={panelLesson.data?.id === activeLessonId ? panelLesson.data.blocks : []}
+              insertPoint={insertPoint}
+              onInsertPointChange={chooseInsertPoint}
+              onAdd={addFromPanel}
             />
           </aside>
         </>

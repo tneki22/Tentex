@@ -177,17 +177,43 @@ interface LessonBlockViewProps {
   onSplit?: (point: LessonSplitPoint) => void;
 }
 
+/** Пустой абзац Crepe пишет как `<br />`: без этого пустой блок считался заполненным. */
+function noteBody(body: string | null): string {
+  return (body ?? "").replace(/^[ \t]*<br\s*\/?>[ \t]*$/gim, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * Что показать в блоке оформления «Заголовок».
+ *
+ * Crepe пишет обычный абзац, пока пользователь сам не сделает его заголовком,
+ * поэтому блок с выбранным оформлением выглядел рядовым пояснением. Уровень
+ * берётся из `#`, а без решёток заголовком становится первая строка.
+ */
+function headingOf(body: string): { text: string; level: 2 | 3 | 4; rest: string } | null {
+  const lines = body.split("\n");
+  const first = lines.findIndex((line) => line.trim() !== "");
+  if (first < 0) return null;
+  const rest = lines.slice(first + 1).join("\n").trim();
+  const marked = /^(#{1,6})\s+(.*)$/.exec(lines[first].trim());
+  if (marked) return { text: marked[2], level: Math.min(4, Math.max(2, marked[1].length)) as 2 | 3 | 4, rest };
+  return { text: lines[first].trim(), level: 3, rest };
+}
+
 function LessonBlockView({ projectId, lessonId, block, mode, hiddenHeading, topicTitle, onSplit }: LessonBlockViewProps) {
   if (block.kind === "note") {
-    const body = block.body_md ?? "";
-    const heading = /^(#{1,6})\s+(.*)$/.exec(body);
-    if (block.variant === "heading" && heading) {
-      if (heading[2] === hiddenHeading) return null;
-      const level = Math.min(4, Math.max(2, heading[1].length));
-      const Tag = `h${level}` as "h2" | "h3" | "h4";
-      return <Tag className={`lesson-note-heading is-level-${level}`}>{heading[2]}</Tag>;
+    const body = noteBody(block.body_md);
+    const heading = block.variant === "heading" ? headingOf(body) : null;
+    if (heading) {
+      if (heading.text === hiddenHeading && !heading.rest) return null;
+      const Tag = `h${heading.level}` as "h2" | "h3" | "h4";
+      return (
+        <>
+          {heading.text !== hiddenHeading && <Tag className={`lesson-note-heading is-level-${heading.level}`}>{heading.text}</Tag>}
+          {heading.rest && <LessonMarkdown className="lesson-note is-text" text={heading.rest} />}
+        </>
+      );
     }
-    if (!body.trim()) return <div className={`lesson-note is-${block.variant ?? "text"} is-empty`}>Пустое пояснение — выберите блок, чтобы написать текст.</div>;
+    if (!body) return <div className={`lesson-note is-${block.variant ?? "text"} is-empty`}>Пустое пояснение — выберите блок, чтобы написать текст.</div>;
     return <LessonMarkdown className={`lesson-note is-${block.variant ?? "text"}`} text={body} />;
   }
   if (block.kind === "media") return <LessonMediaView projectId={projectId} lessonId={lessonId} block={block} />;

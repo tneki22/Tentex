@@ -172,6 +172,9 @@ class MaterialRead(ApiModel):
     display_name: str
     media_type: str
     source_kind: MaterialSourceKind
+    # Вид источника считает сервер: иначе каждый экран заново гадает по MIME,
+    # есть ли у материала растр страницы (`presentation.PAGE_IMAGE_KINDS`).
+    presentation_kind: MaterialPresentationKind
     source_url: str | None
     retrieved_at: datetime | None
     size_bytes: int

@@ -46,6 +46,8 @@ export interface MaterialRead {
   display_name: string;
   media_type: string;
   source_kind: MaterialSourceKind;
+  /** Вид источника от сервера: по нему видно, есть ли у страниц растр. */
+  presentation_kind: MaterialPresentationKind;
   source_url: string | null;
   retrieved_at: string | null;
   size_bytes: number;
@@ -61,7 +63,8 @@ export interface MaterialRead {
   scan_page_count: number;
   ocr_low_page_count: number;
   estimated_seconds: number | null;
-  outline: Array<{ level: number; title: string; page: number }>;
+  /** Оглавление источника, как его сохранил разбор: закладки PDF или печатная страница. */
+  outline: OutlineItem[];
   diagnostics: string[];
   error: string | null;
   task: ProcessingTaskRead | null;

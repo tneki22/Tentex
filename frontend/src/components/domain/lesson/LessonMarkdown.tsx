@@ -5,13 +5,16 @@ import type { ReactNode } from "react";
 // абзацы, заголовки, списки, цитаты, код, **жирный**, *курсив*, ссылки и формулы
 // `$…$`, `$$…$$` и ```latex. Рендер собирает React-узлы сам; HTML приходит только
 // из KaTeX с `trust: false`. Один Crepe на выбранном блоке, остальные — здесь (§3.7).
-const INLINE = /(\$[^$\n]+\$|\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\))/g;
+const INLINE = /(\$[^$\n]+\$|\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`]+`|!?\[[^\]]*\]\([^)\s]*\))/g;
 const HEADING_RE = /^(#{1,6})\s+(.*)$/;
 const ORDERED_RE = /^\d+\.\s+(.*)$/;
 const BULLET_RE = /^[-*]\s+(.*)$/;
 const QUOTE_RE = /^>\s?(.*)$/;
 const FENCE_RE = /^```\s*(\w*)/;
 const LINK_RE = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
+const IMAGE_RE = /^!\[([^\]]*)\]\(([^)\s]*)\)$/;
+/** Пустой абзац Crepe пишет как `<br />`. В чтении это пустая строка, а не текст. */
+const BREAK_RE = /^<br\s*\/?>$/i;
 
 function math(latex: string, displayMode: boolean, key: string): ReactNode {
   try {
@@ -24,6 +27,21 @@ function math(latex: string, displayMode: boolean, key: string): ReactNode {
   }
 }
 
+/**
+ * Картинка из Markdown.
+ *
+ * `blob:` живёт только до перезагрузки вкладки: изображение, брошенное прямо в
+ * редактор пояснения, после неё не открывается и раньше оставалось в тексте
+ * строкой `![1.00](blob:…)`. Вместо мёртвой картинки — честная пометка;
+ * изображения урока добавляются блоком «Медиа», у него файл на диске.
+ */
+function picture(alt: string, url: string, key: string): ReactNode {
+  if (/^(https?:|\/api\/)/.test(url)) {
+    return <img key={key} className="lesson-markdown-image" src={url} alt={unescape(alt)} loading="lazy" />;
+  }
+  return <span key={key} className="lesson-markdown-missing">Изображение не сохранилось{alt ? `: ${unescape(alt)}` : ""}</span>;
+}
+
 /** Crepe экранирует знаки разметки обратной косой чертой — в чтении она не нужна. */
 const unescape = (text: string) => text.replace(/\\([\\`*_{}[\]()#+\-.!$>])/g, "$1");
 
@@ -34,6 +52,8 @@ function inline(text: string, prefix: string): ReactNode[] {
     if (chunk.startsWith("**") && chunk.endsWith("**")) return <strong key={key}>{unescape(chunk.slice(2, -2))}</strong>;
     if (chunk.startsWith("`") && chunk.endsWith("`")) return <code key={key}>{chunk.slice(1, -1)}</code>;
     if (chunk.startsWith("*") && chunk.endsWith("*") && chunk.length > 2) return <em key={key}>{unescape(chunk.slice(1, -1))}</em>;
+    const image = IMAGE_RE.exec(chunk);
+    if (image) return picture(image[1], image[2], key);
     const link = LINK_RE.exec(chunk);
     if (link && /^https?:\/\//.test(link[2])) {
       return <a key={key} href={link[2]} target="_blank" rel="noreferrer noopener">{unescape(link[1])}</a>;
@@ -80,6 +100,7 @@ export function LessonMarkdown({ text, className = "" }: { text: string; classNa
       continue;
     }
     const trimmed = line.trim();
+    if (BREAK_RE.test(trimmed)) { flush(); continue; }
     const fenceOpen = FENCE_RE.exec(trimmed);
     if (fenceOpen) { flush(); fence = { lang: fenceOpen[1].toLowerCase(), lines: [] }; continue; }
     if (trimmed === "$$") { flush(); display = []; continue; }

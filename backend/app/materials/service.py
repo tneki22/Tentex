@@ -25,6 +25,7 @@ from app.materials.library import (
 from app.materials.library import (
     task_read as _task_read,
 )
+from app.materials.presentation import presentation_kind
 from app.materials.schemas import (
     ExamCompositeDraftImportResult,
     ExamCompositeDraftImportWrite,
@@ -107,6 +108,7 @@ def _read(link: ProjectMaterial, material: Material, task: BackgroundJob | None)
         display_name=link.display_name or material.original_name,
         media_type=material.media_type,
         source_kind=material.source_kind,
+        presentation_kind=presentation_kind(material),
         source_url=material.source_url,
         retrieved_at=material.retrieved_at,
         size_bytes=material.size_bytes,

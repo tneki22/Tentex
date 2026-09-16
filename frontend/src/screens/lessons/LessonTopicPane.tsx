@@ -7,7 +7,7 @@ import {
 import {
   confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, unbindLessonBindings,
   updateLesson, updateLessonNote, uploadLessonImage, type LessonBlockCommand, type LessonBlockRead,
-  type LessonChangeResult, type LessonNoteVariant, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
+  type LessonChangeResult, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
 } from "../../api/lessons";
 import { undoProjectAction } from "../../api/projects";
 import { LessonDocument } from "../../components/domain";
@@ -19,6 +19,7 @@ import {
 import { useLesson } from "../../hooks/useLessons";
 import { useLessonViewMode } from "../../hooks/useLessonViewMode";
 import type { ProgramTreeNode } from "../programTree";
+import { NOTE_VARIANTS } from "./lessonBlocks";
 import { VIEW_MODE_TABS } from "./LessonTab";
 import { errorText } from "./lessonTree";
 
@@ -51,16 +52,6 @@ const STATUS_TONE: Record<LessonStatus, "warning" | "success" | "neutral"> = {
   ready: "success",
   archived: "neutral",
 };
-
-const NOTE_VARIANTS: Array<{ value: LessonNoteVariant; label: string }> = [
-  { value: "text", label: "Текст" },
-  { value: "heading", label: "Заголовок" },
-  { value: "explanation", label: "Пояснение" },
-  { value: "important", label: "Важно" },
-  { value: "example", label: "Пример" },
-  { value: "definition", label: "Определение" },
-  { value: "warning", label: "Предупреждение" },
-];
 
 function StageButton({ icon, label, stage }: { icon: ReactNode; label: string; stage: string }) {
   return (
