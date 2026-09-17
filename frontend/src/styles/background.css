@@ -22,3 +22,22 @@
 .background-upload, .background-intensity { display: grid; gap: var(--space-2); }
 .background-intensity input { width: 100%; accent-color: var(--accent); }
 .background-settings > button { justify-self: start; }
+.background-swatch { position: relative; overflow: hidden; }
+.background-svg { display: block; width: 100%; height: 100%; color: var(--accent); }
+.floating-paths path { animation: floating-path-flow 28s linear infinite; animation-play-state: paused; }
+.particle-drift { color: var(--tone-info); }
+.particle-drift text { font: 12px monospace; }
+.particle-nodes { animation: particle-node-drift 40s ease-in-out infinite alternate; animation-play-state: paused; }
+.particle-beam { transform: translateY(var(--beam-y)); animation: particle-beam-drift 30s linear infinite; animation-play-state: paused; }
+.background-art[data-motion="true"] .floating-paths path,
+.background-art[data-motion="true"] .particle-nodes,
+.background-art[data-motion="true"] .particle-beam { animation-play-state: running; }
+.background-art.background-floating-paths, .background-art.background-particle-drift { animation: none; inset: 0; }
+@keyframes floating-path-flow { to { stroke-dashoffset: -1; } }
+@keyframes particle-node-drift { to { transform: translateY(35px); } }
+@keyframes particle-beam-drift { from { transform: translateY(1000px); } to { transform: translateY(-200px); } }
+@media (prefers-reduced-motion: reduce) {
+  .background-art[data-motion="true"] .floating-paths path,
+  .background-art[data-motion="true"] .particle-nodes,
+  .background-art[data-motion="true"] .particle-beam { animation-play-state: paused; }
+}

@@ -34,3 +34,29 @@ test("фон сохраняется, покрывает окно и уважае
   await page.getByRole("link", { name: "Проекты", exact: true }).click();
   await expect(page.locator(".background-art.background-waves")).toBeVisible();
 });
+
+test("TSX-пресеты: превью, пауза, сохранение и промпт", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto(`${process.env.TENTEX_TEST_URL ?? "http://localhost:5187"}/setup?section=background`);
+  for (const [label, selector] of [["Плавающие линии", ".floating-paths path"], ["Частицы", ".particle-beam"]]) {
+    await page.getByRole("radio", { name: label, exact: true }).click();
+    await expect(page.locator(`.background-swatch ${selector}`).first()).toHaveCSS("animation-play-state", "paused");
+    await expect(page.locator(`.background-art ${selector}`).first()).toHaveCSS("animation-play-state", "paused");
+    await page.getByRole("switch", { name: "Плавное движение" }).click();
+    await expect(page.locator(`.background-art ${selector}`).first()).toHaveCSS("animation-play-state", "running");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(page.locator(`.background-art ${selector}`).first()).toHaveCSS("animation-play-state", "paused");
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.getByRole("switch", { name: "Плавное движение" }).click();
+    await page.reload();
+    await expect(page.getByRole("radio", { name: label, exact: true })).toBeChecked();
+  }
+  await page.getByRole("button", { name: "Копировать промпт для агента" }).click();
+  await expect(page.getByRole("status")).toContainText("Промпт скопирован");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("BACKGROUNDS");
+  await page.screenshot({ path: "output/background-presets-light.png", fullPage: true });
+  await page.evaluate(() => localStorage.setItem("tentex:theme", "dark"));
+  await page.reload();
+  await page.screenshot({ path: "output/background-presets-dark.png", fullPage: true });
+});

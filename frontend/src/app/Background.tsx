@@ -1,9 +1,13 @@
 import { createContext, useContext, useEffect, useState, type CSSProperties, type PropsWithChildren } from "react";
 
+import { FloatingPaths, ParticleDrift } from "./BackgroundPresets";
+
 export const BACKGROUNDS = [
   { id: "plain", label: "Однотонный" },
   { id: "aurora", label: "Сияние" },
   { id: "waves", label: "Волны" },
+  { id: "floating-paths", label: "Плавающие линии", component: FloatingPaths },
+  { id: "particle-drift", label: "Частицы", component: ParticleDrift },
   { id: "photo", label: "Своё фото" },
 ] as const;
 type BackgroundId = typeof BACKGROUNDS[number]["id"];
@@ -62,11 +66,13 @@ export function BackgroundProvider({ children }: PropsWithChildren) {
     } catch { setError("Не удалось сохранить фон в браузере. Освободите место и повторите."); }
   }
   const active = preference.id !== "plain";
+  const preset = BACKGROUNDS.find(({ id }) => id === preference.id);
+  const Art = preset && "component" in preset ? preset.component : null;
   return <BackgroundContext.Provider value={{ preference, update, error }}>
     <div className="background-root" data-background={active ? "custom" : "plain"}>
       {active && <div className="app-background" aria-hidden="true" style={{ opacity: preference.intensity / 100 }}>
         <div className={`background-art background-${preference.id}`} data-motion={preference.motion && !hidden}
-          style={preference.id === "photo" ? { backgroundImage: `url("${preference.photo}")` } as CSSProperties : undefined} />
+          style={preference.id === "photo" ? { backgroundImage: `url("${preference.photo}")` } as CSSProperties : undefined}>{Art && <Art />}</div>
       </div>}
       <div className="background-content">{children}</div>
     </div>
