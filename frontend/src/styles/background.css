@@ -8,8 +8,8 @@
 .background-art[data-motion="true"]:not(.background-photo) { animation: background-drift 30s ease-in-out infinite alternate; }
 @keyframes background-drift { to { transform: translate(3%, -3%) scale(1.04); } }
 @media (prefers-reduced-motion: reduce) { .background-art[data-motion="true"]:not(.background-photo) { animation: none; } }
-[data-background="custom"] .app-nav { background: color-mix(in srgb, var(--paper) 45%, transparent); backdrop-filter: blur(20px); }
-[data-background="custom"] .app-topbar { background: color-mix(in srgb, var(--canvas) 45%, transparent); backdrop-filter: blur(20px); }
+[data-background="custom"] .app-nav { background: color-mix(in srgb, var(--paper) 35%, transparent); }
+[data-background="custom"] .app-topbar { background: color-mix(in srgb, var(--canvas) 35%, transparent); }
 .background-settings { display: grid; gap: var(--space-5); max-width: 760px; }
 .background-settings header p, .background-settings small { color: var(--muted); }
 .background-settings header p { margin-bottom: 0; }

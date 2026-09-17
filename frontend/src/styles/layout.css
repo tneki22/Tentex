@@ -8517,9 +8517,15 @@ button.wizard-back-projects {
 
 /* Обзор материалов — без тулбара, единственный ребёнок .materials-document-area:
    без явного grid-row он попадает в auto-строку тулбара, а не в 1fr-строку сцены
-   (см. тот же случай у .materials-conspect-summary в conspects.css). */
+   (см. тот же случай у .materials-conspect-summary в conspects.css). Сама сцена
+   остаётся прозрачной — карточка таблицы уже непрозрачна сама по себе
+   (.materials-overview-table), а пустая часть сцены должна показывать общий фон. */
 .materials-document-stage.is-standalone {
   grid-row: 1 / -1;
+}
+
+.materials-document-stage.is-standalone .materials-document-scroll {
+  background: transparent;
 }
 
 /* Зоны листания по краям: попасть мышью в поля листа проще, чем в кнопку тулбара. */
