@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.db import project_write_transaction
 from app.lessons import boundaries
 from app.lessons import refs as refs_module
 from app.lessons.boundaries import FragmentView, NextItem, OutlineRange, Pages, Piece, Position
@@ -747,7 +748,7 @@ def fill_quick_lesson(
 def create_quick_lesson(
     session: Session, project_id: UUID, command: LessonQuickWrite
 ) -> LessonChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_lessons_project(session, project_id, writable=True)
         node = _require_study_node(session, project_id, command.program_node_id)
         program = _load_program(session, project_id)
@@ -796,7 +797,7 @@ def create_manual_lesson(
     session: Session, project_id: UUID, command: LessonManualWrite
 ) -> LessonChangeResult:
     """Пустой черновик доступен и для темы без диапазона оглавления."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_lessons_project(session, project_id, writable=True)
         node = _require_study_node(session, project_id, command.program_node_id)
         now = utc_now()
@@ -832,7 +833,7 @@ def update_lesson(
     session: Session, project_id: UUID, lesson_id: UUID, command: LessonUpdateWrite
 ) -> LessonChangeResult:
     """Название и статус урока; без записи в журнал."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_lessons_project(session, project_id, writable=True)
         lesson = _require_lesson(session, project_id, lesson_id)
         _require_revision(lesson, command.expected_revision)
@@ -853,7 +854,7 @@ def delete_lesson(session: Session, project_id: UUID, lesson_id: UUID) -> None:
     для этого есть отдельное предложение при удалении куска. Записи журнала об этом
     уроке гасятся: их отмена восстановить уже нечего.
     """
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_lessons_project(session, project_id, writable=True)
         lesson = _require_lesson(session, project_id, lesson_id)
         now = utc_now()

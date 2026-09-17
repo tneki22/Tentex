@@ -9,6 +9,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.db import project_write_transaction
 from app.lessons.schemas import LessonBulkResult, LessonBulkWrite
 from app.lessons.service import (
     ACTION_LESSON_BULK,
@@ -41,7 +42,7 @@ def create_bulk_lessons(
             )
         seen.add(item.program_node_id)
 
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_lessons_project(session, project_id, writable=True)
         program = _load_program(session, project_id)
         now = utc_now()

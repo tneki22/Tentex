@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.bindings.answers_link import apply_answers_link_undo
 from app.bindings.service import apply_undo as apply_binding_undo
+from app.db import project_write_transaction
 from app.lessons.editing import apply_blocks_undo as apply_lesson_blocks_undo
 from app.lessons.editing import apply_unbind_undo as apply_lesson_unbind_undo
 from app.lessons.service import apply_undo as apply_lesson_undo
@@ -345,7 +346,7 @@ def _node_snapshot(node: ProgramNode) -> dict[str, Any]:
 def create_program_node(
     session: Session, project_id: UUID, command: ProgramNodeCreate
 ) -> ProgramChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_writable_project(session, project_id)
         nodes = _nodes(session, project_id)
         nodes_by_id = {node.id: node for node in nodes}
@@ -397,7 +398,7 @@ def update_program_node(
     node_id: UUID,
     command: ProgramNodeUpdate,
 ) -> ProgramChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_writable_project(session, project_id)
         node = session.scalar(
             select(ProgramNode).where(
@@ -436,7 +437,7 @@ def update_program_node(
 def move_program_node(
     session: Session, project_id: UUID, node_id: UUID, command: ProgramMove
 ) -> ProgramChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_writable_project(session, project_id)
         nodes = _nodes(session, project_id)
         nodes_by_id = {node.id: node for node in nodes}
@@ -488,7 +489,7 @@ def move_program_node(
 def swap_program_nodes(
     session: Session, project_id: UUID, node_id: UUID, command: ProgramSwap
 ) -> ProgramChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_writable_project(session, project_id)
         nodes = _nodes(session, project_id)
         nodes_by_id = {node.id: node for node in nodes}
@@ -538,7 +539,7 @@ def swap_program_nodes(
 def set_target_level(
     session: Session, project_id: UUID, node_id: UUID, command: ProgramTargetLevel
 ) -> ProgramChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_writable_project(session, project_id)
         nodes = _nodes(session, project_id)
         nodes_by_id = {node.id: node for node in nodes}
@@ -580,7 +581,7 @@ def _set_subtree_visibility(
     *,
     restore: bool,
 ) -> ProgramChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_writable_project(session, project_id)
         nodes = _nodes(session, project_id)
         nodes_by_id = {node.id: node for node in nodes}
@@ -634,7 +635,7 @@ def remove_all_program_nodes(
     session: Session, project_id: UUID, command: ProgramRevisionCommand
 ) -> ProgramChangeResult:
     """Вывести всю текущую программу одним отменяемым действием."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_writable_project(session, project_id)
         nodes = _nodes(session, project_id)
         visible = [node for node in nodes if node.is_in_current_program and not node.is_archived]
@@ -691,7 +692,7 @@ def replace_draft_program(
     material_id: UUID | None = None,
     material_name: str | None = None,
 ) -> ProgramChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_writable_project(session, project_id)
         if project.status != ProjectStatus.DRAFT:
             raise ProjectConflictError("Импорт доступен только в черновике")
@@ -761,7 +762,7 @@ def replace_active_exam_program(
     material_id: UUID,
     material_name: str,
 ) -> ProgramChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_writable_project(session, project_id)
         if (
             project.status != ProjectStatus.ACTIVE
@@ -906,7 +907,7 @@ def _increment_for_undo(session: Session, project: Project) -> int | None:
 def undo_last_project_action(
     session: Session, project_id: UUID, expected_action_sequence: int
 ) -> ActionUndoResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_writable_project(session, project_id)
         phase = _phase(project)
         action = _latest_action_row(session, project_id, phase)

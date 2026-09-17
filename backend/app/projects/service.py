@@ -203,7 +203,7 @@ def save_wizard_draft(
 
 
 def delete_wizard_draft(session: Session, project_id: UUID, expected_revision: int) -> None:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None:
             raise ProjectNotFoundError("Черновик проекта не найден")
@@ -446,7 +446,7 @@ def get_project(session: Session, project_id: UUID) -> ProjectDetail:
 def update_project_settings(
     session: Session, project_id: UUID, command: ProjectSettingsWrite
 ) -> ProjectSettingsResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None or project.status == ProjectStatus.DRAFT:
             raise ProjectNotFoundError()
@@ -497,7 +497,7 @@ def save_project_order(
 
 
 def archive_project(session: Session, project_id: UUID) -> ProjectSummary:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None or project.status == ProjectStatus.DRAFT:
             raise ProjectNotFoundError()
@@ -519,7 +519,7 @@ def archive_project(session: Session, project_id: UUID) -> ProjectSummary:
 
 
 def restore_project(session: Session, project_id: UUID) -> ProjectSummary:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None or project.status == ProjectStatus.DRAFT:
             raise ProjectNotFoundError()
@@ -541,7 +541,7 @@ def restore_project(session: Session, project_id: UUID) -> ProjectSummary:
 
 def delete_project(session: Session, project_id: UUID) -> None:
     """Безвозвратно удаляет живой проект, но не общие файлы библиотеки."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None or project.status == ProjectStatus.DRAFT:
             raise ProjectNotFoundError()

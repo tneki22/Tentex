@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db import project_write_transaction
 from app.models import (
     GoalPassport,
     GoalRole,
@@ -85,7 +86,7 @@ def import_outlines(
     session: Session, project_id: UUID, command: ProgramOutlinesImportWrite
 ) -> ProgramChangeResult:
     """Импортировать выбранные ветви источников одной ревизией и одной записью undo."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = program._require_writable_project(session, project_id)
         if project.workspace_variant != WorkspaceVariant.TEXTBOOK:
             raise ProjectConflictError(

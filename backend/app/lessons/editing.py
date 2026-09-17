@@ -16,6 +16,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.bindings.service import ACTIVE_STATUSES
+from app.db import project_write_transaction
 from app.lessons import boundaries
 from app.lessons import refs as refs_module
 from app.lessons.refs import Bounds
@@ -715,7 +716,7 @@ def _apply_edit(
     action: Callable[[_Edit], None],
 ) -> LessonChangeResult:
     """Структурное действие — один снимок урока и одна запись отмены."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_lessons_project(session, project_id, writable=True)
         lesson = _require_lesson(session, project_id, lesson_id)
         _require_revision(lesson, command.expected_revision)
@@ -760,7 +761,8 @@ async def add_lesson_image(
         unsupported_message="Поддерживаются PNG, JPG, JPEG, WEBP и GIF",
         error_code_prefix="lesson_image",
     )
-    # Ранняя проверка открыла транзакцию чтения — без rollback() begin() падает.
+    # Ранняя проверка и загрузка файла открыли транзакцию чтения: закрываем её,
+    # чтобы запись пошла со свежего снимка и сразу с резервированием writer.
     session.rollback()
 
     command = LessonBlockWrite(expected_revision=expected_revision, operation="add_image",
@@ -794,7 +796,7 @@ def update_lesson_note(
     block_id: UUID, command: LessonNoteWrite,
 ) -> LessonChangeResult:
     """Текст пояснения или подпись медиа сохраняется с ревизией, без журнала."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_lessons_project(session, project_id, writable=True)
         lesson = _require_lesson(session, project_id, lesson_id)
         _require_revision(lesson, command.expected_revision)
@@ -820,7 +822,7 @@ def confirm_lesson(
 
     Тема, ушедшая из программы, покидает урок, если у него остаются другие темы.
     """
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_lessons_project(session, project_id, writable=True)
         lesson = _require_lesson(session, project_id, lesson_id)
         _require_revision(lesson, command.expected_revision)
@@ -855,7 +857,7 @@ def unbind_lesson_bindings(
     session: Session, project_id: UUID, lesson_id: UUID, command: LessonUnbindWrite
 ) -> LessonChangeResult:
     """Снимает предложенные привязки урока; одна запись журнала, отмена — прежний статус."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_lessons_project(session, project_id, writable=True)
         lesson = _require_lesson(session, project_id, lesson_id)
         bindings = list(session.scalars(select(Binding).where(

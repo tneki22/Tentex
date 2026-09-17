@@ -12,6 +12,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
+from app.db import project_write_transaction
 from app.lessons.schemas import (
     LessonChangeResult,
     LessonCompletionWrite,
@@ -35,7 +36,7 @@ def save_position(
     session: Session, project_id: UUID, lesson_id: UUID, command: LessonProgressWrite
 ) -> LessonChangeResult:
     """Позиция чтения меняется часто и молча: ни ревизии, ни записи в журнал."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_lessons_project(session, project_id, writable=True)
         lesson = _require_lesson(session, project_id, lesson_id)
         if command.last_block_id is not None:
@@ -53,7 +54,7 @@ def set_completed(
     session: Session, project_id: UUID, lesson_id: UUID, command: LessonCompletionWrite
 ) -> LessonChangeResult:
     """«Урок пройден» — отметка и запись занятия в «Историю»; снятие убирает обе."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_lessons_project(session, project_id, writable=True)
         lesson = _require_lesson(session, project_id, lesson_id)
         now = datetime.now(UTC)

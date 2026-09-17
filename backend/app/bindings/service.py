@@ -20,6 +20,7 @@ from app.bindings.schemas import (
     SearchResultPageRead,
     SearchResultRead,
 )
+from app.db import project_write_transaction
 from app.lessons.refs import transfer_refs_on_revision
 from app.marker_labels import material_image_label
 from app.materials.schemas import MaterialPurpose
@@ -195,7 +196,7 @@ def _resolve_fragments(
 def create_bindings(
     session: Session, project_id: UUID, command: BindingCreateWrite
 ) -> BindingChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_project(session, project_id, writable=True)
         node = _require_study_node(session, project_id, command.program_node_id)
         fragments = _resolve_fragments(session, project_id, command)
@@ -259,7 +260,7 @@ def create_bindings(
 
 
 def remove_binding(session: Session, project_id: UUID, binding_id: UUID) -> BindingChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_project(session, project_id, writable=True)
         binding = session.get(Binding, binding_id)
         if binding is None or binding.project_id != project_id:
@@ -284,7 +285,7 @@ def remove_binding(session: Session, project_id: UUID, binding_id: UUID) -> Bind
 
 
 def restore_binding(session: Session, project_id: UUID, binding_id: UUID) -> BindingChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_project(session, project_id, writable=True)
         binding = session.get(Binding, binding_id)
         if binding is None or binding.project_id != project_id:
@@ -319,7 +320,7 @@ def remove_bindings_bulk(
     Одна запись в журнале на всю операцию: undo (Ctrl+Z или кнопка в уведомлении)
     возвращает всю пачку разом, тем же механизмом, что и одиночное снятие.
     """
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_project(session, project_id, writable=True)
         material = _require_project_material(session, project_id, command.material_id)
         link = session.get(ProjectMaterial, (project_id, command.material_id))
@@ -558,7 +559,7 @@ def _highlight_reads(highlights: Sequence[search_module.Highlight]) -> list[Sear
 
 
 def reindex_material(session: Session, project_id: UUID, material_id: UUID) -> ReindexResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None:
             raise ProjectNotFoundError()
