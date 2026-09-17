@@ -4,7 +4,7 @@
   min-height: 100dvh;
   display: grid;
   grid-template-columns: minmax(17rem, 18rem) minmax(0, 1fr);
-  background: var(--canvas);
+  background: transparent;
 }
 
 .cards-mode-switcher {

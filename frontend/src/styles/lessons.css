@@ -6,7 +6,7 @@
   height: 100dvh;
   display: grid;
   overflow: hidden;
-  background: var(--canvas);
+  background: transparent;
 }
 
 .lessons-tree-panel {

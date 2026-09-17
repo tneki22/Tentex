@@ -3541,7 +3541,7 @@
   min-height: 100dvh;
   display: grid;
   grid-template-columns: minmax(17rem, 18rem) minmax(0, 1fr);
-  background: var(--canvas);
+  background: transparent;
 }
 
 .project-side-panel {
@@ -8101,7 +8101,7 @@ button.wizard-back-projects {
     var(--materials-inspector-handle, 10px)
     var(--materials-inspector-width, 356px);
   overflow: hidden;
-  background: var(--canvas);
+  background: transparent;
 }
 
 /* Полный экран: остаются только тулбар и лист. Выход — той же кнопкой, F или Esc. */
@@ -8340,6 +8340,12 @@ button.wizard-back-projects {
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   background: var(--canvas);
+}
+
+/* Обзор материалов остаётся частью экрана проекта; сплошная подложка нужна
+   только открытому документу. */
+.project-materials:not(.has-material-inspector) .materials-document-area {
+  background: transparent;
 }
 
 .materials-document-toolbar {
