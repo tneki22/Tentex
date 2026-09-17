@@ -254,7 +254,7 @@ function MaterialOverview({
   onChooseLibrary: () => void;
 }) {
   return (
-    <div className="materials-document-stage">
+    <div className="materials-document-stage is-standalone">
       <div className="materials-document-scroll">
         <div className="materials-overview">
           <header>

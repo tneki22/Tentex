@@ -8515,6 +8515,13 @@ button.wizard-back-projects {
   overflow: hidden;
 }
 
+/* Обзор материалов — без тулбара, единственный ребёнок .materials-document-area:
+   без явного grid-row он попадает в auto-строку тулбара, а не в 1fr-строку сцены
+   (см. тот же случай у .materials-conspect-summary в conspects.css). */
+.materials-document-stage.is-standalone {
+  grid-row: 1 / -1;
+}
+
 /* Зоны листания по краям: попасть мышью в поля листа проще, чем в кнопку тулбара. */
 .materials-page-zone {
   position: absolute;
