@@ -1,0 +1,36 @@
+import { test, expect } from "@playwright/test";
+
+test("фон сохраняется, покрывает окно и уважает уменьшение движения", async ({ page }) => {
+  await page.goto(`${process.env.TENTEX_TEST_URL ?? "http://localhost:5187"}/setup?section=background`);
+  await expect(page.getByRole("radio", { name: "Однотонный" })).toBeChecked();
+  await expect(page.locator(".app-background")).toHaveCount(0);
+  await page.getByRole("radio", { name: "Сияние" }).click();
+  await page.getByRole("switch", { name: "Плавное движение" }).click();
+  await expect(page.locator(".background-art")).toHaveCSS("animation-name", "background-drift");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(page.locator(".background-art")).toHaveCSS("animation-name", "none");
+  await page.reload();
+  await expect(page.getByRole("radio", { name: "Сияние" })).toBeChecked();
+  await expect(page.locator(".app-background")).toHaveCSS("pointer-events", "none");
+  const box = await page.locator(".app-background").boundingBox();
+  expect(box).toEqual({ x: 0, y: 0, ...page.viewportSize() });
+  await page.screenshot({ path: "output/background-light.png" });
+  await page.evaluate(() => localStorage.setItem("tentex:theme", "dark"));
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.screenshot({ path: "output/background-dark.png" });
+  await page.getByRole("radio", { name: "Волны" }).click();
+  const photo = await page.screenshot();
+  await page.locator('input[type="file"]').setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: photo });
+  await expect(page.getByRole("radio", { name: "Своё фото" })).toBeChecked();
+  await page.reload();
+  await expect(page.locator(".background-photo.background-art")).toBeVisible();
+  await page.locator('input[type="file"]').setInputFiles({ name: "broken.png", mimeType: "image/png", buffer: Buffer.from("broken") });
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Своё фото" })).toBeChecked();
+  await page.getByRole("button", { name: "Удалить фото" }).click();
+  await expect(page.getByRole("radio", { name: "Однотонный" })).toBeChecked();
+  await page.getByRole("radio", { name: "Волны" }).click();
+  await page.getByRole("link", { name: "Проекты", exact: true }).click();
+  await expect(page.locator(".background-art.background-waves")).toBeVisible();
+});

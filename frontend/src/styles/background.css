@@ -1,0 +1,24 @@
+.background-root { isolation: isolate; min-height: 100vh; }
+.app-background { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+.background-art { position: absolute; inset: 0; background-size: cover; background-position: center; }
+.background-art:not(.background-photo) { inset: -8%; }
+.background-aurora { background-image: radial-gradient(ellipse at 15% 25%, var(--accent), transparent 65%), radial-gradient(ellipse at 85% 75%, var(--tone-info), transparent 65%); }
+.background-waves { background-image: repeating-radial-gradient(ellipse at 0% 100%, transparent 0 45px, var(--accent) 46px 48px, transparent 49px 85px), linear-gradient(135deg, var(--canvas), var(--tone-info)); }
+.background-plain, .background-photo { background-color: var(--canvas); }
+.background-art[data-motion="true"]:not(.background-photo) { animation: background-drift 30s ease-in-out infinite alternate; }
+@keyframes background-drift { to { transform: translate(3%, -3%) scale(1.04); } }
+@media (prefers-reduced-motion: reduce) { .background-art[data-motion="true"]:not(.background-photo) { animation: none; } }
+[data-background="custom"] .app-nav { background: color-mix(in srgb, var(--paper) 70%, transparent); }
+[data-background="custom"] .app-topbar { background: color-mix(in srgb, var(--canvas) 85%, transparent); }
+.background-settings { display: grid; gap: var(--space-5); max-width: 760px; }
+.background-settings header p, .background-settings small { color: var(--muted); }
+.background-settings header p { margin-bottom: 0; }
+.background-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: var(--space-3); }
+.background-option { position: relative; display: grid; gap: var(--space-3); padding: var(--space-2); text-align: left; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); cursor: pointer; }
+.background-option[data-state="checked"] { border-color: var(--accent); box-shadow: var(--focus-ring); }
+.background-option:disabled { opacity: .5; cursor: default; }
+.background-swatch { display: block; height: 85px; border-radius: var(--radius-sm); background-size: cover; background-position: center; }
+.background-selected { position: absolute; right: var(--space-2); bottom: var(--space-2); color: var(--accent); }
+.background-upload, .background-intensity { display: grid; gap: var(--space-2); }
+.background-intensity input { width: 100%; accent-color: var(--accent); }
+.background-settings > button { justify-self: start; }

@@ -1,11 +1,14 @@
-import { Bot, BrainCircuit, DatabaseBackup, HardDrive, ScanText } from "lucide-react";
+import { Image, Bot, BrainCircuit, DatabaseBackup, HardDrive, ScanText } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { EmptyState, PageHead } from "../components/ui";
 import { AiSettingsSection } from "./AiSettingsSection";
 import { OcrSettingsSection } from "./OcrSettingsSection";
 
+import { BackgroundSettingsSection } from "./BackgroundSettingsSection";
+
 const SECTIONS = [
+  { id: "background", label: "Задний фон", icon: Image },
   { id: "ai", label: "ИИ", icon: BrainCircuit },
   { id: "ocr", label: "Распознавание", icon: ScanText },
   { id: "bot", label: "Бот", icon: Bot },
@@ -42,7 +45,7 @@ const SUBSECTIONS: Partial<Record<SetupSection, readonly { id: string; label: st
   ocr: OCR_SUBSECTIONS,
 };
 
-const FUTURE_COPY: Record<Exclude<SetupSection, "ai" | "ocr">, { title: string; body: string }> = {
+const FUTURE_COPY: Record<Exclude<SetupSection, "ai" | "ocr" | "background">, { title: string; body: string }> = {
   bot: {
     title: "Бот пока не настроен",
     body: "Здесь появятся подключение Telegram, расписание сообщений и тихие часы — после отдельного серверного среза.",
@@ -102,7 +105,7 @@ export function Setup() {
     });
   }
 
-  const future = active === "ai" || active === "ocr" ? null : FUTURE_COPY[active];
+  const future = active === "ai" || active === "ocr" || active === "background" ? null : FUTURE_COPY[active];
 
   return (
     <div className="screen setup-screen">
@@ -151,7 +154,7 @@ export function Setup() {
               subsection={activeSubsection as OcrSettingsSubsection}
               onActiveSubsection={setActiveSubsection}
             />
-          ) : future ? (
+          ) : active === "background" ? <BackgroundSettingsSection /> : future ? (
             <EmptyState title={future.title}>
               <p>{future.body}</p>
             </EmptyState>
