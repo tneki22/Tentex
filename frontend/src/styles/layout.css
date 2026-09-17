@@ -7337,7 +7337,8 @@ button.wizard-back-projects {
 .textbook-builder-confirm { margin-inline-start: auto; }
 .textbook-program-editor { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto auto auto minmax(0, 1fr); overflow: hidden; background: var(--paper); }
 .textbook-builder > .textbook-program-editor { grid-row: 1 / -1; }
-.program-main > .textbook-program-editor { min-height: calc(100vh - var(--space-8) * 2); border: 1px solid var(--line); border-radius: var(--radius-xl); }
+.program-main > .textbook-program-editor { height: calc(100vh - var(--space-8) * 2); border: 1px solid var(--line); border-radius: var(--radius-xl); }
+.program-main > .textbook-program-editor > .page-head { margin-bottom: var(--space-4); }
 
 /* Режим «С ИИ»: тулбар общий (renderHeader), контентная область — чат + предпросмотр
  * вместо Дерево/Текст/Вопросы. grid-row занимает всё, что осталось после header/error-slot,

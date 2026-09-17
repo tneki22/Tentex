@@ -567,7 +567,6 @@ export function Program() {
             />
           </div>}
           renderHeader={(actions) => <PageHead
-            eyebrow="Структура учебника"
             title="Программа"
             actions={<>
               <Button variant="ghost" disabled={!actions.canUndo || actions.busy} onClick={() => void actions.undo()}><Undo2 size={15} />Отменить</Button>
