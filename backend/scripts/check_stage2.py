@@ -292,7 +292,6 @@ def run() -> None:
                         "cards",
                         "plan",
                         "cards",
-                        "sql",
                         "oral_answers",
                         "repetitions",
                     ],
@@ -329,7 +328,6 @@ def run() -> None:
                 "cards",
                 "repetitions",
                 "oral_answers",
-                "sql",
             ]
             assert updated["goal_passport"]["target_outcome"] == "application"
 

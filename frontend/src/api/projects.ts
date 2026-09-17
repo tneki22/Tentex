@@ -3,7 +3,7 @@ import type { BackgroundJobStartRead } from "./backgroundJobs";
 export type ProjectStatus = "draft" | "active" | "archived" | "completed";
 export type WorkspaceVariant = "exam" | "textbook";
 export type TemplateKey = "exam" | "textbook" | "free";
-export type ModuleKey = "plan" | "lessons" | "cards" | "repetitions" | "oral_answers" | "sql";
+export type ModuleKey = "plan" | "lessons" | "cards" | "repetitions" | "oral_answers";
 export type GoalPurpose = "exam" | "work" | "interview" | "interest";
 export type GoalScope = "whole" | "goal";
 export type StartingLevel = "beginner" | "familiar" | "refreshing";

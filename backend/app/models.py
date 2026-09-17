@@ -259,12 +259,18 @@ class BlockClass(StrEnum):
 
 
 class ModuleKey(StrEnum):
+    """Разделы проекта, которые можно включить и выключить.
+
+    Значение ``sql`` снято 17.09.2026 вместе с задачами на SQL (REQUIREMENTS.md §10).
+    Колонка ``Project.enabled_modules`` — JSON без CHECK, старых данных с ``sql`` нет,
+    поэтому миграция не нужна.
+    """
+
     PLAN = "plan"
     LESSONS = "lessons"
     CARDS = "cards"
     REPETITIONS = "repetitions"
     ORAL_ANSWERS = "oral_answers"
-    SQL = "sql"
 
 
 class BindingStatus(StrEnum):

@@ -60,17 +60,11 @@ export function ProjectNav({ projectId, active, textbook = false, modules, count
     ...(!textbook && hasModule("plan")
       ? [{ key: "plan" as const, to: `/projects/${projectId}/plan`, icon: CalendarDays, label: "Моя подготовка" }]
       : []),
-    ...(textbook
-      ? [{
-        key: "cards" as const,
-        to: `/projects/${projectId}/cards`,
-        icon: Layers,
-        label: "Карточки",
-        disabledReason: "Учебная конфигурация Карточек будет спроектирована отдельно",
-      }]
-      : hasModule("cards")
-        ? [{ key: "cards" as const, to: `/projects/${projectId}/cards`, icon: Layers, label: "Карточки" }]
-        : []),
+    // Карточек в учебниковом режиме нет (решение 17.09.2026, TEXTBOOK_MODE.md §10):
+    // самопроверка там — задания урока. В этом месте навигации позже встанет «Покрытие».
+    ...(!textbook && hasModule("cards")
+      ? [{ key: "cards" as const, to: `/projects/${projectId}/cards`, icon: Layers, label: "Карточки" }]
+      : []),
     { key: "settings", to: `/projects/${projectId}/settings`, icon: Settings, label: "Настройки" },
   ];
 
