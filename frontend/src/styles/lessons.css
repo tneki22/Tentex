@@ -278,6 +278,21 @@
   gap: var(--space-1);
 }
 
+/* Свёртка правой панели — не участник переноса тулбара: отдельный элемент ряда,
+   поэтому при нехватке места вниз уходят инструменты урока, а не она сама.
+   align-items: flex-start — если инструменты всё же перенеслись на вторую
+   строку, кнопка остаётся на уровне первой, а не по центру всего блока. */
+.lessons-lesson-toolbar-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.lessons-lesson-toolbar-row > .lessons-lesson-toolbar {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .lessons-block-toolbar {
   padding-top: var(--space-2);
   border-top: 1px dashed var(--line);
@@ -301,10 +316,20 @@
   display: inline-flex;
 }
 
-/* Кнопка свёртки правой панели встроена в тулбар, а не висит отдельной строкой сверху. */
+.lessons-tool-destructive:hover:not(:disabled) {
+  color: var(--tone-danger);
+}
+
+/* Кнопка свёртки правой панели встроена в тулбар, а не висит отдельной строкой сверху.
+   В заголовке темы (нет открытого урока) она — единственный элемент своего ряда,
+   margin-left:auto прижимает её к правому краю. В тулбаре урока это уже готовый
+   сосед `.lessons-lesson-toolbar` в `.lessons-lesson-toolbar-row`, доп. отступ не нужен. */
 .lessons-toolbar-end {
   display: inline-flex;
   flex: none;
+}
+
+.lessons-topic-title-row > .lessons-toolbar-end {
   margin-left: auto;
 }
 

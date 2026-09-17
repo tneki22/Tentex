@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "rea
 import { Link } from "react-router";
 import {
   AlertTriangle, Archive, ArrowDown, ArrowRightLeft, ArrowUp, CheckCircle2, ChevronDown, Combine, Dumbbell, ExternalLink,
-  FilePlus2, Image, Link2, MoreHorizontal, Pencil, Plus, RotateCcw, Scissors, Sparkles, SquareDashed, Trash2, Undo2, X,
+  FilePlus2, Image, Link2, Pencil, Plus, RotateCcw, Scissors, Sparkles, SquareDashed, Trash2, Undo2, X,
 } from "lucide-react";
 import {
   confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, unbindLessonBindings,
@@ -68,6 +68,8 @@ interface ToolButtonProps {
   hint?: string;
   variant?: "secondary" | "ghost";
   disabled?: boolean;
+  /** Красный при наведении — для необратимых действий вроде удаления урока. */
+  destructive?: boolean;
   onClick(): void;
   labelClassName?: string;
 }
@@ -77,11 +79,11 @@ interface ToolButtonProps {
  * наведению у такой кнопки не остаётся названия вообще. Обёртка `span` нужна
  * выключенной кнопке: она не получает событий мыши, и подсказка бы не появилась.
  */
-function ToolButton({ icon, label, hint, variant = "ghost", disabled, onClick, labelClassName = "toolbar-label" }: ToolButtonProps) {
+function ToolButton({ icon, label, hint, variant = "ghost", disabled, destructive, onClick, labelClassName = "toolbar-label" }: ToolButtonProps) {
   return (
     <Tooltip label={hint ?? label} side="bottom">
       <span className="lessons-tool">
-        <Button variant={variant} aria-label={label} disabled={disabled} onClick={onClick}>
+        <Button variant={variant} className={destructive ? "lessons-tool-destructive" : undefined} aria-label={label} disabled={disabled} onClick={onClick}>
           {icon}<span className={labelClassName}>{label}</span>
         </Button>
       </span>
@@ -374,31 +376,32 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
           {data && (
             <>
               <header className="lessons-lesson-head">
-                <div className="lessons-lesson-toolbar">
-                  <SegmentedTabs label="Способ показа урока" value={mode} tabs={VIEW_MODE_TABS} onChange={setMode} />
-                  {data.status === "draft"
-                    ? <ToolButton variant="secondary" icon={<CheckCircle2 size={14} />} label="Готов" hint="Урок готов — снять пометку черновика" disabled={saving} onClick={() => void change({ status: "ready" })} />
-                    : <ToolButton variant="secondary" icon={<RotateCcw size={14} />} label="Вернуть в черновики" disabled={saving} onClick={() => void change({ status: "draft" })} />}
-                  {data.status !== "archived" && <ToolButton icon={<Archive size={14} />} label="В архив" disabled={saving} onClick={() => void change({ status: "archived" })} />}
-                  <ToolButton
-                    icon={<Undo2 size={14} />}
-                    label="Отменить"
-                    hint={data.undo_sequence ? "Отменить последнее действие" : "Отменить можно только последнее действие проекта"}
-                    disabled={saving || !data.undo_sequence}
-                    onClick={() => void undoLast()}
-                  />
-                  <Tooltip label="Открыть в Рабочей области" side="bottom">
-                    <Link className="secondary-button" aria-label="Открыть в Рабочей области" to={`/projects/${projectId}?topic=${topic.id}&tab=lesson&lesson=${data.id}`}><ExternalLink size={14} /><span className="toolbar-label toolbar-label-link">Открыть в Рабочей области</span></Link>
-                  </Tooltip>
-                  <Menu
-                    label="Действия над уроком"
-                    tooltip="Действия над уроком"
-                    trigger={<Button variant="ghost" aria-label="Действия над уроком" disabled={saving}><MoreHorizontal size={14} /></Button>}
-                    items={[{
-                      label: "Удалить урок", icon: <Trash2 size={14} />, destructive: true,
-                      onSelect: () => setRemoving(openLesson ?? null),
-                    }]}
-                  />
+                <div className="lessons-lesson-toolbar-row">
+                  <div className="lessons-lesson-toolbar">
+                    <SegmentedTabs label="Способ показа урока" value={mode} tabs={VIEW_MODE_TABS} onChange={setMode} />
+                    {data.status === "draft"
+                      ? <ToolButton variant="secondary" icon={<CheckCircle2 size={14} />} label="Готов" hint="Урок готов — снять пометку черновика" disabled={saving} onClick={() => void change({ status: "ready" })} />
+                      : <ToolButton variant="secondary" icon={<RotateCcw size={14} />} label="Вернуть в черновики" disabled={saving} onClick={() => void change({ status: "draft" })} />}
+                    {data.status !== "archived" && <ToolButton icon={<Archive size={14} />} label="В архив" disabled={saving} onClick={() => void change({ status: "archived" })} />}
+                    <ToolButton
+                      icon={<Undo2 size={14} />}
+                      label="Отменить"
+                      hint={data.undo_sequence ? "Отменить последнее действие" : "Отменить можно только последнее действие проекта"}
+                      disabled={saving || !data.undo_sequence}
+                      onClick={() => void undoLast()}
+                    />
+                    <Tooltip label="Открыть в Рабочей области" side="bottom">
+                      <Link className="secondary-button" aria-label="Открыть в Рабочей области" to={`/projects/${projectId}?topic=${topic.id}&tab=lesson&lesson=${data.id}`}><ExternalLink size={14} /><span className="toolbar-label toolbar-label-link">Открыть в Рабочей области</span></Link>
+                    </Tooltip>
+                    <ToolButton
+                      icon={<Trash2 size={14} />}
+                      label="Удалить урок"
+                      destructive
+                      disabled={saving}
+                      labelClassName="sr-only"
+                      onClick={() => setRemoving(openLesson ?? null)}
+                    />
+                  </div>
                   <span className="lessons-toolbar-end">{panelToggle}</span>
                 </div>
 
