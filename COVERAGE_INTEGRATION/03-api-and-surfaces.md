@@ -9,7 +9,7 @@
 | POST `/preflight` | material_ids, mode, context_material_ids, expected_program_revision, limits, role overrides. Без платного вызова: готовые/исключённые источники, текущие ревизии, объём, ограничения извлечения/модальностей, доступные модели и оценка с неопределённостью |
 | POST `/runs` | То же + preflight fingerprint + request_key. Повторно проверить готовность/версии; создать manifest и BackgroundJob атомарно, вернуть 202 run_id/job_id. Повтор ключа с тем же телом возвращает тот же запуск; иное тело — 409 |
 | GET `/runs/{id}` | snapshot, lifecycle, stage, primary counts, refine counts, pending synthesis, stop_reason, costs/uncertain costs, доступные действия. Проверять project принадлежность |
-| POST `/runs/{id}/control` | pause / resume / cancel + expected run generation. Выполнять переход только из допустимого состояния; идемпотентный повтор текущего намерения |
+| POST `/runs/{id}/control` | pause / resume / cancel + expected **control_version** (не внутренний `execution_generation`: тот меняется на каждом кванте worker и давал бы ложный 409). Выполнять переход только из допустимого состояния; идемпотентный повтор текущего намерения |
 | GET `/overview` | filters/scope; coverage_revision, program_revision, source revisions, распределения, basis labels, unresolved и findings counts, partial/stale и extraction diagnostic flags |
 | GET `/matrix` | node/branch/material filters, cursors. Упорядоченные строки/источники и sparse cells; bounded page, counts unique blocks, role/status breakdown |
 | GET `/graph` | focus/type/depth, filters, cursor. Typed nodes/edges, expandable flags, counts, truncation, total; те же агрегаты, не отдельный графовый расчёт истины |
