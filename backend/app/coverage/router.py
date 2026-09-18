@@ -55,6 +55,17 @@ def overview(project_id: UUID, session: DB):
     return queries.overview(session, project_id)
 
 
+@router.get("/issues", response_model=BlocksRead)
+def issues(
+    project_id: UUID,
+    session: DB,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Нерешённые, сбойные и устаревшие блоки всех источников одной страницей."""
+    return queries.issue_blocks(session, project_id, offset, limit)
+
+
 @router.get("/sources/{material_id}/blocks", response_model=BlocksRead)
 def blocks(
     project_id: UUID,

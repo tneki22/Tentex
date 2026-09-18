@@ -131,7 +131,8 @@ def source_snapshot(session, project_id, ids, *, require_ready=True) -> list[dic
     result = []
     for material_id in sorted(set(ids), key=str):
         material = session.get(Material, material_id)
-        if not material or not session.get(ProjectMaterial, (project_id, material_id)):
+        link = session.get(ProjectMaterial, (project_id, material_id))
+        if not material or not link:
             raise ProjectConflictError("Источник не подключён", code="coverage_scope_denied")
         if (
             require_ready and material.status != MaterialState.READY
@@ -147,6 +148,9 @@ def source_snapshot(session, project_id, ids, *, require_ready=True) -> list[dic
         result.append(
             {
                 "id": str(material_id),
+                "name": link.display_name or material.original_name,
+                "source_role": link.source_role,
+                "purposes": link.purposes,
                 "revision": material.active_parse_revision,
                 "diagnostics": diagnostics,
                 "diagnostics_fingerprint": fingerprint(diagnostics),
@@ -212,6 +216,12 @@ def manifest_rows(session, snapshot):
             yield (
                 block,
                 {
+                    "title": block.title,
+                    "section_path": block.title,
+                    "block_class": block.block_class,
+                    "service_reason": block.service_reason,
+                    "page_from": block.page_from,
+                    "page_to": block.page_to,
                     "fragments": [
                         {
                             "id": u.ref,

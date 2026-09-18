@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.bindings.service import remove_binding
 from app.coverage.budget import ResearchBudget, budget_usage
 from app.coverage.lifecycle import ExecutionToken, control_run
+from app.coverage.packets import build_packet_specs
+from app.coverage.protocol import expand_compact_response
 from app.coverage.queries import evidence_read, overview, run_read
 from app.coverage.research import prepare_task, process_coverage_job, publish_packet
 from app.coverage.schemas import Evidence, RunControl, RunPlan, RunStart
@@ -176,16 +178,78 @@ def test_100_blocks_error_missing_pause_restart_and_receipts(session):
         assert result["state"] == "completed"
         assert result["primary"] == {
             "total": 100,
-            "inspected": 98,
-            "error": 2,
+            "inspected": 100,
+            "error": 0,
             "pending": 0,
             "processing": 0,
         }
-        assert restarted.get(BackgroundJob, job.id).done == 98
+        assert restarted.get(BackgroundJob, job.id).done == 100
         assert sum(result["outcomes"].values()) + result["primary"]["error"] == 100
-        assert calls == 7  # Сохранённый первый ответ не вызывает executor повторно.
+        assert calls == 7  # Сохранённый первый пакет не вызывает executor повторно.
         assert restarted.scalar(select(func.count()).select_from(Binding)) == 98
         assert sum(overview(restarted, project.id)["distribution"].values()) == 100
+
+
+def test_packet_builder_groups_neighbors_and_covers_oversized_fragment(session):
+    _, _, material = setup_source(session, 3)
+    blocks = list(
+        session.scalars(
+            select(MaterialBlock)
+            .where(MaterialBlock.material_id == material.id)
+            .order_by(MaterialBlock.sort_order)
+        )
+    )
+    rows = [(block, {"section_path": "Один раздел"}) for block in blocks]
+    grouped = build_packet_specs(session, rows, token_budget=100)
+    assert len(grouped) == 1
+    assert grouped[0].targets == [str(block.id) for block in blocks]
+
+    fragment = session.scalar(
+        select(MaterialFragment).where(MaterialFragment.block_id == blocks[0].id)
+    )
+    fragment.text = " ".join(f"слово{i}" for i in range(80))
+    session.commit()
+    intervals = build_packet_specs(session, rows[:1], token_budget=10)
+    assert len(intervals) > 1
+    parts = [
+        part
+        for packet in intervals
+        for part in packet.checkpoint["target_specs"][str(blocks[0].id)]["parts"]
+    ]
+    assert parts[0]["start"] == 0
+    assert parts[-1]["end"] == len(fragment.text)
+    assert all(
+        left["end"] == right["start"]
+        for left, right in zip(parts, parts[1:], strict=False)
+    )
+    assert any(part["forced"] for part in parts)
+
+
+def test_compact_range_expands_by_packet_order_and_missing_alias_is_not_outside(session):
+    project, _, material = setup_source(session, 3)
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+    aliases = list(task_input.target_aliases.values())
+    expanded = expand_compact_response(
+        task_input,
+        [{
+            "from_target": aliases[0],
+            "to_target": aliases[-1],
+            "outcome": "service",
+            "parts": [],
+        }],
+    )
+    assert [item["target_id"] for item in expanded] == task_input.targets
+    assert all(item["outcome"] == "service" for item in expanded)
+    assert expand_compact_response(
+        task_input,
+        [{
+            "from_target": "B404",
+            "to_target": "B404",
+            "outcome": "outside_program",
+            "parts": [],
+        }],
+    ) == []
 
 
 def test_isolation_receipt_idempotency_and_original_text(session):
@@ -432,7 +496,7 @@ def test_current_count_does_not_promote_mentions_or_exercise_to_reading_basis(se
     process_coverage_job(session, job, executor)
     summary = overview(session, project.id)
     assert summary["topics"] == {"total": 1, "with_content": 1, "reading_basis": 0, "legacy": 0}
-    assert summary["material_ratio"]["numerator"] == 1
+    assert summary["material_ratio"]["numerator"] == 2
 
 
 def test_api_offline_preflight_scope_and_request_key_conflict(session):
@@ -465,3 +529,62 @@ def test_api_offline_preflight_scope_and_request_key_conflict(session):
         == 404
     )
     assert client.get(f"{base}/overview").json()["total"] == 1
+
+
+def test_issues_page_lists_only_blocks_that_need_attention(session):
+    """Экран берёт короткую ленту проблем, а не выкачивает все блоки проекта."""
+    from fastapi.testclient import TestClient
+
+    from app.db import get_session
+    from app.main import create_app
+
+    project, topic, material = setup_source(session, 3)
+    run_id, job, token, _ = launch(session, project, material)
+
+    def executor(task_input):
+        raw = answer(task_input, topic.id)
+        raw[0]["links"][0]["roles"] = ["invalid_role"]
+        return raw
+
+    process_coverage_job(session, job, executor)
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+    base = f"/api/projects/{project.id}/coverage"
+    issues = client.get(f"{base}/issues").json()
+    assert issues["total"] == 1 and issues["next_offset"] is None
+    assert [item["bucket"] for item in issues["items"]] == ["unresolved"]
+    assert client.get(f"{base}/issues?limit=1").json()["total"] == 1
+    blocks = client.get(f"{base}/sources/{material.id}/blocks").json()
+    assert blocks["total"] == 3
+    assert run_read(session, project.id, run_id)["primary"]["inspected"] == 3
+
+
+def test_preflight_returns_resolved_roles_when_models_are_configured(session, ai_config):
+    """Настроенная модель — единственный путь к платному запуску, и он не должен ломать ответ."""
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select as sa_select
+
+    from app.db import get_session
+    from app.main import create_app
+    from app.models import AiProviderConnection
+
+    project, _, material = setup_source(session, 1)
+    provider_id = session.scalar(sa_select(AiProviderConnection.id))
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+    plan = {
+        "material_ids": [str(material.id)],
+        "expected_program_revision": 0,
+        "roles": {
+            key: {"provider_id": str(provider_id), "model_id": ai_config}
+            for key in ("overview", "research")
+        },
+    }
+    checked = client.post(f"/api/projects/{project.id}/coverage/preflight", json=plan)
+    assert checked.status_code == 200, checked.text
+    body = checked.json()
+    assert body["execution_available"] and body["execution_issue"] is None
+    assert body["model_roles"]["overview"]["model_id"] == ai_config
+    assert body["model_roles"]["overview"]["context_length"] == 100_000

@@ -82,15 +82,22 @@ class Limits(StrictModel):
     max_cost_usd: float | None = Field(default=None, gt=0)
 
 
+class RoleSelection(StrictModel):
+    """Явный выбор модели; проход 2 не наследует дешёвый default."""
+
+    provider_id: UUID
+    model_id: str = Field(min_length=1)
+
+
 class RunPlan(StrictModel):
-    """Офлайновая область запуска; выбор реальной модели подключается в И3."""
+    """Область запуска и явно выбранные модели ролей прохода 2."""
 
     material_ids: list[UUID] = Field(min_length=1, max_length=100)
     context_material_ids: list[UUID] = Field(default_factory=list, max_length=100)
     mode: Literal["initial", "incremental", "deep_program"] = "initial"
     expected_program_revision: int = Field(ge=0)
     limits: Limits = Field(default_factory=Limits)
-    roles: dict[str, str] = Field(default_factory=dict)
+    roles: dict[Literal["overview", "research"], RoleSelection] = Field(default_factory=dict)
 
 
 class RunStart(RunPlan):
@@ -107,6 +114,16 @@ class RunControl(StrictModel):
     expected_generation: int = Field(ge=0)
 
 
+class ModelRoleRead(StrictModel):
+    """Разрешённая модель роли: context_length нужен экрану и расчёту пакета, а не только UI."""
+
+    provider_id: str
+    model_id: str
+    model_source: str
+    context_length: int | None = None
+    prompt_version: str
+
+
 class PreflightRead(StrictModel):
     """Снимок разнородных полей предметных сущностей, без копии текста книги."""
 
@@ -114,7 +131,50 @@ class PreflightRead(StrictModel):
     snapshot: dict[str, Any]
     blocks: int
     execution_available: bool
+    execution_issue: str | None = None
+    model_roles: dict[str, ModelRoleRead] = Field(default_factory=dict)
     limits: Limits
+
+
+class CompactLink(StrictModel):
+    """Ссылка в alias-протоколе; текст опоры сервер берёт из снимка."""
+
+    topic: str
+    semantic_kind: Literal["content", "mention", "context", "prerequisite"]
+    roles: list[Role] = Field(min_length=1)
+    evidence: list[str] = Field(default_factory=list, max_length=64)
+
+
+class CompactPart(StrictModel):
+    """Исход одного фрагмента пакета."""
+
+    fragment: str
+    outcome: Literal["content", "mention", "context", "outside_program", "service", "unresolved"]
+    links: list[CompactLink] = Field(default_factory=list, max_length=16)
+
+
+class CompactDecision(StrictModel):
+    """Диапазон определяется порядком targets только в текущем пакете."""
+
+    from_target: str
+    to_target: str
+    outcome: Outcome
+    reason: str = ""
+    parts: list[CompactPart] = Field(default_factory=list, max_length=4096)
+
+
+class SectionDescription(StrictModel):
+    """Независимое описание раздела без подгонки под программу."""
+
+    section: str
+    summary: str = Field(min_length=1, max_length=4000)
+
+
+class OverviewPacketResponse(StrictModel):
+    """Компактный ответ первичного обзора."""
+
+    decisions: list[CompactDecision] = Field(max_length=4096)
+    section_descriptions: list[SectionDescription] = Field(default_factory=list, max_length=64)
 
 
 class RunRead(StrictModel):
@@ -148,6 +208,9 @@ class OverviewRead(StrictModel):
     topics: dict[str, int]
     material_ratio: dict[str, int | float | str | None]
     findings: int
+    latest_run_id: UUID | None = None
+    latest_run_state: BackgroundJobState | None = None
+    sources: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class BlockRead(StrictModel):
@@ -159,6 +222,11 @@ class BlockRead(StrictModel):
     bucket: str
     has_content: bool
     result_id: UUID | None
+    title: str | None = None
+    page_from: int
+    page_to: int
+    material_name: str
+    reason: str | None = None
 
 
 class BlocksRead(StrictModel):

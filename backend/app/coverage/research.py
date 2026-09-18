@@ -1,4 +1,4 @@
-"""Исполнитель И2: устойчивый цикл с подставным портом, без подключения модели."""
+"""Устойчивый исполнитель первичного обзора через общий ModelGateway."""
 
 import json
 import logging
@@ -9,9 +9,14 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.coverage.lifecycle import ExecutionToken, execution_boundary, fenced, stop_core
+from app.coverage.protocol import (
+    CoverageOverviewExecutor,
+    PacketExecution,
+    expand_compact_response,
+)
 from app.coverage.publication import publish_decision
 from app.coverage.snapshots import block_units, fingerprint, snapshot_current
-from app.coverage.validation import CheckedDecision, validate_target
+from app.coverage.validation import CheckedDecision, Unit, validate_target
 from app.db import job_write_transaction
 from app.models import BackgroundJobState, CoverageBlockResult, CoverageTask
 from app.projects.errors import ProjectConflictError
@@ -26,9 +31,20 @@ class TaskInput:
     """Порт не получает SQL-сессию и не может публиковать непроверенный результат."""
 
     task_id: UUID
+    project_id: UUID
     targets: list[str]
     seen: dict
     topics: set[str]
+    target_refs: dict[str, list[str]]
+    context_refs: list[str]
+    target_aliases: dict[str, str]
+    fragment_aliases: dict[str, str]
+    ref_by_alias: dict[str, str]
+    topic_aliases: dict[str, tuple[str, str]]
+    topic_by_alias: dict[str, str]
+    sections: dict[str, str]
+    model_roles: dict
+    scope: dict
     kind: str = "overview"
 
 
@@ -41,7 +57,9 @@ def prepare_task(session, token, task_id):
         task = session.get(CoverageTask, task_id)
         if task.run_id != run.id:
             raise ValueError("task_scope")
-        seen = {}
+        seen: dict[str, Unit] = {}
+        target_refs: dict[str, list[str]] = {}
+        target_specs = task.checkpoint.get("target_specs", {})
         for target in task.targets:
             row = session.scalar(
                 select(CoverageBlockResult).where(
@@ -57,21 +75,98 @@ def prepare_task(session, token, task_id):
                 raise ProjectConflictError(
                     "Текст снимка изменился", code="coverage_snapshot_changed"
                 )
+            spec = target_specs.get(target)
+            if spec and spec.get("parts"):
+                clipped = {}
+                for part in spec["parts"]:
+                    unit = units.get(part["ref"])
+                    if unit is None:
+                        raise ProjectConflictError(
+                            "Текст снимка изменился", code="coverage_snapshot_changed"
+                        )
+                    start, end = part["start"], part["end"]
+                    clipped[unit.ref] = Unit(
+                        unit.ref,
+                        unit.text[start:end],
+                        unit.block_id,
+                        unit.page_ref,
+                        unit.kind,
+                        unit.quality,
+                        {**unit.locator, "text_start": start, "text_end": end},
+                        start,
+                    )
+                units = clipped
             seen.update(units)
+            target_refs[target] = list(units)
             if row.work_state == "pending":
                 row.work_state = "processing"
+        context_refs = []
+        for ref in task.checkpoint.get("context_refs", []):
+            if ref in seen:
+                continue
+            context = _context_unit(session, run, ref)
+            if context is not None:
+                seen[ref] = context
+                context_refs.append(ref)
         task.state = "processing"
         task.dependencies = {
             "reads": [{"ref": u.ref, "hash": fingerprint(u.text)} for u in seen.values()],
             "inspected": [],
             "scope": run.fingerprints,
         }
-        topics = {
-            n["id"]
+        topic_rows = [
+            n
             for n in run.snapshot["program"]
             if n["is_in_current_program"] and not n["is_archived"] and n["node_type"] != "section"
+        ]
+        topic_aliases = {
+            n["id"]: (f"T{index}", n["title"]) for index, n in enumerate(topic_rows, 1)
         }
-        return TaskInput(task.id, list(task.targets), seen, topics, task.kind)
+        target_aliases = {target: f"B{index}" for index, target in enumerate(task.targets, 1)}
+        fragment_aliases = {ref: f"F{index}" for index, ref in enumerate(seen, 1)}
+        return TaskInput(
+            task.id,
+            run.project_id,
+            list(task.targets),
+            seen,
+            set(topic_aliases),
+            target_refs,
+            context_refs,
+            target_aliases,
+            fragment_aliases,
+            {alias: ref for ref, alias in fragment_aliases.items()},
+            topic_aliases,
+            {alias: topic for topic, (alias, _) in topic_aliases.items()},
+            {
+                target: target_specs.get(target, {}).get("section_key", "Без заголовка")
+                for target in task.targets
+            },
+            run.model_roles,
+            run.fingerprints,
+            task.kind,
+        )
+
+
+def _context_unit(session, run, ref: str) -> Unit | None:
+    """Контекст читается только из проверенного manifest того же snapshot."""
+    try:
+        fragment_id = UUID(ref)
+    except ValueError:
+        return None
+    rows = session.scalars(
+        select(CoverageBlockResult).where(CoverageBlockResult.run_id == run.id)
+    )
+    row = next(
+        (item for item in rows if any(part["id"] == ref for part in item.manifest["fragments"])),
+        None,
+    )
+    if row is None:
+        return None
+    unit = block_units(session, row.block_id).get(str(fragment_id))
+    expected = next(part["hash"] for part in row.manifest["fragments"] if part["id"] == ref)
+    if unit is None or fingerprint(unit.text) != expected:
+        raise ProjectConflictError("Текст снимка изменился", code="coverage_snapshot_changed")
+    return unit
 
 
 def publish_packet(session, token, task_input, raw):
@@ -93,9 +188,43 @@ def publish_packet(session, token, task_input, raw):
             task_input.topics,
             origin=task_input.kind,
         )
+        if not checked.valid:
+            checked = _isolated_unresolved(checked, units)
+        _apply_offsets(checked, units)
         receipt = publish_decision(session, token, task_input.task_id, checked)
         if receipt["reason"] in {"snapshot_changed", "pause_requested"}:
             break
+
+
+def _isolated_unresolved(checked: CheckedDecision, units: dict[str, Unit]) -> CheckedDecision:
+    """Ошибка одного ответа становится unresolved этого target, а не потерей пакета."""
+    return CheckedDecision(
+        target_id=checked.target_id,
+        valid=True,
+        outcome="unresolved",
+        reason=f"invalid_decision:{checked.reason}",
+        dispositions=[
+            {
+                "fragment_id": ref,
+                "start": 0,
+                "end": len(unit.text),
+                "outcome": "unresolved",
+            }
+            for ref, unit in units.items()
+        ],
+        diagnostics=[*checked.diagnostics, {"reason": checked.reason}],
+        origin=checked.origin,
+        replacement_allowed=False,
+    )
+
+
+def _apply_offsets(checked: CheckedDecision, units: dict[str, Unit]) -> None:
+    """Диапазоны интервала переводятся обратно в координаты исходного фрагмента."""
+    for disposition in checked.dispositions:
+        unit = units.get(disposition["fragment_id"])
+        if unit is not None and unit.start_offset:
+            disposition["start"] += unit.start_offset
+            disposition["end"] += unit.start_offset
 
 
 def _bounded_response(raw, targets):
@@ -124,32 +253,53 @@ def _next_task(session, run_id):
 
 
 def process_coverage_job(session, job, executor: Callable[[TaskInput], list[dict]] | None = None):
-    """Никакого автоматического сетевого fallback; реальный адаптер — этап И3."""
+    """Выполняет пакеты по порядку; тестовый порт остаётся явным швом."""
     token = ExecutionToken(
         UUID(job.checkpoint["coverage_run_id"]),
         job.checkpoint["coverage_generation"],
         job.lease_owner,
     )
+    owned_executor = executor is None
+    if owned_executor:
+        with job_write_transaction(session):
+            coverage_run, _ = fenced(session, token, allow_pause=True)
+            has_model = bool(coverage_run.model_roles.get("overview"))
+        if not has_model:
+            _finish(session, token, BackgroundJobState.PAUSED, "executor_unavailable")
+            return
+    real_executor = CoverageOverviewExecutor(session, job.id, token) if owned_executor else executor
     try:
         while execution_boundary(session, token):
             task = _next_task(session, token.run_id)
             if task is None:
                 _finish(session, token, BackgroundJobState.COMPLETED, "work_exhausted")
                 return
-            if executor is None:
-                _finish(session, token, BackgroundJobState.PAUSED, "executor_unavailable")
-                return
             task_input = prepare_task(session, token, task.id)
             # SQL-транзакция prepare_task завершена до входа во внешний порт.
             task = session.get(CoverageTask, task_input.task_id)
             saved = task.checkpoint.get("response")
             session.commit()
-            raw = saved if "response" in task.checkpoint else executor(task_input)
+            response = saved if "response" in task.checkpoint else real_executor(task_input)
+            if isinstance(response, PacketExecution):
+                raw = expand_compact_response(task_input, response.decisions)
+                descriptions = response.section_descriptions
+                call_receipt = response.call_receipt
+            else:
+                raw, descriptions, call_receipt = response, [], None
             raw = _bounded_response(raw, task_input.targets)
             with job_write_transaction(session):
                 fenced(session, token, allow_pause=True)
                 task = session.get(CoverageTask, task_input.task_id)
-                task.checkpoint = {**task.checkpoint, "response": raw}
+                checkpoint = {
+                    **task.checkpoint,
+                    "response": raw,
+                    "section_descriptions": descriptions,
+                }
+                # call_receipts — бюджетный журнал шлюза с собственной формой записи;
+                # трасса модели лежит рядом и не попадает в счёт попыток и токенов.
+                if call_receipt:
+                    checkpoint["calls"] = [*checkpoint.get("calls", []), call_receipt]
+                task.checkpoint = checkpoint
             publish_packet(session, token, task_input, raw)
     except ProjectConflictError as error:
         if error.code == "coverage_lease_lost":
@@ -174,6 +324,9 @@ def process_coverage_job(session, job, executor: Callable[[TaskInput], list[dict
             _finish(session, token, BackgroundJobState.FAILED, "execution_error")
         except ProjectConflictError:
             log.info("failed worker already fenced run=%s", token.run_id)
+    finally:
+        if owned_executor:
+            real_executor.close()
 
 
 def _finish(session, token, state, reason):

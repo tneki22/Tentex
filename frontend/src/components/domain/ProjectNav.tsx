@@ -8,13 +8,14 @@ import {
   ListTree,
   Settings,
   Target,
+  ScanSearch,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ModuleKey } from "../../api/projects";
 import { Tooltip } from "../ui";
 import { usePreparationInvitation } from "../../hooks/usePreparationInvitation";
 
-export type ProjectNavKey = "materials" | "program" | "answers" | "lessons" | "plan" | "cards" | "settings";
+export type ProjectNavKey = "materials" | "program" | "answers" | "lessons" | "coverage" | "plan" | "cards" | "settings";
 
 interface NavEntry {
   key: ProjectNavKey;
@@ -36,8 +37,8 @@ interface ProjectNavProps {
 }
 
 /**
- * Единый список разделов проекта: одни и те же шесть пунктов от «Материалов»
- * до «Настроек» на всех экранах проекта, а не урезанный подбор по месту.
+ * Единый список разделов проекта: состав зависит только от режима и модулей,
+ * а не от открытого экрана.
  */
 export function ProjectNav({ projectId, active, textbook = false, modules, counts = {}, className = "" }: ProjectNavProps) {
   const hasModule = (key: ModuleKey) => (modules ? modules.includes(key) : true);
@@ -57,11 +58,14 @@ export function ProjectNav({ projectId, active, textbook = false, modules, count
     ...(hasModule("lessons")
       ? [{ key: "lessons" as const, to: `/projects/${projectId}/lessons`, icon: GraduationCap, label: "Уроки" }]
       : []),
+    ...(textbook
+      ? [{ key: "coverage" as const, to: `/projects/${projectId}/coverage`, icon: ScanSearch, label: "Покрытие" }]
+      : []),
     ...(!textbook && hasModule("plan")
       ? [{ key: "plan" as const, to: `/projects/${projectId}/plan`, icon: CalendarDays, label: "Моя подготовка" }]
       : []),
     // Карточек в учебниковом режиме нет (решение 17.09.2026, TEXTBOOK_MODE.md §10):
-    // самопроверка там — задания урока. В этом месте навигации позже встанет «Покрытие».
+    // самопроверка там — задания урока.
     ...(!textbook && hasModule("cards")
       ? [{ key: "cards" as const, to: `/projects/${projectId}/cards`, icon: Layers, label: "Карточки" }]
       : []),

@@ -20,6 +20,7 @@ from app.models import (
     MaterialBlock,
     MaterialFragment,
     MaterialPage,
+    MaterialRevision,
     NodeType,
     ProgramNode,
     ProjectMaterial,
@@ -37,6 +38,8 @@ BUCKETS = (
     "error",
     "stale",
 )
+# Исход, по которому пользователь может что-то сделать: уточнить, повторить или перепроверить.
+ISSUE_BUCKETS = ("unresolved", "error", "stale")
 
 
 def run_read(session, project_id, run_id):
@@ -154,6 +157,18 @@ def current_map(session, project_id):
         )
     )
     fresh = [b for b in bindings if binding_fresh(session, b, current)]
+    material_names = {
+        material_id: display_name or original_name
+        for material_id, display_name, original_name in session.execute(
+            select(
+                ProjectMaterial.material_id,
+                ProjectMaterial.display_name,
+                Material.original_name,
+            )
+            .join(Material, Material.id == ProjectMaterial.material_id)
+            .where(ProjectMaterial.project_id == project_id)
+        )
+    }
     result = []
     for block in _active_blocks(session, project_id):
         row = selected.get(block.id)
@@ -180,6 +195,11 @@ def current_map(session, project_id):
                 "bucket": bucket,
                 "has_content": bool(content),
                 "result_id": str(row.id) if row else None,
+                "title": block.title,
+                "page_from": block.page_from,
+                "page_to": block.page_to,
+                "material_name": material_names[block.material_id],
+                "reason": row.reason if row else None,
             }
         )
     return result, fresh
@@ -219,19 +239,47 @@ def overview(session, project_id):
         for b in bindings
         if b.semantic_kind == "content" and set(b.roles or []) & {"definition", "explanation"}
     } & node_ids
-    numerator = sum(
-        b["has_content"] and b["bucket"] in {"linked", "mixed_resolved"} for b in blocks
-    )
+    numerator = counts["linked"] + counts["mixed_resolved"]
     denominator = numerator + counts["outside_program"]
     sources = list(
-        session.scalars(
-            select(Material).join(ProjectMaterial).where(ProjectMaterial.project_id == project_id)
+        session.execute(
+            select(Material, ProjectMaterial.display_name)
+            .join(ProjectMaterial, ProjectMaterial.material_id == Material.id)
+            .where(ProjectMaterial.project_id == project_id)
         )
     )
+    runs, _ = _current_runs(session, project_id)
+    latest = runs[0] if runs else None
+    latest_job = session.get(BackgroundJob, latest.job_id) if latest else None
+    by_material = Counter((item["material_id"], item["bucket"]) for item in blocks)
+    source_rows = []
+    for material, display_name in sources:
+        revision = session.scalar(
+            select(MaterialRevision).where(
+                MaterialRevision.material_id == material.id,
+                MaterialRevision.revision == material.active_parse_revision,
+            )
+        )
+        diagnostics = (revision.summary if revision else {}) or {}
+        source_rows.append(
+            {
+                "id": str(material.id),
+                "name": display_name or material.original_name,
+                "revision": material.active_parse_revision,
+                "total": sum(by_material[(str(material.id), bucket)] for bucket in BUCKETS),
+                "distribution": {
+                    bucket: by_material[(str(material.id), bucket)] for bucket in BUCKETS
+                },
+                "diagnostics": diagnostics,
+                "known_limits": _known_extraction_limits(material),
+            }
+        )
     return {
         "coverage_revision": project.coverage_revision,
         "program_revision": project.program_revision,
-        "source_revisions": {str(m.id): m.active_parse_revision for m in sources},
+        "source_revisions": {
+            str(material.id): material.active_parse_revision for material, _ in sources
+        },
         "partial": bool(
             counts["pending"] + counts["processing"] + counts["error"] + counts["stale"]
         ),
@@ -250,7 +298,7 @@ def overview(session, project_id):
             "numerator": numerator,
             "denominator": denominator,
             "value": numerator / denominator if denominator else None,
-            "label": "Блоки с материалом по программе среди разобранных",
+            "label": "Среди разобранных",
             "mixed": counts["mixed_resolved"],
         },
         "findings": len(
@@ -263,18 +311,44 @@ def overview(session, project_id):
                 )
             )
         ),
+        "latest_run_id": str(latest.id) if latest else None,
+        "latest_run_state": latest_job.state if latest_job else None,
+        "sources": source_rows,
+    }
+
+
+def _known_extraction_limits(material):
+    """И0а ещё не выполнен: экран обязан честно показать известные границы адаптера."""
+    limits = []
+    name = material.original_name.casefold()
+    if name.endswith(".docx"):
+        limits.append("docx_tables_not_enumerated")
+    if name.endswith((".md", ".markdown")):
+        limits.append("markdown_fenced_heading_risk")
+    if material.source_kind == "youtube":
+        limits.append("youtube_timestamps_not_preserved")
+    limits.append("bbox_reliability_not_preserved")
+    return limits
+
+
+def _page(rows, offset, limit):
+    return {
+        "items": rows[offset : offset + limit],
+        "total": len(rows),
+        "next_offset": offset + limit if offset + limit < len(rows) else None,
     }
 
 
 def source_blocks(session, project_id, material_id, offset, limit):
     """Ограниченная лента текущих блоков с явным остатком."""
     blocks, _ = current_map(session, project_id)
-    rows = [b for b in blocks if b["material_id"] == str(material_id)]
-    return {
-        "items": rows[offset : offset + limit],
-        "total": len(rows),
-        "next_offset": offset + limit if offset + limit < len(rows) else None,
-    }
+    return _page([b for b in blocks if b["material_id"] == str(material_id)], offset, limit)
+
+
+def issue_blocks(session, project_id, offset, limit):
+    """Отдельная лента требующих внимания блоков: экран не выкачивает весь проект ради списка."""
+    blocks, _ = current_map(session, project_id)
+    return _page([b for b in blocks if b["bucket"] in ISSUE_BUCKETS], offset, limit)
 
 
 def evidence_read(session, project_id, evidence_id):

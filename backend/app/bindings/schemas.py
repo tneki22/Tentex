@@ -178,6 +178,9 @@ class NodeBindingSummary(ApiModel):
     program_node_id: UUID
     fragment_count: int
     material_count: int
+    content_fragment_count: int
+    content_material_count: int
+    supporting_fragment_count: int
     worst_quality: PageQuality | None
 
 

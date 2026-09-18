@@ -1,9 +1,12 @@
-"""Офлайновый запуск и планирование manifest одной атомарной операцией."""
+"""Preflight и атомарное планирование полного manifest прохода 2."""
 
 from uuid import uuid4
 
 from sqlalchemy import select
 
+from app.ai.schemas import AiModelSelection
+from app.ai.settings import resolve_model
+from app.coverage.packets import build_packet_specs, input_token_budget
 from app.coverage.schemas import RunPlan
 from app.coverage.snapshots import build_snapshot, fingerprint, manifest_rows, require_project
 from app.db import project_write_transaction
@@ -15,21 +18,57 @@ from app.models import (
     CoverageRun,
     CoverageTask,
 )
-from app.projects.errors import ProjectConflictError
+from app.projects.errors import ProjectConflictError, ProjectDomainError
 
-# Ограничение хранилища одного участка; структурное пакетирование появится в И3.
-TASK_BLOCK_LIMIT = 16
 ACTIVE = {BackgroundJobState.QUEUED, BackgroundJobState.RUNNING, BackgroundJobState.PAUSED}
 
 
+def _role_override(plan, key):
+    selection = plan.roles.get(key)
+    if selection is None:
+        return None
+    return AiModelSelection(provider_id=selection.provider_id, model_id=selection.model_id)
+
+
+def _resolve_roles(session, plan):
+    """Обе роли требуют явной модели; default настроек сюда не просачивается."""
+    result = {}
+    for key, role in (("overview", "coverage_overview"), ("research", "coverage_research")):
+        resolved = resolve_model(session, role, _role_override(plan, key))
+        result[key] = {
+            "provider_id": str(resolved.provider.id),
+            "model_id": resolved.model_id,
+            "model_source": resolved.source,
+            "context_length": resolved.model.context_length,
+            "prompt_version": resolved.role.prompt_version,
+        }
+    return result
+
+
+def _preflight_details(session, fingerprints, plan):
+    try:
+        roles = _resolve_roles(session, plan)
+        budget = input_token_budget(roles["overview"]["context_length"])
+        issue = None
+    except ProjectDomainError as error:
+        roles, budget, issue = {}, input_token_budget(None), error.detail
+    fingerprint_value = fingerprint(
+        {"scope": fingerprints, "model_roles": roles, "packet_input_tokens": budget}
+    )
+    return roles, budget, issue, fingerprint_value
+
+
 def preflight(session, project_id, plan):
-    """Без сети: только снимок готовых источников и пределы запуска."""
+    """Без платного вызова: снимок, диагностика источников и доступность ролей."""
     snapshot, fingerprints = build_snapshot(session, project_id, plan)
+    roles, budget, issue, fingerprint_value = _preflight_details(session, fingerprints, plan)
     return {
-        "fingerprint": fingerprint(fingerprints),
+        "fingerprint": fingerprint_value,
         "snapshot": snapshot,
         "blocks": sum(1 for _ in manifest_rows(session, snapshot)),
-        "execution_available": False,
+        "execution_available": issue is None,
+        "execution_issue": issue,
+        "model_roles": roles,
         "limits": plan.limits.model_dump(),
     }
 
@@ -66,7 +105,10 @@ def start_run(session, project_id, command):
                 "Построение программы подключается отдельно", code="coverage_mode_unavailable"
             )
         snapshot, fingerprints = build_snapshot(session, project_id, plan)
-        if fingerprint(fingerprints) != command.preflight_fingerprint:
+        roles, packet_budget, _, fingerprint_value = _preflight_details(
+            session, fingerprints, plan
+        )
+        if fingerprint_value != command.preflight_fingerprint:
             raise ProjectConflictError(
                 "Снимок изменился после проверки", code="coverage_snapshot_changed"
             )
@@ -85,12 +127,12 @@ def start_run(session, project_id, command):
             snapshot=snapshot,
             fingerprints=fingerprints,
             limits=plan.limits.model_dump(),
-            model_roles=plan.roles,
+            model_roles=roles,
         )
         session.add(run)
         session.flush()
-        targets = []
-        for block, manifest in manifest_rows(session, snapshot):
+        manifest = list(manifest_rows(session, snapshot))
+        for block, row_manifest in manifest:
             session.add(
                 CoverageBlockResult(
                     run_id=run.id,
@@ -98,17 +140,17 @@ def start_run(session, project_id, command):
                     material_revision=block.revision,
                     block_id=block.id,
                     sort_order=block.sort_order,
-                    manifest=manifest,
+                    manifest=row_manifest,
                 )
             )
-            targets.append(str(block.id))
-        for offset in range(0, len(targets), TASK_BLOCK_LIMIT):
+        for packet in build_packet_specs(session, manifest, packet_budget):
             session.add(
                 CoverageTask(
                     run_id=run.id,
-                    task_key=f"overview:{offset}",
-                    targets=targets[offset : offset + TASK_BLOCK_LIMIT],
+                    task_key=packet.key,
+                    targets=packet.targets,
+                    checkpoint=packet.checkpoint,
                 )
             )
-        job.total = len(targets)
+        job.total = len(manifest)
         return run.id

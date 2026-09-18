@@ -71,7 +71,11 @@ def publish_decision(session, token, task_id, checked):
         ):
             receipt["reason"] = "primary_preserved"
         else:
-            _apply_result(session, run, task, row, checked, receipt)
+            interval = task.checkpoint.get("target_specs", {}).get(checked.target_id, {})
+            if interval.get("interval_count", 1) > 1:
+                _apply_interval_result(session, run, task, row, checked, receipt, interval)
+            else:
+                _apply_result(session, run, task, row, checked, receipt)
         task.result = {**task.result, checked.target_id: receipt}
         if set(task.result) == set(task.targets):
             task.state = "finished"
@@ -118,6 +122,120 @@ def _apply_result(session, run, task, row, checked, receipt):
     receipt["reason"] = checked.reason or None
     project = session.get(Project, run.project_id)
     project.coverage_revision += 1
+
+
+def _apply_interval_result(session, run, task, row, checked, receipt, interval):
+    """Публикует интервал отдельно, но завершает блок только после полного диапазона."""
+    retained = set()
+    for link in checked.links:
+        binding = _publish_link(session, run, task, row, link)
+        if binding:
+            retained.add(binding.id)
+    for finding in checked.findings:
+        session.add(
+            CoverageFinding(
+                project_id=run.project_id,
+                run_id=run.id,
+                kind=finding["kind"],
+                evidence_refs=[_evidence_ref(task, row, e) for e in finding["evidence"]],
+                payload=finding,
+                dependencies=run.fingerprints,
+            )
+        )
+    combined = _merge_interval_decision(row.result, checked)
+    completed = _completed_intervals(session, run.id, row.block_id) + 1
+    final = completed >= interval["interval_count"]
+    if final:
+        _require_complete_ranges(row.manifest, combined["dispositions"])
+        combined["outcome"] = _combined_outcome(combined["dispositions"])
+        combined["reason"] = "" if combined["outcome"] != "unresolved" else "interval_unresolved"
+        retained |= _binding_ids_for_links(session, run.project_id, combined["links"])
+        _retire_owned_links(session, run, row, retained)
+    row.result = combined
+    row.result_version += 1
+    row.task_id = task.id
+    row.work_state = "inspected" if final else "processing"
+    row.outcome = combined["outcome"]
+    row.reason = combined["reason"] or None
+    row.publication_state = "applied" if final else "pending"
+    receipt["applied"] = True
+    receipt["reason"] = checked.reason or None
+    session.get(Project, run.project_id).coverage_revision += 1
+
+
+def _merge_interval_decision(previous, checked):
+    current = previous or {
+        "target_id": checked.target_id,
+        "valid": True,
+        "outcome": "unresolved",
+        "reason": "partial_interval",
+        "dispositions": [],
+        "links": [],
+        "findings": [],
+        "diagnostics": [],
+        "origin": checked.origin,
+        "replacement_allowed": True,
+    }
+    return {
+        **current,
+        "dispositions": [*current.get("dispositions", []), *checked.dispositions],
+        "links": [*current.get("links", []), *checked.links],
+        "findings": [*current.get("findings", []), *checked.findings],
+        "diagnostics": [*current.get("diagnostics", []), *checked.diagnostics],
+        "replacement_allowed": current.get("replacement_allowed", True)
+        and checked.replacement_allowed,
+    }
+
+
+def _completed_intervals(session, run_id, block_id):
+    tasks = session.scalars(select(CoverageTask).where(CoverageTask.run_id == run_id))
+    target = str(block_id)
+    return sum(target in task.result for task in tasks)
+
+
+def _require_complete_ranges(manifest, dispositions):
+    for fragment in manifest["fragments"]:
+        spans = sorted(
+            (part for part in dispositions if part["fragment_id"] == fragment["id"]),
+            key=lambda part: part["start"],
+        )
+        cursor = 0
+        for span in spans:
+            if span["start"] != cursor or span["end"] <= cursor:
+                raise ValueError("interval_range_accounting")
+            cursor = span["end"]
+        if cursor != fragment["length"]:
+            raise ValueError("interval_unread_remainder")
+
+
+def _combined_outcome(dispositions):
+    outcomes = {part["outcome"] for part in dispositions}
+    if "unresolved" in outcomes:
+        return "unresolved"
+    if outcomes == {"service"}:
+        return "service"
+    if outcomes == {"outside_program"}:
+        return "outside_program"
+    if outcomes <= {"content", "mention", "context"}:
+        return "linked"
+    return "mixed_resolved"
+
+
+def _binding_ids_for_links(session, project_id, links):
+    result = set()
+    for link in links:
+        binding = session.scalar(
+            select(Binding).where(
+                Binding.project_id == project_id,
+                Binding.program_node_id == UUID(link["topic_id"]),
+                Binding.fragment_id == UUID(link["fragment_id"]),
+                Binding.status == BindingStatus.MACHINE,
+                Binding.mechanism == BindingMechanism.PASS_TWO,
+            )
+        )
+        if binding:
+            result.add(binding.id)
+    return result
 
 
 def _evidence_ref(task, row, evidence):

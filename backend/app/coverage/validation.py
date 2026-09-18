@@ -62,6 +62,7 @@ class Unit:
     kind: str = "paragraph"
     quality: str = "native"
     locator: dict = field(default_factory=dict)
+    start_offset: int = 0
 
 
 @dataclass
@@ -114,8 +115,8 @@ def _original(evidence: Evidence, unit: Unit, repair: str, start=0, end=None) ->
         **evidence.model_dump(),
         "ref": unit.ref,
         "quote": unit.text[start:end],
-        "start": start,
-        "end": end,
+        "start": start + unit.start_offset,
+        "end": end + unit.start_offset,
         "repair": repair,
         "original_ref": evidence.ref,
         "locator": unit.locator,

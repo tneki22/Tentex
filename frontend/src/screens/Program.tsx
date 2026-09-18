@@ -872,8 +872,8 @@ export function Program() {
                 <GoalLevelPicker label="узла" value={(selected.target_level ?? "understanding") as GoalLevelValue} onChange={(target) => void runCommand(setProgramTargetLevel(projectId, selected.id, { expected_program_revision: detail.program.revision, target_level: target as TargetOutcome, include_descendants: true }))} />
                 <section className="program-impact"><h3>Что связано</h3><dl><div><dt>Ответ</dt><dd>Статус доступен на Карте ответов</dd></div><div><dt>Источник списка</dt><dd>{selected.origin_material_id ? materials.materials.find((item) => item.id === selected.origin_material_id)?.display_name ?? "Материал удалён" : "Добавлено вручную"}</dd></div><div><dt>Привязки</dt><dd>{(() => {
                   const summary = bindingsSummaryByNode.get(selected.id);
-                  if (!summary) return "Материал не привязан";
-                  return `${summary.fragment_count} фрагм. из ${summary.material_count} ${summary.material_count === 1 ? "файла" : "файлов"}`;
+                  if (!summary?.content_fragment_count) return "Содержательный материал не привязан";
+                  return `${summary.content_fragment_count} содерж. фрагм. из ${summary.content_material_count} ${summary.content_material_count === 1 ? "файла" : "файлов"}`;
                 })()}</dd></div><div><dt>План</dt><dd>Появится на этапе 9</dd></div></dl></section>
                 <div className="program-inspector-links"><Link to={`/projects/${projectId}?topic=${selected.id}`}>Открыть в рабочей области</Link>{selected.origin_material_id && <Link to={`/projects/${projectId}/materials/${selected.origin_material_id}`}>Открыть материал списка</Link>}<Link to={`/projects/${projectId}/materials`}>Привязки в материалах</Link></div>
                 <div className="program-row-actions"><Button variant="secondary" disabled={busy} onClick={() => duplicate(selected)}><Copy size={15} />Продублировать</Button><Button variant="ghost" disabled={busy} onClick={() => void runCommand(removeProgramNode(projectId, selected.id, detail.program.revision))}><Trash2 size={15} />Убрать из списка</Button></div>

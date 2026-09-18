@@ -1023,7 +1023,7 @@ export function ProjectWorkspace() {
         );
       }
       const answerStatus = textbook ? undefined : answerStatusByNode.get(node.id) ?? "missing";
-      const hasMaterial = (bindingSummaryByNode.get(node.id)?.fragment_count ?? 0) > 0;
+      const hasMaterial = (bindingSummaryByNode.get(node.id)?.content_fragment_count ?? 0) > 0;
       const mark = marks[node.id];
       const row = (
         <ProgramTopicRow
@@ -1093,7 +1093,7 @@ export function ProjectWorkspace() {
   const sectionTopics = selectedNode?.node_type === "section"
     ? flattenProgramTree(selectedNode.children).filter(isStudyNode)
     : [];
-  const sectionTopicsWithMaterial = sectionTopics.filter((node) => (bindingSummaryByNode.get(node.id)?.fragment_count ?? 0) > 0).length;
+  const sectionTopicsWithMaterial = sectionTopics.filter((node) => (bindingSummaryByNode.get(node.id)?.content_fragment_count ?? 0) > 0).length;
   const editorGroups = layout.groups;
   const editorWeights = layout.group_weights;
   const editorColumns = editorGroups.length === 1
@@ -1137,7 +1137,7 @@ export function ProjectWorkspace() {
             </section>
             <section className="workspace-section-topic-list" aria-label={`Темы раздела «${selectedNode.title}»`}>
               {sectionTopics.map((node) => {
-                const hasMaterial = (bindingSummaryByNode.get(node.id)?.fragment_count ?? 0) > 0;
+                const hasMaterial = (bindingSummaryByNode.get(node.id)?.content_fragment_count ?? 0) > 0;
                 return <button type="button" key={node.id} onClick={() => void selectNode(node.id)}><span><small>{node.number}</small><strong>{node.title}</strong></span><em>{hasMaterial ? "Есть материал" : "Без материала"}</em></button>;
               })}
               {sectionTopics.length === 0 && <div className="workspace-empty-copy"><BookOpen size={26} /><h2>В разделе пока нет тем</h2><p>Добавьте тему в «Программе», затем вернитесь сюда.</p></div>}

@@ -33,6 +33,7 @@ export { ProviderModelPicker } from "./ProviderModelPicker";
 export { ProjectChip, PROJECT_ICONS } from "./ProjectChip";
 export type { ProjectColor, ProjectIconName } from "./ProjectChip";
 export { ProjectNav } from "./ProjectNav";
+export { ResearchLaunchDialog } from "./ResearchLaunchDialog";
 export { ProgramSectionRow, ProgramTopicRow } from "./ProgramTreeRows";
 export { LessonDocument } from "./lesson/LessonDocument";
 export type { LessonDocumentMode } from "./lesson/LessonDocument";

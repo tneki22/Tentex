@@ -1,4 +1,4 @@
-"""И2: 100 блоков, два разных процесса worker, ни одного вызова провайдера.
+"""И3: 100 блоков, два разных процесса worker, ни одного вызова провайдера.
 
 Запуск: python scripts/check_coverage.py. Данные создаются только во временной папке.
 Подставной исполнитель использует те же генераторы ответов, что регрессионные тесты.
@@ -76,8 +76,12 @@ def run_phase(database: str, phase: str):
         assert status["state"] == expected
         if phase != "pause":
             assert status["primary"]["total"] == 100
-            assert status["primary"]["inspected"] == 98
-            assert status["primary"]["error"] == 2
+            # И3: сломанное и пропущенное решение изолируются в unresolved этого блока,
+            # поэтому учтены все 100, а error остаётся только за транспортным сбоем.
+            assert status["primary"]["inspected"] == 100
+            assert status["primary"]["error"] == 0
+            assert status["outcomes"]["unresolved"] == 2
+            assert status["outcomes"]["linked"] == 98
     engine.dispose()
 
 
