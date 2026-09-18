@@ -6,16 +6,16 @@
 
 | Метод и путь | Вход / результат |
 |---|---|
-| POST `/preflight` | material_ids, mode, context_material_ids, expected_program_revision, limits, role overrides. Без платного вызова: готовые/исключённые источники, текущие ревизии, объём, доступные модели и оценка с неопределённостью |
+| POST `/preflight` | material_ids, mode, context_material_ids, expected_program_revision, limits, role overrides. Без платного вызова: готовые/исключённые источники, текущие ревизии, объём, ограничения извлечения/модальностей, доступные модели и оценка с неопределённостью |
 | POST `/runs` | То же + preflight fingerprint + request_key. Повторно проверить готовность/версии; создать manifest и BackgroundJob атомарно, вернуть 202 run_id/job_id. Повтор ключа с тем же телом возвращает тот же запуск; иное тело — 409 |
 | GET `/runs/{id}` | snapshot, lifecycle, stage, primary counts, refine counts, pending synthesis, stop_reason, costs/uncertain costs, доступные действия. Проверять project принадлежность |
 | POST `/runs/{id}/control` | pause / resume / cancel + expected run generation. Выполнять переход только из допустимого состояния; идемпотентный повтор текущего намерения |
-| GET `/overview` | filters/scope; coverage_revision, program_revision, source revisions, распределения, basis labels, unresolved и findings counts, partial/stale flags |
+| GET `/overview` | filters/scope; coverage_revision, program_revision, source revisions, распределения, basis labels, unresolved и findings counts, partial/stale и extraction diagnostic flags |
 | GET `/matrix` | node/branch/material filters, cursors. Упорядоченные строки/источники и sparse cells; bounded page, counts unique blocks, role/status breakdown |
 | GET `/graph` | focus/type/depth, filters, cursor. Typed nodes/edges, expandable flags, counts, truncation, total; те же агрегаты, не отдельный графовый расчёт истины |
 | GET `/topics/{node_id}/evidence` | recommended group, alternatives, examples/exercises, mentions/context, legacy/hidden, next_cursor, reason/source/version, precise ranges. Один контракт для Источника и «Предложено» |
 | GET `/sources/{id}/blocks` | Лента блоков с состояниями, partial/mixed/quality/stale и переходами к фрагментам |
-| GET `/evidence/{id}` | Первичный текст или адрес к текущему viewer, цели/опоры/альтернативы, версии, источник решения; недоступность старой версии объясняется |
+| GET `/evidence/{id}` | Первичный текст или адрес к текущему viewer, цели/опоры/альтернативы, версии, источник решения, locator_kind и reliability; недоступность старой версии объясняется |
 | POST `/decisions` | kind, target refs, expected_coverage_revision, payload, request_key. Confirm/remove/restore/reassign link, change role, mark service, outside goal, hide/prefer reading. Возвращает delta и latest undoable action |
 | GET `/findings` и `/{id}` | Группированные предложения/конфликты с доказательствами, выбранными операциями, affected objects и версиями |
 | POST `/findings/{id}/preview` | Выбранные операции, отредактированные title/parent/links, варианты переноса уроков. Чистый расчёт дифа, без записи программы |
@@ -45,6 +45,8 @@
 Лимиты в примере иллюстративные, не рекомендуемые настройки. Отсутствие денежного поля означает контроль calls/tokens, а не отсутствие ограничения расходов вообще. Модель выбирается среди настроенных доступных пользователю, не по присланной произвольной строке.
 
 Ответ прогресса: `primary={total:1912, inspected:1248, error:36, pending:628}`, `research={discovered:19, finished:12, unresolved:4}`, `synthesis=pending`. Число research может расти; 12/19 не рисуется как монотонный процент всей операции. `completed` с unresolved допустим, `completed` при ещё ожидаемых действиях — нет; достигнутый лимит переводит run в paused с budget_limit.
+
+Полнота подготовки не выражается выдуманным процентом. Пример: «Все 120 блоков подготовленного текста просмотрены; 4 изображения не исследованы; 7 блоков остаются неопределёнными». Для PDF адрес — страница/область, для DOCX/MD — раздел/элемент, для речи — временной интервал. Синтетическая «страница 1» не заменяет адрес всего аудио. Смена ревизии во время запуска показывает snapshot_changed и предложение перепланировать; сохранённые результаты остаются доступны с актуальностью.
 
 Ошибки: `coverage_snapshot_changed`, `coverage_run_active`, `coverage_source_not_ready`, `coverage_evidence_stale`, `coverage_decision_conflict`, `coverage_budget_exhausted`, `coverage_scope_denied`. HTTP 409 для конкурентных/состояний, 422 для недопустимого выбора, существующие 404/read-only ошибки сохраняются. Модельный outage не превращать в пустой успешный список.
 
