@@ -22,6 +22,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.budget import BudgetContext
 from app.ai.catalog import production_transport
 from app.ai.provider import (
     OpenAICompatibleTransport,
@@ -51,6 +52,7 @@ from app.models import (
     AiSettings,
     utc_now,
 )
+from app.projects.errors import ProjectDomainError
 
 ZERO = Decimal("0")
 
@@ -143,6 +145,7 @@ class AiTextRequest[T: BaseModel]:
     # (`app.ai.jobs.process_ai_job`) — прямые вызовы (например, экзаменационный
     # чат) его не передают, и `AiRun.job_id` остаётся пустым.
     job_id: UUID | None = None
+    budget_context: BudgetContext | None = None
 
 
 @dataclass(frozen=True)
@@ -303,6 +306,21 @@ class ModelGateway:
         attempts = len(self.retry_backoff) + 1
         for attempt in range(attempts):
             last_attempt = attempt == attempts - 1
+            budget_receipt = None
+            if request.budget_context is not None:
+                input_tokens = self._estimate_input(
+                    [AiMessage.model_validate(m) for m in messages], response_schema,
+                )
+                estimate = self._estimated_cost(
+                    self._catalog_model(resolved), input_tokens, preflight.estimated_output_tokens,
+                )
+                try:
+                    budget_receipt = request.budget_context.reserve(
+                        input_tokens + preflight.estimated_output_tokens, estimate,
+                    )
+                except ProjectDomainError as error:
+                    self._fail_run(run.id, error.code, started, status="cancelled")
+                    raise
             try:
                 result = await transport.complete(
                     model=resolved.model_id,
@@ -312,11 +330,15 @@ class ModelGateway:
                     parameters=parameters,
                 )
             except ProviderError as error:
+                if budget_receipt is not None:
+                    request.budget_context.settle(budget_receipt, None)
                 if not last_attempt and error.code in _RETRYABLE_PROVIDER_CODES:
                     await asyncio.sleep(self.retry_backoff[attempt])
                     continue
                 self._fail_run(run.id, error.code, started)
                 raise _gateway_error(error.code, error.detail) from error
+            if budget_receipt is not None:
+                request.budget_context.settle(budget_receipt, result.usage)
             combined_usage = _sum_usage(combined_usage, result.usage)
             try:
                 value = request.response_model.model_validate_json(result.content)

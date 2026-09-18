@@ -90,6 +90,12 @@ def _require_project_material(session: Session, project_id: UUID, material_id: U
 def _record_action(
     session: Session, project: Project, action_type: str, target_title: str, inverse_data: dict
 ) -> None:
+    from app.coverage.decisions import remember_binding_choice
+
+    for binding_id in inverse_data.get("binding_ids", []):
+        binding = session.get(Binding, UUID(binding_id))
+        if binding is not None:
+            remember_binding_choice(session, binding)
     session.add(
         ProjectActionLog(
             project_id=project.id,
@@ -387,6 +393,9 @@ def apply_undo(session: Session, project_id: UUID, action_type: str, data: dict)
             )
         binding.status = target_status
         binding.updated_at = now
+        from app.coverage.decisions import remember_binding_choice
+
+        remember_binding_choice(session, binding)
 
 
 def list_bindings(

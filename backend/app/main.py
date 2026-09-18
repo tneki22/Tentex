@@ -13,6 +13,7 @@ from app.bindings.router import router as bindings_router
 from app.cards.router import router as cards_router
 from app.config import settings
 from app.conspects.router import router as conspects_router
+from app.coverage.router import router as coverage_router
 from app.db import SessionLocal, upgrade_database
 from app.exam.router import router as exam_router
 from app.lessons.router import router as lessons_router
@@ -116,6 +117,7 @@ def create_app() -> FastAPI:
 
     app.include_router(api)
     app.include_router(projects_router)
+    app.include_router(coverage_router)
     app.include_router(materials_router)
     app.include_router(bindings_router)
     app.include_router(cards_router)

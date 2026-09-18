@@ -425,6 +425,11 @@ def resolve_model(
         )
         source = "role_override"
     else:
+        if spec.requires_explicit_model:
+            raise AiGatewayError(
+                "Для прохода 2 явно выберите модель уровня построения программы",
+                code="ai_model_not_configured", context={"role": role},
+            )
         provider_id = getattr(global_row, f"default_{spec.modality}_provider_id")
         model_id = getattr(global_row, f"default_{spec.modality}_model_id")
         if provider_id is None or model_id is None:

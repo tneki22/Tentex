@@ -12,7 +12,8 @@ export type BackgroundJobKind =
   | "ai_cleanup"
   | "link_answers"
   | "ai_answer_sections"
-  | "ai_program_build";
+  | "ai_program_build"
+  | "coverage_research";
 
 export type BackgroundJobState =
   | "queued"
