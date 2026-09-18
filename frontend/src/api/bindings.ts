@@ -89,6 +89,9 @@ export interface NodeBindingSummary {
   program_node_id: string;
   fragment_count: number;
   material_count: number;
+  content_fragment_count: number;
+  content_material_count: number;
+  supporting_fragment_count: number;
   worst_quality: PageQuality | null;
 }
 

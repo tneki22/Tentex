@@ -166,6 +166,40 @@ def test_textbook_manual_binding_cycle(session: Session) -> None:
     assert service.list_bindings(session, project.id, node_id=node.id)[0].id == binding_id
 
 
+def test_summary_separates_pass_two_mention_from_content(session: Session) -> None:
+    project = make_textbook_project(session)
+    node = make_topic_node(session, project, title="Семантика")
+    material = make_material(session, "b2")
+    link_material(session, project, material)
+    page = add_page_with_fragments(
+        session,
+        material,
+        page_number=1,
+        revision=1,
+        fragments=["Содержательное объяснение.", "Только упоминание."],
+    )
+    _bind(session, project, node, page.fragment_ids[:1])
+    session.add(
+        Binding(
+            project_id=project.id,
+            program_node_id=node.id,
+            fragment_id=page.fragment_ids[1],
+            material_id=material.id,
+            status=BindingStatus.MACHINE,
+            mechanism=BindingMechanism.PASS_TWO,
+            semantic_kind="mention",
+            roles=["reference"],
+        )
+    )
+    session.commit()
+
+    summary = service.get_summary(session, project.id)[0]
+    assert summary.fragment_count == 2
+    assert summary.content_fragment_count == 1
+    assert summary.content_material_count == 1
+    assert summary.supporting_fragment_count == 1
+
+
 def test_undo_removes_a_whole_block_batch(session: Session) -> None:
     project = make_exam_project(session)
     node = make_topic_node(session, project, title="Нормальные формы")

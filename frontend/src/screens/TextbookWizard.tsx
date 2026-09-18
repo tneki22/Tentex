@@ -12,7 +12,14 @@ import {
 } from "../api/projects";
 import type { WizardDraftController } from "../hooks/useWizardDraft";
 import { Button, Card, Disclosure, Field, IconButton, LoadingState, PageHead, SegmentedTabs, StatusBadge } from "../components/ui";
-import { LibraryMaterialPickerDialog, ProgramTreePreview, QualityBadge, TaskRow, TextbookProgramEditor } from "../components/domain";
+import {
+  LibraryMaterialPickerDialog,
+  ProgramTreePreview,
+  QualityBadge,
+  ResearchLaunchDialog,
+  TaskRow,
+  TextbookProgramEditor,
+} from "../components/domain";
 import type { TextbookProgramView } from "../components/domain";
 import { buildProgramTree, flattenProgramTree } from "./programTree";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
@@ -97,6 +104,9 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   }
   const [actionError, setActionError] = useState("");
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [researchProject, setResearchProject] = useState<ProjectDetail | null>(null);
+  const [researchOpen, setResearchOpen] = useState(false);
+  const researchStarted = useRef(false);
   const [outlinesByMaterialId, setOutlinesByMaterialId] = useState<OutlinesByMaterialId>({});
   const initializedKey = useRef<string | null>(null);
   const materialInput = useRef<HTMLInputElement>(null);
@@ -242,12 +252,18 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
     await materials.upload(file, "main", ["study_source"]);
   }
 
-  async function activate() {
+  async function activate(startResearch: boolean) {
     setActionError("");
     try {
       await controller.queueSave(command(5));
       const project = await controller.activate();
-      onActivated?.(project);
+      if (startResearch) {
+        researchStarted.current = false;
+        setResearchProject(project);
+        setResearchOpen(true);
+      } else {
+        onActivated?.(project);
+      }
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Не удалось создать проект");
     }
@@ -500,7 +516,11 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
 
           <Card className="textbook-summary-card"><h3>После создания</h3><p>Проект станет активным, а источники сохранят свои роли и настройки. {nodes.length === 0 ? "Программа останется пустой — её можно собрать вручную в разделе «Программа» после создания проекта." : "Программа сразу откроется для ручной работы."}</p></Card>
           {errorBanner}
-          <div className="wizard-actions"><Button variant="ghost" onClick={() => void go(4)}>Вернуться к программе</Button><Button disabled={busy} onClick={() => void activate()}>Создать проект</Button></div>
+          <div className="wizard-actions">
+            <Button variant="ghost" onClick={() => void go(4)}>Вернуться к программе</Button>
+            <Button variant="secondary" disabled={busy} onClick={() => void activate(false)}>Создать без исследования</Button>
+            <Button disabled={busy} onClick={() => void activate(true)}>Создать и исследовать</Button>
+          </div>
         </section>
       )}
       {controller.detail && (
@@ -517,6 +537,20 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
           onCreateNew={() => {
             setLibraryOpen(false);
             window.setTimeout(() => materialInput.current?.click(), 0);
+          }}
+        />
+      )}
+      {researchProject && (
+        <ResearchLaunchDialog
+          open={researchOpen}
+          projectId={researchProject.project.id}
+          onOpenChange={(open) => {
+            setResearchOpen(open);
+            if (!open && !researchStarted.current) onActivated?.(researchProject);
+          }}
+          onStarted={() => {
+            researchStarted.current = true;
+            navigate(`/projects/${researchProject.project.id}/coverage`);
           }}
         />
       )}

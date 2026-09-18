@@ -176,6 +176,23 @@ def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:
     `completed` (см. `app.ai.jobs`).
     """
     job = _job_or_404(session, job_id)
+    # У прохода 2 отмена обязана пройти через control_run: он один снимает
+    # `paused`, освобождает lease и закрывает поколение, которого общий путь ниже
+    # не знает.
+    if job.kind == BackgroundJobKind.COVERAGE_RESEARCH:
+        from app.coverage.lifecycle import control_run
+        from app.coverage.schemas import RunControl
+        from app.models import CoverageRun
+
+        run = session.scalar(select(CoverageRun).where(CoverageRun.job_id == job_id))
+        control_run(
+            session,
+            run.project_id,
+            run.id,
+            RunControl(action="cancel", expected_generation=run.execution_generation),
+        )
+        return get_job(session, job_id)
+
     # Чтение выше уже открыло транзакцию само (autobegin), а `session.begin()`
     # поверх начатой падает. Поэтому состояние снимается до отката, а не после:
     # откат сбрасывает объект, и обращение к его полю открыло бы транзакцию

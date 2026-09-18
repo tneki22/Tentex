@@ -55,6 +55,8 @@ function backgroundJobPath(job: BackgroundJobRead): string | null {
       return job.project_id && job.material_id
         ? `/projects/${job.project_id}/materials/${job.material_id}`
         : null;
+    case "coverage_research":
+      return job.project_id ? `/projects/${job.project_id}/coverage` : null;
     default:
       return null;
   }

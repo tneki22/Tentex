@@ -90,6 +90,12 @@ def _require_project_material(session: Session, project_id: UUID, material_id: U
 def _record_action(
     session: Session, project: Project, action_type: str, target_title: str, inverse_data: dict
 ) -> None:
+    from app.coverage.decisions import remember_binding_choice
+
+    for binding_id in inverse_data.get("binding_ids", []):
+        binding = session.get(Binding, UUID(binding_id))
+        if binding is not None:
+            remember_binding_choice(session, binding)
     session.add(
         ProjectActionLog(
             project_id=project.id,
@@ -387,6 +393,9 @@ def apply_undo(session: Session, project_id: UUID, action_type: str, data: dict)
             )
         binding.status = target_status
         binding.updated_at = now
+        from app.coverage.decisions import remember_binding_choice
+
+        remember_binding_choice(session, binding)
 
 
 def list_bindings(
@@ -437,17 +446,41 @@ def list_bindings(
 def get_summary(session: Session, project_id: UUID) -> list[NodeBindingSummary]:
     _require_project(session, project_id, writable=False)
     rows = session.execute(
-        select(Binding.program_node_id, Binding.material_id, MaterialFragment.quality)
+        select(
+            Binding.program_node_id,
+            Binding.material_id,
+            MaterialFragment.quality,
+            Binding.semantic_kind,
+            Binding.mechanism,
+        )
         .join(MaterialFragment, MaterialFragment.id == Binding.fragment_id)
         .where(Binding.project_id == project_id, Binding.status.in_(ACTIVE_STATUSES))
     ).all()
     aggregates: dict[UUID, dict] = {}
-    for node_id, material_id, quality in rows:
+    for node_id, material_id, quality, semantic_kind, mechanism in rows:
         entry = aggregates.setdefault(
-            node_id, {"fragment_count": 0, "materials": set(), "worst_quality": None}
+            node_id,
+            {
+                "fragment_count": 0,
+                "materials": set(),
+                "content_fragment_count": 0,
+                "content_materials": set(),
+                "supporting_fragment_count": 0,
+                "worst_quality": None,
+            },
         )
         entry["fragment_count"] += 1
         entry["materials"].add(material_id)
+        # Старые ручные/lesson/outline связи создавались до semantic_kind и остаются
+        # содержательными; PASS_TWO mention/context такими не становятся.
+        content = semantic_kind == "content" or (
+            semantic_kind in {None, "unknown"} and mechanism != BindingMechanism.PASS_TWO
+        )
+        if content:
+            entry["content_fragment_count"] += 1
+            entry["content_materials"].add(material_id)
+        else:
+            entry["supporting_fragment_count"] += 1
         worst = entry["worst_quality"]
         if worst is None or QUALITY_RANK[quality] > QUALITY_RANK[worst]:
             entry["worst_quality"] = quality
@@ -456,6 +489,9 @@ def get_summary(session: Session, project_id: UUID) -> list[NodeBindingSummary]:
             program_node_id=node_id,
             fragment_count=entry["fragment_count"],
             material_count=len(entry["materials"]),
+            content_fragment_count=entry["content_fragment_count"],
+            content_material_count=len(entry["content_materials"]),
+            supporting_fragment_count=entry["supporting_fragment_count"],
             worst_quality=entry["worst_quality"],
         )
         for node_id, entry in aggregates.items()

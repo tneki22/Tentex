@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import { Cards } from "../screens/cards/Cards";
 import { CoverageMap } from "../screens/CoverageMap";
+import { CoverageOverviewScreen } from "../screens/coverage/CoverageOverview";
 import { Library } from "../screens/Library";
 import { LibraryMaterialWorkspace } from "../screens/library/LibraryMaterialWorkspace";
 import { Lessons } from "../screens/lessons/Lessons";
@@ -33,10 +34,10 @@ export const SCREEN_VIEWS: Record<string, ComponentType> = {
   plan: Plan,
   cards: Cards,
   "coverage-map": CoverageMap,
+  "textbook-coverage": CoverageOverviewScreen,
   settings: ProjectSettings,
   library: Library,
   "library-material": LibraryMaterialWorkspace,
   setup: Setup,
   "ui-kit": UiKit,
 };
-

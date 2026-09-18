@@ -48,11 +48,24 @@ class AiRoleSpec:
     allow_request_model_override: bool = False
     parameter_model: type[BaseModel] = TextRoleParameters
     visible: bool = True
+    requires_explicit_model: bool = False
 
 
 ROLE_SPECS = {
     spec.key: spec
     for spec in (
+        AiRoleSpec(
+            "coverage_overview", "Обзор материала", "Полный учёт блоков прохода 2.",
+            "text", frozenset({"structured_output"}), "none", "verified-07",
+            {"max_output_tokens": 8000}, allow_request_model_override=True,
+            requires_explicit_model=True,
+        ),
+        AiRoleSpec(
+            "coverage_research", "Исследование материала", "Уточнение решений прохода 2.",
+            "text", frozenset({"structured_output"}), "none", "verified-07",
+            {"max_output_tokens": 8000}, allow_request_model_override=True,
+            requires_explicit_model=True,
+        ),
         AiRoleSpec(
             "material_text_cleanup",
             "Уборка текста материала",

@@ -15,7 +15,8 @@ export type TaskKind =
   | "ai_cleanup"
   | "link_answers"
   | "ai_answer_sections"
-  | "ai_program_build";
+  | "ai_program_build"
+  | "coverage_research";
 
 export interface BackgroundTask {
   id: string;
@@ -50,6 +51,7 @@ const KIND_LABEL: Record<TaskKind, string> = {
   link_answers: "Автопривязка ответов",
   ai_answer_sections: "Разметка ответов моделью",
   ai_program_build: "Составление программы",
+  coverage_research: "Исследование покрытия",
 };
 
 interface TaskRowProps {
@@ -122,7 +124,7 @@ export function TaskRow({ task, onPause, onResume, onRetry, onCancel, onDismiss 
             </IconButton>
           )}
           {cancellable && onCancel && (
-            <IconButton label="Отменить разбор" onClick={() => onCancel(task.id)}>
+            <IconButton label="Отменить задачу" onClick={() => onCancel(task.id)}>
               <X size={14} />
             </IconButton>
           )}

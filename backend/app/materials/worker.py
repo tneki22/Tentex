@@ -75,6 +75,7 @@ AI_JOB_KINDS = frozenset(
         BackgroundJobKind.AI_CLEANUP,
         BackgroundJobKind.AI_ANSWER_SECTIONS,
         BackgroundJobKind.AI_PROGRAM_BUILD,
+        BackgroundJobKind.COVERAGE_RESEARCH,
     }
 )
 LOCAL_JOB_KINDS = frozenset(
@@ -147,6 +148,10 @@ def claim_job(
         job.heartbeat_at = now
         job.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
         job.updated_at = now
+        if job.kind == BackgroundJobKind.COVERAGE_RESEARCH:
+            from app.coverage.lifecycle import claim_generation
+
+            claim_generation(session, job)
         # Стадии extract/segment и статус материала осмысленны только у
         # разбора: у ролей ИИ и у link_answers material_id пустой. Закладки
         # PDF уже прочитаны при загрузке (library.store_uploaded_file) —
@@ -742,6 +747,10 @@ def _process_claimed_job(job: BackgroundJob) -> None:
                 process_typst_compile_job(session, job)
             elif job.kind == BackgroundJobKind.LINK_ANSWERS:
                 process_link_answers_job(session, job)
+            elif job.kind == BackgroundJobKind.COVERAGE_RESEARCH:
+                from app.coverage.research import process_coverage_job
+
+                process_coverage_job(session, job)
             else:
                 process_ai_job(session, job)
             log.info(

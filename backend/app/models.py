@@ -235,6 +235,7 @@ class BackgroundJobKind(StrEnum):
     LINK_ANSWERS = "link_answers"
     AI_ANSWER_SECTIONS = "ai_answer_sections"
     AI_PROGRAM_BUILD = "ai_program_build"
+    COVERAGE_RESEARCH = "coverage_research"
 
 
 class BackgroundJobState(StrEnum):
@@ -476,6 +477,7 @@ class Project(Base):
     color: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     program_revision: Mapped[int] = mapped_column(Integer, default=0)
+    coverage_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     deadline: Mapped[date | None] = mapped_column(Date, nullable=True)
     enabled_modules: Mapped[list[str]] = mapped_column(JSON, default=list)
     status_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -522,6 +524,7 @@ class GoalPassport(Base):
         Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
     )
     subject: Mapped[str | None] = mapped_column(String, nullable=True)
+    tree_detail: Mapped[str | None] = mapped_column(String, nullable=True)
     purpose: Mapped[GoalPurpose | None] = mapped_column(
         enum_type(GoalPurpose, "goal_purpose"), nullable=True
     )
@@ -1130,11 +1133,140 @@ class Binding(Base):
         Uuid(as_uuid=True), ForeignKey("material_blocks.id", ondelete="CASCADE"), nullable=True
     )
     status: Mapped[BindingStatus] = mapped_column(enum_type(BindingStatus, "binding_status"))
+    roles: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    semantic_kind: Mapped[str | None] = mapped_column(String, nullable=True)
+    evidence_ref: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    semantic_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     mechanism: Mapped[BindingMechanism] = mapped_column(
         enum_type(BindingMechanism, "binding_mechanism")
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class CoverageRun(Base):
+    """Неизменяемая область исследования; состояние исполнения принадлежит job."""
+
+    __tablename__ = "coverage_runs"
+    __table_args__ = (
+        UniqueConstraint("project_id", "request_key"),
+        CheckConstraint("execution_generation >= 0", name="generation_nonnegative"),
+        Index("ix_coverage_runs_project_created", "project_id", "created_at"),
+    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    job_id: Mapped[UUID] = mapped_column(
+        ForeignKey("background_jobs.id", ondelete="CASCADE"), unique=True
+    )
+    mode: Mapped[str] = mapped_column(String)
+    request_key: Mapped[str] = mapped_column(String)
+    request_hash: Mapped[str] = mapped_column(String)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    protocol_version: Mapped[str] = mapped_column(String, default="verified-07")
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    fingerprints: Mapped[dict[str, Any]] = mapped_column(JSON)
+    model_roles: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    limits: Mapped[dict[str, Any]] = mapped_column(JSON)
+    execution_generation: Mapped[int] = mapped_column(Integer, default=0)
+    stop_reason: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class CoverageTask(Base):
+    """Ограниченный участок и неизменяемые receipts внутри одной общей задачи."""
+
+    __tablename__ = "coverage_tasks"
+    __table_args__ = (
+        UniqueConstraint("run_id", "task_key"),
+        Index("ix_coverage_tasks_run_state", "run_id", "state"),
+    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("coverage_runs.id", ondelete="CASCADE"))
+    task_key: Mapped[str] = mapped_column(String)
+    kind: Mapped[str] = mapped_column(String, default="overview")
+    state: Mapped[str] = mapped_column(String, default="pending")
+    parent_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("coverage_tasks.id", ondelete="SET NULL")
+    )
+    targets: Mapped[list[str]] = mapped_column(JSON)
+    question: Mapped[str | None] = mapped_column(Text)
+    checkpoint: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    dependencies: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    call_receipts: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    stop_reason: Mapped[str | None] = mapped_column(String)
+
+
+class CoverageBlockResult(Base):
+    """Строка manifest существует до обработки, исторические locators переживают удаление."""
+
+    __tablename__ = "coverage_block_results"
+    __table_args__ = (
+        UniqueConstraint("run_id", "block_id"),
+        Index("ix_coverage_results_material_revision", "material_id", "material_revision"),
+        Index("ix_coverage_results_run_state", "run_id", "work_state"),
+    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("coverage_runs.id", ondelete="CASCADE"))
+    # Исторические ID намеренно без FK: материал может быть физически удалён.
+    material_id: Mapped[UUID] = mapped_column(Uuid)
+    material_revision: Mapped[int] = mapped_column(Integer)
+    block_id: Mapped[UUID] = mapped_column(Uuid)
+    sort_order: Mapped[int] = mapped_column(Integer)
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSON)
+    work_state: Mapped[str] = mapped_column(String, default="pending")
+    outcome: Mapped[str] = mapped_column(String, default="unresolved")
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    result_version: Mapped[int] = mapped_column(Integer, default=0)
+    task_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("coverage_tasks.id", ondelete="SET NULL")
+    )
+    publication_state: Mapped[str] = mapped_column(String, default="pending")
+    reason: Mapped[str | None] = mapped_column(String)
+    reuse_ref: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+
+class CoverageFinding(Base):
+    """Гипотеза с опорами, но без автоматического изменения программы."""
+
+    __tablename__ = "coverage_findings"
+    __table_args__ = (Index("ix_coverage_findings_project_state", "project_id", "state"),)
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("coverage_runs.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String)
+    proposal_version: Mapped[int] = mapped_column(Integer, default=1)
+    state: Mapped[str] = mapped_column(String, default="proposed")
+    evidence_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    dependencies: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    feedback: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    applied_action_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_action_log.sequence", ondelete="SET NULL")
+    )
+
+
+class CoverageDecision(Base):
+    """Личный запрет хранится независимо от существования Binding и материала."""
+
+    __tablename__ = "coverage_decisions"
+    __table_args__ = (
+        UniqueConstraint("project_id", "kind", "target_key"),
+        Index("ix_coverage_decisions_project_kind", "project_id", "kind"),
+    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String)
+    target_key: Mapped[str] = mapped_column(String)
+    source_revision: Mapped[int | None] = mapped_column(Integer)
+    anchor_fingerprint: Mapped[str | None] = mapped_column(String)
+    goal_fingerprint: Mapped[str | None] = mapped_column(String)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    action_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_action_log.sequence", ondelete="SET NULL")
+    )
 
 
 class WorkspaceState(Base):

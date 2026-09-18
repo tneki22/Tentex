@@ -18,6 +18,7 @@ import {
   Minimize2,
   Plus,
   Search,
+  ScanSearch,
   Sparkles,
   Trash2,
   Undo2,
@@ -56,6 +57,7 @@ import {
   LibraryMaterialPickerDialog,
   ProjectNav,
   QualityBadge,
+  ResearchLaunchDialog,
 } from "../components/domain";
 import { usePendingReviewJob } from "../hooks/usePendingReviewJob";
 import { AnswersAiPlanDialog } from "./answers/AnswersAiPlanDialog";
@@ -244,14 +246,18 @@ function MaterialCatalog({
 
 function MaterialOverview({
   materials,
+  textbook,
   onOpen,
   onAdd,
   onChooseLibrary,
+  onResearch,
 }: {
   materials: MaterialRead[];
+  textbook: boolean;
   onOpen: (id: string) => void;
   onAdd: () => void;
   onChooseLibrary: () => void;
+  onResearch: (id: string) => void;
 }) {
   return (
     <div className="materials-document-stage is-standalone">
@@ -259,9 +265,9 @@ function MaterialOverview({
         <div className="materials-overview">
           <header>
             <div>
-              <p className="materials-kicker">Приоритет этапа 5</p>
-              <h1>Материалы экзамена</h1>
-              <p>Загрузите список вопросов, ответы и учебные источники.</p>
+              <p className="materials-kicker">{textbook ? "Источники проекта" : "Приоритет этапа 5"}</p>
+              <h1>{textbook ? "Материалы" : "Материалы экзамена"}</h1>
+              <p>{textbook ? "Подготовьте текст, затем исследуйте содержание одного или нескольких источников." : "Загрузите список вопросов, ответы и учебные источники."}</p>
             </div>
             <div className="material-entry-actions is-end">
               <Button onClick={onAdd}><Upload size={15} /> Добавить материал</Button>
@@ -272,7 +278,7 @@ function MaterialOverview({
             <section className="materials-empty-state">
               <Files size={28} />
               <h2>Материалов пока нет</h2>
-              <p>Начните с фотографии списка вопросов — быстрый OCR разберёт её в фоне.</p>
+              <p>{textbook ? "Добавьте учебник, конспект или справочник и подготовьте его текст." : "Начните с фотографии списка вопросов — быстрый OCR разберёт её в фоне."}</p>
               <div className="material-entry-actions">
                 <Button onClick={onAdd}>Выбрать файл</Button>
                 <Button variant="secondary" onClick={onChooseLibrary}><LibraryBig size={15} /> Из Библиотеки</Button>
@@ -281,22 +287,21 @@ function MaterialOverview({
           ) : (
             <div className="materials-overview-table" role="table" aria-label="Материалы проекта">
               <div className="materials-overview-row is-head" role="row">
-                <span>Материал</span><span>Назначение</span><span>Страницы</span><span>Качество</span><span>Состояние</span>
+                <span>Материал</span><span>Назначение</span><span>Страницы</span><span>Качество</span><span>Состояние</span><span>Действие</span>
               </div>
               {materials.map((material) => (
-                <button
+                <div
                   className="materials-overview-row"
-                  type="button"
                   role="row"
                   key={material.id}
-                  onClick={() => onOpen(material.id)}
                 >
-                  <strong>{material.display_name}</strong>
+                  <button className="materials-overview-link" type="button" onClick={() => onOpen(material.id)}><strong>{material.display_name}</strong></button>
                   <span>{material.purposes.map((purpose) => PURPOSE[purpose]).join(", ")}</span>
                   <span>{material.page_count ?? "—"}</span>
                   <span>{material.parser_mode !== "fast" && material.ocr_low_page_count ? `${material.ocr_low_page_count} low` : "—"}</span>
                   <StatusBadge tone={STATUS[material.status].tone}>{STATUS[material.status].label}</StatusBadge>
-                </button>
+                  <span>{textbook && material.status === "ready" ? <Button variant="ghost" onClick={() => onResearch(material.id)}><ScanSearch size={14} />Исследовать</Button> : "—"}</span>
+                </div>
               ))}
             </div>
           )}
@@ -1101,8 +1106,8 @@ function ExamStructureBindingsTab({
             >
               <small>{node.number}</small>
               <span>{node.title}</span>
-              {bound
-                ? <StatusBadge tone="success">{bound.fragment_count} фрагм. · {bound.material_count} ф.</StatusBadge>
+              {bound?.content_fragment_count
+                ? <StatusBadge tone="success">{bound.content_fragment_count} содерж. фрагм. · {bound.content_material_count} ф.</StatusBadge>
                 : <span className="materials-examnode-empty">Без материала</span>}
             </div>
           );
@@ -1230,6 +1235,8 @@ function MaterialSurface() {
   const [editText, setEditText] = useState("");
   const [editBusy, setEditBusy] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [researchOpen, setResearchOpen] = useState(false);
+  const [researchMaterialIds, setResearchMaterialIds] = useState<string[]>([]);
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("bindings");
   const [bindingMode, setBindingMode] = useState(false);
@@ -1477,7 +1484,7 @@ function MaterialSurface() {
     () => pageBindings.filter((binding) => binding.fragment_id === focusedFragmentId),
     [pageBindings, focusedFragmentId],
   );
-  const fragmentsBound = bindings.summary.reduce((sum, item) => sum + item.fragment_count, 0);
+  const fragmentsBound = bindings.summary.reduce((sum, item) => sum + item.content_fragment_count, 0);
   const questionsWithMaterial = bindings.summary.length;
   const questionsWithoutMaterial = Math.max(0, studyNodes.length - questionsWithMaterial);
 
@@ -1885,9 +1892,11 @@ function MaterialSurface() {
         ) : !material ? (
           <MaterialOverview
             materials={store.materials}
+            textbook={Boolean(textbook)}
             onOpen={(id) => navigate(`/projects/${projectId}/materials/${id}`)}
             onAdd={() => setAddOpen(true)}
             onChooseLibrary={() => setLibraryOpen(true)}
+            onResearch={(id) => { setResearchMaterialIds([id]); setResearchOpen(true); }}
           />
         ) : (
           <>
@@ -2212,6 +2221,15 @@ function MaterialSurface() {
         >
           <p>Файл отвяжется от этого проекта. Ответы, уже импортированные из него, сохранятся.</p>
         </ConfirmDialog>
+      )}
+      {textbook && (
+        <ResearchLaunchDialog
+          open={researchOpen}
+          projectId={projectId}
+          initialMaterialIds={researchMaterialIds}
+          onOpenChange={setResearchOpen}
+          onStarted={() => navigate(`/projects/${projectId}/coverage`)}
+        />
       )}
     </div>
   );

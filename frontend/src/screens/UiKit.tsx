@@ -39,6 +39,7 @@ import {
   ProjectChip,
   ProviderModelPicker,
   QualityBadge,
+  ResearchLaunchDialog,
   REFERENCE_ANSWER_STATUSES,
   ReferenceAnswerBadge,
   SourceChip,
@@ -51,7 +52,8 @@ import {
 import type { GoalLevelValue, ProjectColor } from "../components/domain";
 import type { AiModelRead, AiModelSelection, AiProviderRead } from "../api/ai";
 import type { AnswersLinkRead } from "../api/bindings";
-import type { LibraryMaterialDetailRead, LibraryMaterialRead } from "../api/materials";
+import type { CoveragePreflight, CoverageRun } from "../api/coverage";
+import type { LibraryMaterialDetailRead, LibraryMaterialRead, MaterialRead } from "../api/materials";
 
 const DEMO_LIBRARY_MATERIAL: LibraryMaterialRead = {
   id: "demo-library-material",
@@ -75,6 +77,74 @@ const DEMO_LIBRARY_MATERIAL: LibraryMaterialRead = {
 
 const loadDemoLibraryMaterials = async () => [DEMO_LIBRARY_MATERIAL];
 const attachDemoLibraryMaterial = async () => ({ ...DEMO_LIBRARY_MATERIAL } as LibraryMaterialDetailRead);
+
+const DEMO_RESEARCH_MATERIAL: MaterialRead = {
+  id: "demo-research-material",
+  original_name: "Операционные системы.pdf",
+  display_name: "Операционные системы",
+  media_type: "application/pdf",
+  source_kind: "file",
+  presentation_kind: "pdf",
+  source_url: null,
+  retrieved_at: null,
+  size_bytes: 2_400_000,
+  page_count: 184,
+  source_role: "reference",
+  priority: 0,
+  instruction: null,
+  purposes: ["study_source"],
+  exam_slot: null,
+  status: "ready",
+  parser_mode: "fast",
+  active_parse_revision: 1,
+  scan_page_count: 4,
+  ocr_low_page_count: 0,
+  estimated_seconds: null,
+  outline: [],
+  diagnostics: [],
+  error: null,
+  task: null,
+  attached_at: "2026-09-18T00:00:00Z",
+  created_at: "2026-09-18T00:00:00Z",
+  updated_at: "2026-09-18T00:00:00Z",
+};
+
+const loadDemoResearchContext = async () => ({
+  programRevision: 7,
+  materials: [DEMO_RESEARCH_MATERIAL],
+});
+
+const demoCoveragePreflight = async (): Promise<CoveragePreflight> => ({
+  fingerprint: "demo-snapshot",
+  snapshot: {
+    sources: [{ id: DEMO_RESEARCH_MATERIAL.id, name: DEMO_RESEARCH_MATERIAL.display_name, source_role: "reference", revision: 1, diagnostics: {} }],
+    context_sources: [],
+  },
+  blocks: 424,
+  execution_available: true,
+  execution_issue: null,
+  model_roles: {
+    overview: { provider_id: "demo-provider", model_id: "openai/gpt-demo", model_source: "role_override", context_length: 128_000, prompt_version: "verified-07" },
+    research: { provider_id: "demo-provider", model_id: "openai/gpt-demo", model_source: "role_override", context_length: 128_000, prompt_version: "verified-07" },
+  },
+  limits: { max_calls: 100, max_total_tokens: 400_000 },
+});
+
+const demoCoverageStart = async (): Promise<CoverageRun> => ({
+  id: "demo-run",
+  job_id: "demo-job",
+  state: "queued",
+  execution_generation: 1,
+  stop_reason: null,
+  snapshot: (await demoCoveragePreflight()).snapshot,
+  stale: false,
+  primary: { total: 424, pending: 424, processing: 0, inspected: 0, error: 0 },
+  outcomes: { linked: 0, outside_program: 0, service: 0, mixed_resolved: 0, unresolved: 0 },
+  research: { discovered: 0, finished: 0 },
+  pending_synthesis: 0,
+  costs: { calls: 0, tokens: 0, cost_usd: 0, uncertain_calls: 0 },
+  pause_requested: false,
+});
 
 const DEMO_MATCHED_IDS = Array.from({ length: 42 }, (_, index) => `question-${index + 1}`);
 const DEMO_ANSWER_MATCH_RESULT: AnswersLinkRead = {
@@ -204,6 +274,7 @@ export function UiKit() {
   const [dialog, setDialog] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [libraryPicker, setLibraryPicker] = useState(false);
+  const [researchDialog, setResearchDialog] = useState(false);
   const [minutes, setMinutes] = useState("40");
   const [suggested, setSuggested] = useState(true);
   const [selectValue, setSelectValue] = useState<string | null>("openrouter");
@@ -780,6 +851,20 @@ export function UiKit() {
           onAttached={() => undefined}
           loadMaterials={loadDemoLibraryMaterials}
           attachMaterial={attachDemoLibraryMaterial}
+        />
+      </section>
+
+      <section className="kit-section">
+        <h2>Запуск исследования</h2>
+        <p className="kit-hint">Один доменный диалог для мастера, Материалов и Покрытия: область, роли источников, модели и лимит до создания задачи.</p>
+        <Button variant="secondary" onClick={() => setResearchDialog(true)}>Открыть запуск исследования</Button>
+        <ResearchLaunchDialog
+          open={researchDialog}
+          projectId="demo-project"
+          onOpenChange={setResearchDialog}
+          loadContext={loadDemoResearchContext}
+          preflightRequest={demoCoveragePreflight}
+          startRequest={demoCoverageStart}
         />
       </section>
 
