@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 from app.bindings.service import remove_binding
 from app.coverage.budget import ResearchBudget, budget_usage
 from app.coverage.lifecycle import ExecutionToken, control_run, stop_core
-from app.coverage.packets import OUTPUT_RESERVE_TOKENS, build_packet_specs
+from app.coverage.packets import (
+    OUTPUT_RESERVE_TOKENS,
+    build_packet_specs,
+    output_reserve_tokens,
+)
 from app.coverage.protocol import expand_compact_response
 from app.coverage.queries import evidence_read, overview, run_read
 from app.coverage.research import prepare_task, process_coverage_job, publish_packet
@@ -282,6 +286,75 @@ def test_unknown_topic_is_reported_and_own_uuid_still_resolves(session):
     assert session.scalar(select(CoverageBlockResult)).reason == "invalid_decision:unknown_topic"
     by_uuid = expand_compact_response(task_input, packet(str(topic.id)))[0]
     assert by_uuid["links"][0]["topic_id"] == str(topic.id)
+
+
+def test_fragment_range_is_expanded_and_missing_parts_have_their_own_reason(session):
+    """Живой прогон: 14 блоков потеряны на «F2-F6», ещё 38 — на linked без parts."""
+    project, topic, material = setup_source(session, 1)
+    block = session.scalar(select(MaterialBlock).where(MaterialBlock.material_id == material.id))
+    page_id = session.scalar(select(MaterialPage.id).where(MaterialPage.material_id == material.id))
+    for index in range(1, 4):
+        session.add(
+            MaterialFragment(
+                id=uuid4(),
+                material_id=material.id,
+                page_id=page_id,
+                block_id=block.id,
+                sort_order=index,
+                text=f"Потоки выполняют задачи дополнительно {index}",
+                bbox=[0, 0, 1, 1],
+                element_kind="paragraph",
+                quality=PageQuality.NATIVE,
+            )
+        )
+    session.commit()
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+    target = task_input.targets[0]
+    alias = task_input.target_aliases[target]
+    refs = task_input.target_refs[target]
+    aliases = [task_input.fragment_aliases[ref] for ref in refs]
+    assert len(aliases) == 4
+
+    def packet(parts):
+        return [
+            {"from_target": alias, "to_target": alias, "outcome": "linked", "parts": parts}
+        ]
+
+    link = {
+        "topic": task_input.topic_aliases[str(topic.id)][0],
+        "semantic_kind": "content",
+        "roles": ["explanation"],
+        "evidence": [],
+    }
+    # Сжатая запись покрывает все четыре фрагмента и раскрывается до отдельных строк.
+    compact = f"{aliases[0]}–{aliases[2]},{aliases[3]}"
+    raw = expand_compact_response(
+        task_input, packet([{"fragment": compact, "outcome": "content", "links": [link]}])
+    )
+    assert "error" not in raw[0]
+    assert [d["fragment_id"] for d in raw[0]["dispositions"]] == refs
+
+    empty = expand_compact_response(task_input, packet([]))
+    assert empty[0]["error"] == "parts_missing"
+
+
+def test_answer_reserve_and_token_limit_follow_the_size_of_the_packet(session):
+    """Плоские 8 000 на ответ обрывали перечисление трёхсот фрагментов пакета."""
+    assert output_reserve_tokens(1, 1) == OUTPUT_RESERVE_TOKENS
+    # Пакет живого прогона: 16 targets и триста фрагментов не помещались в 8 000.
+    big = output_reserve_tokens(16, 300)
+    assert big > 2 * OUTPUT_RESERVE_TOKENS
+    assert output_reserve_tokens(16, 600) > big
+    project, _, material = setup_source(session, 20)
+    run_id, _, _, _ = launch(session, project, material)
+    tasks = list(session.scalars(select(CoverageTask).where(CoverageTask.run_id == run_id)))
+    run = session.get(CoverageRun, run_id)
+    for task in tasks:
+        assert task.checkpoint["output_tokens"] >= OUTPUT_RESERVE_TOKENS
+    # Предел покрывает три попытки, каждая из которых переотправляет прошлый ответ.
+    answers = sum(task.checkpoint["output_tokens"] for task in tasks)
+    assert run.limits["max_total_tokens"] > answers * 3
 
 
 def test_packet_builder_groups_neighbors_and_covers_oversized_fragment(session):

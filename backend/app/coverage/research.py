@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.coverage.lifecycle import ExecutionToken, execution_boundary, fenced, stop_core
+from app.coverage.packets import output_reserve_tokens
 from app.coverage.protocol import (
     CoverageOverviewExecutor,
     PacketExecution,
@@ -46,6 +47,7 @@ class TaskInput:
     sections: dict[str, str]
     model_roles: dict
     scope: dict
+    output_tokens: int
     kind: str = "overview"
 
 
@@ -140,6 +142,7 @@ def prepare_task(session, token, task_id):
             },
             run.model_roles,
             run.fingerprints,
+            output_reserve_tokens(len(task.targets), len(seen)),
             task.kind,
         )
 

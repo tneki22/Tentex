@@ -11,6 +11,13 @@ from app.coverage.snapshots import material_units
 FALLBACK_CONTEXT_TOKENS = 32_000
 OUTPUT_RESERVE_TOKENS = 8_000
 REASONING_RESERVE_TOKENS = 4_000
+# Ответ перечисляет каждый фрагмент каждого target отдельной строкой parts, поэтому
+# его размер задаёт пакет, а не константа. Плоские 8 000 уходили в провайдера как
+# max_output_tokens и обрывали ответ на пакете из трёхсот фрагментов: модель отдавала
+# linked без parts, склеивала «F2-F6» или прямо писала «недостаточно места», и весь
+# блок становился unresolved.
+PART_ANSWER_TOKENS = 48
+TARGET_ANSWER_TOKENS = 160
 MAX_PACKET_INPUT_TOKENS = 16_000
 MIN_PACKET_INPUT_TOKENS = 2_000
 MAX_PACKET_TARGETS = 16
@@ -36,6 +43,15 @@ def input_token_budget(context_length: int | None, overhead_tokens: int = 0) -> 
         OUTPUT_RESERVE_TOKENS + REASONING_RESERVE_TOKENS + overhead_tokens
     )
     return max(MIN_PACKET_INPUT_TOKENS, min(MAX_PACKET_INPUT_TOKENS, available))
+
+
+def output_reserve_tokens(target_count: int, part_count: int) -> int:
+    """Сколько места нужно ответу пакета: строка на фрагмент плюс решение блока.
+
+    Скрытые рассуждения расходуют тот же лимит completion, поэтому их запас входит сюда.
+    """
+    answer = target_count * TARGET_ANSWER_TOKENS + part_count * PART_ANSWER_TOKENS
+    return max(OUTPUT_RESERVE_TOKENS, answer + REASONING_RESERVE_TOKENS)
 
 
 def estimate_tokens(text: str) -> int:
@@ -183,9 +199,8 @@ def _packet_spec(index: int, items: list[dict], all_items: list[dict]) -> Packet
             "interval_count": interval["total"],
             "section_key": item["section_key"],
         }
-    input_tokens = sum(
-        part.get("tokens", 0) for item in items for part in item["intervals"][0]["parts"]
-    )
+    parts = [part for item in items for part in item["intervals"][0]["parts"]]
+    input_tokens = sum(part.get("tokens", 0) for part in parts)
     positions = {item["block_id"]: pos for pos, item in enumerate(all_items)}
     context_refs: list[str] = []
     for block_id in targets:
@@ -210,5 +225,7 @@ def _packet_spec(index: int, items: list[dict], all_items: list[dict]) -> Packet
             "context_refs": list(dict.fromkeys(context_refs)),
             # Оценка входа пакета нужна не для отчёта: из неё выводится предел запуска.
             "input_tokens": input_tokens,
+            # Столько же нужно ответу: это и max_output_tokens запроса, и слагаемое предела.
+            "output_tokens": output_reserve_tokens(len(targets), len(parts)),
         },
     )

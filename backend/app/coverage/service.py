@@ -9,7 +9,6 @@ from app.ai.schemas import AiModelSelection
 from app.ai.settings import resolve_model
 from app.coverage.packets import (
     MAX_PACKET_TARGETS,
-    OUTPUT_RESERVE_TOKENS,
     build_packet_specs,
     input_token_budget,
 )
@@ -194,12 +193,16 @@ def resolved_limits(limits, packets, overhead) -> dict:
     Плоские значения не знают размера книги: на одном учебнике они не расходуются,
     на другом останавливают обзор на середине. Денежный предел остаётся за человеком.
     """
-    planned = sum(
-        packet.checkpoint["input_tokens"] + overhead + OUTPUT_RESERVE_TOKENS
-        for packet in packets
-    )
+    # Попытка schema repair переотправляет диалог вместе с предыдущим ответом, поэтому
+    # попытка N стоит дороже первой. Равные попытки занижали предел втрое, и обзор
+    # вставал на 102 блоках из 126 при потраченных $0,19 из $1.
+    planned = 0
+    for packet in packets:
+        request = packet.checkpoint["input_tokens"] + overhead
+        answer = packet.checkpoint["output_tokens"]
+        planned += sum(request + attempt * answer for attempt in range(1, GATEWAY_ATTEMPTS + 1))
     return {
         "max_calls": limits.max_calls or len(packets) * GATEWAY_ATTEMPTS + 1,
-        "max_total_tokens": limits.max_total_tokens or planned * GATEWAY_ATTEMPTS,
+        "max_total_tokens": limits.max_total_tokens or planned,
         "max_cost_usd": limits.max_cost_usd,
     }
