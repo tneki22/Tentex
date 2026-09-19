@@ -19,6 +19,7 @@ import { Button, Card, EmptyState, ErrorState, LoadingState, PageHead, Progress,
 import { StackedBar, type BarSegment } from "../../components/ui/chart";
 import { useCoverage } from "../../hooks/useCoverage";
 import { ResumeBudgetDialog } from "./ResumeBudgetDialog";
+import { CoverageBrowser } from "./CoverageBrowser";
 
 const NUMBER = new Intl.NumberFormat("ru-RU");
 
@@ -279,6 +280,12 @@ export function CoverageOverviewScreen() {
             <TopicNames titles={overview.reading_titles} total={overview.topics.reading_basis} />
           </Card>
         </section>
+
+        <CoverageBrowser
+          projectId={projectId}
+          nodes={project.program.nodes}
+          onChanged={coverage.refresh}
+        />
 
         <section className="coverage-sources" aria-labelledby="coverage-sources-title">
           <header><div><h2 id="coverage-sources-title">Источники проекта</h2><p>Разбор файла подготавливает текст; исследование проверяет его содержание относительно программы. Область последнего запуска отмечена отдельно.</p></div></header>

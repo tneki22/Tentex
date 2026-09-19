@@ -6,6 +6,45 @@
   grid-template-columns: minmax(17rem, 18rem) minmax(0, 1fr);
 }
 
+.coverage-browser { display: grid; gap: var(--space-3); }
+.coverage-browser-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); }
+.coverage-browser-head h2 { margin: 0; }
+.coverage-browser-head p { margin: var(--space-1) 0 0; color: var(--muted); }
+.coverage-browser-notice, .coverage-refresh-offer { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--accent-wash); color: var(--ink); }
+.coverage-browser-grid { display: grid; grid-template-columns: minmax(15rem, 20rem) minmax(0, 1fr); min-height: 31rem; border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; background: var(--paper); }
+.coverage-browser-list { min-width: 0; padding: var(--space-2); border-right: 1px solid var(--line); background: var(--surface-sunken); overflow: auto; }
+.coverage-browser-list > button { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); width: 100%; padding: var(--space-3); border: 0; border-radius: var(--radius-md); color: var(--ink); background: transparent; text-align: left; cursor: pointer; }
+.coverage-browser-list > button:hover { background: var(--surface-hover); }
+.coverage-browser-list > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.coverage-browser-list > button.is-selected { background: var(--accent-wash); box-shadow: inset 2px 0 var(--accent); }
+.coverage-browser-list > button > span:first-child { display: grid; gap: var(--space-1); min-width: 0; }
+.coverage-browser-list > button strong { overflow: hidden; text-overflow: ellipsis; }
+.coverage-browser-list > button small { color: var(--muted); }
+.coverage-browser-list > button > svg { flex: 0 0 auto; color: var(--tone-warning); }
+.coverage-browser-detail { min-width: 0; padding: var(--space-3); overflow: auto; }
+.coverage-evidence-layout { display: grid; grid-template-columns: minmax(13rem, 18rem) minmax(0, 1fr); gap: var(--space-3); }
+.coverage-evidence-groups { display: grid; align-content: start; gap: var(--space-4); }
+.coverage-evidence-groups section { display: grid; gap: var(--space-2); }
+.coverage-evidence-groups h3 { margin: 0; color: var(--muted); font-size: var(--text-xs); text-transform: uppercase; }
+.coverage-read-in-workspace { display: inline-flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); }
+.coverage-browser-pagination { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2); color: var(--muted); font-size: var(--text-xs); }
+.coverage-block-decision { display: grid; gap: var(--space-4); max-width: 48rem; margin: 0 auto; }
+.coverage-block-decision header h3 { margin: var(--space-1) 0 0; font-size: var(--text-xl); }
+.coverage-block-decision header small, .coverage-block-decision > p { color: var(--muted); }
+.coverage-block-decision fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); max-height: 18rem; margin: 0; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); overflow: auto; }
+.coverage-block-decision legend { padding: 0 var(--space-2); font-weight: var(--weight-semibold); }
+.coverage-block-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.coverage-block-decision.is-action { padding: var(--space-4); border-radius: var(--radius-lg); background: var(--surface-sunken); }
+
+/* При 1120 px боковая навигация оставляет рабочей части около 800 px: заголовок
+   и четыре режима уже не помещаются рядом, хотя это ещё desktop-компоновка. */
+@media (max-width: 1280px) {
+  .coverage-browser-head { align-items: stretch; flex-direction: column; }
+  .coverage-browser-grid { grid-template-columns: minmax(13rem, 17rem) minmax(0, 1fr); }
+  .coverage-evidence-layout { grid-template-columns: 1fr; }
+  .coverage-evidence-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .coverage-main {
   min-width: 0;
   padding: var(--space-8);

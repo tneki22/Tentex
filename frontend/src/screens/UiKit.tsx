@@ -29,9 +29,12 @@ import {
 import {
   AnswerMatchStatus,
   CostEstimate,
+  EvidenceCard,
+  EvidenceInspector,
   GOAL_LEVELS,
   GoalLevelPicker,
   LibraryMaterialPickerDialog,
+  LessonEvidenceDialog,
   MachineMark,
   MetricList,
   OfflineNotice,
@@ -52,7 +55,7 @@ import {
 import type { GoalLevelValue, ProjectColor } from "../components/domain";
 import type { AiModelRead, AiModelSelection, AiProviderRead } from "../api/ai";
 import type { AnswersLinkRead } from "../api/bindings";
-import type { CoveragePreflight, CoverageRun } from "../api/coverage";
+import type { CoveragePreflight, CoverageRun, EvidenceDetail } from "../api/coverage";
 import type { LibraryMaterialDetailRead, LibraryMaterialRead, MaterialRead } from "../api/materials";
 
 const DEMO_LIBRARY_MATERIAL: LibraryMaterialRead = {
@@ -249,6 +252,41 @@ const TYPE_SCALE = [
 const SPACE_SCALE = ["1", "2", "3", "4", "5", "6", "8", "10", "12", "16"] as const;
 const PROJECT_COLORS: ProjectColor[] = [1, 2, 3, 4, 5, 6, 7, 8];
 
+const DEMO_EVIDENCE: EvidenceDetail = {
+  id: "demo-task:demo-block:e1",
+  key: "e1",
+  ref: "demo-fragment",
+  binding_id: "demo-binding",
+  topic_id: "demo-topic",
+  topic_title: "Взаимная блокировка",
+  material_id: "demo-material",
+  material_name: "Операционные системы.pdf",
+  page_from: 84,
+  page_to: 85,
+  fragment_ids: ["demo-fragment"],
+  quote: "Взаимная блокировка возникает, когда процессы циклически ждут ресурсы друг друга.",
+  text: "Взаимная блокировка возникает, когда процессы циклически ждут ресурсы друг друга.",
+  description: "Связное объяснение условия циклического ожидания.",
+  roles: ["definition", "explanation"],
+  semantic_kind: "content",
+  status: "confirmed",
+  mechanism: "pass_two",
+  quality: "native",
+  available: true,
+  stale: false,
+  hidden: false,
+  preferred: true,
+  legacy: false,
+  repair: "exact",
+  start: 0,
+  end: 88,
+  original_ref: null,
+  origin: "overview",
+  applied: true,
+  locator: {},
+  linked_topics: [{ topic_id: "demo-topic", title: "Взаимная блокировка" }],
+};
+
 type DemoTab = "gaps" | "unsorted";
 type DemoWay = "outline" | "pass1" | "catalog";
 
@@ -279,6 +317,7 @@ export function UiKit() {
   const [confirm, setConfirm] = useState(false);
   const [libraryPicker, setLibraryPicker] = useState(false);
   const [researchDialog, setResearchDialog] = useState(false);
+  const [lessonEvidenceDialog, setLessonEvidenceDialog] = useState(false);
   const [minutes, setMinutes] = useState("40");
   const [suggested, setSuggested] = useState(true);
   const [selectValue, setSelectValue] = useState<string | null>("openrouter");
@@ -736,6 +775,29 @@ export function UiKit() {
             step={{ text: "Заниматься — 25 минут", to: "/projects", tone: "accent" }}
           />
         </div>
+      </section>
+
+      <section className="kit-section">
+        <h2>Опоры прохода 2</h2>
+        <p className="kit-hint">
+          Карточка остаётся короткой, а постоянный инспектор показывает точный текст,
+          происхождение и решения. Вставка в Урок открывает отдельный диалог с явным местом.
+        </p>
+        <div className="kit-grid-two">
+          <EvidenceCard evidence={DEMO_EVIDENCE} selected onSelect={() => undefined} />
+          <EvidenceInspector
+            evidence={DEMO_EVIDENCE}
+            onDecision={() => undefined}
+            onAddToLesson={() => setLessonEvidenceDialog(true)}
+          />
+        </div>
+        <LessonEvidenceDialog
+          open={lessonEvidenceDialog}
+          projectId="demo-project"
+          evidence={DEMO_EVIDENCE}
+          preview
+          onOpenChange={setLessonEvidenceDialog}
+        />
       </section>
 
       <section className="kit-section">

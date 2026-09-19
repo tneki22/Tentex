@@ -91,6 +91,7 @@ import { AttemptHistory } from "./workspace/AttemptHistory";
 import { ReferenceAnswerContent, type ReferenceAnswerMedia } from "./workspace/ReferenceAnswerContent";
 import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
 import { BoundSourceReader } from "./workspace/BoundSourceReader";
+import { TextbookSourcePanel } from "./workspace/TextbookSourcePanel";
 import { SourcePreviewDialog } from "./workspace/SourcePreviewDialog";
 import { toSourcePlaces, type SourcePlace } from "./workspace/sourcePlaces";
 import { renderSearchHighlights } from "./workspace/searchHighlights";
@@ -257,6 +258,8 @@ export function ProjectWorkspace() {
   const preferredTopic = searchParams.get("topic");
   const preferredLesson = searchParams.get("lesson");
   const preferredTabParam = searchParams.get("tab");
+  const preferredEvidence = searchParams.get("evidence");
+  const coverageReturn = searchParams.get("returnTo");
   const preferredTab = isWorkspaceTab(preferredTabParam) ? preferredTabParam : null;
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [layout, setLayout] = useState<WorkspaceLayout>(DEFAULT_LAYOUT);
@@ -489,8 +492,9 @@ export function ProjectWorkspace() {
     setSourceBindings([]);
     setHiddenPlaces(new Set());
     setPreviewKey(null);
-    // Смысл продукта — открыл вопрос и сразу видишь, где про это в учебниках.
-    void runSourceSearch(selected.id, selected.title);
+    // В экзаменационном режиме сохраняем прежний автопоиск. В учебниковом
+    // сначала открывается опубликованная опора; BM25 запускается только человеком.
+    if (!textbook) void runSourceSearch(selected.id, selected.title);
     const controller = new AbortController();
     setSourceBindingsLoading(true);
     listBindings(projectId, { nodeId: selected.id }, controller.signal)
@@ -498,7 +502,7 @@ export function ProjectWorkspace() {
       .catch(() => undefined)
       .finally(() => { if (!controller.signal.aborted) setSourceBindingsLoading(false); });
     return () => controller.abort();
-  }, [projectId, selected?.id, selected?.title, runSourceSearch]);
+  }, [projectId, selected?.id, selected?.title, runSourceSearch, textbook]);
 
 
   /** Привязки вопроса и выдача — один источник правды на вкладку и на окно
@@ -865,6 +869,19 @@ export function ProjectWorkspace() {
   function sourcePanel() {
     if (!selected) {
       return <div className="workspace-empty-copy"><FileText size={26} /><h2>Выберите тему</h2><p>Материал появится после выбора темы слева.</p></div>;
+    }
+    if (textbook) {
+      return <TextbookSourcePanel
+        projectId={projectId}
+        topicId={selected.id}
+        topicTitle={selected.title}
+        initialEvidenceId={preferredEvidence}
+        returnTo={coverageReturn}
+        onBindingsChanged={() => {
+          void reloadSourceBindings(selected.id);
+          void bindings.refreshSummary();
+        }}
+      />;
     }
     // Привязки файла эталонных ответов (mechanism "answers_file") уже показаны
     // во вкладке «Ответ» как страницы/медиа эталона — здесь это другая сущность.

@@ -159,10 +159,108 @@ export const getCoverageRun = (
 ): Promise<CoverageRun> => request(`${path(projectId)}/runs/${encodeURIComponent(runId)}`, { signal });
 
 export interface CoverageBlockPage {
+  coverage_revision: number;
   items: CoverageBlock[];
   total: number;
   next_offset: number | null;
   distribution: Partial<Record<CoverageBucket, number>>;
+}
+
+export type CoverageView = "readable" | "gaps" | "outside_program" | "needs_action";
+
+export interface CoverageTopic {
+  node_id: string;
+  title: string;
+  parent_title: string | null;
+  evidence_count: number;
+  mention_count: number;
+  hidden_count: number;
+  legacy_count: number;
+  best_evidence_id: string | null;
+}
+
+export interface CoverageTopicPage {
+  coverage_revision: number;
+  items: CoverageTopic[];
+  total: number;
+  next_offset: number | null;
+}
+
+export interface EvidenceSummary {
+  id: string;
+  binding_id: string;
+  topic_id: string;
+  material_id: string;
+  material_name: string;
+  page_from: number;
+  page_to: number;
+  fragment_ids: string[];
+  quote: string;
+  description: string;
+  roles: string[];
+  semantic_kind: string | null;
+  status: string;
+  mechanism: string;
+  quality: "native" | "ocr" | "ocr_low";
+  available: boolean;
+  stale: boolean;
+  hidden: boolean;
+  preferred: boolean;
+  legacy: boolean;
+}
+
+export interface TopicEvidence {
+  coverage_revision: number;
+  topic_id: string;
+  topic_title: string;
+  best_evidence_id: string | null;
+  starter: EvidenceSummary[];
+  explanations: EvidenceSummary[];
+  practice: EvidenceSummary[];
+  depth: EvidenceSummary[];
+  mentions: EvidenceSummary[];
+  hidden: EvidenceSummary[];
+  legacy: EvidenceSummary[];
+}
+
+export interface EvidenceDetail extends EvidenceSummary {
+  key: string;
+  ref: string;
+  repair: string;
+  start: number | null;
+  end: number | null;
+  original_ref: string | null;
+  origin: string | null;
+  applied: boolean;
+  locator: Record<string, unknown>;
+  topic_title: string;
+  text: string;
+  linked_topics: Array<{ topic_id: string; title: string }>;
+}
+
+export type CoverageDecisionAction =
+  | "confirm" | "remove" | "restore" | "reassign" | "change_role"
+  | "hide" | "show" | "prefer" | "clear_prefer" | "service" | "outside_goal";
+
+export interface CoverageDecisionCommand {
+  request_key: string;
+  expected_coverage_revision: number;
+  action: CoverageDecisionAction;
+  binding_id?: string;
+  evidence_id?: string;
+  block_id?: string;
+  topic_ids?: string[];
+  role?: "definition" | "explanation" | "example" | "exercise" | "reference";
+  semantic_kind?: "content" | "mention" | "context";
+}
+
+export interface CoverageDecisionReceipt {
+  request_key: string;
+  action: CoverageDecisionAction;
+  coverage_revision: number;
+  action_sequence: number;
+  binding_ids: string[];
+  message: string;
 }
 
 /** Нерешённые, сбойные и устаревшие блоки всех источников: одна страница вместо всего проекта. */
@@ -171,6 +269,54 @@ export const getCoverageIssues = (
   limit = 12,
   signal?: AbortSignal,
 ): Promise<CoverageBlockPage> => request(`${path(projectId)}/issues?offset=0&limit=${limit}`, { signal });
+
+export const getCoverageTopics = (
+  projectId: string,
+  view: "readable" | "gaps",
+  offset = 0,
+  limit = 30,
+  signal?: AbortSignal,
+): Promise<CoverageTopicPage> => request(
+  `${path(projectId)}/topics?view=${view}&offset=${offset}&limit=${limit}`,
+  { signal },
+);
+
+export const getCoverageBlocks = (
+  projectId: string,
+  view: "outside_program" | "needs_action",
+  offset = 0,
+  limit = 30,
+  signal?: AbortSignal,
+): Promise<CoverageBlockPage> => request(
+  `${path(projectId)}/blocks?view=${view}&offset=${offset}&limit=${limit}`,
+  { signal },
+);
+
+export const getTopicEvidence = (
+  projectId: string,
+  nodeId: string,
+  signal?: AbortSignal,
+): Promise<TopicEvidence> => request(
+  `${path(projectId)}/topics/${encodeURIComponent(nodeId)}/evidence`,
+  { signal },
+);
+
+export const getEvidence = (
+  projectId: string,
+  evidenceId: string,
+  signal?: AbortSignal,
+): Promise<EvidenceDetail> => request(
+  `${path(projectId)}/evidence/${encodeURIComponent(evidenceId)}`,
+  { signal },
+);
+
+export const decideCoverage = (
+  projectId: string,
+  command: CoverageDecisionCommand,
+): Promise<CoverageDecisionReceipt> => request(`${path(projectId)}/decisions`, {
+  method: "POST",
+  body: JSON.stringify(command),
+});
 
 export const controlCoverageRun = (
   projectId: string,

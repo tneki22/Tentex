@@ -164,6 +164,8 @@ async function stub(page: Page, overview: unknown, issuePage: unknown, runRow: u
     const url = route.request().url();
     const json = url.includes("/coverage/overview") ? overview
       : url.includes("/coverage/issues") ? issuePage
+        : url.includes("/coverage/topics") ? { coverage_revision: 4, items: [], total: 0, next_offset: null }
+          : url.includes("/coverage/blocks") ? { coverage_revision: 4, items: [], total: 0, next_offset: null, distribution: {} }
         : url.includes("/coverage/runs/") ? runRow
           : url.includes("/coverage/preflight") ? preflight
             : url.includes("/materials") ? materials

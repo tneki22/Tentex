@@ -269,6 +269,73 @@
   background: var(--accent-wash-strong);
 }
 
+/* Evidence: одна компактная карточка в списках Покрытия, Источника и Уроков. */
+.evidence-card {
+  position: relative;
+  display: grid;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  background: var(--paper);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.evidence-card:hover { background: var(--surface-hover); border-color: var(--line-strong); }
+.evidence-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.evidence-card.is-selected { border-color: var(--accent); background: var(--accent-wash); box-shadow: var(--shadow-sm); }
+.evidence-card-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.evidence-card-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
+.evidence-card-head svg:last-child { margin-left: auto; color: var(--accent); }
+.evidence-card-quote { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-height: 1.45; }
+.evidence-card-meta { color: var(--muted); font-size: var(--text-xs); }
+.evidence-card > .quality-badge { position: absolute; right: var(--space-3); bottom: var(--space-3); }
+
+.evidence-inspector {
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper-strong);
+  box-shadow: var(--shadow-sm);
+}
+.evidence-inspector.is-empty { display: grid; place-items: center; min-height: 16rem; color: var(--muted); }
+.evidence-inspector-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+.evidence-inspector-head h3 { margin: var(--space-1) 0 0; font-size: var(--text-lg); }
+.evidence-inspector-head p, .evidence-inspector-head small { margin: 0; color: var(--muted); }
+.evidence-inspector-statuses { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+.evidence-inspector blockquote, .lesson-evidence-preview blockquote {
+  margin: var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: var(--surface-sunken);
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+.evidence-inspector-description { color: var(--muted); }
+.evidence-inspector-facts { display: grid; gap: var(--space-2); margin: var(--space-4) 0; }
+.evidence-inspector-facts > div { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: var(--space-3); }
+.evidence-inspector-facts dt { color: var(--muted); }
+.evidence-inspector-facts dd { margin: 0; }
+.evidence-inspector > footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
+
+.lesson-evidence-dialog { width: min(44rem, calc(100vw - var(--space-6))); }
+.lesson-evidence-form { display: grid; gap: var(--space-4); }
+.lesson-evidence-form > label { display: grid; grid-template-columns: 8rem minmax(0, 1fr); align-items: center; gap: var(--space-3); }
+.lesson-evidence-form > label > span { color: var(--muted); font-size: var(--text-sm); }
+.lesson-evidence-preview { padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-sunken); }
+.lesson-evidence-preview p { margin: var(--space-1) 0 0; color: var(--muted); }
+.lesson-evidence-preview blockquote { max-height: 8rem; overflow: auto; margin-bottom: 0; }
+.lesson-evidence-overlap { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
+
+.evidence-structured-reader { display: grid; gap: var(--space-3); }
+.evidence-structured-reader .structured-page { min-height: 0; }
+
 /* --- Метрики. Ни баров, ни окраски: числа текстом --- */
 
 .metric-row {

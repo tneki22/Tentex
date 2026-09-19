@@ -375,6 +375,12 @@
   flex-direction: column;
 }
 
+.lesson-suggested { display: grid; grid-template-columns: minmax(13rem, .8fr) minmax(0, 1.2fr); gap: var(--space-3); align-items: start; }
+.lesson-suggested-list { display: grid; gap: var(--space-2); }
+.lesson-suggested-list > p { margin: 0 0 var(--space-1); color: var(--muted); }
+.lesson-suggested-item { position: relative; }
+.lesson-suggested-item > .status-badge { position: absolute; right: var(--space-2); top: var(--space-2); }
+
 .lessons-panel-head {
   flex: none;
   display: grid;

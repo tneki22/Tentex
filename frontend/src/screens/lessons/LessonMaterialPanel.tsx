@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Sparkles } from "lucide-react";
 import { getTopicSources, type LessonBlockCommand, type LessonBlockRead, type LessonSourceRangeRead } from "../../api/lessons";
 import { listMaterials, type MaterialRead } from "../../api/materials";
 import { EmptyState, ErrorState, LoadingState, SegmentedTabs, Select } from "../../components/ui";
@@ -9,6 +8,7 @@ import { LessonOutlineTab } from "./LessonOutlineTab";
 import { LessonPagesTab } from "./LessonPagesTab";
 import { LessonSearchTab, useMaterialSearch } from "./LessonSearchTab";
 import { LessonSourcePicker, type LessonPickerTarget } from "./LessonSourcePicker";
+import { LessonSuggestedTab } from "./LessonSuggestedTab";
 import { errorText } from "./lessonTree";
 
 type PanelTab = "outline" | "pages" | "search" | "suggested";
@@ -105,9 +105,14 @@ export function LessonMaterialPanel({
               />
             )}
             {tab === "suggested" && (
-              <EmptyState title="Предложений пока нет" icon={<Sparkles size={24} />}>
-                <p>Предложения появятся после автоматического разбора материала (проход 2).</p>
-              </EmptyState>
+              studyTopic ? <LessonSuggestedTab
+                projectId={projectId}
+                topic={studyTopic}
+                lessonId={lessonId}
+                blocks={blocks}
+                busy={busy}
+                onAdd={onAdd}
+              /> : <EmptyState title="Выберите тему"><p>Предложения прохода 2 показываются для выбранной темы урока.</p></EmptyState>
             )}
           </>
         )}
