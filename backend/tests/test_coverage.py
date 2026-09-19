@@ -1009,3 +1009,4 @@ def test_rules_separate_a_plan_from_a_list_that_explains():
     без второй половины срабатывало наоборот: 332 связи на списках стали mention."""
     assert "План и оглавление" in SYSTEM_RULES
     assert "Список факторов, признаков, видов или условий раскрывает тему" in SYSTEM_RULES
+    assert "Список вопросов и заданий" in SYSTEM_RULES
