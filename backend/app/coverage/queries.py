@@ -39,7 +39,8 @@ BUCKETS = (
     "stale",
 )
 # Исход, по которому пользователь может что-то сделать: уточнить, повторить или перепроверить.
-ISSUE_BUCKETS = ("unresolved", "error", "stale")
+# Порядок задаёт и ленту: сбой повторяем, нерешённое уточняем, устаревшее ждёт запуска.
+ISSUE_BUCKETS = ("error", "unresolved", "stale")
 
 
 def run_read(session, project_id, run_id):
@@ -72,6 +73,7 @@ def run_read(session, project_id, run_id):
         },
         "pending_synthesis": sum(t.kind == "synthesis" and t.state != "finished" for t in tasks),
         "costs": budget_usage(session, run.id),
+        "limits": run.limits,
         "pause_requested": job.pause_requested,
     }
 
@@ -123,22 +125,42 @@ def _active_blocks(session, project_id):
 
 def _select_results(session, runs, current):
     """Поздний pending/failed не заслоняет совместимый проверенный результат."""
-    selected, latest = {}, {}
+    selected, latest, reviewed = {}, {}, set()
     for run in runs:
         for row in session.scalars(
             select(CoverageBlockResult).where(CoverageBlockResult.run_id == run.id)
         ):
-            latest.setdefault(row.block_id, row)
+            previous = latest.get(row.block_id)
+            if previous is None or (
+                previous.work_state != "inspected" and row.work_state == "inspected"
+            ):
+                latest[row.block_id] = row
+            if row.work_state == "inspected" and not current[run.id]:
+                reviewed.add(row.material_id)
             if current[run.id] and row.publication_state == "applied":
                 selected.setdefault(row.block_id, row)
-    return selected, latest
+    return selected, latest, reviewed
+
+
+def _unfinished_bucket(block, previous, current, reviewed):
+    """Устаревшим блок делает прежний разбор, а не сам факт брошенного запуска.
+
+    Блок, который ни один запуск не рассмотрел, остаётся нерассмотренным: иначе
+    подключённый, но ни разу не исследованный учебник целиком попадает в
+    «устарели» и вытесняет настоящие проблемы из ленты.
+    """
+    if previous is None:
+        return "stale" if block.material_id in reviewed else "pending"
+    if not current[previous.run_id]:
+        return "stale" if previous.work_state == "inspected" else "pending"
+    return "unresolved" if previous.work_state == "inspected" else previous.work_state
 
 
 def current_map(session, project_id):
     """Один серверный расчёт для будущих overview/matrix/graph."""
     require_project(session, project_id)
     runs, current = _current_runs(session, project_id)
-    selected, latest = _select_results(session, runs, current)
+    selected, latest, reviewed = _select_results(session, runs, current)
     bindings = list(
         session.scalars(
             select(Binding)
@@ -177,16 +199,7 @@ def current_map(session, project_id):
         if row:
             bucket = _project_outcome(row, related)
         else:
-            previous = latest.get(block.id)
-            bucket = previous.work_state if previous and current[previous.run_id] else "pending"
-            if previous and not current[previous.run_id]:
-                bucket = "stale"
-            if not previous and any(
-                s["id"] == str(block.material_id) for r in runs for s in r.snapshot["sources"]
-            ):
-                bucket = "stale"
-            if bucket == "inspected":
-                bucket = "unresolved"
+            bucket = _unfinished_bucket(block, latest.get(block.id), current, reviewed)
         result.append(
             {
                 "block_id": str(block.id),
@@ -233,6 +246,7 @@ def overview(session, project_id):
         )
     )
     node_ids = {n.id for n in nodes}
+    titles = {n.id: n.title for n in nodes}
     content = {b.program_node_id for b in bindings if b.semantic_kind == "content"} & node_ids
     reading = {
         b.program_node_id
@@ -251,6 +265,7 @@ def overview(session, project_id):
     runs, _ = _current_runs(session, project_id)
     latest = runs[0] if runs else None
     latest_job = session.get(BackgroundJob, latest.job_id) if latest else None
+    latest_scope = {s["id"] for s in latest.snapshot["sources"]} if latest else set()
     by_material = Counter((item["material_id"], item["bucket"]) for item in blocks)
     source_rows = []
     for material, display_name in sources:
@@ -272,6 +287,8 @@ def overview(session, project_id):
                 },
                 "diagnostics": diagnostics,
                 "known_limits": _known_extraction_limits(material),
+                # Источник проекта и область последнего запуска — разные вещи.
+                "in_latest_run": str(material.id) in latest_scope,
             }
         )
     return {
@@ -294,6 +311,9 @@ def overview(session, project_id):
                 & node_ids
             ),
         },
+        # Число без названий нечитаемо: «6 тем» не говорит, каких именно.
+        "content_titles": _titles(content, titles),
+        "reading_titles": _titles(reading, titles),
         "material_ratio": {
             "numerator": numerator,
             "denominator": denominator,
@@ -317,6 +337,15 @@ def overview(session, project_id):
     }
 
 
+# Сколько названий тем экран показывает под числом, не превращаясь в список программы.
+TITLE_SAMPLE = 24
+
+
+def _titles(ids, titles) -> list[str]:
+    """Названия в порядке программы; длинный список отсекается по TITLE_SAMPLE."""
+    return sorted(titles[node_id] for node_id in ids)[:TITLE_SAMPLE]
+
+
 def _known_extraction_limits(material):
     """И0а ещё не выполнен: экран обязан честно показать известные границы адаптера."""
     limits = []
@@ -336,6 +365,7 @@ def _page(rows, offset, limit):
         "items": rows[offset : offset + limit],
         "total": len(rows),
         "next_offset": offset + limit if offset + limit < len(rows) else None,
+        "distribution": dict(Counter(row["bucket"] for row in rows)),
     }
 
 
@@ -348,7 +378,11 @@ def source_blocks(session, project_id, material_id, offset, limit):
 def issue_blocks(session, project_id, offset, limit):
     """Отдельная лента требующих внимания блоков: экран не выкачивает весь проект ради списка."""
     blocks, _ = current_map(session, project_id)
-    return _page([b for b in blocks if b["bucket"] in ISSUE_BUCKETS], offset, limit)
+    rows = [b for b in blocks if b["bucket"] in ISSUE_BUCKETS]
+    # Сначала то, с чем можно что-то сделать сейчас: устаревшее ждёт нового запуска
+    # и не должно вытеснять сбои и нерешённые блоки с первой страницы.
+    rows.sort(key=lambda row: ISSUE_BUCKETS.index(row["bucket"]))
+    return _page(rows, offset, limit)
 
 
 def evidence_read(session, project_id, evidence_id):

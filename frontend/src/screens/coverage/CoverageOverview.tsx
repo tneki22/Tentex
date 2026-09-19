@@ -10,13 +10,17 @@ import {
   Pause,
   Play,
   ScanSearch,
+  XCircle,
 } from "lucide-react";
-import { controlCoverageRun, type CoverageBucket } from "../../api/coverage";
+import { controlCoverageRun, type CoverageBucket, type CoverageLimits } from "../../api/coverage";
 import { getProject, type ProjectDetail } from "../../api/projects";
 import { ProjectNav, ResearchLaunchDialog } from "../../components/domain";
 import { Button, Card, EmptyState, ErrorState, LoadingState, PageHead, Progress, StatusBadge, Tooltip } from "../../components/ui";
 import { StackedBar, type BarSegment } from "../../components/ui/chart";
 import { useCoverage } from "../../hooks/useCoverage";
+import { ResumeBudgetDialog } from "./ResumeBudgetDialog";
+
+const NUMBER = new Intl.NumberFormat("ru-RU");
 
 const BUCKETS: Array<{ key: CoverageBucket; label: string; token: string }> = [
   { key: "linked", label: "Связаны с программой", token: "--accent" },
@@ -39,6 +43,23 @@ const LIMIT_LABEL: Record<string, string> = {
 
 const RUNNING_STATES = new Set(["queued", "running"]);
 
+/** Код остановки читает worker, человеку нужна фраза и следующий шаг. */
+const STOP_REASON: Record<string, string> = {
+  budget_tokens: "Достигнут предел по токенам запуска",
+  budget_calls: "Достигнут предел по числу вызовов",
+  budget_cost_usd: "Достигнут денежный предел запуска",
+  budget_limit: "Достигнут предел запуска",
+  snapshot_changed: "Источник, программа или цель изменились после запуска",
+  user_pause: "Обзор остановлен вручную",
+  user_cancelled: "Обзор отменён",
+  executor_unavailable: "Для роли обзора не выбрана модель",
+  execution_error: "Сбой при обращении к модели",
+  lease_lost: "Запуск перехватил другой процесс",
+  work_exhausted: "Все блоки области рассмотрены",
+};
+
+const BUDGET_REASONS = new Set(["budget_tokens", "budget_calls", "budget_cost_usd", "budget_limit"]);
+
 /** Машинная причина остаётся в receipt; на экране стоит фраза, по которой понятно, что делать. */
 const REASON_LABEL: Record<string, string> = {
   unsupported_evidence: "Опора не нашлась в прочитанном тексте",
@@ -54,6 +75,19 @@ const REASON_LABEL: Record<string, string> = {
   decision_too_large: "Ответ по блоку не помещается в допустимый размер",
   interval_unresolved: "Часть длинного блока осталась нерешённой",
   manual_conflict: "Ваше ручное решение изменилось во время обзора",
+  unknown_topic: "Модель назвала тему, которой нет в программе",
+  link_accounting: "Часть блока отнесена к теме, но связь не подтверждена опорой",
+  disposition_without_link: "Назначение части блока не совпало с её связью",
+  link_scope: "Связь ведёт за пределы блока или программы",
+  heading_content: "Заголовок предложен как раскрытие темы",
+  outcome_dispositions: "Исход блока не сходится с назначением его частей",
+  content_without_target: "Опора взята не из самого блока",
+  reference_roles: "У упоминания указана роль раскрытия",
+  mixed_parts: "Смешанный исход без двух разных частей",
+  unsupported_finding: "Предложение по программе не подкреплено опорой",
+  duplicate_evidence_key: "Две разные опоры с одним ключом",
+  target_scope: "Решение пришло не по тому блоку",
+  empty_or_missing_fragment: "Фрагмент блока пуст или не прочитан",
 };
 
 const BUCKET_REASON: Record<string, string> = {
@@ -67,6 +101,25 @@ function reasonText(bucket: string, reason: string | null): string {
   return REASON_LABEL[code] ?? BUCKET_REASON[bucket] ?? "Блок требует внимания";
 }
 
+const ISSUE_ORDER: CoverageBucket[] = ["error", "unresolved", "stale"];
+const BUCKET_TITLE: Record<string, string> = {
+  error: "ошибки обработки",
+  unresolved: "ждут уточнения",
+  stale: "устарели",
+};
+
+/** Число тем без названий нечитаемо: «6 тем» не говорит, каких именно. */
+function TopicNames({ titles, total }: { titles: string[]; total: number }) {
+  if (titles.length === 0) return null;
+  const shown = titles.slice(0, 3);
+  const rest = total - shown.length;
+  return (
+    <Tooltip label={titles.join(" · ") + (total > titles.length ? " …" : "")}>
+      <p className="coverage-topic-names">{shown.join(" · ")}{rest > 0 ? ` и ещё ${rest}` : ""}</p>
+    </Tooltip>
+  );
+}
+
 /** Первый рабочий экран прохода 2: полный учёт подготовленного текста без обещания И4. */
 export function CoverageOverviewScreen() {
   const { projectId } = useParams();
@@ -74,6 +127,7 @@ export function CoverageOverviewScreen() {
   const [projectError, setProjectError] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
   const [controlBusy, setControlBusy] = useState(false);
+  const [resumeOpen, setResumeOpen] = useState(false);
   const coverage = useCoverage(projectId);
 
   useEffect(() => {
@@ -104,7 +158,7 @@ export function CoverageOverviewScreen() {
     return <ErrorState title="Не удалось загрузить покрытие" message={coverage.error}><Button onClick={() => void coverage.refresh()}>Повторить</Button></ErrorState>;
   }
 
-  const { overview, run, issues, issueTotal } = coverage;
+  const { overview, run, issues, issueTotal, issueCounts } = coverage;
   const runTotal = run?.primary.total ?? overview.total;
   const inspected = run?.primary.inspected ?? (
     overview.distribution.linked
@@ -114,6 +168,7 @@ export function CoverageOverviewScreen() {
     + overview.distribution.unresolved
   );
   const active = Boolean(run && RUNNING_STATES.has(run.state));
+  const budgetStop = Boolean(run && run.stop_reason && BUDGET_REASONS.has(run.stop_reason));
   const stoppedWithProblem = Boolean(run && ["failed", "cancelled"].includes(run.state));
   const runTitle = active
     ? "Модель распределяет блоки"
@@ -133,11 +188,12 @@ export function CoverageOverviewScreen() {
       ? { title: "Подготовленного текста ещё нет", body: "Источники подключены, но ни один файл не разобран на блоки. Дождитесь разбора в «Материалах»." }
       : null;
 
-  async function control(action: "pause" | "resume") {
+  async function control(action: "pause" | "resume" | "cancel", limits?: CoverageLimits) {
     if (!run) return;
     setControlBusy(true);
     try {
-      await controlCoverageRun(projectId!, run, action);
+      await controlCoverageRun(projectId!, run, action, limits);
+      setResumeOpen(false);
       await coverage.refresh();
     } finally {
       setControlBusy(false);
@@ -166,7 +222,16 @@ export function CoverageOverviewScreen() {
           lead="Первичный обзор показывает, что произошло с каждым блоком подготовленного текста. Углубление и синтез коллекции ещё не выполняются."
           actions={<>
             {run?.state === "running" && <Button variant="secondary" disabled={controlBusy} onClick={() => void control("pause")}><Pause size={15} />Пауза</Button>}
-            {run?.state === "paused" && !run.stale && <Button variant="secondary" disabled={controlBusy} onClick={() => void control("resume")}><Play size={15} />Продолжить</Button>}
+            {run?.state === "paused" && !run.stale && (
+              <Button
+                variant="secondary"
+                disabled={controlBusy}
+                onClick={() => budgetStop ? setResumeOpen(true) : void control("resume")}
+              >
+                <Play size={15} />{budgetStop ? "Продолжить с новым пределом" : "Продолжить"}
+              </Button>
+            )}
+            {run?.state === "paused" && <Button variant="ghost" disabled={controlBusy} onClick={() => void control("cancel")}><XCircle size={15} />Отменить запуск</Button>}
             <Button onClick={() => setLaunchOpen(true)}><ScanSearch size={15} />Исследовать материалы</Button>
           </>}
         />
@@ -176,7 +241,7 @@ export function CoverageOverviewScreen() {
             <span className={active ? "is-active" : stoppedWithProblem ? "is-danger" : run?.state === "paused" ? "is-warning" : ""}>
               {active ? <CircleDashed size={19} /> : stoppedWithProblem ? <AlertTriangle size={19} /> : run?.state === "paused" ? <Pause size={19} /> : <CheckCircle2 size={19} />}
             </span>
-            <div><small>{active ? "Сейчас происходит" : run ? "Последний запуск" : "Исследование не запускалось"}</small><strong>{runTitle}</strong>{run?.stop_reason && <small>Причина: {run.stop_reason}. Сохранённые решения доступны; запустите обзор заново после исправления.</small>}{run?.stale && <small>Источник изменился после запуска: продолжить прежний обзор нельзя, нужен новый явный запуск.</small>}</div>
+            <div><small>{active ? "Сейчас происходит" : run ? "Последний запуск" : "Исследование не запускалось"}</small><strong>{runTitle}</strong>{run?.stop_reason && run.stop_reason !== "work_exhausted" && <small>{STOP_REASON[run.stop_reason] ?? `Причина: ${run.stop_reason}`}{budgetStop && run ? `: ${NUMBER.format(run.costs.tokens)} из ${NUMBER.format(run.limits.max_total_tokens)} токенов, ${run.costs.calls} из ${run.limits.max_calls} вызовов, $${run.costs.cost_usd.toFixed(2)}${run.limits.max_cost_usd === null ? "" : ` из $${run.limits.max_cost_usd.toFixed(2)}`}.` : "."} Сохранённые решения доступны.</small>}{run?.stale && <small>Источник изменился после запуска: продолжить прежний обзор нельзя — отмените его и запустите заново.</small>}</div>
           </div>
           <div className="coverage-progress-copy"><strong>{runTotal > 0 ? `${inspected} из ${runTotal}` : "—"}</strong><span>блоков выбранной области рассмотрено</span></div>
           {runTotal > 0 && <Progress value={inspected} max={runTotal} label={`Рассмотрено ${inspected} из ${runTotal} блоков выбранной области`} />}
@@ -199,6 +264,7 @@ export function CoverageOverviewScreen() {
             {overview.topics.total === 0
               ? <p>Программа пуста: относить блоки не к чему. Соберите темы в разделе «Программа» и запустите обзор снова.</p>
               : <p>Только content-связи. Упоминания не превращают тему в обеспеченную.{overview.topics.legacy > 0 && ` Тем со связями до прохода 2, где назначение неизвестно: ${overview.topics.legacy}.`}</p>}
+            <TopicNames titles={overview.content_titles} total={overview.topics.with_content} />
           </Card>
           <Card className="coverage-metric-card is-material">
             <small>{overview.material_ratio.label}</small>
@@ -209,16 +275,17 @@ export function CoverageOverviewScreen() {
             <small>Основа чтения</small>
             <strong>{overview.topics.reading_basis} <span>тем</span></strong>
             <p>Есть проверенное определение или объяснение. Пример сам по себе сюда не входит.</p>
+            <TopicNames titles={overview.reading_titles} total={overview.topics.reading_basis} />
           </Card>
         </section>
 
         <section className="coverage-sources" aria-labelledby="coverage-sources-title">
-          <header><div><h2 id="coverage-sources-title">Выбранная область</h2><p>Разбор файла подготавливает текст; исследование проверяет его содержание относительно программы.</p></div></header>
+          <header><div><h2 id="coverage-sources-title">Источники проекта</h2><p>Разбор файла подготавливает текст; исследование проверяет его содержание относительно программы. Область последнего запуска отмечена отдельно.</p></div></header>
           <div className="coverage-source-list">
             {overview.sources.map((source) => {
               const reviewed = source.total - source.distribution.pending - source.distribution.processing - source.distribution.error - source.distribution.stale;
               return <article key={source.id}>
-                <div className="coverage-source-heading"><BookOpenText size={17} /><span><strong>{source.name}</strong><small>Ревизия {source.revision} · {reviewed} из {source.total} рассмотрено</small></span><Link to={`/projects/${projectId}/materials/${source.id}`}>Открыть текст</Link></div>
+                <div className="coverage-source-heading"><BookOpenText size={17} /><span><strong>{source.name}</strong><small>Ревизия {source.revision} · {reviewed} из {source.total} рассмотрено</small></span>{run && <StatusBadge tone={source.in_latest_run ? "info" : "neutral"}>{source.in_latest_run ? "в области запуска" : "вне запуска"}</StatusBadge>}<Link to={`/projects/${projectId}/materials/${source.id}`}>Открыть текст</Link></div>
                 <StackedBar segments={BUCKETS.map((bucket) => ({ value: source.distribution[bucket.key], token: bucket.token, label: bucket.label, soft: bucket.key === "pending" }))} total={source.total} ariaLabel={`Распределение блоков ${source.name}`} />
                 {source.known_limits.length > 0 && <div className="coverage-diagnostics"><AlertTriangle size={14} /><span>{source.known_limits.map((limit) => LIMIT_LABEL[limit] ?? limit).join("; ")}.</span></div>}
               </article>;
@@ -227,7 +294,8 @@ export function CoverageOverviewScreen() {
         </section>
 
         <section className="coverage-issues" aria-labelledby="coverage-issues-title">
-          <header><div><h2 id="coverage-issues-title">Где нужна помощь</h2><p>Технический сбой можно повторить, нерешённый блок — уточнить на следующем слое, устаревший — перепроверить после изменения источника.</p></div><StatusBadge tone={issues.some((item) => item.bucket === "error") ? "danger" : "neutral"}>{issueTotal}</StatusBadge></header>
+          <header><div><h2 id="coverage-issues-title">Где нужна помощь</h2><p>Технический сбой можно повторить, нерешённый блок — уточнить на следующем слое, устаревший — перепроверить после изменения источника.</p></div><StatusBadge tone={issueCounts.error ? "danger" : issueCounts.unresolved ? "warning" : "neutral"}>{issueTotal}</StatusBadge></header>
+          {issueTotal > 0 && <p className="coverage-issue-summary">{ISSUE_ORDER.filter((bucket) => issueCounts[bucket]).map((bucket) => `${BUCKET_TITLE[bucket]} — ${issueCounts[bucket]}`).join(" · ")}.</p>}
           {issueTotal === 0 ? <p className="coverage-no-issues">Ошибок и нерешённых блоков нет.</p> : <div className="coverage-issue-list">
             {issues.map((block) => <article key={block.block_id}>
               <span className={`coverage-issue-icon is-${block.bucket}`}><AlertTriangle size={15} /></span>
@@ -238,6 +306,16 @@ export function CoverageOverviewScreen() {
           </div>}
         </section>
       </main>
+
+      {run && (
+        <ResumeBudgetDialog
+          open={resumeOpen}
+          run={run}
+          busy={controlBusy}
+          onOpenChange={setResumeOpen}
+          onResume={(limits) => void control("resume", limits)}
+        />
+      )}
 
       <ResearchLaunchDialog
         open={launchOpen}

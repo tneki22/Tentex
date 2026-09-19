@@ -9,14 +9,15 @@ from sqlalchemy.orm import Session
 
 from app.bindings.service import remove_binding
 from app.coverage.budget import ResearchBudget, budget_usage
-from app.coverage.lifecycle import ExecutionToken, control_run
-from app.coverage.packets import build_packet_specs
+from app.coverage.lifecycle import ExecutionToken, control_run, stop_core
+from app.coverage.packets import OUTPUT_RESERVE_TOKENS, build_packet_specs
 from app.coverage.protocol import expand_compact_response
 from app.coverage.queries import evidence_read, overview, run_read
 from app.coverage.research import prepare_task, process_coverage_job, publish_packet
 from app.coverage.schemas import Evidence, RunControl, RunPlan, RunStart
 from app.coverage.service import preflight, start_run
 from app.coverage.validation import CheckedDecision, Unit, merge_refinement, repair_evidence
+from app.db import job_write_transaction
 from app.materials.worker import claim_job
 from app.models import (
     BackgroundJob,
@@ -188,6 +189,99 @@ def test_100_blocks_error_missing_pause_restart_and_receipts(session):
         assert calls == 7  # Сохранённый первый пакет не вызывает executor повторно.
         assert restarted.scalar(select(func.count()).select_from(Binding)) == 98
         assert sum(overview(restarted, project.id)["distribution"].values()) == 100
+
+
+def test_abandoned_run_leaves_blocks_pending_not_stale(session):
+    """Брошенный запуск не делает нерассмотренный блок устаревшим.
+
+    Иначе подключённый учебник, по которому обзор ни разу не доходил до модели,
+    целиком уезжает в «устарели» и вытесняет настоящие проблемы из ленты.
+    """
+    project, topic, material = setup_source(session, 3)
+    launch(session, project, material)
+    topic.title = "Другой смысл"
+    session.commit()
+    distribution = overview(session, project.id)["distribution"]
+    assert distribution["pending"] == 3 and distribution["stale"] == 0
+
+
+def test_limits_are_derived_from_packets_and_name_the_exhausted_one(session):
+    """Плоский предел не знает размера книги; исчерпанный предел называется явно."""
+    project, _, material = setup_source(session, 20)
+    run_id, _, token, _ = launch(session, project, material)
+    run = session.get(CoverageRun, run_id)
+    packets = session.scalar(
+        select(func.count()).select_from(CoverageTask).where(CoverageTask.run_id == run_id)
+    )
+    assert run.limits["max_calls"] == packets * 3 + 1
+    assert run.limits["max_total_tokens"] > packets * OUTPUT_RESERVE_TOKENS
+    assert run.limits["max_cost_usd"] is None
+    run.limits = {**run.limits, "max_total_tokens": 10}
+    session.commit()
+    with pytest.raises(ProjectConflictError) as error:
+        ResearchBudget(session, token, first_task(session, run_id).id).reserve(11, None)
+    assert error.value.context["limit"] == "tokens"
+
+
+def test_resume_raises_limits_so_continuation_is_not_a_dead_button(session):
+    """Продолжение с прежним потолком встаёт на первом же вызове."""
+    project, _, material = setup_source(session)
+    run_id, job, token, _ = launch(session, project, material)
+    # claim_job отдаёт отсоединённый объект: паузу пишем по строке этой сессии.
+    with job_write_transaction(session):
+        stop_core(
+            session.get(CoverageRun, run_id),
+            session.get(BackgroundJob, job.id),
+            BackgroundJobState.PAUSED,
+            "budget_tokens",
+        )
+    control_run(
+        session,
+        project.id,
+        run_id,
+        RunControl(
+            action="resume",
+            expected_generation=token.generation,
+            limits={"max_total_tokens": 2_000_000},
+        ),
+    )
+    run = session.get(CoverageRun, run_id)
+    assert run.limits["max_total_tokens"] == 2_000_000
+    assert run.stop_reason is None
+    assert session.get(BackgroundJob, job.id).state == BackgroundJobState.QUEUED
+
+
+def test_unknown_topic_is_reported_and_own_uuid_still_resolves(session):
+    """Потерянная связь превращала разобранный блок в «link_accounting» без причины."""
+    project, topic, material = setup_source(session, 1)
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+    alias = task_input.target_aliases[task_input.targets[0]]
+    fragment = task_input.fragment_aliases[task_input.target_refs[task_input.targets[0]][0]]
+
+    def packet(topic_value):
+        return [{
+            "from_target": alias,
+            "to_target": alias,
+            "outcome": "linked",
+            "parts": [{
+                "fragment": fragment,
+                "outcome": "content",
+                "links": [{
+                    "topic": topic_value,
+                    "semantic_kind": "content",
+                    "roles": ["explanation"],
+                    "evidence": [fragment],
+                }],
+            }],
+        }]
+
+    raw = expand_compact_response(task_input, packet("T404"))
+    assert raw[0]["error"] == "unknown_topic"
+    publish_packet(session, token, task_input, raw)
+    assert session.scalar(select(CoverageBlockResult)).reason == "invalid_decision:unknown_topic"
+    by_uuid = expand_compact_response(task_input, packet(str(topic.id)))[0]
+    assert by_uuid["links"][0]["topic_id"] == str(topic.id)
 
 
 def test_packet_builder_groups_neighbors_and_covers_oversized_fragment(session):

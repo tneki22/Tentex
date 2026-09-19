@@ -13,6 +13,7 @@ from app.coverage.protocol import (
     CoverageOverviewExecutor,
     PacketExecution,
     expand_compact_response,
+    topic_nodes,
 )
 from app.coverage.publication import publish_decision
 from app.coverage.snapshots import block_units, fingerprint, snapshot_current
@@ -114,11 +115,7 @@ def prepare_task(session, token, task_id):
             "inspected": [],
             "scope": run.fingerprints,
         }
-        topic_rows = [
-            n
-            for n in run.snapshot["program"]
-            if n["is_in_current_program"] and not n["is_archived"] and n["node_type"] != "section"
-        ]
+        topic_rows = topic_nodes(run.snapshot["program"])
         topic_aliases = {
             n["id"]: (f"T{index}", n["title"]) for index, n in enumerate(topic_rows, 1)
         }
@@ -312,7 +309,7 @@ def process_coverage_job(session, job, executor: Callable[[TaskInput], list[dict
             else BackgroundJobState.PAUSED
         )
         reason = (
-            "budget_limit"
+            f"budget_{error.context.get('limit', 'limit')}"
             if error.code == "coverage_budget_exhausted"
             else error.code.removeprefix("coverage_")
         )

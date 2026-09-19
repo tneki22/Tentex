@@ -10,6 +10,21 @@ from app.db import job_write_transaction
 from app.models import CoverageTask
 from app.projects.errors import ProjectConflictError
 
+# Какой именно предел остановил запуск: «budget_limit» без этого ничего не объясняет.
+LIMIT_TITLE = {"calls": "вызовов", "tokens": "токенов", "cost_usd": "расход $"}
+
+
+def _exhausted(limits, used, tokens, cost):
+    """Возвращает исчерпанный предел до обращения к сети, а не общий признак."""
+    if used["calls"] >= limits["max_calls"]:
+        return "calls", used["calls"], limits["max_calls"]
+    if used["tokens"] + tokens > limits["max_total_tokens"]:
+        return "tokens", used["tokens"], limits["max_total_tokens"]
+    money = limits.get("max_cost_usd")
+    if money is not None and (cost is None or used["cost_usd"] + cost > Decimal(str(money))):
+        return "cost_usd", round(used["cost_usd"], 4), money
+    return None
+
 
 def budget_usage(session, run_id) -> dict:
     """Зарезервированная/неизвестная попытка никогда не становится бесплатной."""
@@ -40,17 +55,13 @@ class ResearchBudget:
             if task is None or task.run_id != run.id:
                 raise ValueError("budget_task_scope")
             used = budget_usage(self.session, run.id)
-            limit = run.limits.get("max_cost_usd")
-            over_cost = limit is not None and (
-                cost is None or used["cost_usd"] + cost > Decimal(str(limit))
-            )
-            if (
-                used["calls"] >= run.limits["max_calls"]
-                or over_cost
-                or used["tokens"] + tokens > run.limits["max_total_tokens"]
-            ):
+            exhausted = _exhausted(run.limits, used, tokens, cost)
+            if exhausted is not None:
+                kind, spent, limit = exhausted
                 raise ProjectConflictError(
-                    "Достигнут лимит исследования", code="coverage_budget_exhausted"
+                    f"Достигнут предел исследования: {LIMIT_TITLE[kind]} {spent} из {limit}",
+                    code="coverage_budget_exhausted",
+                    context={"limit": kind, "spent": str(spent), "value": str(limit)},
                 )
             receipt_id = str(uuid4())
             task.call_receipts = [

@@ -1,12 +1,19 @@
 """Preflight и атомарное планирование полного manifest прохода 2."""
 
+from math import ceil
 from uuid import uuid4
 
 from sqlalchemy import select
 
 from app.ai.schemas import AiModelSelection
 from app.ai.settings import resolve_model
-from app.coverage.packets import build_packet_specs, input_token_budget
+from app.coverage.packets import (
+    MAX_PACKET_TARGETS,
+    OUTPUT_RESERVE_TOKENS,
+    build_packet_specs,
+    input_token_budget,
+)
+from app.coverage.protocol import prompt_overhead_tokens
 from app.coverage.schemas import RunPlan
 from app.coverage.snapshots import (
     build_snapshot,
@@ -27,6 +34,8 @@ from app.models import (
 from app.projects.errors import ProjectConflictError, ProjectDomainError
 
 ACTIVE = {BackgroundJobState.QUEUED, BackgroundJobState.RUNNING, BackgroundJobState.PAUSED}
+# Повтор по схеме и повтор транспорта тратят тот же бюджет, что и сам вызов.
+GATEWAY_ATTEMPTS = 3
 
 
 def _role_override(plan, key):
@@ -51,13 +60,14 @@ def _resolve_roles(session, plan):
     return result
 
 
-def _preflight_details(session, fingerprints, plan):
+def _preflight_details(session, snapshot, fingerprints, plan):
+    overhead = prompt_overhead_tokens(snapshot["program"])
     try:
         roles = _resolve_roles(session, plan)
-        budget = input_token_budget(roles["overview"]["context_length"])
+        budget = input_token_budget(roles["overview"]["context_length"], overhead)
         issue = None
     except ProjectDomainError as error:
-        roles, budget, issue = {}, input_token_budget(None), error.detail
+        roles, budget, issue = {}, input_token_budget(None, overhead), error.detail
     fingerprint_value = fingerprint(
         {"scope": fingerprints, "model_roles": roles, "packet_input_tokens": budget}
     )
@@ -67,15 +77,22 @@ def _preflight_details(session, fingerprints, plan):
 def preflight(session, project_id, plan):
     """Без платного вызова: снимок, диагностика источников и доступность ролей."""
     snapshot, fingerprints = build_snapshot(session, project_id, plan)
-    roles, budget, issue, fingerprint_value = _preflight_details(session, fingerprints, plan)
+    roles, budget, issue, fingerprint_value = _preflight_details(
+        session, snapshot, fingerprints, plan
+    )
+    blocks = count_manifest_blocks(session, snapshot)
     return {
         "fingerprint": fingerprint_value,
         "snapshot": snapshot,
-        "blocks": count_manifest_blocks(session, snapshot),
+        "blocks": blocks,
         "execution_available": issue is None,
         "execution_issue": issue,
         "model_roles": roles,
         "limits": plan.limits.model_dump(),
+        # Предел выводится при запуске по готовым пакетам; здесь честная нижняя оценка.
+        "packets_at_least": max(1, ceil(blocks / MAX_PACKET_TARGETS)),
+        "prompt_overhead_tokens": prompt_overhead_tokens(snapshot["program"]),
+        "packet_input_tokens": budget,
     }
 
 
@@ -102,7 +119,13 @@ def start_run(session, project_id, command):
             .where(CoverageRun.project_id == project_id, BackgroundJob.state.in_(ACTIVE))
         )
         if active:
-            return active.id
+            # Прежний ID в ответ на другой запрос выглядел как «кнопка не работает»:
+            # экран обновлялся, а область запуска оставалась чужой.
+            raise ProjectConflictError(
+                "Прежний запуск ещё не закончен: продолжите или отмените его",
+                code="coverage_run_active",
+                context={"run_id": str(active.id)},
+            )
         plan = RunPlan.model_validate(
             command.model_dump(exclude={"request_key", "preflight_fingerprint"})
         )
@@ -112,7 +135,7 @@ def start_run(session, project_id, command):
             )
         snapshot, fingerprints = build_snapshot(session, project_id, plan)
         roles, packet_budget, _, fingerprint_value = _preflight_details(
-            session, fingerprints, plan
+            session, snapshot, fingerprints, plan
         )
         if fingerprint_value != command.preflight_fingerprint:
             raise ProjectConflictError(
@@ -138,6 +161,7 @@ def start_run(session, project_id, command):
         session.add(run)
         session.flush()
         manifest = list(manifest_rows(session, snapshot))
+        overhead = prompt_overhead_tokens(snapshot["program"])
         for block, row_manifest in manifest:
             session.add(
                 CoverageBlockResult(
@@ -149,7 +173,8 @@ def start_run(session, project_id, command):
                     manifest=row_manifest,
                 )
             )
-        for packet in build_packet_specs(session, manifest, packet_budget):
+        packets = build_packet_specs(session, manifest, packet_budget)
+        for packet in packets:
             session.add(
                 CoverageTask(
                     run_id=run.id,
@@ -158,5 +183,23 @@ def start_run(session, project_id, command):
                     checkpoint=packet.checkpoint,
                 )
             )
+        run.limits = resolved_limits(plan.limits, packets, overhead)
         job.total = len(manifest)
         return run.id
+
+
+def resolved_limits(limits, packets, overhead) -> dict:
+    """Выводит предел вызовов и токенов из готовых пакетов запуска.
+
+    Плоские значения не знают размера книги: на одном учебнике они не расходуются,
+    на другом останавливают обзор на середине. Денежный предел остаётся за человеком.
+    """
+    planned = sum(
+        packet.checkpoint["input_tokens"] + overhead + OUTPUT_RESERVE_TOKENS
+        for packet in packets
+    )
+    return {
+        "max_calls": limits.max_calls or len(packets) * GATEWAY_ATTEMPTS + 1,
+        "max_total_tokens": limits.max_total_tokens or planned * GATEWAY_ATTEMPTS,
+        "max_cost_usd": limits.max_cost_usd,
+    }

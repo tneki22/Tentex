@@ -25,10 +25,15 @@ class PacketSpec:
     checkpoint: dict
 
 
-def input_token_budget(context_length: int | None) -> int:
-    """Оставляет место ответу и reasoning, не выдавая эвристику за tokenizer модели."""
+def input_token_budget(context_length: int | None, overhead_tokens: int = 0) -> int:
+    """Оставляет место ответу, reasoning и постоянной части запроса.
+
+    Постоянная часть — правила, схема ответа и всё дерево тем — уходит в модель
+    с каждым пакетом. На программе в шестьсот тем она весит больше самого текста
+    блоков, и без её вычета «16 000 токенов на пакет» превращались в сорок тысяч.
+    """
     available = (context_length or FALLBACK_CONTEXT_TOKENS) - (
-        OUTPUT_RESERVE_TOKENS + REASONING_RESERVE_TOKENS
+        OUTPUT_RESERVE_TOKENS + REASONING_RESERVE_TOKENS + overhead_tokens
     )
     return max(MIN_PACKET_INPUT_TOKENS, min(MAX_PACKET_INPUT_TOKENS, available))
 
@@ -111,7 +116,7 @@ def _intervals(units, token_budget: int) -> list[dict]:
             if current and (used + cost > token_budget or repeats_fragment):
                 intervals.append({"index": len(intervals), "parts": current})
                 current, used = [], 0
-            current.append(piece)
+            current.append({**piece, "tokens": cost})
             used += cost
     if current:
         intervals.append({"index": len(intervals), "parts": current})
@@ -178,6 +183,9 @@ def _packet_spec(index: int, items: list[dict], all_items: list[dict]) -> Packet
             "interval_count": interval["total"],
             "section_key": item["section_key"],
         }
+    input_tokens = sum(
+        part.get("tokens", 0) for item in items for part in item["intervals"][0]["parts"]
+    )
     positions = {item["block_id"]: pos for pos, item in enumerate(all_items)}
     context_refs: list[str] = []
     for block_id in targets:
@@ -200,5 +208,7 @@ def _packet_spec(index: int, items: list[dict], all_items: list[dict]) -> Packet
         checkpoint={
             "target_specs": target_specs,
             "context_refs": list(dict.fromkeys(context_refs)),
+            # Оценка входа пакета нужна не для отчёта: из неё выводится предел запуска.
+            "input_tokens": input_tokens,
         },
     )

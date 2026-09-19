@@ -222,6 +222,10 @@ def validate_target(target_id, raw, units, seen, inspected, topics, *, origin="o
     try:
         if len(raw) != 1:
             raise ValueError("missing_or_duplicate_target")
+        # Маркер сервера («диапазон с частями», «не сошлись фрагменты», неизвестная тема)
+        # не должен превращаться в «ответ не по схеме»: причина уже известна точно.
+        if isinstance(raw[0], dict) and raw[0].get("error"):
+            raise ValueError(str(raw[0]["error"])[:80])
         decision = BlockDecision.model_validate(raw[0])
         if str(decision.target_id) != str(target_id):
             raise ValueError("target_scope")

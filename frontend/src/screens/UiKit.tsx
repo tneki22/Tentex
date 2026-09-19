@@ -127,7 +127,10 @@ const demoCoveragePreflight = async (): Promise<CoveragePreflight> => ({
     overview: { provider_id: "demo-provider", model_id: "openai/gpt-demo", model_source: "role_override", context_length: 128_000, prompt_version: "verified-07" },
     research: { provider_id: "demo-provider", model_id: "openai/gpt-demo", model_source: "role_override", context_length: 128_000, prompt_version: "verified-07" },
   },
-  limits: { max_calls: 100, max_total_tokens: 400_000 },
+  limits: { max_cost_usd: 1 },
+  packets_at_least: 27,
+  prompt_overhead_tokens: 19_000,
+  packet_input_tokens: 16_000,
 });
 
 const demoCoverageStart = async (): Promise<CoverageRun> => ({
@@ -143,6 +146,7 @@ const demoCoverageStart = async (): Promise<CoverageRun> => ({
   research: { discovered: 0, finished: 0 },
   pending_synthesis: 0,
   costs: { calls: 0, tokens: 0, cost_usd: 0, uncertain_calls: 0 },
+  limits: { max_calls: 82, max_total_tokens: 1_200_000, max_cost_usd: 1 },
   pause_requested: false,
 });
 

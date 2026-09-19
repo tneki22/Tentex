@@ -26,9 +26,9 @@ interface ResearchLaunchDialogProps {
   startRequest?: typeof startCoverage;
 }
 
-const DEFAULT_LIMITS = { max_calls: 100, max_total_tokens: 400_000 };
 /** Предел расхода выбирает человек: молча тратить деньги на обзор книги нельзя. */
 const DEFAULT_COST_USD = "1.00";
+const NUMBER = new Intl.NumberFormat("ru-RU");
 
 const ROLE_LABEL: Record<string, string> = {
   main: "основной",
@@ -95,17 +95,19 @@ export function ResearchLaunchDialog({
   const costValid = costLimit.trim() === "" || (Number.isFinite(cost) && cost > 0);
 
   // Отпечаток preflight зависит от области и моделей, но не от лимитов, поэтому
-  // правка предела расхода не перезапрашивает проверку на каждый символ.
+  // правка предела расхода не перезапрашивает проверку на каждый символ. Сами
+  // вызовы и токены выводит сервер из готовых пакетов: плоские числа не знают
+  // размера книги и останавливали обзор на середине учебника.
   const scope = useMemo<CoveragePlan>(() => ({
     material_ids: selected,
     context_material_ids: [],
     mode: "initial",
     expected_program_revision: programRevision,
-    limits: DEFAULT_LIMITS,
+    limits: {},
   }), [programRevision, selected]);
 
   const plan: CoveragePlan = costValid && costLimit.trim() !== ""
-    ? { ...scope, limits: { ...DEFAULT_LIMITS, max_cost_usd: cost } }
+    ? { ...scope, limits: { max_cost_usd: cost } }
     : scope;
 
   useEffect(() => {
@@ -185,9 +187,9 @@ export function ResearchLaunchDialog({
         </section>
 
         <section className="research-launch-facts">
-          <div><Layers3 size={16} /><span><small>Подготовленный текст</small><b>{preflight ? `${preflight.blocks} блоков` : "Проверяем…"}</b></span></div>
+          <div><Layers3 size={16} /><span><small>Подготовленный текст</small><b>{preflight ? `${preflight.blocks} блоков · от ${preflight.packets_at_least} вызовов` : "Проверяем…"}</b></span></div>
           <div><RefreshCw size={16} /><span><small>Модель обзора</small><b>{model?.model_id ?? "Не настроена"}</b></span></div>
-          <div><CircleDollarSign size={16} /><span><small>Модель исследования · вызовов</small><b>{researchModel?.model_id ?? "Не настроена"} · {DEFAULT_LIMITS.max_calls}</b></span></div>
+          <div><CircleDollarSign size={16} /><span><small>Модель исследования</small><b>{researchModel?.model_id ?? "Не настроена"}</b></span></div>
         </section>
 
         <Field
@@ -208,6 +210,11 @@ export function ResearchLaunchDialog({
 
         {preflight && !preflight.execution_available && (
           <OfflineNotice reason="disabled" alternative={`${(preflight.execution_issue ?? "Выберите модель для ролей прохода 2").replace(/\.?$/, ".")} Сохранённое покрытие останется доступно.`} />
+        )}
+        {preflight && preflight.prompt_overhead_tokens > 0 && (
+          <p className="research-launch-note">
+            Дерево тем уходит в модель с каждым вызовом: постоянная часть запроса — около {NUMBER.format(preflight.prompt_overhead_tokens)} токенов, на текст блоков остаётся {NUMBER.format(preflight.packet_input_tokens)}.
+          </p>
         )}
         <p className="research-launch-boundary">«Файл разобран» означает, что Tentex подготовил текст. «Содержание исследовано» появится только после проверки блоков моделью.</p>
         {error && <p className="inline-error" role="alert">{error}</p>}

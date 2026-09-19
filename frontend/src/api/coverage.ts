@@ -11,9 +11,10 @@ export type CoverageBucket =
   | "error"
   | "stale";
 
+/** Пустые вызовы и токены означают «выведи из области запуска», а не «без предела». */
 export interface CoverageLimits {
-  max_calls: number;
-  max_total_tokens: number;
+  max_calls?: number | null;
+  max_total_tokens?: number | null;
   max_cost_usd?: number | null;
 }
 
@@ -49,6 +50,9 @@ export interface CoveragePreflight {
     prompt_version: string;
   }>;
   limits: CoverageLimits;
+  packets_at_least: number;
+  prompt_overhead_tokens: number;
+  packet_input_tokens: number;
 }
 
 export interface CoverageRun {
@@ -64,6 +68,7 @@ export interface CoverageRun {
   research: { discovered: number; finished: number };
   pending_synthesis: number;
   costs: { calls: number; tokens: number; cost_usd: number; uncertain_calls: number };
+  limits: { max_calls: number; max_total_tokens: number; max_cost_usd: number | null };
   pause_requested: boolean;
 }
 
@@ -75,6 +80,7 @@ export interface CoverageSourceOverview {
   distribution: Record<CoverageBucket, number>;
   diagnostics: Record<string, unknown>;
   known_limits: string[];
+  in_latest_run: boolean;
 }
 
 export interface CoverageOverview {
@@ -85,6 +91,8 @@ export interface CoverageOverview {
   total: number;
   distribution: Record<CoverageBucket, number>;
   topics: { total: number; with_content: number; reading_basis: number; legacy: number };
+  content_titles: string[];
+  reading_titles: string[];
   material_ratio: {
     numerator: number;
     denominator: number;
@@ -154,6 +162,7 @@ export interface CoverageBlockPage {
   items: CoverageBlock[];
   total: number;
   next_offset: number | null;
+  distribution: Partial<Record<CoverageBucket, number>>;
 }
 
 /** Нерешённые, сбойные и устаревшие блоки всех источников: одна страница вместо всего проекта. */
@@ -167,7 +176,8 @@ export const controlCoverageRun = (
   projectId: string,
   run: CoverageRun,
   action: "pause" | "resume" | "cancel",
+  limits?: CoverageLimits,
 ): Promise<CoverageRun> => request(`${path(projectId)}/runs/${encodeURIComponent(run.id)}/control`, {
   method: "POST",
-  body: JSON.stringify({ action, expected_generation: run.execution_generation }),
+  body: JSON.stringify({ action, expected_generation: run.execution_generation, limits }),
 });

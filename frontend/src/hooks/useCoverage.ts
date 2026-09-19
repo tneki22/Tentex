@@ -4,6 +4,7 @@ import {
   getCoverageOverview,
   getCoverageRun,
   type CoverageBlock,
+  type CoverageBucket,
   type CoverageOverview,
   type CoverageRun,
 } from "../api/coverage";
@@ -18,6 +19,7 @@ export function useCoverage(projectId: string | undefined) {
   const [run, setRun] = useState<CoverageRun | null>(null);
   const [issues, setIssues] = useState<CoverageBlock[]>([]);
   const [issueTotal, setIssueTotal] = useState(0);
+  const [issueCounts, setIssueCounts] = useState<Partial<Record<CoverageBucket, number>>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -38,6 +40,7 @@ export function useCoverage(projectId: string | undefined) {
       setRun(nextRun);
       setIssues(issuePage.items);
       setIssueTotal(issuePage.total);
+      setIssueCounts(issuePage.distribution ?? {});
     } catch (caught) {
       if (!signal?.aborted) setError(caught instanceof Error ? caught.message : "Не удалось загрузить покрытие");
     } finally {
@@ -58,5 +61,5 @@ export function useCoverage(projectId: string | undefined) {
     return () => window.clearInterval(timer);
   }, [run?.state, refresh]);
 
-  return { overview, run, issues, issueTotal, loading, error, refresh };
+  return { overview, run, issues, issueTotal, issueCounts, loading, error, refresh };
 }

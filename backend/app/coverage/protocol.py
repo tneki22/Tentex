@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from app.ai.gateway import AiTextRequest, ModelGateway
 from app.ai.schemas import AiMessage, AiModelSelection
 from app.coverage.budget import ResearchBudget
+from app.coverage.packets import estimate_tokens
 from app.coverage.schemas import OverviewPacketResponse
 
 SYSTEM_RULES = """Ты выполняешь первичный обзор подготовленного текста.
@@ -58,12 +59,36 @@ def build_prompt(task_input) -> str:
         }
         for ref in task_input.context_refs
     ]
+    # UUID темы в запросе не нужен: ответ приходит по alias, а тысяча тем с UUID
+    # весит больше самого текста блоков и уходит в модель с каждым пакетом.
     topics = [
-        {"alias": alias, "id": topic_id, "title": title}
-        for topic_id, (alias, title) in task_input.topic_aliases.items()
+        {"alias": alias, "title": title} for alias, title in task_input.topic_aliases.values()
     ]
     payload = {"targets": targets, "context": context, "topics": topics}
     return f"{SYSTEM_RULES}\n\nВХОД:\n{json.dumps(payload, ensure_ascii=False)}"
+
+
+def prompt_overhead_tokens(program: list[dict]) -> int:
+    """Постоянная часть запроса: правила, схема ответа и всё дерево допустимых тем."""
+    topics = [
+        {"alias": f"T{index}", "title": node["title"]}
+        for index, node in enumerate(topic_nodes(program), 1)
+    ]
+    payload = json.dumps(topics, ensure_ascii=False) + json.dumps(
+        OverviewPacketResponse.model_json_schema(), ensure_ascii=False
+    )
+    return estimate_tokens(SYSTEM_RULES) + estimate_tokens(payload)
+
+
+def topic_nodes(program: list[dict]) -> list[dict]:
+    """Темы программы в одном порядке для prompt, оценки и aliases."""
+    return [
+        node
+        for node in program
+        if node["is_in_current_program"]
+        and not node["is_archived"]
+        and node["node_type"] != "section"
+    ]
 
 
 class CoverageOverviewExecutor:
@@ -142,6 +167,13 @@ def expand_compact_response(task_input, decisions: list[dict]) -> list[dict]:
     return expanded
 
 
+def _resolve_topic(task_input, value) -> str | None:
+    """Alias — основной адрес темы; собственный UUID принимается как запасной."""
+    if not isinstance(value, str):
+        return None
+    return task_input.topic_by_alias.get(value) or (value if value in task_input.topics else None)
+
+
 def _expand_target(task_input, target: str, decision: dict) -> dict:
     refs = task_input.target_refs[target]
     parts = decision.get("parts") or []
@@ -165,9 +197,11 @@ def _expand_target(task_input, target: str, decision: dict) -> dict:
             {"fragment_id": ref, "start": 0, "end": len(unit.text), "outcome": part["outcome"]}
         )
         for link_index, link in enumerate(part.get("links", [])):
-            topic = task_input.topic_by_alias.get(link.get("topic"))
+            topic = _resolve_topic(task_input, link.get("topic"))
             if topic is None:
-                continue
+                # Молча потерянная связь превращала разобранный блок в «link_accounting»
+                # и прятала настоящую причину: модель назвала тему, которой нет.
+                return {"target_id": target, "error": "unknown_topic"}
             evidence_aliases = link.get("evidence") or [part["fragment"]]
             evidence = []
             for evidence_index, alias in enumerate(evidence_aliases):

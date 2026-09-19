@@ -75,10 +75,15 @@ class BlockDecision(StrictModel):
 
 
 class Limits(StrictModel):
-    """Общий предел охватывает повторы шлюза, а не только логические вызовы."""
+    """Общий предел охватывает повторы шлюза, а не только логические вызовы.
 
-    max_calls: int = Field(default=100, ge=1, le=100000)
-    max_total_tokens: int = Field(default=400000, ge=1)
+    Пустые вызовы и токены не значат «без предела»: они выводятся из области
+    запуска при старте. Плоские 100 вызовов и 400 000 токенов останавливали
+    книгу на середине, хотя денежный предел человека не был и близко исчерпан.
+    """
+
+    max_calls: int | None = Field(default=None, ge=1, le=100000)
+    max_total_tokens: int | None = Field(default=None, ge=1)
     max_cost_usd: float | None = Field(default=None, gt=0)
 
 
@@ -112,6 +117,8 @@ class RunControl(StrictModel):
 
     action: Literal["pause", "resume", "cancel"]
     expected_generation: int = Field(ge=0)
+    # Продолжение после исчерпанного предела без нового потолка сразу же встанет снова.
+    limits: Limits | None = None
 
 
 class ModelRoleRead(StrictModel):
@@ -134,6 +141,10 @@ class PreflightRead(StrictModel):
     execution_issue: str | None = None
     model_roles: dict[str, ModelRoleRead] = Field(default_factory=dict)
     limits: Limits
+    # Чем оборачивается запуск: пакетов не меньше, постоянная часть каждого запроса.
+    packets_at_least: int = 0
+    prompt_overhead_tokens: int = 0
+    packet_input_tokens: int = 0
 
 
 class CompactLink(StrictModel):
@@ -193,6 +204,7 @@ class RunRead(StrictModel):
     research: dict[str, int]
     pending_synthesis: int
     costs: dict[str, int | float]
+    limits: dict[str, int | float | None]
     pause_requested: bool
 
 
@@ -206,6 +218,8 @@ class OverviewRead(StrictModel):
     total: int
     distribution: dict[str, int]
     topics: dict[str, int]
+    content_titles: list[str] = Field(default_factory=list)
+    reading_titles: list[str] = Field(default_factory=list)
     material_ratio: dict[str, int | float | str | None]
     findings: int
     latest_run_id: UUID | None = None
@@ -230,11 +244,12 @@ class BlockRead(StrictModel):
 
 
 class BlocksRead(StrictModel):
-    """Ограниченная страница с полным знаменателем."""
+    """Ограниченная страница с полным знаменателем и составом остатка."""
 
     items: list[BlockRead]
     total: int
     next_offset: int | None
+    distribution: dict[str, int] = Field(default_factory=dict)
 
 
 class EvidenceRead(StrictModel):

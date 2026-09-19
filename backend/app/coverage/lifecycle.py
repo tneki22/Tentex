@@ -101,10 +101,17 @@ def control_run(session, project_id, run_id, command):
             if not snapshot_current(session, run):
                 stop_core(run, job, BackgroundJobState.CANCELLED, "snapshot_changed")
             else:
+                if command.limits is not None:
+                    run.limits = _raised_limits(run.limits, command.limits)
                 job.state = BackgroundJobState.QUEUED
                 job.pause_requested = False
                 run.stop_reason = None
         return run.id
+
+
+def _raised_limits(current: dict, command) -> dict:
+    """Продолжение после исчерпанного предела имеет смысл только с новым потолком."""
+    return {**current, **{k: v for k, v in command.model_dump().items() if v is not None}}
 
 
 def _require_state(job, states):
