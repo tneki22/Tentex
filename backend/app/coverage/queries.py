@@ -1,13 +1,14 @@
 """Текущие агрегаты и исторические receipts: состояние job не подменяет покрытие."""
 
-from collections import Counter
+from collections import Counter, defaultdict
+from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import select
 
 from app.coverage.budget import budget_usage
 from app.coverage.lifecycle import require_run
-from app.coverage.snapshots import require_project, snapshot_current
+from app.coverage.snapshots import require_project, snapshot_current, snapshots_current
 from app.models import (
     BackgroundJob,
     Binding,
@@ -43,6 +44,21 @@ BUCKETS = (
 # Исход, по которому пользователь может что-то сделать: уточнить, повторить или перепроверить.
 # Порядок задаёт и ленту: сбой повторяем, нерешённое уточняем, устаревшее ждёт запуска.
 ISSUE_BUCKETS = ("error", "unresolved", "stale")
+
+
+@dataclass(slots=True)
+class _ResultProjection:
+    """Лёгкая строка результата без тяжёлых manifest/result прошлых прогонов."""
+
+    id: UUID
+    run_id: UUID
+    block_id: UUID
+    material_id: UUID
+    work_state: str
+    outcome: str
+    publication_state: str
+    reason: str | None
+    result: dict | None = None
 
 
 def run_read(session, project_id, run_id):
@@ -91,23 +107,83 @@ def _current_runs(session, project_id):
             .order_by(CoverageRun.created_at.desc())
         )
     )
-    return runs, {r.id: snapshot_current(session, r) for r in runs}
+    return runs, snapshots_current(session, runs)
 
 
-def binding_fresh(session, binding, current):
+def binding_fresh(binding, current, task_runs, task_results):
     """Позиционный перенос не делает старое evidence новым, даже при прежнем Binding ID."""
     ref = binding.evidence_ref
     if not ref:
         return binding.status in {BindingStatus.MANUAL, BindingStatus.CONFIRMED}
-    task = session.get(CoverageTask, UUID(ref["task_id"])) if ref.get("task_id") else None
-    if not task or not current.get(task.run_id, False) or ref.get("retired_reason"):
+    try:
+        task_id = UUID(ref["task_id"])
+    except (KeyError, TypeError, ValueError):
         return False
-    receipt = task.result.get(ref["target_id"])
+    run_id = task_runs.get(task_id)
+    if not run_id or not current.get(run_id, False) or ref.get("retired_reason"):
+        return False
+    receipt = task_results.get(task_id, {}).get(ref["target_id"])
     if not receipt or not receipt["applied"]:
         return False
     return any(
         link["fragment_id"] == str(binding.fragment_id) for link in receipt["decision"]["links"]
     )
+
+
+def fresh_binding_ids(session, project_id, bindings=None, current=None) -> set[UUID]:
+    """Проверить актуальность пачкой, не перечитывая JSON одной задачи для каждой связи."""
+    if current is None:
+        _, current = _current_runs(session, project_id)
+    if bindings is None:
+        bindings = list(
+            session.scalars(
+                select(Binding).where(
+                    Binding.project_id == project_id,
+                    Binding.status.in_(
+                        [BindingStatus.MANUAL, BindingStatus.CONFIRMED, BindingStatus.MACHINE]
+                    ),
+                )
+            )
+        )
+    task_ids = set()
+    for binding in bindings:
+        ref = binding.evidence_ref or {}
+        try:
+            task_ids.add(UUID(ref["task_id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    task_runs = (
+        {
+            task_id: run_id
+            for task_id, run_id in session.execute(
+                select(CoverageTask.id, CoverageTask.run_id).where(
+                    CoverageTask.id.in_(task_ids)
+                )
+            )
+        }
+        if task_ids
+        else {}
+    )
+    current_task_ids = {
+        task_id for task_id, run_id in task_runs.items() if current.get(run_id, False)
+    }
+    task_results = (
+        {
+            task_id: result
+            for task_id, result in session.execute(
+                select(CoverageTask.id, CoverageTask.result).where(
+                    CoverageTask.id.in_(current_task_ids)
+                )
+            )
+        }
+        if current_task_ids
+        else {}
+    )
+    return {
+        binding.id
+        for binding in bindings
+        if binding_fresh(binding, current, task_runs, task_results)
+    }
 
 
 def _active_blocks(session, project_id):
@@ -128,10 +204,25 @@ def _active_blocks(session, project_id):
 def _select_results(session, runs, current):
     """Поздний pending/failed не заслоняет совместимый проверенный результат."""
     selected, latest, reviewed = {}, {}, set()
+    if not runs:
+        return selected, latest, reviewed
+    by_run = defaultdict(list)
+    for row in session.execute(
+        select(
+            CoverageBlockResult.id,
+            CoverageBlockResult.run_id,
+            CoverageBlockResult.block_id,
+            CoverageBlockResult.material_id,
+            CoverageBlockResult.work_state,
+            CoverageBlockResult.outcome,
+            CoverageBlockResult.publication_state,
+            CoverageBlockResult.reason,
+        ).where(CoverageBlockResult.run_id.in_([run.id for run in runs]))
+    ):
+        projection = _ResultProjection(*row)
+        by_run[projection.run_id].append(projection)
     for run in runs:
-        for row in session.scalars(
-            select(CoverageBlockResult).where(CoverageBlockResult.run_id == run.id)
-        ):
+        for row in by_run[run.id]:
             previous = latest.get(row.block_id)
             if previous is None or (
                 previous.work_state != "inspected" and row.work_state == "inspected"
@@ -141,6 +232,14 @@ def _select_results(session, runs, current):
                 reviewed.add(row.material_id)
             if current[run.id] and row.publication_state == "applied":
                 selected.setdefault(row.block_id, row)
+    selected_by_id = {row.id: row for row in selected.values()}
+    if selected_by_id:
+        for row_id, result in session.execute(
+            select(CoverageBlockResult.id, CoverageBlockResult.result).where(
+                CoverageBlockResult.id.in_(selected_by_id)
+            )
+        ):
+            selected_by_id[row_id].result = result
     return selected, latest, reviewed
 
 
@@ -158,10 +257,10 @@ def _unfinished_bucket(block, previous, current, reviewed):
     return "unresolved" if previous.work_state == "inspected" else previous.work_state
 
 
-def current_map(session, project_id):
+def current_map(session, project_id, run_state=None):
     """Один серверный расчёт для будущих overview/matrix/graph."""
     require_project(session, project_id)
-    runs, current = _current_runs(session, project_id)
+    runs, current = run_state or _current_runs(session, project_id)
     selected, latest, reviewed = _select_results(session, runs, current)
     bindings = list(
         session.scalars(
@@ -180,7 +279,11 @@ def current_map(session, project_id):
             )
         )
     )
-    fresh = [b for b in bindings if binding_fresh(session, b, current)]
+    fresh_ids = fresh_binding_ids(session, project_id, bindings, current)
+    fresh = [binding for binding in bindings if binding.id in fresh_ids]
+    fresh_by_block = defaultdict(list)
+    for binding in fresh:
+        fresh_by_block[binding.block_id].append(binding)
     material_names = {
         material_id: display_name or original_name
         for material_id, display_name, original_name in session.execute(
@@ -205,7 +308,7 @@ def current_map(session, project_id):
     }
     for block in _active_blocks(session, project_id):
         row = selected.get(block.id)
-        related = [b for b in fresh if b.block_id == block.id]
+        related = fresh_by_block[block.id]
         content = [b for b in related if b.semantic_kind == "content"]
         manual_content = [
             binding
@@ -253,7 +356,8 @@ def _project_outcome(row, bindings):
 def overview(session, project_id):
     """Покрытие меньше 100% — распределение результата, не признак ошибки."""
     project = require_project(session, project_id)
-    blocks, bindings = current_map(session, project_id)
+    runs, current = _current_runs(session, project_id)
+    blocks, bindings = current_map(session, project_id, (runs, current))
     counts = Counter(b["bucket"] for b in blocks)
     nodes = list(
         session.scalars(
@@ -282,7 +386,6 @@ def overview(session, project_id):
             .where(ProjectMaterial.project_id == project_id)
         )
     )
-    runs, _ = _current_runs(session, project_id)
     latest = runs[0] if runs else None
     latest_job = session.get(BackgroundJob, latest.job_id) if latest else None
     latest_scope = {s["id"] for s in latest.snapshot["sources"]} if latest else set()
@@ -412,6 +515,21 @@ def issue_blocks(session, project_id, offset, limit):
     return _page(rows, offset, limit, session.get(Project, project_id).coverage_revision)
 
 
+def task_evidence(task: CoverageTask, target_id: str, key: str) -> dict | None:
+    """Найти опору в уже загруженном receipt без повторного чтения тяжёлого JSON задачи."""
+    receipt = (task.result or {}).get(target_id)
+    decision = receipt["decision"] if receipt else {}
+    return next(
+        (
+            evidence
+            for item in decision.get("links", []) + decision.get("findings", [])
+            for evidence in item["evidence"]
+            if evidence["key"] == key
+        ),
+        None,
+    )
+
+
 def evidence_read(session, project_id, evidence_id):
     """ID = task UUID:target UUID:local key, цитата не участвует в идентичности."""
     try:
@@ -424,17 +542,9 @@ def evidence_read(session, project_id, evidence_id):
         raise ProjectNotFoundError("Опора не найдена")
     run = session.get(CoverageRun, task.run_id)
     require_run(session, project_id, run.id)
-    receipt = task.result.get(target_id)
+    receipt = (task.result or {}).get(target_id)
     decision = receipt["decision"] if receipt else {}
-    evidence = next(
-        (
-            e
-            for item in decision.get("links", []) + decision.get("findings", [])
-            for e in item["evidence"]
-            if e["key"] == key
-        ),
-        None,
-    )
+    evidence = task_evidence(task, target_id, key)
     if evidence is None:
         raise ProjectNotFoundError("Опора не найдена")
     ref = evidence["ref"]

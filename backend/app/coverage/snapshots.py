@@ -200,6 +200,84 @@ def snapshot_current(session, run) -> bool:
     return fingerprint(sources + context) == run.fingerprints["sources"]
 
 
+def snapshots_current(session, runs) -> dict[UUID, bool]:
+    """Проверить историю проекта пачкой, не перечитывая программу и источники для run."""
+    if not runs:
+        return {}
+    project_ids = {run.project_id for run in runs}
+    projects = {
+        project.id: project
+        for project in session.scalars(select(Project).where(Project.id.in_(project_ids)))
+    }
+    semantic_fingerprints = {
+        project_id: fingerprint(semantic_snapshot(session, project_id))
+        for project_id, project in projects.items()
+        if project.status == ProjectStatus.ACTIVE
+    }
+    source_ids = {
+        UUID(source["id"])
+        for run in runs
+        for source in run.snapshot["sources"] + run.snapshot["context_sources"]
+    }
+    materials = {
+        material.id: material
+        for material in session.scalars(select(Material).where(Material.id.in_(source_ids)))
+    }
+    links = {
+        (link.project_id, link.material_id): link
+        for link in session.scalars(
+            select(ProjectMaterial).where(
+                ProjectMaterial.project_id.in_(project_ids),
+                ProjectMaterial.material_id.in_(source_ids),
+            )
+        )
+    }
+    revisions = {
+        (revision.material_id, revision.revision): revision
+        for revision in session.scalars(
+            select(MaterialRevision).where(MaterialRevision.material_id.in_(source_ids))
+        )
+    }
+
+    def current_sources(project_id: UUID, rows: list[dict]) -> list[dict] | None:
+        """Воспроизвести форму `source_snapshot` из уже загруженных строк."""
+        result = []
+        for material_id in sorted({UUID(row["id"]) for row in rows}, key=str):
+            material = materials.get(material_id)
+            link = links.get((project_id, material_id))
+            if material is None or link is None:
+                return None
+            revision = revisions.get((material_id, material.active_parse_revision))
+            diagnostics = (revision.summary if revision else {}) or {}
+            result.append(
+                {
+                    "id": str(material_id),
+                    "name": link.display_name or material.original_name,
+                    "source_role": link.source_role,
+                    "purposes": link.purposes,
+                    "revision": material.active_parse_revision,
+                    "diagnostics": diagnostics,
+                    "diagnostics_fingerprint": fingerprint(diagnostics),
+                }
+            )
+        return result
+
+    result = {}
+    for run in runs:
+        semantic = semantic_fingerprints.get(run.project_id)
+        if semantic is None or semantic != run.fingerprints["semantic"]:
+            result[run.id] = False
+            continue
+        sources = current_sources(run.project_id, run.snapshot["sources"])
+        context = current_sources(run.project_id, run.snapshot["context_sources"])
+        result[run.id] = bool(
+            sources is not None
+            and context is not None
+            and fingerprint(sources + context) == run.fingerprints["sources"]
+        )
+    return result
+
+
 def manifest_rows(session, snapshot):
     """Фиксирует состав, хеши и locators, не копируя весь текст книги."""
     for source in snapshot["sources"]:

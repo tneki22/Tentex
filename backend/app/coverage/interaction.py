@@ -9,7 +9,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.coverage import queries
 from app.coverage.schemas import DecisionWrite
@@ -20,6 +20,8 @@ from app.models import (
     BindingMechanism,
     BindingStatus,
     CoverageDecision,
+    CoverageRun,
+    CoverageTask,
     Material,
     MaterialBlock,
     MaterialFragment,
@@ -62,21 +64,64 @@ def _active_nodes(session: Session, project_id: UUID) -> list[ProgramNode]:
     )
 
 
-def _binding_rows(session: Session, project_id: UUID):
-    return list(
-        session.execute(
-            select(Binding, MaterialFragment, MaterialPage, Material, ProjectMaterial)
-            .join(MaterialFragment, MaterialFragment.id == Binding.fragment_id)
-            .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
-            .join(Material, Material.id == Binding.material_id)
-            .join(
-                ProjectMaterial,
-                (ProjectMaterial.project_id == Binding.project_id)
-                & (ProjectMaterial.material_id == Binding.material_id),
-            )
-            .where(Binding.project_id == project_id, Binding.status.in_(ACTIVE_STATUSES))
+def _binding_rows(
+    session: Session,
+    project_id: UUID,
+    node_id: UUID | None = None,
+    *,
+    summary: bool = False,
+):
+    """Загрузить строки ранга либо полные строки одной темы без ленивых N+1."""
+    block_entity = MaterialBlock.id if summary else MaterialBlock
+    statement = (
+        select(
+            Binding,
+            MaterialFragment,
+            MaterialPage,
+            Material,
+            ProjectMaterial,
+            block_entity,
         )
+        .join(MaterialFragment, MaterialFragment.id == Binding.fragment_id)
+        .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+        .join(Material, Material.id == Binding.material_id)
+        .join(
+            ProjectMaterial,
+            (ProjectMaterial.project_id == Binding.project_id)
+            & (ProjectMaterial.material_id == Binding.material_id),
+        )
+        .outerjoin(MaterialBlock, MaterialBlock.id == Binding.block_id)
+        .where(Binding.project_id == project_id, Binding.status.in_(ACTIVE_STATUSES))
     )
+    if summary:
+        statement = statement.options(
+            load_only(
+                Binding.id,
+                Binding.program_node_id,
+                Binding.fragment_id,
+                Binding.status,
+                Binding.roles,
+                Binding.semantic_kind,
+                Binding.evidence_ref,
+            ),
+            load_only(MaterialFragment.id, MaterialFragment.quality),
+            load_only(MaterialPage.id, MaterialPage.revision, MaterialPage.page_number),
+            load_only(
+                Material.id,
+                Material.active_parse_revision,
+                Material.original_name,
+            ),
+            load_only(
+                ProjectMaterial.project_id,
+                ProjectMaterial.material_id,
+                ProjectMaterial.display_name,
+                ProjectMaterial.source_role,
+                ProjectMaterial.priority,
+            ),
+        )
+    if node_id is not None:
+        statement = statement.where(Binding.program_node_id == node_id)
+    return list(session.execute(statement))
 
 
 def _decision_map(session: Session, project_id: UUID, kind: str) -> dict[str, CoverageDecision]:
@@ -98,14 +143,17 @@ def _evidence_id(binding: Binding) -> str:
     return f"binding:{binding.id}"
 
 
-def _fresh_binding_ids(session: Session, project_id: UUID) -> set[UUID]:
-    _, bindings = queries.current_map(session, project_id)
-    return {binding.id for binding in bindings}
+def _fresh_binding_ids(session: Session, project_id: UUID, rows) -> set[UUID]:
+    return queries.fresh_binding_ids(
+        session,
+        project_id,
+        [row[0] for row in rows],
+    )
 
 
 def _binding_row_rank(row, preferred_binding_id: str | None) -> tuple:
     """Ранг строки без загрузки полного текста для пагинированного списка тем."""
-    binding, fragment, page, material, project_material = row
+    binding, fragment, page, material, project_material, _ = row
     roles = set(binding.roles or [])
     return (
         str(binding.id) != preferred_binding_id,
@@ -128,8 +176,8 @@ def topics_page(
     project = require_project(session, project_id)
     nodes = _active_nodes(session, project_id)
     node_by_id = {node.id: node for node in nodes}
-    rows = _binding_rows(session, project_id)
-    fresh_ids = _fresh_binding_ids(session, project_id)
+    rows = _binding_rows(session, project_id, summary=True)
+    fresh_ids = _fresh_binding_ids(session, project_id, rows)
     hidden = _decision_map(session, project_id, "hide_evidence")
     preferred = _decision_map(session, project_id, "prefer_reading")
     grouped: dict[UUID, list] = defaultdict(list)
@@ -213,30 +261,62 @@ def blocks_page(
     }
 
 
-def _evidence_meta(session: Session, project_id: UUID, binding: Binding) -> tuple[str, str]:
+def _evidence_tasks(session: Session, project_id: UUID, rows) -> dict[UUID, CoverageTask]:
+    """Загрузить JSON каждой задачи темы один раз, даже если из неё опубликованы сотни связей."""
+    task_ids = set()
+    for binding, *_ in rows:
+        ref = binding.evidence_ref or {}
+        try:
+            task_ids.add(UUID(ref["task_id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not task_ids:
+        return {}
+    return {
+        task.id: task
+        for task in session.scalars(
+            select(CoverageTask)
+            .join(CoverageRun, CoverageRun.id == CoverageTask.run_id)
+            .where(
+                CoverageTask.id.in_(task_ids),
+                CoverageRun.project_id == project_id,
+            )
+        )
+    }
+
+
+def _evidence_meta(
+    binding: Binding,
+    fragment: MaterialFragment,
+    tasks: dict[UUID, CoverageTask],
+) -> tuple[str, str]:
     evidence_id = _evidence_id(binding)
     if evidence_id.startswith("binding:"):
-        fragment = session.get(MaterialFragment, binding.fragment_id)
-        return fragment.text if fragment else "", ""
-    raw = queries.evidence_read(session, project_id, evidence_id)
-    return raw["quote"], raw["description"]
+        return fragment.text, ""
+    ref = binding.evidence_ref or {}
+    try:
+        task = tasks[UUID(ref["task_id"])]
+        evidence = queries.task_evidence(task, ref["target_id"], ref["key"])
+    except (KeyError, TypeError, ValueError):
+        evidence = None
+    if evidence is None:
+        return "", ""
+    return evidence["quote"], evidence["description"]
 
 
 def _evidence_summary(
-    session: Session,
-    project_id: UUID,
     row,
     *,
     fresh_ids: set[UUID],
     hidden: dict[str, CoverageDecision],
     preferred_binding_id: str | None,
+    tasks: dict[UUID, CoverageTask],
 ) -> dict:
     """Собрать одну карточку без протекания служебного ранга в API."""
-    binding, fragment, page, material, project_material = row
-    quote, description = _evidence_meta(session, project_id, binding)
+    binding, fragment, page, material, project_material, block = row
+    quote, description = _evidence_meta(binding, fragment, tasks)
     hidden_row = hidden.get(str(binding.id))
     stale = binding.id not in fresh_ids or page.revision != material.active_parse_revision
-    block = session.get(MaterialBlock, binding.block_id) if binding.block_id else None
     return {
         "id": _evidence_id(binding),
         "binding_id": str(binding.id),
@@ -285,19 +365,19 @@ def topic_evidence(session: Session, project_id: UUID, node_id: UUID) -> dict:
     node = session.get(ProgramNode, node_id)
     if node is None or node.project_id != project_id or node.node_type not in STUDY_NODE_TYPES:
         raise ProjectNotFoundError("Тема программы не найдена")
-    rows = [row for row in _binding_rows(session, project_id) if row[0].program_node_id == node_id]
-    fresh_ids = _fresh_binding_ids(session, project_id)
+    rows = _binding_rows(session, project_id, node_id)
+    fresh_ids = _fresh_binding_ids(session, project_id, rows)
     hidden = _decision_map(session, project_id, "hide_evidence")
     preferred = _decision_map(session, project_id, "prefer_reading").get(str(node_id))
     preferred_id = (preferred.payload or {}).get("binding_id") if preferred else None
+    tasks = _evidence_tasks(session, project_id, rows)
     items = [
         _evidence_summary(
-            session,
-            project_id,
             row,
             fresh_ids=fresh_ids,
             hidden=hidden,
             preferred_binding_id=preferred_id,
+            tasks=tasks,
         )
         for row in rows
     ]
@@ -346,9 +426,22 @@ def _binding_for_evidence(session: Session, project_id: UUID, evidence_id: str) 
         if binding is not None and binding.project_id == project_id:
             return binding
         raise ProjectNotFoundError("Опора не найдена")
-    for binding in session.scalars(select(Binding).where(Binding.project_id == project_id)):
-        if _evidence_id(binding) == evidence_id:
-            return binding
+    try:
+        task_id, target_id, key = evidence_id.split(":")
+        UUID(task_id)
+        UUID(target_id)
+    except (TypeError, ValueError):
+        raise ProjectNotFoundError("Опора не найдена") from None
+    binding = session.scalar(
+        select(Binding).where(
+            Binding.project_id == project_id,
+            Binding.evidence_ref["task_id"].as_string() == task_id,
+            Binding.evidence_ref["target_id"].as_string() == target_id,
+            Binding.evidence_ref["key"].as_string() == key,
+        )
+    )
+    if binding is not None:
+        return binding
     raise ProjectNotFoundError("Опора не найдена")
 
 
@@ -385,17 +478,18 @@ def evidence_detail(session: Session, project_id: UUID, evidence_id: str) -> dic
     hidden = _decision_map(session, project_id, "hide_evidence").get(str(binding.id))
     preferred = _decision_map(session, project_id, "prefer_reading").get(str(node.id))
     block = session.get(MaterialBlock, binding.block_id) if binding.block_id else None
-    linked = []
-    for other in session.scalars(
-        select(Binding).where(
-            Binding.project_id == project_id,
-            Binding.fragment_id == binding.fragment_id,
-            Binding.status.in_(ACTIVE_STATUSES),
+    linked = [
+        {"topic_id": str(other_id), "title": other_title}
+        for other_id, other_title in session.execute(
+            select(ProgramNode.id, ProgramNode.title)
+            .join(Binding, Binding.program_node_id == ProgramNode.id)
+            .where(
+                Binding.project_id == project_id,
+                Binding.fragment_id == binding.fragment_id,
+                Binding.status.in_(ACTIVE_STATUSES),
+            )
         )
-    ):
-        other_node = session.get(ProgramNode, other.program_node_id)
-        if other_node:
-            linked.append({"topic_id": str(other_node.id), "title": other_node.title})
+    ]
     return {
         **base,
         "binding_id": str(binding.id),

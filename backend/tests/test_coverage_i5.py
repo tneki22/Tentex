@@ -3,9 +3,10 @@
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app.coverage.interaction import apply_decision, blocks_page, topic_evidence, topics_page
+from app.coverage.queries import overview
 from app.coverage.research import prepare_task, process_coverage_job, publish_packet
 from app.coverage.schemas import DecisionWrite
 from app.models import (
@@ -321,3 +322,31 @@ def test_i5_http_contract_returns_revision_groups_detail_and_receipt(session):
     )
     assert receipt.status_code == 200
     assert receipt.json()["coverage_revision"] == grouped["coverage_revision"] + 1
+
+
+def test_coverage_read_queries_stay_bounded_as_bindings_grow(session):
+    """Список опор не возвращается к одному SELECT тяжёлой задачи на каждую связь."""
+    project, topic, material = setup_source(session, 24)
+    _, job, _, _ = launch(session, project, material)
+    process_coverage_job(session, job, lambda task: answer(task, topic.id))
+    engine = session.get_bind()
+    selects = 0
+
+    def count_selects(_connection, _cursor, statement, _parameters, _context, _many):
+        nonlocal selects
+        selects += statement.lstrip().upper().startswith("SELECT")
+
+    event.listen(engine, "before_cursor_execute", count_selects)
+    try:
+        overview(session, project.id)
+        overview_selects = selects
+        topics_page(session, project.id, "readable", 0, 24)
+        topics_selects = selects - overview_selects
+        topic_evidence(session, project.id, topic.id)
+        evidence_selects = selects - overview_selects - topics_selects
+    finally:
+        event.remove(engine, "before_cursor_execute", count_selects)
+
+    assert overview_selects <= 25
+    assert topics_selects <= 18
+    assert evidence_selects <= 18
