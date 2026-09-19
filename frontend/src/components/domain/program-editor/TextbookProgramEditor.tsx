@@ -40,6 +40,7 @@ import {
   IconButton,
   LoadingState,
   SegmentedTabs,
+  Select,
 } from "../../ui";
 import type { ContextMenuItem } from "../../ui";
 import {
@@ -419,6 +420,7 @@ function renderTreeRow(node: ProgramTreeNode, actions: TreeRowActions): ReactNod
 interface ImportSource {
   material: MaterialRead;
   outline: OutlineDraftState;
+  availableSources: Array<"embedded" | "printed" | "recognized">;
 }
 
 interface TextbookOutlineImportDialogProps {
@@ -448,6 +450,7 @@ function TextbookOutlineImportDialog({
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
+  const [switchingSource, setSwitchingSource] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -457,11 +460,10 @@ function TextbookOutlineImportDialog({
     setError("");
     Promise.all(materials.map(async (material): Promise<ImportSource> => {
       const saved = outlinesByMaterialId[material.id];
-      if (saved) return { material, outline: saved };
       const detail = await getMaterialOutline(projectId, material.id, "auto", abort.signal);
       return {
         material,
-        outline: {
+        outline: saved ?? {
           material_id: material.id,
           source: detail.source,
           items: outlineItemsWithKeys(material.id, detail.source, detail.items),
@@ -471,6 +473,7 @@ function TextbookOutlineImportDialog({
           edited: false,
           checked_at: null,
         },
+        availableSources: detail.available_sources.filter((source): source is "embedded" | "printed" | "recognized" => source !== "none" && source !== "model"),
       };
     }))
       .then((loaded) => {
@@ -486,6 +489,31 @@ function TextbookOutlineImportDialog({
       .finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
   }, [open, projectId, materials, outlinesByMaterialId]);
+
+  /** Меняет только кандидатов импорта, сохраняя остальные материалы и программу. */
+  async function changeSource(materialId: string, source: "embedded" | "printed" | "recognized") {
+    const current = sources.find((candidate) => candidate.material.id === materialId);
+    if (!current || current.outline.source === source) return;
+    setSwitchingSource(materialId);
+    setError("");
+    try {
+      const detail = await getMaterialOutline(projectId, materialId, source);
+      const nextItems = outlineItemsWithKeys(materialId, detail.source, detail.items);
+      setSources((items) => items.map((candidate) => candidate.material.id === materialId
+        ? { ...candidate, outline: { ...candidate.outline, source: detail.source, items: nextItems, source_pages: detail.source_pages, review_pages: detail.review_pages, review_needs_check: detail.review_needs_check, edited: false } }
+        : candidate));
+      setSelectedKeys((keys) => {
+        const next = new Set(keys);
+        current.outline.items.forEach((item) => next.delete(item.outline_item_key));
+        nextItems.forEach((item) => next.add(item.outline_item_key));
+        return next;
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Не удалось выбрать источник оглавления");
+    } finally {
+      setSwitchingSource(null);
+    }
+  }
 
   const currentKeys = useMemo(() => new Set(program.nodes
     .filter((node) => node.is_in_current_program && !node.is_archived)
@@ -553,10 +581,10 @@ function TextbookOutlineImportDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={(next) => { if (!switchingSource && !busy) onOpenChange(next); }}
       title="Импортировать программу из оглавления"
       description="Выберите источники и ветви. Они добавятся отдельными корневыми ветвями в порядке приоритета источников."
-      footer={<><Button variant="ghost" onClick={() => onOpenChange(false)}>Закрыть</Button><Button disabled={busy || loading || selectedCount === 0} onClick={() => void submit()}>Импортировать {selectedCount} {selectedCount === 1 ? "пункт" : "пунктов"}</Button></>}
+      footer={<><Button variant="ghost" disabled={busy || switchingSource !== null} onClick={() => onOpenChange(false)}>Закрыть</Button><Button disabled={busy || loading || switchingSource !== null || Boolean(error) || selectedCount === 0} onClick={() => void submit()}>Импортировать {selectedCount} {selectedCount === 1 ? "пункт" : "пунктов"}</Button></>}
     >
       {wizard && <p className="textbook-import-note">Проверить и исправить оглавления можно на предыдущем шаге.</p>}
       {loading && <LoadingState label="Загружаем оглавления" />}
@@ -566,6 +594,16 @@ function TextbookOutlineImportDialog({
           const enabled = selectedSources.has(source.material.id);
           return <section key={source.material.id} className="textbook-import-source">
             <label className="textbook-import-source-head"><input type="checkbox" checked={enabled} disabled={source.outline.items.length === 0} onChange={(event) => toggleSource(source, event.target.checked)} /><span><b>{source.material.display_name}</b><small>{source.outline.items.length ? `${source.outline.items.length} пунктов · приоритет ${source.material.priority + 1}` : "Оглавление не найдено — источник можно оставить без импорта"}</small></span></label>
+            {source.availableSources.length > 1 && <div className="textbook-import-source-choice">
+              <span>Источник оглавления</span>
+              <Select
+                value={source.outline.source === "embedded" || source.outline.source === "printed" || source.outline.source === "recognized" ? source.outline.source : null}
+                disabled={busy || switchingSource !== null}
+                ariaLabel={`Источник оглавления для ${source.material.display_name}`}
+                options={source.availableSources.map((candidate) => ({ value: candidate, label: candidate === "embedded" ? "Закладки PDF" : candidate === "printed" ? "Страницы оглавления" : "Заголовки текста" }))}
+                onValueChange={(value) => { if (value === "embedded" || value === "printed" || value === "recognized") void changeSource(source.material.id, value); }}
+              />
+            </div>}
             {enabled && source.outline.items.length > 0 && <div className="textbook-import-tree">{source.outline.items.map((item, index) => {
               const already = currentKeys.has(`${source.material.id}:${item.outline_item_key}`);
               return <label key={item.outline_item_key} style={{ "--outline-depth": item.level - 1 } as CSSProperties}>

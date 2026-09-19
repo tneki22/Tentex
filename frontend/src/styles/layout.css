@@ -7501,6 +7501,8 @@ button.wizard-back-projects {
 .textbook-import-source-head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); background: var(--surface-sunken); cursor: pointer; }
 .textbook-import-source-head > span { display: grid; gap: 2px; }
 .textbook-import-source-head small { color: var(--muted); font-size: var(--text-xs); }
+.textbook-import-source-choice { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line); color: var(--muted); font-size: var(--text-xs); }
+.textbook-import-source-choice .select-trigger { min-width: 190px; }
 .textbook-import-tree { display: grid; }
 .textbook-import-tree > label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--space-3); min-height: 46px; padding: var(--space-2) var(--space-3); padding-inline-start: calc(var(--space-3) + var(--outline-depth) * var(--space-5)); border-top: 1px solid var(--line); cursor: pointer; }
 .textbook-import-tree > label:hover { background: var(--surface-hover); }
