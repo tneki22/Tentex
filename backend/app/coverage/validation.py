@@ -180,7 +180,11 @@ def _check_links(decision, units, seen, inspected, topics, diagnostics) -> list[
             continue
         if link.semantic_kind == "content":
             if units[ref].kind in {"heading", "title"}:
-                raise ValueError("heading_content")
+                # Заголовок не раскрывает тему — но и не отменяет разбор всего блока.
+                # Модель помечает ведущий заголовок content вместе с телом раздела, и
+                # отклонение target уносило разом все верные связи семидесяти абзацев.
+                diagnostics.append({"reason": "heading_content", "ref": ref})
+                continue
             if not any(_supports_target(e, {ref: units[ref]}, inspected) for e in evidence):
                 raise ValueError("content_without_target")
         links.append({**link.model_dump(mode="json"), "evidence": evidence})

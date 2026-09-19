@@ -365,6 +365,45 @@ def test_fragment_range_is_expanded_and_missing_parts_have_their_own_reason(sess
     assert checked.valid and checked.outcome == "linked"
 
 
+def test_heading_link_is_dropped_without_losing_the_body_of_the_block():
+    """Ведущий заголовок раздела уносил разом все верные связи его абзацев."""
+    topic, block = str(uuid4()), str(uuid4())
+    head_ref, body_ref = str(uuid4()), str(uuid4())
+    units = {
+        head_ref: Unit(head_ref, "Спрос, закон спроса", block, "page:1", kind="heading"),
+        body_ref: Unit(
+            body_ref, "Спрос — это зависимость величины покупок от цены.", block, "page:1"
+        ),
+    }
+    raw = [
+        {
+            "target_id": block,
+            "outcome": "linked",
+            "dispositions": [
+                {"fragment_id": ref, "start": 0, "end": len(u.text), "outcome": "content"}
+                for ref, u in units.items()
+            ],
+            "links": [
+                {
+                    "topic_id": topic,
+                    "fragment_id": ref,
+                    "semantic_kind": "content",
+                    "roles": ["explanation"],
+                    "evidence": [{"key": f"e{ref}", "ref": ref}],
+                }
+                for ref in units
+            ],
+        }
+    ]
+    checked = validate_target(block, raw, units, units, set(units), {topic})
+    assert checked.valid
+    # Связь абзаца сохранена, связь заголовка снята с объяснением.
+    assert [link["fragment_id"] for link in checked.links] == [body_ref]
+    assert {"reason": "heading_content", "ref": head_ref} in checked.diagnostics
+    # Нерассмотренным остаётся только заголовок, и это видно по исходу блока.
+    assert checked.outcome == "unresolved" and checked.reason == "unsupported_evidence"
+
+
 def test_answer_reserve_and_token_limit_follow_the_size_of_the_packet(session):
     """Плоские 8 000 на ответ обрывали перечисление трёхсот фрагментов пакета."""
     assert output_reserve_tokens(1, 1) == OUTPUT_RESERVE_TOKENS
