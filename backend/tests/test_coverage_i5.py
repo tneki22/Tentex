@@ -31,6 +31,22 @@ def _decision(project, action, revision, **values):
     )
 
 
+def test_gaps_skip_chapters_whose_subtopics_carry_the_content(session):
+    """Глава из оглавления не пробел: проход 2 привязывает блоки к её подтемам."""
+    project, topic, material = setup_source(session, 3)
+    chapter = make_topic_node(session, project, title="ТЕМА 3. Рынки благ")
+    empty = make_topic_node(session, project, title="ТЕМА 17. Ничего не загружено")
+    topic.parent_id = chapter.id
+    session.commit()
+    _, job, _, _ = launch(session, project, material)
+    process_coverage_job(session, job, lambda task: answer(task, topic.id))
+
+    gaps = topics_page(session, project.id, "gaps", 0, 10)
+    assert [item["node_id"] for item in gaps["items"]] == [str(empty.id)]
+    readable = topics_page(session, project.id, "readable", 0, 10)
+    assert [item["node_id"] for item in readable["items"]] == [str(topic.id)]
+
+
 def test_topic_groups_rank_preference_hide_legacy_and_gaps(session):
     project, topic, material = setup_source(session, 3)
     fragment_ids = list(session.scalars(select(MaterialFragment.id).order_by(MaterialFragment.id)))

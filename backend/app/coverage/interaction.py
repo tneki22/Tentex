@@ -155,6 +155,35 @@ def _binding_summary_rank(binding: Binding, preferred_binding_id: str | None) ->
     )
 
 
+def _parent_chain(session: Session, project_id: UUID) -> dict:
+    """Родители всех узлов программы: цепочка не рвётся на разделах вне изучения."""
+    return {
+        row.id: row.parent_id
+        for row in session.execute(
+            select(ProgramNode.id, ProgramNode.parent_id).where(
+                ProgramNode.project_id == project_id,
+                ProgramNode.is_archived.is_(False),
+            )
+        )
+    }
+
+
+def _covered_subtrees(parent_of: dict, own_content: set) -> set:
+    """Тема обеспечена, если содержание есть у неё самой или у её подтем.
+
+    Проход 2 привязывает блок к самой узкой подходящей теме, поэтому глава «ТЕМА 3»
+    с 272 опорами у детей не получает ни одной своей и попадала в Пробелы рядом с
+    темами, по которым материала действительно нет.
+    """
+    covered = set()
+    for node_id in own_content:
+        current = node_id
+        while current is not None and current not in covered:
+            covered.add(current)
+            current = parent_of.get(current)
+    return covered
+
+
 def topics_page(
     session: Session, project_id: UUID, view: str, offset: int, limit: int
 ) -> dict:
@@ -169,17 +198,25 @@ def topics_page(
     grouped: dict[UUID, list] = defaultdict(list)
     for binding in bindings:
         grouped[binding.program_node_id].append(binding)
+    content_by_node = {
+        node.id: [
+            binding
+            for binding in grouped[node.id]
+            if binding.id in fresh_ids and binding.semantic_kind == "content"
+        ]
+        for node in nodes
+    }
+    covered = _covered_subtrees(
+        _parent_chain(session, project_id) if view == "gaps" else {},
+        {node_id for node_id, items in content_by_node.items() if items},
+    )
     result = []
     for node in nodes:
         node_bindings = grouped[node.id]
-        content_bindings = [
-            binding
-            for binding in node_bindings
-            if binding.id in fresh_ids and binding.semantic_kind == "content"
-        ]
+        content_bindings = content_by_node[node.id]
         if view == "readable" and not content_bindings:
             continue
-        if view == "gaps" and content_bindings:
+        if view == "gaps" and node.id in covered:
             continue
         legacy = [item for item in node_bindings if item.semantic_kind in {None, "unknown"}]
         mentions = [item for item in node_bindings if item.semantic_kind == "mention"]
