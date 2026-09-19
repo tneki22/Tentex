@@ -15,7 +15,7 @@ from app.models import (
     CoverageBlockResult,
     MaterialFragment,
 )
-from app.projects.errors import ProjectConflictError
+from app.projects.errors import ProjectConflictError, ProjectDomainError
 from app.projects.program import undo_last_project_action
 from tests.conftest import make_topic_node
 from tests.test_coverage import answer, first_task, launch, setup_source
@@ -99,6 +99,9 @@ def test_topic_groups_rank_preference_hide_legacy_and_gaps(session):
     )
     preferred = topic_evidence(session, project.id, topic.id)
     assert preferred["best_evidence_id"] == example["id"]
+    assert topics_page(session, project.id, "readable", 0, 10)["items"][0][
+        "best_evidence_id"
+    ] == example["id"]
     hidden_receipt = apply_decision(
         session,
         project.id,
@@ -255,6 +258,33 @@ def test_manual_decision_protects_active_publication(session):
     row = session.scalar(select(CoverageBlockResult))
     assert row.publication_state == "conflict"
     assert binding.status == BindingStatus.CONFIRMED
+
+
+def test_removed_binding_requires_explicit_restore_before_role_change(session):
+    project, topic, material = setup_source(session, 1)
+    _, job, _, _ = launch(session, project, material)
+    process_coverage_job(session, job, lambda task: answer(task, topic.id))
+    binding = session.scalar(select(Binding))
+    revision = session.get(type(project), project.id).coverage_revision
+    removed = apply_decision(
+        session,
+        project.id,
+        _decision(project, "remove", revision, binding_id=binding.id),
+    )
+
+    with pytest.raises(ProjectDomainError) as invalid:
+        apply_decision(
+            session,
+            project.id,
+            _decision(
+                project,
+                "change_role",
+                removed["coverage_revision"],
+                binding_id=binding.id,
+                role="definition",
+            ),
+        )
+    assert invalid.value.code == "coverage_binding_removed"
 
 
 def test_i5_http_contract_returns_revision_groups_detail_and_receipt(session):

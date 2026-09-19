@@ -103,6 +103,24 @@ def _fresh_binding_ids(session: Session, project_id: UUID) -> set[UUID]:
     return {binding.id for binding in bindings}
 
 
+def _binding_row_rank(row, preferred_binding_id: str | None) -> tuple:
+    """Ранг строки без загрузки полного текста для пагинированного списка тем."""
+    binding, fragment, page, material, project_material = row
+    roles = set(binding.roles or [])
+    return (
+        str(binding.id) != preferred_binding_id,
+        page.revision != material.active_parse_revision,
+        QUALITY_RANK.get(fragment.quality.value, 9),
+        not bool(roles & {"definition", "explanation"}),
+        binding.semantic_kind != "content",
+        SOURCE_ROLE_RANK.get(project_material.source_role.value, 9),
+        project_material.priority,
+        (project_material.display_name or material.original_name).casefold(),
+        page.page_number,
+        _evidence_id(binding),
+    )
+
+
 def topics_page(
     session: Session, project_id: UUID, view: str, offset: int, limit: int
 ) -> dict:
@@ -114,20 +132,21 @@ def topics_page(
     fresh_ids = _fresh_binding_ids(session, project_id)
     hidden = _decision_map(session, project_id, "hide_evidence")
     preferred = _decision_map(session, project_id, "prefer_reading")
-    grouped: dict[UUID, list[Binding]] = defaultdict(list)
-    for binding, *_ in rows:
-        grouped[binding.program_node_id].append(binding)
+    grouped: dict[UUID, list] = defaultdict(list)
+    for row in rows:
+        grouped[row[0].program_node_id].append(row)
     result = []
     for node in nodes:
-        bindings = grouped[node.id]
-        content = [
-            item
-            for item in bindings
-            if item.id in fresh_ids and item.semantic_kind == "content"
+        node_rows = grouped[node.id]
+        bindings = [row[0] for row in node_rows]
+        content_rows = [
+            row
+            for row in node_rows
+            if row[0].id in fresh_ids and row[0].semantic_kind == "content"
         ]
-        if view == "readable" and not content:
+        if view == "readable" and not content_rows:
             continue
-        if view == "gaps" and content:
+        if view == "gaps" and content_rows:
             continue
         legacy = [item for item in bindings if item.semantic_kind in {None, "unknown"}]
         mentions = [item for item in bindings if item.semantic_kind == "mention"]
@@ -137,16 +156,26 @@ def topics_page(
         )
         preferred_row = preferred.get(str(node.id))
         preferred_id = (preferred_row.payload or {}).get("binding_id") if preferred_row else None
-        best = next((item for item in content if str(item.id) == preferred_id), None)
-        if best is None and content:
-            best = sorted(content, key=lambda item: str(item.id))[0]
+        best = next(
+            (
+                row[0]
+                for row in sorted(
+                    content_rows, key=lambda item: _binding_row_rank(item, preferred_id)
+                )
+                if not (
+                    hidden.get(str(row[0].id))
+                    and hidden[str(row[0].id)].payload.get("hidden")
+                )
+            ),
+            None,
+        )
         parent = node_by_id.get(node.parent_id)
         result.append(
             {
                 "node_id": str(node.id),
                 "title": node.title,
                 "parent_title": parent.title if parent else None,
-                "evidence_count": len(content),
+                "evidence_count": len(content_rows),
                 "mention_count": len(mentions),
                 "hidden_count": hidden_count,
                 "legacy_count": len(legacy),
@@ -595,6 +624,16 @@ def _apply_link_action(
 ) -> tuple[list[Binding], list[tuple[str, str]], str]:
     """Изменить только выбранную связь и записать долговечное решение рядом."""
     keys: list[tuple[str, str]] = []
+    if binding.status == BindingStatus.REMOVED and command.action in {
+        "confirm",
+        "change_role",
+        "prefer",
+    }:
+        raise ProjectDomainError(
+            "Сначала восстановите снятую связь",
+            status=409,
+            code="coverage_binding_removed",
+        )
     if command.action == "confirm":
         binding.status = BindingStatus.CONFIRMED
         keys.append(("confirm_link", str(binding.id)))
