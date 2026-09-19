@@ -4,7 +4,7 @@ import math
 import re
 from dataclasses import dataclass
 
-from app.coverage.snapshots import block_units
+from app.coverage.snapshots import material_units
 
 # Рабочие значения И3: запас отделяет вход от structured output и reasoning.
 # Они не являются измеренным продуктовым порогом и вынесены сюда для последующей калибровки.
@@ -41,7 +41,15 @@ def estimate_tokens(text: str) -> int:
 
 def build_packet_specs(session, rows: list[tuple], token_budget: int) -> list[PacketSpec]:
     """Группирует соседние блоки одной структурной области и режет oversized-блоки."""
-    prepared = [_prepared_block(session, block, manifest, token_budget) for block, manifest in rows]
+    # Фрагменты берутся одним запросом на ревизию: иначе книга на 900 блоков
+    # читается из SQLite 900 раз, уже после такого же обхода в manifest_rows.
+    by_block: dict[str, dict] = {}
+    for material_id, revision in {(block.material_id, block.revision) for block, _ in rows}:
+        by_block.update(material_units(session, material_id, revision))
+    prepared = [
+        _prepared_block(block, manifest, by_block.get(str(block.id), {}), token_budget)
+        for block, manifest in rows
+    ]
     specs: list[PacketSpec] = []
     packet: list[dict] = []
     packet_tokens = 0
@@ -75,8 +83,8 @@ def build_packet_specs(session, rows: list[tuple], token_budget: int) -> list[Pa
     return specs
 
 
-def _prepared_block(session, block, manifest: dict, token_budget: int) -> dict:
-    units = list(block_units(session, block.id).values())
+def _prepared_block(block, manifest: dict, units_by_ref: dict, token_budget: int) -> dict:
+    units = list(units_by_ref.values())
     intervals = _intervals(units, token_budget)
     return {
         "block_id": str(block.id),

@@ -207,7 +207,7 @@ export function ResearchLaunchDialog({
         </Field>
 
         {preflight && !preflight.execution_available && (
-          <OfflineNotice reason="disabled" alternative={`${preflight.execution_issue ?? "Выберите модель для ролей прохода 2."} Сохранённое покрытие останется доступно.`} />
+          <OfflineNotice reason="disabled" alternative={`${(preflight.execution_issue ?? "Выберите модель для ролей прохода 2").replace(/\.?$/, ".")} Сохранённое покрытие останется доступно.`} />
         )}
         <p className="research-launch-boundary">«Файл разобран» означает, что Tentex подготовил текст. «Содержание исследовано» появится только после проверки блоков моделью.</p>
         {error && <p className="inline-error" role="alert">{error}</p>}

@@ -198,7 +198,7 @@ export function CoverageOverviewScreen() {
             <strong>{overview.topics.with_content} <span>из {overview.topics.total} тем</span></strong>
             {overview.topics.total === 0
               ? <p>Программа пуста: относить блоки не к чему. Соберите темы в разделе «Программа» и запустите обзор снова.</p>
-              : <p>Только content-связи. Упоминания не превращают тему в обеспеченную.</p>}
+              : <p>Только content-связи. Упоминания не превращают тему в обеспеченную.{overview.topics.legacy > 0 && ` Тем со связями до прохода 2, где назначение неизвестно: ${overview.topics.legacy}.`}</p>}
           </Card>
           <Card className="coverage-metric-card is-material">
             <small>{overview.material_ratio.label}</small>

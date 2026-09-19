@@ -8,7 +8,13 @@ from app.ai.schemas import AiModelSelection
 from app.ai.settings import resolve_model
 from app.coverage.packets import build_packet_specs, input_token_budget
 from app.coverage.schemas import RunPlan
-from app.coverage.snapshots import build_snapshot, fingerprint, manifest_rows, require_project
+from app.coverage.snapshots import (
+    build_snapshot,
+    count_manifest_blocks,
+    fingerprint,
+    manifest_rows,
+    require_project,
+)
 from app.db import project_write_transaction
 from app.models import (
     BackgroundJob,
@@ -65,7 +71,7 @@ def preflight(session, project_id, plan):
     return {
         "fingerprint": fingerprint_value,
         "snapshot": snapshot,
-        "blocks": sum(1 for _ in manifest_rows(session, snapshot)),
+        "blocks": count_manifest_blocks(session, snapshot),
         "execution_available": issue is None,
         "execution_issue": issue,
         "model_roles": roles,

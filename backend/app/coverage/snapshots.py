@@ -4,7 +4,7 @@ import hashlib
 import json
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.coverage.validation import Unit
 from app.models import (
@@ -211,8 +211,9 @@ def manifest_rows(session, snapshot):
             )
             .order_by(MaterialBlock.sort_order)
         )
+        by_block = material_units(session, UUID(source["id"]), source["revision"])
         for block in blocks:
-            units = block_units(session, block.id)
+            units = by_block.get(str(block.id), {})
             yield (
                 block,
                 {
@@ -239,27 +240,65 @@ def manifest_rows(session, snapshot):
             )
 
 
-def block_units(session, block_id) -> dict[str, Unit]:
+def _unit(fragment, page, material) -> Unit:
     """Адрес страницы содержит material ID: page:1 двух книг не совпадает."""
-    rows = session.execute(
+    return Unit(
+        str(fragment.id),
+        fragment.text,
+        str(fragment.block_id),
+        f"page:{fragment.material_id}:{page.page_number}",
+        fragment.element_kind,
+        fragment.quality,
+        _locator(fragment, page, material),
+    )
+
+
+def _units_query():
+    return (
         select(MaterialFragment, MaterialPage, Material)
         .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
         .join(Material, Material.id == MaterialFragment.material_id)
-        .where(MaterialFragment.block_id == block_id)
         .order_by(MaterialPage.page_number, MaterialFragment.sort_order)
     )
-    return {
-        str(f.id): Unit(
-            str(f.id),
-            f.text,
-            str(f.block_id),
-            f"page:{f.material_id}:{p.page_number}",
-            f.element_kind,
-            f.quality,
-            _locator(f, p, m),
+
+
+def block_units(session, block_id) -> dict[str, Unit]:
+    """Один блок: используется исполнителем, который читает пакет за пакетом."""
+    rows = session.execute(_units_query().where(MaterialFragment.block_id == block_id))
+    return {str(f.id): _unit(f, p, m) for f, p, m in rows}
+
+
+def material_units(session, material_id, revision) -> dict[str, dict[str, Unit]]:
+    """Все фрагменты ревизии одним запросом: книга на 900 блоков не даёт 900 обращений."""
+    rows = session.execute(
+        _units_query().where(
+            MaterialFragment.material_id == material_id,
+            MaterialPage.revision == revision,
         )
-        for f, p, m in rows
-    }
+    )
+    result: dict[str, dict[str, Unit]] = {}
+    for fragment, page, material in rows:
+        if fragment.block_id is None:
+            continue
+        result.setdefault(str(fragment.block_id), {})[str(fragment.id)] = _unit(
+            fragment, page, material
+        )
+    return result
+
+
+def count_manifest_blocks(session, snapshot) -> int:
+    """Preflight нужно только число: полный manifest ради счётчика стоит десятки секунд."""
+    return sum(
+        session.scalar(
+            select(func.count())
+            .select_from(MaterialBlock)
+            .where(
+                MaterialBlock.material_id == UUID(source["id"]),
+                MaterialBlock.revision == source["revision"],
+            )
+        )
+        for source in snapshot["sources"]
+    )
 
 
 def _locator(fragment, page, material):
