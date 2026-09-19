@@ -20,7 +20,13 @@ from app.coverage.queries import evidence_read, overview, run_read
 from app.coverage.research import prepare_task, process_coverage_job, publish_packet
 from app.coverage.schemas import Evidence, RunControl, RunPlan, RunStart
 from app.coverage.service import preflight, start_run
-from app.coverage.validation import CheckedDecision, Unit, merge_refinement, repair_evidence
+from app.coverage.validation import (
+    CheckedDecision,
+    Unit,
+    merge_refinement,
+    repair_evidence,
+    validate_target,
+)
 from app.db import job_write_transaction
 from app.materials.worker import claim_job
 from app.models import (
@@ -337,6 +343,23 @@ def test_fragment_range_is_expanded_and_missing_parts_have_their_own_reason(sess
 
     empty = expand_compact_response(task_input, packet([]))
     assert empty[0]["error"] == "parts_missing"
+
+    # Вместо F-alias модель присылает фразу: связь остаётся, опорой служит свой фрагмент.
+    prose = {**link, "evidence": ["Оглавление указывает предмет экономики."]}
+    raw = expand_compact_response(
+        task_input,
+        packet([{"fragment": a, "outcome": "content", "links": [prose]} for a in aliases]),
+    )
+    assert [e["ref"] for e in raw[0]["links"][0]["evidence"]] == [refs[0]]
+    checked = validate_target(
+        target,
+        [raw[0]],
+        {ref: task_input.seen[ref] for ref in refs},
+        task_input.seen,
+        set(refs),
+        task_input.topics,
+    )
+    assert checked.valid and checked.outcome == "linked"
 
 
 def test_answer_reserve_and_token_limit_follow_the_size_of_the_packet(session):

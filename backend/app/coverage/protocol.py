@@ -242,18 +242,22 @@ def _expand_target(task_input, target: str, decision: dict) -> dict:
                 # Молча потерянная связь превращала разобранный блок в «link_accounting»
                 # и прятала настоящую причину: модель назвала тему, которой нет.
                 return {"target_id": target, "error": "unknown_topic"}
-            evidence_aliases = link.get("evidence") or [part["fragment"]]
-            evidence = []
-            for evidence_index, alias in enumerate(evidence_aliases):
-                evidence_ref = task_input.ref_by_alias.get(alias)
-                if evidence_ref is None:
-                    continue
-                evidence.append(
-                    {
-                        "key": f"e{part_index}_{link_index}_{evidence_index}",
-                        "ref": evidence_ref,
-                    }
-                )
+            # Правило «текст цитат не возвращай» модель нарушает: вместо F-alias она
+            # присылает фразу. Неразрешимые опоры отбрасывались, связь оставалась без
+            # единой опоры и весь блок падал как invalid_schema. Свой же фрагмент —
+            # верная опора для решения по этому фрагменту, и он остаётся запасным.
+            aliases = [
+                alias
+                for alias in (link.get("evidence") or [])
+                if alias in task_input.ref_by_alias
+            ] or [part["fragment"]]
+            evidence = [
+                {
+                    "key": f"e{part_index}_{link_index}_{evidence_index}",
+                    "ref": task_input.ref_by_alias[alias],
+                }
+                for evidence_index, alias in enumerate(aliases)
+            ]
             links.append(
                 {
                     "topic_id": topic,
