@@ -436,7 +436,10 @@ def _create_source(
 def _add_manual_bounds(edit: _Edit, material: Material, link: ProjectMaterial,
                        bounds: Bounds) -> None:
     """Ручной выбор — `manual/lesson` на содержательные фрагменты именно выбранного."""
-    node_id = _node_for_page(edit, material.id, bounds.page_from)
+    requested = edit.command.program_node_id
+    if requested is not None and requested not in edit.topic_ids():
+        raise _invalid("Тема не входит в урок", "lesson_topic_missing")
+    node_id = requested or _node_for_page(edit, material.id, bounds.page_from)
     _create_source(edit, material, link, bounds, node_id, LessonBlockOrigin.MANUAL)
     order = refs_module.load_order(edit.session, material, bounds.page_from, bounds.page_to)
     edit.binding_ids += _bind_fragments(

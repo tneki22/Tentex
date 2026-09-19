@@ -13,6 +13,7 @@ from app.models import (
     Binding,
     BindingStatus,
     CoverageBlockResult,
+    CoverageDecision,
     CoverageFinding,
     CoverageRun,
     CoverageTask,
@@ -23,6 +24,7 @@ from app.models import (
     MaterialRevision,
     NodeType,
     ProgramNode,
+    Project,
     ProjectMaterial,
 )
 from app.projects.errors import ProjectNotFoundError
@@ -192,11 +194,29 @@ def current_map(session, project_id):
         )
     }
     result = []
+    block_choices = {
+        row.target_key: row.payload.get("disposition")
+        for row in session.scalars(
+            select(CoverageDecision).where(
+                CoverageDecision.project_id == project_id,
+                CoverageDecision.kind == "block_disposition",
+            )
+        )
+    }
     for block in _active_blocks(session, project_id):
         row = selected.get(block.id)
         related = [b for b in fresh if b.block_id == block.id]
         content = [b for b in related if b.semantic_kind == "content"]
-        if row:
+        manual_content = [
+            binding
+            for binding in content
+            if binding.status in {BindingStatus.MANUAL, BindingStatus.CONFIRMED}
+        ]
+        if block_choices.get(str(block.id)) in {"service", "outside_program"}:
+            bucket = block_choices[str(block.id)]
+        elif manual_content:
+            bucket = "linked"
+        elif row:
             bucket = _project_outcome(row, related)
         else:
             bucket = _unfinished_bucket(block, latest.get(block.id), current, reviewed)
@@ -360,8 +380,9 @@ def _known_extraction_limits(material):
     return limits
 
 
-def _page(rows, offset, limit):
+def _page(rows, offset, limit, coverage_revision):
     return {
+        "coverage_revision": coverage_revision,
         "items": rows[offset : offset + limit],
         "total": len(rows),
         "next_offset": offset + limit if offset + limit < len(rows) else None,
@@ -372,7 +393,13 @@ def _page(rows, offset, limit):
 def source_blocks(session, project_id, material_id, offset, limit):
     """Ограниченная лента текущих блоков с явным остатком."""
     blocks, _ = current_map(session, project_id)
-    return _page([b for b in blocks if b["material_id"] == str(material_id)], offset, limit)
+    revision = session.get(Project, project_id).coverage_revision
+    return _page(
+        [b for b in blocks if b["material_id"] == str(material_id)],
+        offset,
+        limit,
+        revision,
+    )
 
 
 def issue_blocks(session, project_id, offset, limit):
@@ -382,7 +409,7 @@ def issue_blocks(session, project_id, offset, limit):
     # Сначала то, с чем можно что-то сделать сейчас: устаревшее ждёт нового запуска
     # и не должно вытеснять сбои и нерешённые блоки с первой страницы.
     rows.sort(key=lambda row: ISSUE_BUCKETS.index(row["bucket"]))
-    return _page(rows, offset, limit)
+    return _page(rows, offset, limit, session.get(Project, project_id).coverage_revision)
 
 
 def evidence_read(session, project_id, evidence_id):

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.bindings.answers_link import apply_answers_link_undo
 from app.bindings.service import apply_undo as apply_binding_undo
+from app.coverage.interaction import apply_undo as apply_coverage_undo
 from app.db import project_write_transaction
 from app.lessons.editing import apply_blocks_undo as apply_lesson_blocks_undo
 from app.lessons.editing import apply_unbind_undo as apply_lesson_unbind_undo
@@ -924,6 +925,7 @@ def undo_last_project_action(
         nodes = _nodes(session, project_id)
         nodes_by_id = {node.id: node for node in nodes}
         data = action.inverse_data
+        changes_program = True
         match action.action_type:
             case "exam_import":
                 _restore_snapshot(session, project_id, data["nodes"])
@@ -1001,6 +1003,9 @@ def undo_last_project_action(
                 apply_lesson_blocks_undo(session, project_id, data)
             case "lesson_unbind":
                 apply_lesson_unbind_undo(session, project_id, data)
+            case "coverage_decision":
+                apply_coverage_undo(session, project_id, data)
+                changes_program = False
             case "active_exam_import" | "ai_import_repair":
                 old_ids = {UUID(item["id"]) for item in data["nodes"]}
                 for item in data["nodes"]:
@@ -1117,7 +1122,7 @@ def undo_last_project_action(
                 raise ProjectInvariantError(f"Тип действия {action.action_type!r} нельзя отменить")
 
         action.undone_at = utc_now()
-        draft_revision = _increment_for_undo(session, project)
+        draft_revision = _increment_for_undo(session, project) if changes_program else None
         session.flush()
         return ActionUndoResult(
             undone_action_type=action.action_type,

@@ -246,6 +246,7 @@ class BlockRead(StrictModel):
 class BlocksRead(StrictModel):
     """Ограниченная страница с полным знаменателем и составом остатка."""
 
+    coverage_revision: int
     items: list[BlockRead]
     total: int
     next_offset: int | None
@@ -269,3 +270,124 @@ class EvidenceRead(StrictModel):
     origin: str | None
     applied: bool
     locator: dict[str, Any] = Field(default_factory=dict)
+    binding_id: UUID | None = None
+    topic_id: UUID | None = None
+    topic_title: str | None = None
+    material_id: UUID | None = None
+    material_name: str | None = None
+    page_from: int | None = None
+    page_to: int | None = None
+    fragment_ids: list[UUID] = Field(default_factory=list)
+    text: str = ""
+    roles: list[str] = Field(default_factory=list)
+    semantic_kind: str | None = None
+    status: str | None = None
+    mechanism: str | None = None
+    quality: str | None = None
+    hidden: bool = False
+    preferred: bool = False
+    legacy: bool = False
+    linked_topics: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TopicRead(StrictModel):
+    """Строка программы с текущим основанием для чтения."""
+
+    node_id: UUID
+    title: str
+    parent_title: str | None = None
+    evidence_count: int
+    mention_count: int
+    hidden_count: int
+    legacy_count: int
+    best_evidence_id: str | None = None
+
+
+class TopicsRead(StrictModel):
+    """Пагинированные темы одной ревизии покрытия."""
+
+    coverage_revision: int
+    items: list[TopicRead]
+    total: int
+    next_offset: int | None
+
+
+class EvidenceSummary(StrictModel):
+    """Компактная карточка точной опоры без числовой уверенности."""
+
+    id: str
+    binding_id: UUID
+    topic_id: UUID
+    material_id: UUID
+    material_name: str
+    page_from: int
+    page_to: int
+    fragment_ids: list[UUID]
+    quote: str
+    description: str = ""
+    roles: list[str] = Field(default_factory=list)
+    semantic_kind: str | None = None
+    status: str
+    mechanism: str
+    quality: str
+    available: bool
+    stale: bool
+    hidden: bool
+    preferred: bool
+    legacy: bool
+
+
+class TopicEvidenceRead(StrictModel):
+    """Группы чтения одной темы; разные источники остаются отдельными карточками."""
+
+    coverage_revision: int
+    topic_id: UUID
+    topic_title: str
+    best_evidence_id: str | None = None
+    starter: list[EvidenceSummary] = Field(default_factory=list)
+    explanations: list[EvidenceSummary] = Field(default_factory=list)
+    practice: list[EvidenceSummary] = Field(default_factory=list)
+    depth: list[EvidenceSummary] = Field(default_factory=list)
+    mentions: list[EvidenceSummary] = Field(default_factory=list)
+    hidden: list[EvidenceSummary] = Field(default_factory=list)
+    legacy: list[EvidenceSummary] = Field(default_factory=list)
+
+
+DecisionAction = Literal[
+    "confirm",
+    "remove",
+    "restore",
+    "reassign",
+    "change_role",
+    "hide",
+    "show",
+    "prefer",
+    "clear_prefer",
+    "service",
+    "outside_goal",
+]
+
+
+class DecisionWrite(StrictModel):
+    """Одна осознанная команда над связью или блоком."""
+
+    request_key: str = Field(min_length=1, max_length=160)
+    expected_coverage_revision: int = Field(ge=0)
+    action: DecisionAction
+    binding_id: UUID | None = None
+    evidence_id: str | None = None
+    block_id: UUID | None = None
+    topic_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    role: Role | None = None
+    semantic_kind: Literal["content", "mention", "context"] | None = None
+
+
+class DecisionReceipt(StrictModel):
+    """Стабильный ответ идемпотентной команды."""
+
+    request_key: str
+    action: DecisionAction
+    coverage_revision: int
+    action_sequence: int
+    binding_ids: list[UUID] = Field(default_factory=list)
+    message: str

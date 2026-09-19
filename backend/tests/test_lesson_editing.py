@@ -163,6 +163,36 @@ def test_selected_fragments_and_structure_block_bind_only_the_selection(session,
     )
 
 
+def test_selected_fragments_use_explicit_topic_in_multi_topic_lesson(session, project, book):
+    first = add_node(session, project, "Сети", 0)
+    second = add_node(session, project, "Беспроводная связь", 1)
+    lesson = manual_lesson(session, project, first)
+    lesson = edit(
+        session,
+        project,
+        lesson,
+        operation="add_topic",
+        program_node_id=second.id,
+    ).lesson
+
+    lesson = edit(
+        session,
+        project,
+        lesson,
+        operation="add_fragments",
+        material_id=book.material.id,
+        from_fragment_id=book.ids["Wi-Fi"],
+        to_fragment_id=book.ids["радио"],
+        program_node_id=second.id,
+    ).lesson
+
+    assert lesson.blocks[0].bound_program_node_id == second.id
+    assert set(bindings(session, project)) == {
+        (second.id, book.ids["Wi-Fi"]),
+        (second.id, book.ids["радио"]),
+    }
+
+
 def test_new_revision_transfers_boundaries_and_degrades_lost_one_to_page(session, project, book):
     topic = add_node(session, project, "Сети", 0)
     lesson = manual_lesson(session, project, topic)
