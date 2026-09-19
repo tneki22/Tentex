@@ -270,6 +270,19 @@ def _block_reason(decision, outcome: str, changes: list[dict]) -> str:
     return own or "unresolved_remainder"
 
 
+def _check_evidence_keys(items: list[dict]) -> None:
+    """Ключ опоры становится её публичным адресом: двусмысленный адрес роняет блок.
+
+    На alias-протоколе ключи выдаёт сервер и они уникальны по построению; проверка
+    остаётся для решений углубления, где ключ приходит от модели.
+    """
+    keys: dict[str, dict] = {}
+    for item in items:
+        for evidence in item["evidence"]:
+            if keys.setdefault(evidence["key"], evidence) != evidence:
+                raise ValueError("duplicate_evidence_key")
+
+
 def validate_target(target_id, raw, units, seen, inspected, topics, *, origin="overview"):
     """Проверяет одно решение; исключения схемы не распространяются на соседей."""
     diagnostics = []
@@ -299,12 +312,7 @@ def validate_target(target_id, raw, units, seen, inspected, topics, *, origin="o
                 diagnostics.append({"reason": "unsupported_finding"})
                 continue
             findings.append({**finding.model_dump(mode="json"), "evidence": evidence})
-        keys = {}
-        for item in links + findings:
-            for evidence in item["evidence"]:
-                if evidence["key"] in keys and keys[evidence["key"]] != evidence:
-                    raise ValueError("duplicate_evidence_key")
-                keys[evidence["key"]] = evidence
+        _check_evidence_keys(links + findings)
         return CheckedDecision(
             str(target_id),
             True,
