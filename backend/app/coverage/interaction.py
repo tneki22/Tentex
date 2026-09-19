@@ -68,11 +68,8 @@ def _binding_rows(
     session: Session,
     project_id: UUID,
     node_id: UUID | None = None,
-    *,
-    summary: bool = False,
 ):
-    """Загрузить строки ранга либо полные строки одной темы без ленивых N+1."""
-    block_entity = MaterialBlock.id if summary else MaterialBlock
+    """Загрузить полные строки одной темы без ленивых N+1."""
     statement = (
         select(
             Binding,
@@ -80,7 +77,7 @@ def _binding_rows(
             MaterialPage,
             Material,
             ProjectMaterial,
-            block_entity,
+            MaterialBlock,
         )
         .join(MaterialFragment, MaterialFragment.id == Binding.fragment_id)
         .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
@@ -93,35 +90,32 @@ def _binding_rows(
         .outerjoin(MaterialBlock, MaterialBlock.id == Binding.block_id)
         .where(Binding.project_id == project_id, Binding.status.in_(ACTIVE_STATUSES))
     )
-    if summary:
-        statement = statement.options(
-            load_only(
-                Binding.id,
-                Binding.program_node_id,
-                Binding.fragment_id,
-                Binding.status,
-                Binding.roles,
-                Binding.semantic_kind,
-                Binding.evidence_ref,
-            ),
-            load_only(MaterialFragment.id, MaterialFragment.quality),
-            load_only(MaterialPage.id, MaterialPage.revision, MaterialPage.page_number),
-            load_only(
-                Material.id,
-                Material.active_parse_revision,
-                Material.original_name,
-            ),
-            load_only(
-                ProjectMaterial.project_id,
-                ProjectMaterial.material_id,
-                ProjectMaterial.display_name,
-                ProjectMaterial.source_role,
-                ProjectMaterial.priority,
-            ),
-        )
     if node_id is not None:
         statement = statement.where(Binding.program_node_id == node_id)
     return list(session.execute(statement))
+
+
+def _binding_summaries(session: Session, project_id: UUID) -> list[Binding]:
+    """Список тем читает только поля связи; текст и геометрию берёт уже выбранная тема."""
+    return list(
+        session.scalars(
+            select(Binding)
+            .options(
+                load_only(
+                    Binding.id,
+                    Binding.program_node_id,
+                    Binding.status,
+                    Binding.roles,
+                    Binding.semantic_kind,
+                    Binding.evidence_ref,
+                )
+            )
+            .where(
+                Binding.project_id == project_id,
+                Binding.status.in_(ACTIVE_STATUSES),
+            )
+        )
+    )
 
 
 def _decision_map(session: Session, project_id: UUID, kind: str) -> dict[str, CoverageDecision]:
@@ -143,28 +137,20 @@ def _evidence_id(binding: Binding) -> str:
     return f"binding:{binding.id}"
 
 
-def _fresh_binding_ids(session: Session, project_id: UUID, rows) -> set[UUID]:
+def _fresh_binding_ids(session: Session, project_id: UUID, bindings) -> set[UUID]:
     return queries.fresh_binding_ids(
         session,
         project_id,
-        [row[0] for row in rows],
+        bindings,
     )
 
 
-def _binding_row_rank(row, preferred_binding_id: str | None) -> tuple:
-    """Ранг строки без загрузки полного текста для пагинированного списка тем."""
-    binding, fragment, page, material, project_material, _ = row
+def _binding_summary_rank(binding: Binding, preferred_binding_id: str | None) -> tuple:
+    """До открытия темы достаточно личного приоритета и роли; полный ранг считает тема."""
     roles = set(binding.roles or [])
     return (
         str(binding.id) != preferred_binding_id,
-        page.revision != material.active_parse_revision,
-        QUALITY_RANK.get(fragment.quality.value, 9),
         not bool(roles & {"definition", "explanation"}),
-        binding.semantic_kind != "content",
-        SOURCE_ROLE_RANK.get(project_material.source_role.value, 9),
-        project_material.priority,
-        (project_material.display_name or material.original_name).casefold(),
-        page.page_number,
         _evidence_id(binding),
     )
 
@@ -176,43 +162,43 @@ def topics_page(
     project = require_project(session, project_id)
     nodes = _active_nodes(session, project_id)
     node_by_id = {node.id: node for node in nodes}
-    rows = _binding_rows(session, project_id, summary=True)
-    fresh_ids = _fresh_binding_ids(session, project_id, rows)
+    bindings = _binding_summaries(session, project_id)
+    fresh_ids = _fresh_binding_ids(session, project_id, bindings)
     hidden = _decision_map(session, project_id, "hide_evidence")
     preferred = _decision_map(session, project_id, "prefer_reading")
     grouped: dict[UUID, list] = defaultdict(list)
-    for row in rows:
-        grouped[row[0].program_node_id].append(row)
+    for binding in bindings:
+        grouped[binding.program_node_id].append(binding)
     result = []
     for node in nodes:
-        node_rows = grouped[node.id]
-        bindings = [row[0] for row in node_rows]
-        content_rows = [
-            row
-            for row in node_rows
-            if row[0].id in fresh_ids and row[0].semantic_kind == "content"
+        node_bindings = grouped[node.id]
+        content_bindings = [
+            binding
+            for binding in node_bindings
+            if binding.id in fresh_ids and binding.semantic_kind == "content"
         ]
-        if view == "readable" and not content_rows:
+        if view == "readable" and not content_bindings:
             continue
-        if view == "gaps" and content_rows:
+        if view == "gaps" and content_bindings:
             continue
-        legacy = [item for item in bindings if item.semantic_kind in {None, "unknown"}]
-        mentions = [item for item in bindings if item.semantic_kind == "mention"]
+        legacy = [item for item in node_bindings if item.semantic_kind in {None, "unknown"}]
+        mentions = [item for item in node_bindings if item.semantic_kind == "mention"]
         hidden_count = sum(
             bool(hidden.get(str(item.id)) and hidden[str(item.id)].payload.get("hidden"))
-            for item in bindings
+            for item in node_bindings
         )
         preferred_row = preferred.get(str(node.id))
         preferred_id = (preferred_row.payload or {}).get("binding_id") if preferred_row else None
         best = next(
             (
-                row[0]
-                for row in sorted(
-                    content_rows, key=lambda item: _binding_row_rank(item, preferred_id)
+                binding
+                for binding in sorted(
+                    content_bindings,
+                    key=lambda item: _binding_summary_rank(item, preferred_id),
                 )
                 if not (
-                    hidden.get(str(row[0].id))
-                    and hidden[str(row[0].id)].payload.get("hidden")
+                    hidden.get(str(binding.id))
+                    and hidden[str(binding.id)].payload.get("hidden")
                 )
             ),
             None,
@@ -223,7 +209,7 @@ def topics_page(
                 "node_id": str(node.id),
                 "title": node.title,
                 "parent_title": parent.title if parent else None,
-                "evidence_count": len(content_rows),
+                "evidence_count": len(content_bindings),
                 "mention_count": len(mentions),
                 "hidden_count": hidden_count,
                 "legacy_count": len(legacy),
@@ -366,7 +352,7 @@ def topic_evidence(session: Session, project_id: UUID, node_id: UUID) -> dict:
     if node is None or node.project_id != project_id or node.node_type not in STUDY_NODE_TYPES:
         raise ProjectNotFoundError("Тема программы не найдена")
     rows = _binding_rows(session, project_id, node_id)
-    fresh_ids = _fresh_binding_ids(session, project_id, rows)
+    fresh_ids = _fresh_binding_ids(session, project_id, [row[0] for row in rows])
     hidden = _decision_map(session, project_id, "hide_evidence")
     preferred = _decision_map(session, project_id, "prefer_reading").get(str(node_id))
     preferred_id = (preferred.payload or {}).get("binding_id") if preferred else None

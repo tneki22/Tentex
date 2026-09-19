@@ -110,7 +110,7 @@ def _current_runs(session, project_id):
     return runs, snapshots_current(session, runs)
 
 
-def binding_fresh(binding, current, task_runs, task_results):
+def binding_fresh(binding, current, task_runs):
     """Позиционный перенос не делает старое evidence новым, даже при прежнем Binding ID."""
     ref = binding.evidence_ref
     if not ref:
@@ -120,14 +120,9 @@ def binding_fresh(binding, current, task_runs, task_results):
     except (KeyError, TypeError, ValueError):
         return False
     run_id = task_runs.get(task_id)
-    if not run_id or not current.get(run_id, False) or ref.get("retired_reason"):
-        return False
-    receipt = task_results.get(task_id, {}).get(ref["target_id"])
-    if not receipt or not receipt["applied"]:
-        return False
-    return any(
-        link["fragment_id"] == str(binding.fragment_id) for link in receipt["decision"]["links"]
-    )
+    # Активная PASS_TWO-связь появляется только после applied receipt. Повторная
+    # проверка того же receipt декодировала тяжёлый JSON задачи при каждом открытии.
+    return bool(run_id and current.get(run_id, False) and not ref.get("retired_reason"))
 
 
 def fresh_binding_ids(session, project_id, bindings=None, current=None) -> set[UUID]:
@@ -164,25 +159,10 @@ def fresh_binding_ids(session, project_id, bindings=None, current=None) -> set[U
         if task_ids
         else {}
     )
-    current_task_ids = {
-        task_id for task_id, run_id in task_runs.items() if current.get(run_id, False)
-    }
-    task_results = (
-        {
-            task_id: result
-            for task_id, result in session.execute(
-                select(CoverageTask.id, CoverageTask.result).where(
-                    CoverageTask.id.in_(current_task_ids)
-                )
-            )
-        }
-        if current_task_ids
-        else {}
-    )
     return {
         binding.id
         for binding in bindings
-        if binding_fresh(binding, current, task_runs, task_results)
+        if binding_fresh(binding, current, task_runs)
     }
 
 
@@ -201,28 +181,65 @@ def _active_blocks(session, project_id):
     )
 
 
-def _select_results(session, runs, current):
-    """Поздний pending/failed не заслоняет совместимый проверенный результат."""
-    selected, latest, reviewed = {}, {}, set()
-    if not runs:
-        return selected, latest, reviewed
-    by_run = defaultdict(list)
-    for row in session.execute(
-        select(
-            CoverageBlockResult.id,
-            CoverageBlockResult.run_id,
-            CoverageBlockResult.block_id,
-            CoverageBlockResult.material_id,
-            CoverageBlockResult.work_state,
-            CoverageBlockResult.outcome,
-            CoverageBlockResult.publication_state,
-            CoverageBlockResult.reason,
-        ).where(CoverageBlockResult.run_id.in_([run.id for run in runs]))
+def _projection_block_ids(session, project_id) -> set[UUID]:
+    """Найти только блоки, где личное решение могло изменить машинный outcome."""
+    block_ids = set(
+        session.scalars(
+            select(Binding.block_id).where(
+                Binding.project_id == project_id,
+                Binding.status != BindingStatus.MACHINE,
+                Binding.block_id.is_not(None),
+            )
+        )
+    )
+    rejected_fragments = []
+    for decision in session.scalars(
+        select(CoverageDecision).where(
+            CoverageDecision.project_id == project_id,
+            CoverageDecision.kind == "reject_link",
+        )
     ):
-        projection = _ResultProjection(*row)
-        by_run[projection.run_id].append(projection)
+        if not decision.payload.get("rejected"):
+            continue
+        try:
+            rejected_fragments.append(UUID(decision.payload["fragment_id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if rejected_fragments:
+        block_ids.update(
+            session.scalars(
+                select(MaterialFragment.block_id).where(
+                    MaterialFragment.id.in_(rejected_fragments)
+                )
+            )
+        )
+    return block_ids
+
+
+def _select_results(session, project_id, runs, current, active_block_ids):
+    """Идти от нового запуска назад только пока остаются блоки без результата."""
+    selected, latest, reviewed = {}, {}, set()
+    if not runs or not active_block_ids:
+        return selected, latest, reviewed
+    remaining = set(active_block_ids)
     for run in runs:
-        for row in by_run[run.id]:
+        rows = session.execute(
+            select(
+                CoverageBlockResult.id,
+                CoverageBlockResult.run_id,
+                CoverageBlockResult.block_id,
+                CoverageBlockResult.material_id,
+                CoverageBlockResult.work_state,
+                CoverageBlockResult.outcome,
+                CoverageBlockResult.publication_state,
+                CoverageBlockResult.reason,
+            ).where(
+                CoverageBlockResult.run_id == run.id,
+                CoverageBlockResult.block_id.in_(remaining),
+            )
+        )
+        for raw in rows:
+            row = _ResultProjection(*raw)
             previous = latest.get(row.block_id)
             if previous is None or (
                 previous.work_state != "inspected" and row.work_state == "inspected"
@@ -232,7 +249,13 @@ def _select_results(session, runs, current):
                 reviewed.add(row.material_id)
             if current[run.id] and row.publication_state == "applied":
                 selected.setdefault(row.block_id, row)
-    selected_by_id = {row.id: row for row in selected.values()}
+        remaining.difference_update(selected)
+        if not remaining:
+            break
+    projection_blocks = _projection_block_ids(session, project_id)
+    selected_by_id = {
+        row.id: row for block_id, row in selected.items() if block_id in projection_blocks
+    }
     if selected_by_id:
         for row_id, result in session.execute(
             select(CoverageBlockResult.id, CoverageBlockResult.result).where(
@@ -261,8 +284,23 @@ def current_map(session, project_id, run_state=None):
     """Один серверный расчёт для будущих overview/matrix/graph."""
     require_project(session, project_id)
     runs, current = run_state or _current_runs(session, project_id)
-    selected, latest, reviewed = _select_results(session, runs, current)
-    bindings = list(
+    active_blocks = _active_blocks(session, project_id)
+    selected, latest, reviewed = _select_results(
+        session,
+        project_id,
+        runs,
+        current,
+        {block.id for block in active_blocks},
+    )
+    machine_bindings = list(
+        session.scalars(
+            select(Binding).where(
+                Binding.project_id == project_id,
+                Binding.status == BindingStatus.MACHINE,
+            )
+        )
+    )
+    manual_bindings = list(
         session.scalars(
             select(Binding)
             .join(MaterialFragment, MaterialFragment.id == Binding.fragment_id)
@@ -273,12 +311,11 @@ def current_map(session, project_id, run_state=None):
                 Binding.project_id == project_id,
                 ProjectMaterial.project_id == project_id,
                 MaterialPage.revision == Material.active_parse_revision,
-                Binding.status.in_(
-                    [BindingStatus.MANUAL, BindingStatus.CONFIRMED, BindingStatus.MACHINE]
-                ),
+                Binding.status.in_([BindingStatus.MANUAL, BindingStatus.CONFIRMED]),
             )
         )
     )
+    bindings = [*machine_bindings, *manual_bindings]
     fresh_ids = fresh_binding_ids(session, project_id, bindings, current)
     fresh = [binding for binding in bindings if binding.id in fresh_ids]
     fresh_by_block = defaultdict(list)
@@ -306,7 +343,7 @@ def current_map(session, project_id, run_state=None):
             )
         )
     }
-    for block in _active_blocks(session, project_id):
+    for block in active_blocks:
         row = selected.get(block.id)
         related = fresh_by_block[block.id]
         content = [b for b in related if b.semantic_kind == "content"]
@@ -343,6 +380,8 @@ def current_map(session, project_id, run_state=None):
 
 def _project_outcome(row, bindings):
     """Ручное снятие меняет текущую проекцию, не исторический ответ модели."""
+    if row.result is None:
+        return row.outcome
     dispositions = row.result["dispositions"]
     for part in dispositions:
         if part["outcome"] in {"content", "mention", "context"} and not any(
