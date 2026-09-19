@@ -40,6 +40,9 @@ LATEX_SYMBOLS = {
     "cap": "∩",
 }
 HOMOGLYPHS = str.maketrans("ABCEHKMOPTXYaceopxy", "АВСЕНКМОРТХУасеорху")
+# Содержательные исходы части и их сила: связь content сильнее mention и context.
+CONTENT_OUTCOMES = {"content", "mention", "context"}
+OUTCOME_STRENGTH = ["context", "mention", "content"]
 
 
 def normalize(text: str) -> str:
@@ -167,14 +170,25 @@ def _repair_all(evidences, seen, inspected, diagnostics) -> list[dict]:
 
 
 def _check_links(decision, units, seen, inspected, topics, diagnostics) -> list[dict]:
-    """Плохая опора снимается отдельно; смысловые нарушения отклоняют target."""
+    """Негодная связь снимается отдельно: блок не отвечает за одну свою строку."""
     links = []
     for link in decision.links:
         ref = str(link.fragment_id)
         if str(link.topic_id) not in topics or ref not in units:
-            raise ValueError("link_scope")
+            # Связь мимо программы или мимо блока — одна строка ответа, а не приговор
+            # всему разбору: остальные связи блока проверяются как обычно.
+            diagnostics.append({"reason": "link_scope", "ref": ref})
+            continue
         if link.semantic_kind != "content" and set(link.roles) != {"reference"}:
-            raise ValueError("reference_roles")
+            # Вес несодержательной связи задаёт semantic_kind, а роль у неё по контракту
+            # ровно одна. Имя роли не стоит разбора блока: роль приводится к контракту.
+            diagnostics.append({"reason": "reference_roles", "ref": ref})
+            link = link.model_copy(update={"roles": ["reference"]})
+        if _unavailable_visual(units[ref], inspected):
+            # Рисунок никто не смотрел: снимается связь этого фрагмента, а не раздел,
+            # в котором он стоит. Текст вокруг картинки разобран и публикуется.
+            diagnostics.append({"reason": "visual_unavailable", "ref": ref})
+            continue
         evidence = _repair_all(link.evidence, seen, inspected, diagnostics)
         if not evidence:
             continue
@@ -186,38 +200,74 @@ def _check_links(decision, units, seen, inspected, topics, diagnostics) -> list[
                 diagnostics.append({"reason": "heading_content", "ref": ref})
                 continue
             if not any(_supports_target(e, {ref: units[ref]}, inspected) for e in evidence):
-                raise ValueError("content_without_target")
+                diagnostics.append({"reason": "content_without_target", "ref": ref})
+                continue
         links.append({**link.model_dump(mode="json"), "evidence": evidence})
     return links
 
 
-def _check_outcome(decision, links) -> None:
-    outcomes = {d.outcome for d in decision.dispositions}
-    if "unresolved" in outcomes and decision.outcome != "unresolved":
-        raise ValueError("unresolved_remainder")
-    if decision.outcome == "unresolved" and not decision.reason.strip():
-        raise ValueError("unresolved_reason")
-    expected = {
-        "service": {"service"},
-        "outside_program": {"outside_program"},
-        "linked": {"content", "mention", "context"},
-    }
-    if decision.outcome in expected and not outcomes <= expected[decision.outcome]:
-        raise ValueError("outcome_dispositions")
-    if decision.outcome == "mixed_resolved" and (len(outcomes) < 2 or "unresolved" in outcomes):
-        raise ValueError("mixed_parts")
-    if bool(links) != bool(outcomes & {"content", "mention", "context"}):
-        raise ValueError("link_accounting")
-    for disposition in decision.dispositions:
-        if disposition.outcome not in {"content", "mention", "context"}:
-            continue
-        if not any(
-            str(disposition.fragment_id) == link["fragment_id"]
-            and disposition.outcome
-            == ("context" if link["semantic_kind"] == "prerequisite" else link["semantic_kind"])
-            for link in links
-        ):
-            raise ValueError("disposition_without_link")
+def _unavailable_visual(unit: Unit, inspected: set[str]) -> bool:
+    """Рисунок без визуального разбора: его нельзя ни связать, ни признать служебным."""
+    return unit.kind == "image" and unit.page_ref not in inspected
+
+
+def _link_outcome(link: dict) -> str:
+    """Исход части, который подтверждает эта связь."""
+    return "context" if link["semantic_kind"] == "prerequisite" else link["semantic_kind"]
+
+
+def derive_outcome(outcomes) -> str:
+    """Агрегат выводится из проверенных частей, а не берётся у модели на веру.
+
+    Части валидируются пофрагментно и являются истиной; объявленный моделью исход —
+    избыточные данные. `linked` при служебной части — это `mixed_resolved`, и сервер
+    называет это сам вместо того, чтобы отклонить весь разбор блока.
+    """
+    outcomes = set(outcomes)
+    if not outcomes or "unresolved" in outcomes:
+        return "unresolved"
+    if outcomes == {"service"}:
+        return "service"
+    if outcomes == {"outside_program"}:
+        return "outside_program"
+    if outcomes <= CONTENT_OUTCOMES:
+        return "linked"
+    return "mixed_resolved"
+
+
+def _align_dispositions(dispositions, links, units, inspected):
+    """Часть следует за своими проверенными связями; без связи она unresolved."""
+    by_ref: dict[str, set[str]] = {}
+    for link in links:
+        by_ref.setdefault(link["fragment_id"], set()).add(_link_outcome(link))
+    aligned, changes = [], []
+    for part in dispositions:
+        ref, outcome, reason = str(part.fragment_id), part.outcome, ""
+        if _unavailable_visual(units[ref], inspected):
+            outcome, reason = "unresolved", "visual_unavailable"
+        elif ref in by_ref:
+            # Связь прошла лестницу опор целиком, а исход части — просто её имя.
+            outcome, reason = max(by_ref[ref], key=OUTCOME_STRENGTH.index), "disposition_realigned"
+        elif outcome in CONTENT_OUTCOMES:
+            outcome, reason = "unresolved", "unsupported_evidence"
+        if outcome != part.outcome:
+            changes.append({"reason": reason, "ref": ref})
+            part = part.model_copy(update={"outcome": outcome})
+        aligned.append(part)
+    return aligned, changes
+
+
+def _block_reason(decision, outcome: str, changes: list[dict]) -> str:
+    """Причина unresolved: своя у модели, иначе — та, по которой сервер снял часть."""
+    own = decision.reason.strip()
+    if outcome != "unresolved":
+        return decision.reason
+    if own and any(part.outcome == "unresolved" for part in decision.dispositions):
+        return own
+    for reason in ("visual_unavailable", "unsupported_evidence"):
+        if any(change["reason"] == reason for change in changes):
+            return reason
+    return own or "unresolved_remainder"
 
 
 def validate_target(target_id, raw, units, seen, inspected, topics, *, origin="overview"):
@@ -234,32 +284,20 @@ def validate_target(target_id, raw, units, seen, inspected, topics, *, origin="o
         if str(decision.target_id) != str(target_id):
             raise ValueError("target_scope")
         _check_ranges(decision, units)
-        if any(u.kind == "image" and u.page_ref not in inspected for u in units.values()):
-            raise ValueError("visual_unavailable")
         links = _check_links(decision, units, seen, inspected, topics, diagnostics)
-        replacement_allowed = True
-        if len(links) < len(decision.links):
-            dispositions = []
-            for part in decision.dispositions:
-                supported = any(str(part.fragment_id) == link["fragment_id"] for link in links)
-                if part.outcome in {"content", "mention", "context"} and not supported:
-                    part = part.model_copy(update={"outcome": "unresolved"})
-                dispositions.append(part)
-            if any(part.outcome == "unresolved" for part in dispositions):
-                decision = decision.model_copy(
-                    update={
-                        "outcome": "unresolved",
-                        "reason": "unsupported_evidence",
-                        "dispositions": dispositions,
-                    }
-                )
-                replacement_allowed = False
-        _check_outcome(decision, links)
+        dispositions, changes = _align_dispositions(decision.dispositions, links, units, inspected)
+        diagnostics.extend(changes)
+        outcome = derive_outcome(part.outcome for part in dispositions)
+        # Непроверенный остаток не заменяет собой уже готовый разбор блока.
+        replacement_allowed = not any(part.outcome == "unresolved" for part in dispositions)
         findings = []
         for finding in decision.findings:
             evidence = _repair_all(finding.evidence, seen, inspected, diagnostics)
             if not evidence:
-                raise ValueError("unsupported_finding")
+                # Предложение по программе — не покрытие: негодная опора снимает
+                # предложение, а не разбор блока.
+                diagnostics.append({"reason": "unsupported_finding"})
+                continue
             findings.append({**finding.model_dump(mode="json"), "evidence": evidence})
         keys = {}
         for item in links + findings:
@@ -270,9 +308,9 @@ def validate_target(target_id, raw, units, seen, inspected, topics, *, origin="o
         return CheckedDecision(
             str(target_id),
             True,
-            decision.outcome,
-            decision.reason,
-            [d.model_dump(mode="json") for d in decision.dispositions],
+            outcome,
+            _block_reason(decision, outcome, changes),
+            [d.model_dump(mode="json") for d in dispositions],
             links,
             findings,
             diagnostics,

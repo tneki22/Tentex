@@ -19,9 +19,12 @@ SYSTEM_RULES = """Ты выполняешь первичный обзор под
 Тему адресуй её T-alias, не названием.
 Верни решение для каждого B-alias ровно один раз. Не считай пропуск outside_program.
 Диапазон from_target..to_target допустим только для одинаковых service/outside_program/unresolved.
+to_target — всегда B-alias последнего блока диапазона; для одного блока повтори from_target.
 Для linked и mixed_resolved перечисли каждый F-alias в parts: решение без parts недействительно.
 Соседние F-aliases с одинаковым решением записывай диапазоном «F2-F6» или списком через запятую.
+Исключение внутри диапазона пиши следом отдельной записью: о фрагменте выигрывает последняя.
 content — раскрытие темы с ролью definition/explanation/example/exercise.
+Перечень пунктов темы называет их, но не раскрывает: такой список — mention, не content.
 mention/context несут только роль reference.
 Ошибка, лимит и нехватка контекста дают unresolved с причиной, не service и не outside_program.
 Текст цитат не возвращай: сервер возьмёт опубликованную опору из снимка.
@@ -157,23 +160,34 @@ def expand_compact_response(task_input, decisions: list[dict]) -> list[dict]:
     """Раскрывает серверные диапазоны и aliases; пропуски остаются пропусками."""
     order = [task_input.target_aliases[target] for target in task_input.targets]
     aliases = {alias: target for target, alias in task_input.target_aliases.items()}
-    expanded: list[dict] = []
+    expanded: dict[str, dict] = {}
+    exact: set[str] = set()
     for decision in decisions:
         start = decision.get("from_target")
         end = decision.get("to_target")
-        if start not in aliases or end not in aliases:
+        if start not in aliases:
             continue
+        if end not in aliases:
+            # В to_target модель кладёт alias темы вместо повтора B-alias. Решение при
+            # этом одиночное и читается полностью; молчаливый пропуск уносил весь пакет.
+            end = start
         left, right = order.index(start), order.index(end)
         if right < left:
             left, right = right, left
         targets = [aliases[alias] for alias in order[left : right + 1]]
-        if len(targets) > 1 and decision.get("parts"):
-            for target in targets:
-                expanded.append({"target_id": target, "error": "range_with_parts"})
-            continue
+        single = len(targets) == 1
         for target in targets:
-            expanded.append(_expand_target(task_input, target, decision))
-    return expanded
+            # Точечное решение сильнее накрывшего его диапазона, в остальном выигрывает
+            # более поздняя запись: дубль уточняет решение, а не роняет оба.
+            if target in exact and not single:
+                continue
+            if not single and decision.get("parts"):
+                expanded[target] = {"target_id": target, "error": "range_with_parts"}
+                continue
+            expanded[target] = _expand_target(task_input, target, decision)
+            if single:
+                exact.add(target)
+    return [expanded[target] for target in task_input.targets if target in expanded]
 
 
 def _resolve_topic(task_input, value) -> str | None:
@@ -200,30 +214,48 @@ def _resolve_topic(task_input, value) -> str | None:
 
 
 def _expand_fragment_ranges(parts: list[dict], order: list[str]) -> list[dict] | None:
-    """Раскрывает «F2-F6» и списки через запятую до отдельных строк parts.
+    """Раскрывает «F2-F6» и списки через запятую; поздняя запись уточняет раннюю.
 
     Перечислить триста фрагментов построчно модель не всегда может, и сжатую запись
     она присылает независимо от правил; без раскрытия весь блок уходил в unresolved.
+    Вложенный диапазон — это исключение внутри предыдущего («F200-F209 content,
+    следом F201-F203 service»), а не дубль: о каждом фрагменте выигрывает последняя
+    запись, а равные решения складывают свои связи.
     """
     position = {alias: index for index, alias in enumerate(order)}
-    expanded: list[dict] = []
+    chosen: dict[str, dict] = {}
     for part in parts:
         value = str(part.get("fragment", ""))
-        if value in position:
-            expanded.append(part)
-            continue
-        for piece in (p.strip() for p in value.split(",")):
-            bounds = re.split(DASH_SPLIT, piece)
-            if len(bounds) == 1 and bounds[0] in position:
-                expanded.append({**part, "fragment": bounds[0]})
-                continue
-            if len(bounds) != 2 or any(bound not in position for bound in bounds):
+        pieces = [value] if value in position else [piece.strip() for piece in value.split(",")]
+        for piece in pieces:
+            span = _alias_span(piece, position, order)
+            if span is None:
                 return None
-            left, right = position[bounds[0]], position[bounds[1]]
-            if left > right:
-                return None
-            expanded.extend({**part, "fragment": order[i]} for i in range(left, right + 1))
-    return expanded
+            for alias in span:
+                chosen[alias] = _merge_part(chosen.get(alias), {**part, "fragment": alias})
+    return [chosen[alias] for alias in order if alias in chosen]
+
+
+def _alias_span(piece: str, position: dict[str, int], order: list[str]) -> list[str] | None:
+    """Один alias или его диапазон; неизвестный конец диапазона не раскрывается."""
+    bounds = re.split(DASH_SPLIT, piece)
+    if len(bounds) == 1 and bounds[0] in position:
+        return [bounds[0]]
+    if len(bounds) != 2 or any(bound not in position for bound in bounds):
+        return None
+    left, right = position[bounds[0]], position[bounds[1]]
+    return None if left > right else order[left : right + 1]
+
+
+def _merge_part(previous: dict | None, current: dict) -> dict:
+    """Равные решения о фрагменте складывают связи; разные — оставляют последнее."""
+    if previous is None or previous.get("outcome") != current.get("outcome"):
+        return current
+    links: list[dict] = []
+    for link in [*(previous.get("links") or []), *(current.get("links") or [])]:
+        if link not in links:
+            links.append(link)
+    return {**current, "links": links}
 
 
 def _expand_target(task_input, target: str, decision: dict) -> dict:

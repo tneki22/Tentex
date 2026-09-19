@@ -15,7 +15,7 @@ from app.coverage.packets import (
     build_packet_specs,
     output_reserve_tokens,
 )
-from app.coverage.protocol import expand_compact_response
+from app.coverage.protocol import SYSTEM_RULES, expand_compact_response
 from app.coverage.queries import evidence_read, overview, run_read
 from app.coverage.research import prepare_task, process_coverage_job, publish_packet
 from app.coverage.schemas import Evidence, RunControl, RunPlan, RunStart
@@ -820,3 +820,190 @@ def test_preflight_returns_resolved_roles_when_models_are_configured(session, ai
     assert body["execution_available"] and body["execution_issue"] is None
     assert body["model_roles"]["overview"]["model_id"] == ai_config
     assert body["model_roles"]["overview"]["context_length"] == 100_000
+
+
+def test_block_outcome_is_derived_from_parts_not_taken_on_trust():
+    """Живой прогон: 23 блока потеряны на «linked, а часть служебная» — это mixed."""
+    topic, block = str(uuid4()), str(uuid4())
+    body_ref, service_ref = str(uuid4()), str(uuid4())
+    units = {
+        body_ref: Unit(body_ref, "Спрос — зависимость покупок от цены.", block, "page:1"),
+        service_ref: Unit(service_ref, "Контрольные вопросы к главе", block, "page:1"),
+    }
+    raw = [
+        {
+            "target_id": block,
+            # Модель называет агрегат «linked», хотя сама же отдала служебную часть.
+            "outcome": "linked",
+            "dispositions": [
+                {
+                    "fragment_id": ref,
+                    "start": 0,
+                    "end": len(units[ref].text),
+                    "outcome": outcome,
+                }
+                for ref, outcome in ((body_ref, "content"), (service_ref, "service"))
+            ],
+            "links": [
+                {
+                    "topic_id": topic,
+                    "fragment_id": body_ref,
+                    "semantic_kind": "content",
+                    "roles": ["explanation"],
+                    "evidence": [{"key": "e0", "ref": body_ref}],
+                }
+            ],
+        }
+    ]
+    checked = validate_target(block, raw, units, units, set(units), {topic})
+    assert checked.valid and checked.outcome == "mixed_resolved"
+    assert [link["fragment_id"] for link in checked.links] == [body_ref]
+    # Часть без связи, названная содержательной, становится unresolved, а не роняет блок.
+    raw[0]["dispositions"][1]["outcome"] = "content"
+    demoted = validate_target(block, raw, units, units, set(units), {topic})
+    assert demoted.valid and demoted.outcome == "unresolved"
+    assert demoted.reason == "unsupported_evidence"
+    assert [link["fragment_id"] for link in demoted.links] == [body_ref]
+
+
+def test_unseen_image_drops_its_fragment_not_the_whole_block():
+    """Один непросмотренный рисунок отменял разбор всего раздела: 27 блоков из 126."""
+    topic, block = str(uuid4()), str(uuid4())
+    body_ref, image_ref = str(uuid4()), str(uuid4())
+    units = {
+        body_ref: Unit(body_ref, "Кривая спроса убывает по цене.", block, "page:1"),
+        image_ref: Unit(image_ref, "Рис. 3.1. Кривая спроса", block, "page:1", kind="image"),
+    }
+    raw = [
+        {
+            "target_id": block,
+            "outcome": "linked",
+            "dispositions": [
+                {"fragment_id": ref, "start": 0, "end": len(unit.text), "outcome": "content"}
+                for ref, unit in units.items()
+            ],
+            "links": [
+                {
+                    "topic_id": topic,
+                    "fragment_id": ref,
+                    "semantic_kind": "content",
+                    "roles": ["explanation"],
+                    "evidence": [{"key": f"e{index}", "ref": ref}],
+                }
+                for index, ref in enumerate(units)
+            ],
+        }
+    ]
+    checked = validate_target(block, raw, units, units, set(), {topic})
+    # Блок честно остаётся unresolved: часть его не просмотрена.
+    assert checked.valid and checked.outcome == "unresolved"
+    assert checked.reason == "visual_unavailable"
+    # Но текст рядом с картинкой разобран, и его связь публикуется.
+    assert [link["fragment_id"] for link in checked.links] == [body_ref]
+    assert {"reason": "visual_unavailable", "ref": image_ref} in checked.diagnostics
+    # Просмотренная страница ничего не снимает.
+    seen = validate_target(block, raw, units, units, {"page:1"}, {topic})
+    assert seen.outcome == "linked" and len(seen.links) == 2
+
+
+def test_topic_alias_in_to_target_keeps_the_single_decision(session):
+    """Живой прогон: alias темы в to_target уносил все восемь targets пакета."""
+    project, topic, material = setup_source(session, 3)
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+    alias = task_input.target_aliases[task_input.targets[0]]
+    topic_alias = task_input.topic_aliases[str(topic.id)][0]
+    expanded = expand_compact_response(
+        task_input,
+        [{"from_target": alias, "to_target": topic_alias, "outcome": "service", "parts": []}],
+    )
+    assert [item["target_id"] for item in expanded] == [task_input.targets[0]]
+    assert expanded[0]["outcome"] == "service"
+    # Точечное решение сильнее накрывшего его диапазона, дубль больше не теряет оба.
+    last = task_input.target_aliases[task_input.targets[-1]]
+    both = expand_compact_response(
+        task_input,
+        [
+            {"from_target": alias, "to_target": last, "outcome": "outside_program", "parts": []},
+            {"from_target": last, "to_target": last, "outcome": "service", "parts": []},
+        ],
+    )
+    assert [item["target_id"] for item in both] == task_input.targets
+    assert both[-1]["outcome"] == "service"
+    assert all(item["outcome"] == "outside_program" for item in both[:-1])
+
+
+def test_nested_fragment_range_is_an_exception_not_a_duplicate(session):
+    """«F200-F209 content, следом F201-F203 service» — вырезанное исключение, не дубль."""
+    project, topic, material = setup_source(session, 1)
+    block = session.scalar(select(MaterialBlock).where(MaterialBlock.material_id == material.id))
+    page_id = session.scalar(select(MaterialPage.id).where(MaterialPage.material_id == material.id))
+    for index in range(1, 4):
+        session.add(
+            MaterialFragment(
+                id=uuid4(),
+                material_id=material.id,
+                page_id=page_id,
+                block_id=block.id,
+                sort_order=index,
+                text=f"Кривая спроса убывает {index}",
+                bbox=[0, 0, 1, 1],
+                element_kind="paragraph",
+                quality=PageQuality.NATIVE,
+            )
+        )
+    session.commit()
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+    target = task_input.targets[0]
+    alias = task_input.target_aliases[target]
+    refs = task_input.target_refs[target]
+    aliases = [task_input.fragment_aliases[ref] for ref in refs]
+    link = {
+        "topic": task_input.topic_aliases[str(topic.id)][0],
+        "semantic_kind": "content",
+        "roles": ["explanation"],
+        "evidence": [],
+    }
+    raw = expand_compact_response(
+        task_input,
+        [
+            {
+                "from_target": alias,
+                "to_target": alias,
+                "outcome": "mixed_resolved",
+                "parts": [
+                    {
+                        "fragment": f"{aliases[0]}-{aliases[3]}",
+                        "outcome": "content",
+                        "links": [link],
+                    },
+                    {"fragment": f"{aliases[1]}-{aliases[2]}", "outcome": "service", "links": []},
+                ],
+            }
+        ],
+    )
+    assert "error" not in raw[0]
+    assert [part["fragment_id"] for part in raw[0]["dispositions"]] == refs
+    # Исключение выигрывает у объемлющего диапазона, крайние фрагменты остаются content.
+    assert [part["outcome"] for part in raw[0]["dispositions"]] == [
+        "content",
+        "service",
+        "service",
+        "content",
+    ]
+    assert {item["fragment_id"] for item in raw[0]["links"]} == {refs[0], refs[3]}
+    checked = validate_target(
+        target,
+        raw,
+        {ref: task_input.seen[ref] for ref in refs},
+        task_input.seen,
+        set(refs),
+        task_input.topics,
+    )
+    assert checked.valid and checked.outcome == "mixed_resolved"
+
+
+def test_rules_call_a_list_of_topic_items_a_mention():
+    """Пять блоков-планов из девяти отдавались как content: 20 ложных связей из 664."""
+    assert "Перечень пунктов темы" in SYSTEM_RULES

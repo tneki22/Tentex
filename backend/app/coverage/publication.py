@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from app.coverage.decisions import link_rejected
 from app.coverage.lifecycle import fenced, stop_core
 from app.coverage.snapshots import decisions_fingerprint, snapshot_current
+from app.coverage.validation import derive_outcome
 from app.db import project_write_transaction
 from app.models import (
     BackgroundJobState,
@@ -147,7 +148,9 @@ def _apply_interval_result(session, run, task, row, checked, receipt, interval):
     final = completed >= interval["interval_count"]
     if final:
         _require_complete_ranges(row.manifest, combined["dispositions"])
-        combined["outcome"] = _combined_outcome(combined["dispositions"])
+        combined["outcome"] = derive_outcome(
+            part["outcome"] for part in combined["dispositions"]
+        )
         combined["reason"] = "" if combined["outcome"] != "unresolved" else "interval_unresolved"
         retained |= _binding_ids_for_links(session, run.project_id, combined["links"])
         _retire_owned_links(session, run, row, retained)
@@ -208,17 +211,6 @@ def _require_complete_ranges(manifest, dispositions):
             raise ValueError("interval_unread_remainder")
 
 
-def _combined_outcome(dispositions):
-    outcomes = {part["outcome"] for part in dispositions}
-    if "unresolved" in outcomes:
-        return "unresolved"
-    if outcomes == {"service"}:
-        return "service"
-    if outcomes == {"outside_program"}:
-        return "outside_program"
-    if outcomes <= {"content", "mention", "context"}:
-        return "linked"
-    return "mixed_resolved"
 
 
 def _binding_ids_for_links(session, project_id, links):
