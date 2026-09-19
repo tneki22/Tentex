@@ -1,6 +1,9 @@
 # API, экраны и использование результата
 
-Предлагаемые имена маршрутов, не существующий API. Корень `/api/projects/{project_id}/coverage`. Схемы Pydantic и TS синхронизируются при реализации; обязательны project ownership, textbook guard, writable guard и стабильные доменные ошибки. Pass2 разрешён только активному проекту; условный deep_program дополнительно допускает учебниковый draft по контракту первого прохода. Тонкий router вызывает сервис, не работает с БД напрямую.
+Корень `/api/projects/{project_id}/coverage`. Маршруты И2–И3 и И5 реализованы; matrix,
+graph, findings и incremental ниже остаются контрактом И4–И7. Pydantic и TS-схемы И5
+синхронизированы вручную; обязательны project ownership, writable guard и стабильные
+доменные ошибки. Тонкий router вызывает предметные функции и не содержит правил записи.
 
 ## 1. Команды и чтение
 
@@ -11,14 +14,14 @@
 | GET `/runs/{id}` | snapshot, lifecycle, stage, primary counts, refine counts, pending synthesis, stop_reason, costs/uncertain costs, доступные действия. Проверять project принадлежность |
 | POST `/runs/{id}/control` | pause / resume / cancel + expected **control_version** (не внутренний `execution_generation`: тот меняется на каждом кванте worker и давал бы ложный 409). Выполнять переход только из допустимого состояния; идемпотентный повтор текущего намерения |
 | GET `/overview` | filters/scope; coverage_revision, program_revision, source revisions, распределения, basis labels, unresolved и findings counts, partial/stale и extraction diagnostic flags |
-| GET `/topics?view=readable\|gaps` | Пагинированные темы для И5: группы evidence/причины выбора, наличие основы чтения либо точный вид пробела; стабильная сортировка и coverage_revision |
+| GET `/topics?view=readable\|gaps` | Пагинированные темы И5: счётчики content/mentions/hidden/legacy и `best_evidence_id`; стабильный порядок и `coverage_revision` |
 | GET `/blocks?view=outside_program\|needs_action` | Пагинированные блоки И5. `outside_program` не смешивается с `unresolved/error/stale`; точные source/page/range и доступные решения |
 | GET `/matrix` | node/branch/material filters, cursors. Упорядоченные строки/источники и sparse cells; bounded page, counts unique blocks, role/status breakdown |
 | GET `/graph` | focus/type/depth, filters, cursor. Typed nodes/edges, expandable flags, counts, truncation, total; те же агрегаты, не отдельный графовый расчёт истины |
-| GET `/topics/{node_id}/evidence` | Группы «Для начала», «Другие объяснения», «Примеры и практика», «Углубление и связи»; отдельно mentions, hidden и legacy; next_cursor, reason/source/version и точные ranges. Один контракт для Источника и «Предложено» |
+| GET `/topics/{node_id}/evidence` | Группы «Для начала», «Другие объяснения», «Примеры и практика», «Углубление и связи»; отдельно mentions, hidden и legacy; точные fragments/pages и `coverage_revision`. Один контракт для Источника и «Предложено» |
 | GET `/sources/{id}/blocks` | Лента блоков с состояниями, partial/mixed/quality/stale и переходами к фрагментам |
 | GET `/evidence/{id}` | Точный текст и границы, источник и страницы, роли, происхождение, актуальность, связанные темы и основания; locator_kind/reliability и объяснение недоступной старой версии |
-| POST `/decisions` | kind, target refs, expected_coverage_revision, payload, request_key. Confirm/remove/restore/reassign на одну или несколько существующих тем, change role, service, outside_goal, hide/restore/prefer reading. Одна транзакция, один `ProjectActionLog`, delta и latest undoable action |
+| POST `/decisions` | `action`, target refs, `topic_ids`, role, `expected_coverage_revision`, `request_key`. Confirm/remove/restore/reassign на одну или несколько существующих тем, change role, service, outside_goal, hide/show/prefer. Одна транзакция, один `ProjectActionLog` и receipt с `action_sequence` |
 | GET `/findings` и `/{id}` | Группированные предложения/конфликты с доказательствами, выбранными операциями, affected objects и версиями |
 | POST `/findings/{id}/preview` | Выбранные операции, отредактированные title/parent/links, варианты переноса уроков. Чистый расчёт дифа, без записи программы |
 | POST `/findings/{id}/apply` | Preview fingerprint, expected revisions, request_key. Одна транзакция и одна отменяемая операция; вернуть новую программу/coverage revision и receipt |
@@ -76,9 +79,9 @@
 
 **Обзор:** просмотренные/ожидающие/ошибочные блоки, темы с content и отдельно с основой чтения, материал вне программы, unresolved, актуальность, расходы. Списки по клику: пробелы, исследуемое, требует решения, новые темы. Не окрашивать материал вне цели и покрытие ниже 100% как ошибку.
 
-**Срез И5 поверх Обзора:** верхняя сводка И3 остаётся. Ниже переключатель
+**Реализованный срез И5 поверх Обзора:** верхняя сводка И3 остаётся. Ниже переключатель
 `К чтению · Пробелы · Неразобранное · Требует решения`, слева пагинированный список,
-справа постоянный evidence-инспектор. Вид, фильтры и выбранные topic/source/evidence
+справа постоянный evidence-инспектор. Вид, offset и выбранные topic/source/evidence
 сохраняются в URL. «Неразобранное» показывает только `outside_program` нейтрально;
 `unresolved/error/stale` находятся в «Требует решения». Из темы доступны «Читать»,
 «Добавить в урок» и решения связи. У блока outside доступны существующая тема, `service`
@@ -123,7 +126,7 @@ ProjectWorkspace в textbook-ветви запрашивает topic evidence. �
 
 Предпочтительный результат — группа соседних точных фрагментов одного объяснения; BoundSourceReader/StructuredPage остаются рендерером. Все найденные результаты, включая legacy, упражнения и mention, доступны через список/фильтры. Если definition/explanation отсутствуют, открывать доступное с честной подписью, не сочинять объяснение. После новой фоновой публикации не переключать пользователя с текущей страницы; показать доступное обновление.
 
-Учебниковый «Источник» выносится из перегруженного `ProjectWorkspace.tsx` в отдельный
+Учебниковый «Источник» вынесен из перегруженного `ProjectWorkspace.tsx` в отдельный
 компонент и предметный hook. Переключатель `Вместе · Исследование · Поиск` по умолчанию
 стоит на «Вместе»: сначала открывается preferred или лучшее исследованное объяснение,
 BM25 запускается только по кнопке «Найти ещё». Связный диапазон показывает существующий
@@ -133,8 +136,8 @@ BM25 запускается только по кнопке «Найти ещё»
 
 ## 7. Уроки: только ручной выбор в этой вертикали
 
-В LessonMaterialPanel подключить «Предложено» к тому же topic evidence и постоянному
-инспектору. Использовать существующий LessonSourcePicker и команды вставки
+В `LessonMaterialPanel` «Предложено» подключено к тому же topic evidence и постоянному
+инспектору. Используются существующие команды вставки
 фрагментов/блоков/границ. При нескольких темах урока явно выбрать целевую; выделить уже
 включённые точные интервалы и пересечения, не только совпадение номера страницы. Место
 вставки выбирается явно.
