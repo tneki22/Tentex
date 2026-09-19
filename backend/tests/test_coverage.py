@@ -292,6 +292,9 @@ def test_unknown_topic_is_reported_and_own_uuid_still_resolves(session):
     assert session.scalar(select(CoverageBlockResult)).reason == "invalid_decision:unknown_topic"
     by_uuid = expand_compact_response(task_input, packet(str(topic.id)))[0]
     assert by_uuid["links"][0]["topic_id"] == str(topic.id)
+    # К концу книги модель адресует тему заголовком: однозначное название тоже принимается.
+    by_title = expand_compact_response(task_input, packet(f"  {topic.title.upper()} "))[0]
+    assert by_title["links"][0]["topic_id"] == str(topic.id)
 
 
 def test_fragment_range_is_expanded_and_missing_parts_have_their_own_reason(session):
