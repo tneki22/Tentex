@@ -6,9 +6,8 @@
 печатную страницу — работает по текстовому слою, без OCR и без разбора
 материала, поэтому доступен сразу после загрузки файла.
 
-Импорт найденного оглавления в настоящую программу (`ProgramNode`) не
-реализован — это заведомый максимум текущего захода: вытащить и показать
-оглавление, не больше.
+Найденный список импортирует отдельный модуль `projects.program_outline`;
+здесь остаётся только извлечение структуры из печатных страниц.
 """
 
 from __future__ import annotations
@@ -17,6 +16,8 @@ import re
 from pathlib import Path
 
 import pymupdf as fitz
+
+from app.materials.outline_titles import GENERAL_TITLE_RE, TOPIC_TITLE_RE
 
 # Кандидаты — начало книги и последние страницы: в русских учебниках
 # содержание нередко печатают в конце, а не сразу после титула.
@@ -43,6 +44,8 @@ _LEADER_RE = re.compile(
 # Запасной путь без выноски: заголовок, пробелы, число.
 _PLAIN_RE = re.compile(rf"^(?P<num>{_NUMBERING})?\s*(?P<title>.+?)\s+(?P<page>\d{{1,4}})\s*$")
 _ENDS_WITH_NUMBER_RE = re.compile(r"(?<=\D)\d{1,4}\s*$")
+PhysicalLine = tuple[str, float, float]
+ParsedLine = tuple[str | None, str, int, float]
 
 
 def _candidate_pages(page_count: int) -> list[int]:
@@ -54,10 +57,15 @@ def _candidate_pages(page_count: int) -> list[int]:
     return list(ordered)
 
 
-def _page_lines(page: fitz.Page) -> list[tuple[str, float]]:
-    """Строки страницы с левой границей (`x0`) — нужна для уровня без нумерации."""
+def _page_lines(page: fitz.Page) -> list[PhysicalLine]:
+    """Строки страницы с координатами текста.
+
+    Координата ``y`` нужна для PDF, где номер страницы лекции вынесен в
+    отдельный текстовый блок на той же строке. Без неё такой заголовок терялся
+    при разборе, а длинные пункты оглавления распадались на два пункта.
+    """
     raw = page.get_text("dict", sort=True)
-    lines: list[tuple[str, float]] = []
+    lines: list[PhysicalLine] = []
     for block in raw.get("blocks", []):
         for line in block.get("lines", []):
             spans = line.get("spans", [])
@@ -65,7 +73,7 @@ def _page_lines(page: fitz.Page) -> list[tuple[str, float]]:
             if not text:
                 continue
             x0 = min((span["bbox"][0] for span in spans), default=0.0)
-            lines.append((text, x0))
+            lines.append((text, x0, float(line["bbox"][1])))
     return lines
 
 
@@ -82,9 +90,13 @@ def _toc_page_kind(lines: list[str]) -> str | None:
     `"strong"`-страницу, если она есть, а не просто первую подходящую."""
     if not lines:
         return None
-    head = lines[0].strip().lower()
-    if any(head.startswith(marker) for marker in TITLE_MARKERS):
-        return "strong"
+    # Заголовок часто идёт после двух-трёх строк колонтитула. Проверяем
+    # начало страницы, но не принимаем «Краткое содержание» за подробное
+    # оглавление: у этого файла оно является отдельным коротким списком.
+    for line in lines[:10]:
+        head = line.strip().lower()
+        if head.startswith(("оглавление", "содержание", "contents", "table of contents")):
+            return "strong"
     if len(lines) < MIN_TOC_LINES:
         return None
     ending = sum(1 for line in lines if _ENDS_WITH_NUMBER_RE.search(line))
@@ -103,6 +115,48 @@ def _parse_line(line: str) -> tuple[str | None, str, int] | None:
     except ValueError:
         return None
     return match.group("num"), title, page_number
+
+
+def _logical_lines(lines: list[PhysicalLine]) -> list[PhysicalLine]:
+    """Приклеивает номер страницы, вынесенный в отдельный PDF-блок справа."""
+    logical: list[PhysicalLine] = []
+    for text, x0, y0 in lines:
+        if re.fullmatch(r"\d{1,4}", text.strip()) and logical:
+            previous_text, previous_x, previous_y = logical[-1]
+            if abs(y0 - previous_y) <= 2.5:
+                logical[-1] = (f"{previous_text} {text.strip()}", previous_x, previous_y)
+                continue
+        logical.append((text, x0, y0))
+    return logical
+
+
+def _parsed_lines(lines: list[PhysicalLine]) -> list[ParsedLine]:
+    """Разбирает логические строки и склеивает переносы одного пункта."""
+    parsed: list[ParsedLine] = []
+    pending: PhysicalLine | None = None
+    for text, x0, y0 in _logical_lines(lines):
+        result = _parse_line(text.strip())
+        if result is None:
+            same_entry = (
+                pending is not None
+                and y0 - pending[2] <= 20
+                and abs(x0 - pending[1]) <= 8
+            )
+            pending = (
+                (f"{pending[0]} {text.strip()}", pending[1], y0)
+                if same_entry and pending is not None
+                else (text.strip(), x0, y0)
+            )
+            continue
+        if pending is not None and y0 - pending[2] <= 20 and abs(x0 - pending[1]) <= 8:
+            combined = _parse_line(f"{pending[0]} {text.strip()}")
+            if combined is not None:
+                result = combined
+                x0 = pending[1]
+        pending = None
+        num, title, page_number = result
+        parsed.append((num, title, page_number, x0))
+    return parsed
 
 
 def _level_from_numbering(num: str) -> int:
@@ -128,9 +182,33 @@ def _cluster_levels(indents: list[float]) -> list[int]:
     return [level_of[round(value, 1)] for value in indents]
 
 
+def _normalize_named_hierarchy(items: list[dict[str, object]]) -> None:
+    """Восстанавливает `часть → тема/глава → пункт` без видимых отступов.
+
+    Некоторые издательские PDF выравнивают все строки оглавления по одной
+    левой границе. В таком файле геометрия бесполезна, но явные маркеры части
+    и темы однозначно задают уровни. Список меняется на месте перед возвратом.
+    """
+    titles = [str(item["title"]).strip() for item in items]
+    if not any(GENERAL_TITLE_RE.match(title) for title in titles):
+        return
+    if not any(TOPIC_TITLE_RE.match(title) for title in titles):
+        return
+    inside_subsection = False
+    for item, title in zip(items, titles, strict=True):
+        if GENERAL_TITLE_RE.match(title):
+            item["level"] = 1
+            inside_subsection = False
+        elif TOPIC_TITLE_RE.match(title):
+            item["level"] = 2
+            inside_subsection = True
+        elif inside_subsection:
+            item["level"] = 3
+
+
 def _extract_page_items(page: fitz.Page, *, max_page: int) -> list[dict[str, object]] | None:
     lines = _page_lines(page)
-    plain = [text for text, _ in lines]
+    plain = [text for text, _, _ in lines]
     if _toc_page_kind(plain) is None:
         return None
 
@@ -138,12 +216,8 @@ def _extract_page_items(page: fitz.Page, *, max_page: int) -> list[dict[str, obj
     # колонтитул с годом («ИУ-6, МГТУ..., 2023») и страницу-обманку вроде
     # списка литературы с годами изданий, случайно прошедшую первый фильтр.
     page_bound = max_page + max(20, max_page // 4)
-    parsed: list[tuple[str | None, str, int, float]] = []
-    for text, x0 in lines:
-        result = _parse_line(text.strip())
-        if result is None:
-            continue
-        num, title, page_number = result
+    parsed: list[ParsedLine] = []
+    for num, title, page_number, x0 in _parsed_lines(lines):
         if page_number < 1 or page_number > page_bound:
             continue
         parsed.append((num, title, page_number, x0))
@@ -154,7 +228,7 @@ def _extract_page_items(page: fitz.Page, *, max_page: int) -> list[dict[str, obj
     # валят всю страницу. Это же отсекает страницу-обманку вроде списка
     # литературы с годами изданий — они идут вразнобой (по алфавиту автора),
     # а не по возрастанию, и после фильтра почти ничего не остаётся.
-    filtered: list[tuple[str | None, str, int, float]] = []
+    filtered: list[ParsedLine] = []
     last_page = 0
     for entry in parsed:
         if entry[2] < last_page:
@@ -201,7 +275,7 @@ def _scan_printed_outline(
         weak_start: tuple[int, list[dict[str, object]]] | None = None
         for page_number in _candidate_pages(total):
             page = document[page_number - 1]
-            kind = _toc_page_kind([text for text, _ in _page_lines(page)])
+            kind = _toc_page_kind([text for text, _, _ in _page_lines(page)])
             if kind is None:
                 continue
             items = _extract_page_items(page, max_page=page_count)
@@ -236,4 +310,5 @@ def _merge_from(
         items.extend(continued)
         source_pages.append(next_page)
         next_page += 1
+    _normalize_named_hierarchy(items)
     return items, source_pages

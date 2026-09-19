@@ -421,6 +421,7 @@ interface ImportSource {
   material: MaterialRead;
   outline: OutlineDraftState;
   availableSources: Array<"embedded" | "printed" | "recognized">;
+  foundSources: Set<"embedded" | "printed" | "recognized">;
 }
 
 interface TextbookOutlineImportDialogProps {
@@ -473,7 +474,8 @@ function TextbookOutlineImportDialog({
           edited: false,
           checked_at: null,
         },
-        availableSources: detail.available_sources.filter((source): source is "embedded" | "printed" | "recognized" => source !== "none" && source !== "model"),
+        availableSources: ["embedded", "printed", "recognized"],
+        foundSources: new Set(detail.available_sources.filter((source): source is "embedded" | "printed" | "recognized" => source !== "none" && source !== "model")),
       };
     }))
       .then((loaded) => {
@@ -493,7 +495,7 @@ function TextbookOutlineImportDialog({
   /** Меняет только кандидатов импорта, сохраняя остальные материалы и программу. */
   async function changeSource(materialId: string, source: "embedded" | "printed" | "recognized") {
     const current = sources.find((candidate) => candidate.material.id === materialId);
-    if (!current || current.outline.source === source) return;
+    if (!current || current.outline.source === source || !current.foundSources.has(source)) return;
     setSwitchingSource(materialId);
     setError("");
     try {
@@ -600,7 +602,12 @@ function TextbookOutlineImportDialog({
                 value={source.outline.source === "embedded" || source.outline.source === "printed" || source.outline.source === "recognized" ? source.outline.source : null}
                 disabled={busy || switchingSource !== null}
                 ariaLabel={`Источник оглавления для ${source.material.display_name}`}
-                options={source.availableSources.map((candidate) => ({ value: candidate, label: candidate === "embedded" ? "Закладки PDF" : candidate === "printed" ? "Страницы оглавления" : "Заголовки текста" }))}
+                options={source.availableSources.map((candidate) => ({
+                  value: candidate,
+                  disabled: !source.foundSources.has(candidate),
+                  label: candidate === "embedded" ? "Закладки PDF" : candidate === "printed" ? "Страницы оглавления" : "Заголовки текста",
+                  description: source.foundSources.has(candidate) ? undefined : "В этом файле не найдены",
+                }))}
                 onValueChange={(value) => { if (value === "embedded" || value === "printed" || value === "recognized") void changeSource(source.material.id, value); }}
               />
             </div>}

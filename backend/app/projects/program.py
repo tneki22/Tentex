@@ -974,6 +974,23 @@ def undo_last_project_action(
                     if node is None:
                         raise ProjectInvariantError("Скрытый узел для undo не найден")
                     node.is_in_current_program = value["is_in_current_program"]
+                    if "parent_id" in value:
+                        node.is_archived = value["is_archived"]
+                        node.parent_id = UUID(value["parent_id"]) if value["parent_id"] else None
+                        node.node_type = NodeType(value["node_type"])
+                        node.sort_order = value["sort_order"]
+                        node.title = value["title"]
+                        node.origin_kind = OriginKind(value["origin_kind"])
+                        node.basis_kind = ProgramBasisKind(value["basis_kind"])
+                        range_data = value["range"]
+                        source_range = session.get(
+                            ProgramNodeSourcePageRange, UUID(range_data["id"])
+                        )
+                        if source_range is None:
+                            raise ProjectInvariantError("Диапазон оглавления для undo не найден")
+                        source_range.outline_item_key = range_data["outline_item_key"]
+                        source_range.page_from = range_data["page_from"]
+                        source_range.page_to = range_data["page_to"]
             case "binding_create" | "binding_remove":
                 apply_binding_undo(session, project_id, action.action_type, data)
             case "answers_link":

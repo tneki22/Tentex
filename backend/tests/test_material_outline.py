@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.materials import library
 from app.materials.outline import find_printed_outline
+from app.materials.schemas import OutlineItem
 from app.models import MaterialSourceKind
 
 LINE_HEIGHT = 20.0
@@ -89,6 +90,138 @@ def test_finds_printed_outline_without_dot_leaders(tmp_path: Path) -> None:
     items, _ = result
     assert [item["page"] for item in items] == [3, 5, 6, 8, 12, 14, 20, 25]
     assert items[0]["title"] == "Introduction"
+
+
+def test_printed_outline_joins_detached_pages_and_wrapped_titles(tmp_path: Path) -> None:
+    """Макет реального учебника: номер лекции отдельным блоком справа."""
+    path = tmp_path / "detached-pages.pdf"
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_text((50, 40), "Course header", fontsize=9)
+    page.insert_text((50, 60), "Contents", fontsize=12)
+    rows = [
+        ("Lecture 1. Introduction", 5, 0),
+        ("Course plan", 5, 70),
+        ("Operating system", 6, 70),
+        ("History", 10, 70),
+        ("Classic functions", 23, 70),
+        ("Lecture 2. Architecture", 26, 0),
+        ("Interrupts", 26, 70),
+    ]
+    y = 90
+    for title, target_page, indent in rows:
+        if title == "History":
+            page.insert_text((50 + indent, y), "History of computing", fontsize=11)
+            y += 14
+            title = "systems ........................"
+        page.insert_text((50 + indent, y), title, fontsize=11)
+        page.insert_text((520, y), str(target_page), fontsize=11)
+        y += 20
+    page.insert_text((120, y), "Scheduling ........................ 30", fontsize=11)
+    document.save(path)
+    document.close()
+
+    result = find_printed_outline(path, page_count=40)
+
+    assert result is not None
+    items, source_pages = result
+    assert source_pages == [1]
+    assert [(item["level"], item["title"], item["page"]) for item in items] == [
+        (1, "Lecture 1. Introduction", 5),
+        (2, "Course plan", 5),
+        (2, "Operating system", 6),
+        (2, "History of computing systems", 10),
+        (2, "Classic functions", 23),
+        (1, "Lecture 2. Architecture", 26),
+        (2, "Interrupts", 26),
+        (2, "Scheduling", 30),
+    ]
+
+
+def test_recognized_outline_uses_sections_as_roots_and_removes_noise() -> None:
+    items = [
+        OutlineItem(level=1, title="OPERATING SYSTEMS", page=1),
+        OutlineItem(level=2, title="Author Name", page=1),
+        OutlineItem(level=1, title="Lecture 1. Introduction", page=5),
+        OutlineItem(level=1, title="Operating system", page=6),
+        OutlineItem(level=1, title="Producer: while(1) {", page=12),
+        OutlineItem(level=1, title="Lecture 2. Architecture", page=26),
+        OutlineItem(level=2, title="Interrupts", page=26),
+    ]
+
+    normalized = library._normalize_recognized_outline(items)
+
+    assert [(item.level, item.title) for item in normalized] == [
+        (1, "Lecture 1. Introduction"),
+        (2, "Operating system"),
+        (1, "Lecture 2. Architecture"),
+        (2, "Interrupts"),
+    ]
+
+
+def test_recognized_outline_preserves_part_topic_and_subpoint_levels() -> None:
+    items = [
+        OutlineItem(level=1, title="ЭКОНОМИКА", page=1),
+        OutlineItem(level=1, title="ЧАСТЬ ПЕРВАЯ. ВВЕДЕНИЕ", page=8),
+        OutlineItem(level=1, title="ТЕМА 1. ПРЕДМЕТ И МЕТОД", page=8),
+        OutlineItem(level=1, title="Что изучает экономическая теория?", page=8),
+        OutlineItem(level=1, title="Вопросы для повторения", page=28),
+        OutlineItem(level=1, title="ТЕМА 2. РЫНОЧНАЯ ЭКОНОМИКА", page=29),
+        OutlineItem(level=1, title="Различные экономические системы", page=29),
+    ]
+
+    normalized = library._normalize_recognized_outline(items)
+
+    assert [(item.level, item.title) for item in normalized] == [
+        (1, "ЧАСТЬ ПЕРВАЯ. ВВЕДЕНИЕ"),
+        (2, "ТЕМА 1. ПРЕДМЕТ И МЕТОД"),
+        (3, "Что изучает экономическая теория?"),
+        (3, "Вопросы для повторения"),
+        (2, "ТЕМА 2. РЫНОЧНАЯ ЭКОНОМИКА"),
+        (3, "Различные экономические системы"),
+    ]
+
+
+def test_recognized_candidate_accepts_named_paragraphs_and_rejects_layout_noise() -> None:
+    assert library._recognized_candidate("ЧАСТЬ ПЕРВАЯ. ВВЕДЕНИЕ", "paragraph")
+    assert library._recognized_candidate("ТЕМА 1. ПРЕДМЕТ ЭКОНОМИКИ", "paragraph")
+    assert library._recognized_candidate("1. ВАЖНЕЙШИЕ ПОНЯТИЯ", "paragraph")
+    assert library._recognized_candidate("Вопросы для повторения", "paragraph")
+    assert library._recognized_candidate("Понятие операционной системы", "heading")
+    assert not library._recognized_candidate("Рис. 1.4. Ограниченность ресурсов", "heading")
+    assert not library._recognized_candidate("Qd = f(P, I, Z)", "heading")
+    assert not library._recognized_candidate("Обычный абзац текста.", "heading")
+    assert not library._recognized_candidate("Часть определений приведена ниже", "heading")
+
+
+def test_named_parts_and_topics_restore_hierarchy_without_indents(tmp_path: Path) -> None:
+    lines = [
+        "Contents",
+        "Preface .......................... 6",
+        "Part First. Introduction .......................... 8",
+        "Topic 1. Fundamentals .......................... 8",
+        "1. Subject and method .......................... 8",
+        "2. Core concepts .......................... 16",
+        "Review questions .......................... 28",
+        "Topic 2. Market economy .......................... 29",
+        "1. Economic systems .......................... 29",
+    ]
+    path = _make_pdf(tmp_path / "named-hierarchy.pdf", _flat(lines))
+
+    result = find_printed_outline(path, page_count=40)
+
+    assert result is not None
+    items, _ = result
+    assert [(item["level"], item["title"]) for item in items] == [
+        (1, "Preface"),
+        (1, "Part First. Introduction"),
+        (2, "Topic 1. Fundamentals"),
+        (3, "Subject and method"),
+        (3, "Core concepts"),
+        (3, "Review questions"),
+        (2, "Topic 2. Market economy"),
+        (3, "Economic systems"),
+    ]
 
 
 def test_numbering_maps_to_levels(tmp_path: Path) -> None:

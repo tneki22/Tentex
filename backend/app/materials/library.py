@@ -11,6 +11,7 @@
 
 import hashlib
 import os
+import re
 import shutil
 import threading
 from collections import OrderedDict, defaultdict
@@ -43,6 +44,7 @@ from app.materials import revisions as revision_registry
 from app.materials.external import fetch_web_page, fetch_youtube_transcript
 from app.materials.lexicon import index_text, prefix_term, query_terms
 from app.materials.outline import find_printed_outline
+from app.materials.outline_titles import GENERAL_TITLE_RE, TOPIC_TITLE_RE
 from app.materials.parsers.base import ParsedElement, ParsedPage
 from app.materials.parsers.native import extract_outline, inspect, parse_text_page
 from app.materials.presentation import (
@@ -117,6 +119,7 @@ AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
 TEXT_MEDIA_TYPES = {"text/plain", "text/markdown", "text/x-markdown"}
 # Оглавление из заголовков имеет смысл, пока его можно прочитать глазами.
 RECOGNIZED_OUTLINE_LIMIT = 400
+RECOGNIZED_SCAN_LIMIT = 20_000
 SEARCH_LIMIT_MAX = 100
 #: Форматы, у которых страница материала — готовый растр, а не разметка.
 RASTER_SOURCE_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png"}
@@ -159,25 +162,132 @@ def _capabilities(
     )
 
 
-def _recognized_outline(session: Session, material: Material) -> list[OutlineItem]:
+_CODE_HEADING_RE = re.compile(r"[{}]|\b(?:while|for|if)\s*\(|^[A-Za-z_]\w*(?:\s+\w+)+\s*=")
+_FIGURE_HEADING_RE = re.compile(
+    r"^(?:рис\.|рисунок|табл\.|таблица|fig\.|figure)\s*\d+", re.IGNORECASE
+)
+_NUMBERED_HEADING_RE = re.compile(r"^\d+(?:\.\d+)*[.)]?\s+\S")
+_REVIEW_HEADING_RE = re.compile(
+    r"^(?:вопросы для повторения|контрольные вопросы|review questions)\b", re.IGNORECASE
+)
+_BARE_LEVEL_WORD_RE = re.compile(
+    r"^(?:часть|раздел|тема|лекция|глава|part|section|topic|lecture|chapter)\b",
+    re.IGNORECASE,
+)
+
+
+def _recognized_candidate(title: str, element_kind: str) -> bool:
+    """Отличить заголовок тела книги от ошибок верстального анализатора."""
+    if _CODE_HEADING_RE.search(title) or _FIGURE_HEADING_RE.match(title) or "=" in title:
+        return False
+    if (
+        GENERAL_TITLE_RE.match(title)
+        or TOPIC_TITLE_RE.match(title)
+        or _REVIEW_HEADING_RE.match(title)
+    ):
+        return True
+    if _BARE_LEVEL_WORD_RE.match(title):
+        return False
+    letters = "".join(character for character in title if character.isalpha())
+    if _NUMBERED_HEADING_RE.match(title) and letters and letters == letters.upper():
+        return True
+    return element_kind == "heading" and not title.endswith(".")
+
+
+def _normalize_recognized_outline(items: list[OutlineItem]) -> list[OutlineItem]:
+    """Убирает обложку и явный код из заголовков подготовленного текста.
+
+    Лекции и главы задают корневые темы. Если над ними есть часть или раздел,
+    она остаётся общим контейнером, темы получают второй уровень, а остальные
+    заголовки — третий. Это не подменяет источник печатным оглавлением:
+    формулировки и страницы по-прежнему берутся из заголовков основного текста.
+    """
+    clean = [item for item in items if not _CODE_HEADING_RE.search(item.title)]
+    first_anchor = next(
+        (
+            index
+            for index, item in enumerate(clean)
+            if GENERAL_TITLE_RE.match(item.title) or TOPIC_TITLE_RE.match(item.title)
+        ),
+        None,
+    )
+    if first_anchor is None:
+        return clean
+    normalized: list[OutlineItem] = []
+    has_general_parent = False
+    inside_topic = False
+    for item in clean[first_anchor:]:
+        if GENERAL_TITLE_RE.match(item.title):
+            level = 1
+            has_general_parent = True
+            inside_topic = False
+        elif TOPIC_TITLE_RE.match(item.title):
+            level = 2 if has_general_parent else 1
+            inside_topic = True
+        elif inside_topic:
+            level = 3 if has_general_parent else 2
+        else:
+            level = max(2, item.level)
+        normalized.append(item.model_copy(update={"level": level}))
+    return normalized
+
+
+def _recognized_outline(
+    session: Session, material: Material, excluded_pages: set[int] | None = None
+) -> list[OutlineItem]:
+    """Собрать заголовки тела книги, включая ошибочно размеченные абзацами."""
     if material.active_parse_revision == 0:
         return []
     rows = session.execute(
-        select(MaterialFragment.text, MaterialFragment.structure_level, MaterialPage.page_number)
+        select(
+            MaterialFragment.text,
+            MaterialFragment.structure_level,
+            MaterialPage.page_number,
+            MaterialFragment.element_kind,
+        )
         .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
         .where(
             MaterialFragment.material_id == material.id,
             MaterialPage.revision == material.active_parse_revision,
-            MaterialFragment.element_kind == "heading",
         )
         .order_by(MaterialPage.page_number, MaterialFragment.sort_order)
-        .limit(RECOGNIZED_OUTLINE_LIMIT)
+        .limit(RECOGNIZED_SCAN_LIMIT)
     ).all()
-    return [
-        OutlineItem(level=max(1, min(4, level or 1)), title=title.strip(), page=page_number)
-        for title, level, page_number in rows
-        if title.strip()
-    ]
+    ignored = excluded_pages or set()
+    items: list[OutlineItem] = []
+    seen: set[tuple[int, str]] = set()
+    seen_named: set[tuple[str, str]] = set()
+    general_context = ""
+    for raw_title, level, page_number, element_kind in rows:
+        title = raw_title.strip()
+        key = (page_number, title.casefold())
+        if (
+            not title
+            or page_number in ignored
+            or key in seen
+            or not _recognized_candidate(title, element_kind)
+        ):
+            continue
+        general_match = GENERAL_TITLE_RE.match(title)
+        topic_match = TOPIC_TITLE_RE.match(title)
+        if general_match:
+            general_context = general_match.group(0).casefold()
+            named_key = ("general", general_context)
+        elif topic_match:
+            named_key = (general_context, topic_match.group(0).casefold())
+        else:
+            named_key = None
+        if named_key is not None and named_key in seen_named:
+            continue
+        if named_key is not None:
+            seen_named.add(named_key)
+        seen.add(key)
+        items.append(
+            OutlineItem(level=max(1, min(4, level or 1)), title=title, page=page_number)
+        )
+        if len(items) >= RECOGNIZED_OUTLINE_LIMIT:
+            break
+    return _normalize_recognized_outline(items)
 
 
 def _embedded_outline(material: Material) -> list[OutlineItem]:
@@ -219,7 +329,8 @@ def outline_sources(
                 ],
                 source_pages,
             )
-    recognized = _recognized_outline(session, material)
+    printed_pages = set(found["printed"][1]) if "printed" in found else set()
+    recognized = _recognized_outline(session, material, printed_pages)
     if recognized:
         found["recognized"] = (recognized, [])
     return found
