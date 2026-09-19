@@ -41,7 +41,7 @@ export function LessonMaterialPanel({
   projectId, topic, busy, refreshKey, onCreateFromRange, lessonId, lessonPages,
   blocks, insertPoint, onInsertPointChange, onAdd,
 }: LessonMaterialPanelProps) {
-  const [tab, setTab] = useState<PanelTab>("search");
+  const [tab, setTab] = useState<PanelTab>("suggested");
   const [picker, setPicker] = useState<LessonPickerTarget | null>(null);
   const materials = useProjectMaterials(projectId);
   const studyTopic = topic && topic.node_type !== "section" ? topic : null;
