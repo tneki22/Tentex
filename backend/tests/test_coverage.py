@@ -1004,6 +1004,8 @@ def test_nested_fragment_range_is_an_exception_not_a_duplicate(session):
     assert checked.valid and checked.outcome == "mixed_resolved"
 
 
-def test_rules_call_a_list_of_topic_items_a_mention():
-    """Пять блоков-планов из девяти отдавались как content: 20 ложных связей из 664."""
-    assert "Перечень пунктов темы" in SYSTEM_RULES
+def test_rules_separate_a_plan_from_a_list_that_explains():
+    """План отдавался как content (20 ложных связей), а на список факторов правило
+    без второй половины срабатывало наоборот: 332 связи на списках стали mention."""
+    assert "План и оглавление" in SYSTEM_RULES
+    assert "Список факторов, признаков, видов или условий раскрывает тему" in SYSTEM_RULES
