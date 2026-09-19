@@ -1004,8 +1004,10 @@ def test_nested_fragment_range_is_an_exception_not_a_duplicate(session):
     assert checked.valid and checked.outcome == "mixed_resolved"
 
 
-def test_rules_judge_a_list_by_content_not_by_form():
-    """Правило про списки держится одной строкой сознательно: перечисленное отдельными
-    случаями модель сворачивала в «любой список — mention» и теряла 200 связей."""
-    assert "Список решает содержание, а не форма" in SYSTEM_RULES
-    assert "План, оглавление и вопросы о теме её называют" in SYSTEM_RULES
+def test_rules_separate_a_plan_from_a_list_that_explains():
+    """Правило про списки держится ровно двумя строками, и это измерено на четырёх
+    живых прогонах: план как content давал 20 ложных связей, а любая третья строка
+    «— mention» сворачивалась в «любой список — mention» и стоила 200 связей."""
+    assert "План и оглавление" in SYSTEM_RULES
+    assert "Список факторов, признаков, видов или условий раскрывает тему" in SYSTEM_RULES
+    assert "вопрос" not in SYSTEM_RULES.casefold()
