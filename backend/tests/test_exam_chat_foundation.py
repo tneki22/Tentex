@@ -92,17 +92,16 @@ def test_new_session_defaults_to_exam_mode(session: Session) -> None:
     assert chat.mode == ChatMode.EXAM
 
 
-def test_study_mode_rejected_with_stable_reason(session: Session) -> None:
+def test_study_mode_can_be_enabled_for_exam_chat(session: Session) -> None:
     project = make_exam_project(session)
     topic = make_topic_node(session, project, title="Режим Разобраться")
     chat = chat_service.create_session(session, project.id, topic.id)
 
-    with pytest.raises(ProjectDomainError) as excinfo:
-        chat_service.update_settings(
-            session, project.id, chat.id, ChatSettingsWrite(mode=ChatMode.STUDY)
-        )
-    assert excinfo.value.code == "chat_mode_unavailable"
-    assert chat.mode == ChatMode.EXAM  # настройка не применилась
+    updated = chat_service.update_settings(
+        session, project.id, chat.id, ChatSettingsWrite(mode=ChatMode.STUDY)
+    )
+
+    assert updated.mode == ChatMode.STUDY
 
 
 def test_unknown_model_override_rejected(session: Session) -> None:

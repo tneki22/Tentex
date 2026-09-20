@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { ExternalLink, X } from "lucide-react";
+import { Link } from "react-router";
 import { QualityControl } from "../../preparation/QualityControl";
 import type { AttemptOutcome, ChatMessageRead } from "../../../api/chat";
 import { AnswerFormCard } from "./AnswerFormCard";
@@ -40,6 +43,16 @@ export function TypedMessage({
   headingRef,
 }: TypedMessageProps) {
   const payload = parsePayload(message);
+  const sources = (message.context_snapshot.retrieval_sources ?? []) as Array<{
+    id: string;
+    material: string;
+    material_id: string;
+    locator: string;
+    page: number | null;
+    text: string;
+  }>;
+  const [activeCitation, setActiveCitation] = useState<string | null>(null);
+  const citation = sources.find((source) => source.id === activeCitation);
 
   if (payload.kind === "answer_form" && onAnswerAgain) {
     return (
@@ -102,8 +115,24 @@ export function TypedMessage({
   return (
     <div className={`chat-bubble is-${message.role}`}>
       {message.role === "examiner" || message.role === "assistant"
-        ? <Markdown text={message.text} />
+        ? <Markdown
+          text={message.text}
+          citationIds={sources.map((source) => source.id)}
+          onCitation={setActiveCitation}
+        />
         : <p>{message.text}</p>}
+      {citation && (
+        <aside className="chat-citation-preview" aria-label={`Источник ${citation.id}`}>
+          <header>
+            <div><strong>{citation.material}</strong><small>{citation.locator}</small></div>
+            <button type="button" onClick={() => setActiveCitation(null)} aria-label="Закрыть источник"><X size={14} /></button>
+          </header>
+          <p>{citation.text}</p>
+          <Link to={`/library/${citation.material_id}${citation.page ? `?page=${citation.page}` : ""}`}>
+            Открыть в просмотрщике <ExternalLink size={13} />
+          </Link>
+        </aside>
+      )}
       {isStreaming && message.stream_state === "complete" && (
         <span className="chat-typing" aria-hidden="true" />
       )}

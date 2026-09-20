@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     worker_local_concurrency: int = Field(default=1, ge=1, le=32)
     worker_cloud_concurrency: int = Field(default=2, ge=1, le=32)
     worker_ai_concurrency: int = Field(default=8, ge=1, le=32)
+    retrieval_model_url: str = "http://retrieval-model:8010"
 
     @property
     def database_path(self) -> Path:
@@ -58,6 +59,13 @@ class Settings(BaseSettings):
     def typst_package_cache_dir(self) -> Path:
         """Постоянный локальный кэш подтверждённых пакетов Typst."""
         path = self.data_dir / "typst-packages"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def embedding_models_dir(self) -> Path:
+        """Общий кэш безопасно загруженных HF-моделей retrieval service."""
+        path = self.data_dir / "models" / "embeddings"
         path.mkdir(parents=True, exist_ok=True)
         return path
 

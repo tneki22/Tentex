@@ -91,6 +91,14 @@ class ProviderTranscription:
 
 
 @dataclass(frozen=True)
+class ProviderEmbeddings:
+    vectors: list[list[float]]
+    actual_model_id: str
+    usage: ProviderUsage
+    request_id: str | None = None
+
+
+@dataclass(frozen=True)
 class ProviderStreamEvent:
     delta: str = ""
     usage: ProviderUsage | None = None
@@ -107,6 +115,8 @@ class ProviderError(Exception):
 
 class OpenAICompatibleTransport(Protocol):
     async def list_models(self) -> list[ProviderModel]: ...
+
+    async def embed(self, *, model: str, texts: list[str]) -> ProviderEmbeddings: ...
 
     async def complete(
         self,
@@ -302,6 +312,21 @@ class OpenAITransport:
             )
         return models
 
+    async def embed(self, *, model: str, texts: list[str]) -> ProviderEmbeddings:
+        """Вызвать общий OpenAI-compatible `/embeddings` без провайдерных веток."""
+        try:
+            result = await self.client.embeddings.create(model=model, input=texts)
+        except Exception as error:
+            raise normalize_provider_error(error) from error
+        vectors = [item.embedding for item in sorted(result.data, key=lambda item: item.index)]
+        usage = getattr(result, "usage", None)
+        return ProviderEmbeddings(
+            vectors=vectors,
+            actual_model_id=result.model,
+            usage=ProviderUsage(input_tokens=getattr(usage, "prompt_tokens", 0) or 0),
+            request_id=getattr(result, "id", None),
+        )
+
     async def complete(
         self,
         *,
@@ -433,26 +458,28 @@ class OpenAITransport:
             "model": model,
             "max_tokens": 4000,
             "temperature": 0,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Дословно расшифруй речь из записи (язык: {language}). "
-                            "Верни только текст расшифровки без комментариев и кавычек. "
-                            "Если в записи нет речи, верни пустой ответ."
-                        ),
-                    },
-                    {
-                        "type": "input_audio",
-                        "input_audio": {
-                            "data": base64.b64encode(audio).decode("ascii"),
-                            "format": audio_format,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                f"Дословно расшифруй речь из записи (язык: {language}). "
+                                "Верни только текст расшифровки без комментариев и кавычек. "
+                                "Если в записи нет речи, верни пустой ответ."
+                            ),
                         },
-                    },
-                ],
-            }],
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": base64.b64encode(audio).decode("ascii"),
+                                "format": audio_format,
+                            },
+                        },
+                    ],
+                }
+            ],
         }
         if self.catalog_profile == "openrouter":
             kwargs["extra_body"] = {"usage": {"include": True}}
@@ -500,20 +527,32 @@ class FakeTransport:
         completions: Sequence[ProviderCompletion | Exception] = (),
         streams: Sequence[Sequence[ProviderStreamEvent] | Exception] = (),
         transcriptions: Sequence[ProviderTranscription | Exception] = (),
+        embeddings: Sequence[ProviderEmbeddings | Exception] = (),
     ) -> None:
         self.models = list(models)
         self.completions = deque(completions)
         self.streams = deque(streams)
         self.transcriptions = deque(transcriptions)
+        self.embeddings = deque(embeddings)
         self.list_calls = 0
         self.complete_calls = 0
         self.stream_calls = 0
         self.complete_requests: list[dict[str, object]] = []
         self.transcribe_requests: list[dict[str, object]] = []
+        self.embed_requests: list[dict[str, object]] = []
 
     async def list_models(self) -> list[ProviderModel]:
         self.list_calls += 1
         return list(self.models)
+
+    async def embed(self, *, model: str, texts: list[str]) -> ProviderEmbeddings:
+        self.embed_requests.append({"model": model, "texts": texts})
+        if not self.embeddings:
+            raise ProviderError("ai_provider_unavailable", "Fake embedding queue is empty")
+        result = self.embeddings.popleft()
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     async def complete(
         self,

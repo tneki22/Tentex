@@ -91,7 +91,7 @@ def _context_snapshot(ctx: ChatContext) -> dict[str, Any]:
     """Полный снимок нужен повторной проверке, даже если эталон позже изменится."""
     return {
         **ctx.snapshot,
-        "question": ctx.node.title,
+        "question": ctx.question,
         "reference_text": ctx.reference_text,
         "reference_revision": _reference_revision(ctx),
         "fragments": [

@@ -42,6 +42,7 @@ batch-режиме Alembic») — там он был безвреден, пот�
 from collections.abc import Sequence
 
 from alembic import op
+from sqlalchemy import inspect
 from sqlalchemy.schema import conv
 
 revision: str = "20260904_0033"
@@ -56,10 +57,22 @@ def upgrade() -> None:
     # constraint'а, и ищет несуществующее `ck_background_jobs_ck_processing_
     # tasks_task_parser_mode` вместо реального имени на диске. `conv()` — тот
     # же приём, что уже используют явные имена в `app/models.py`.
-    with op.batch_alter_table("materials") as batch:
-        batch.drop_constraint(conv("parser_mode"), type_="check")
-    with op.batch_alter_table("background_jobs") as batch:
-        batch.drop_constraint(conv("ck_processing_tasks_task_parser_mode"), type_="check")
+    # На чистой БД свежий Alembic не создаёт исторические дубли вовсе. Проверка
+    # существования сохраняет багфикс для старых установок и делает upgrade
+    # воспроизводимым на новых версиях reflection-кода.
+    inspector = inspect(op.get_bind())
+    material_checks = {
+        item["name"] for item in inspector.get_check_constraints("materials")
+    }
+    if "parser_mode" in material_checks:
+        with op.batch_alter_table("materials") as batch:
+            batch.drop_constraint(conv("parser_mode"), type_="check")
+    job_checks = {
+        item["name"] for item in inspector.get_check_constraints("background_jobs")
+    }
+    if "ck_processing_tasks_task_parser_mode" in job_checks:
+        with op.batch_alter_table("background_jobs") as batch:
+            batch.drop_constraint(conv("ck_processing_tasks_task_parser_mode"), type_="check")
 
 
 def downgrade() -> None:

@@ -9,6 +9,8 @@ export type ChatPayloadKind =
 export type ExaminerPersona = "calm_teacher" | "neutral_examiner" | "strict_reviewer";
 export type ExaminerStrictness = "soft" | "normal" | "strict";
 export type ChatMode = "exam" | "study" | "program";
+export type ChatRetrievalScope = "linked_topic" | "topic_project" | "project" | "selected_materials";
+export type ChatKnowledgePolicy = "sources_only" | "allow_model";
 export type ChatToolRunState = "queued" | "running" | "succeeded" | "failed";
 export type AttemptOutcome = "passed" | "partial" | "failed" | "unscored";
 export type GradeMethod = "exact_match" | "key_terms" | "sql" | "semantic" | "ai_judge" | "self_assessment";
@@ -158,7 +160,7 @@ export interface ChatMessageRead {
 export interface ChatSessionSummary {
   id: string;
   project_id: string;
-  program_node_id: string;
+  program_node_id: string | null;
   title: string;
   updated_at: string;
   message_count: number;
@@ -168,7 +170,7 @@ export interface ChatSessionSummary {
 export interface ChatSessionDetail {
   id: string;
   project_id: string;
-  program_node_id: string;
+  program_node_id: string | null;
   section_scope_node_id: string | null;
   title: string;
   mode: ChatMode;
@@ -207,7 +209,7 @@ export interface ManifestEntry {
 
 export interface ChatContextPreview {
   session_id: string;
-  node_id: string;
+  node_id: string | null;
   question: string;
   persona: ExaminerPersona;
   strictness: ExaminerStrictness;
@@ -280,6 +282,7 @@ export interface ChatAnswerResult {
 export type ChatStreamEvent =
   | { type: "started"; messageId: string; runId: string }
   | { type: "delta"; text: string }
+  | { type: "reset"; reason: string }
   | {
       type: "completed";
       messageId: string;
@@ -296,14 +299,14 @@ const attemptsPath = (projectId: string): string =>
 
 export const listChatSessions = (
   projectId: string,
-  nodeId: string,
+  nodeId: string | null,
   signal?: AbortSignal,
 ): Promise<ChatSessionSummary[]> =>
-  request(`${chatPath(projectId)}/sessions?node_id=${encodeURIComponent(nodeId)}`, { signal });
+  request(`${chatPath(projectId)}/sessions${nodeId ? `?node_id=${encodeURIComponent(nodeId)}` : ""}`, { signal });
 
 export const createChatSession = (
   projectId: string,
-  nodeId: string,
+  nodeId: string | null,
 ): Promise<ChatSessionDetail> => request(`${chatPath(projectId)}/sessions`, {
   method: "POST",
   body: JSON.stringify({ program_node_id: nodeId }),
@@ -343,10 +346,10 @@ export const getChatContextPreview = (
 
 export const getChatCapabilities = (
   projectId: string,
-  nodeId: string,
+  nodeId: string | null,
   signal?: AbortSignal,
 ): Promise<ChatCapabilities> =>
-  request(`${chatPath(projectId)}/capabilities?node_id=${encodeURIComponent(nodeId)}`, { signal });
+  request(`${chatPath(projectId)}/capabilities${nodeId ? `?node_id=${encodeURIComponent(nodeId)}` : ""}`, { signal });
 
 export const runChatTool = (
   projectId: string,
@@ -416,6 +419,7 @@ function parseFrame(raw: string): ChatStreamEvent | null {
     return { type: "started", messageId: String(payload.message_id), runId: String(payload.run_id) };
   }
   if (event === "delta") return { type: "delta", text: String(payload.text ?? "") };
+  if (event === "reset") return { type: "reset", reason: String(payload.reason ?? "") };
   if (event === "completed") {
     return {
       type: "completed",
@@ -436,10 +440,25 @@ export async function* streamMessage(
   sessionId: string,
   text: string,
   signal: AbortSignal,
+  retrieval: {
+    scope: ChatRetrievalScope;
+    knowledgePolicy: ChatKnowledgePolicy;
+    materialIds?: string[];
+  } = { scope: "topic_project", knowledgePolicy: "sources_only" },
 ): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch(
     `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/messages`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }), signal },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        retrieval_scope: retrieval.scope,
+        retrieval_material_ids: retrieval.materialIds ?? [],
+        knowledge_policy: retrieval.knowledgePolicy,
+      }),
+      signal,
+    },
   );
   if (!response.ok || !response.body) {
     const payload = await response.json().catch(() => null) as { detail?: string; code?: string } | null;

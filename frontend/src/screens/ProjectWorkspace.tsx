@@ -385,6 +385,7 @@ export function ProjectWorkspace() {
   const tracking = study.tracking;
   const selectedIndex = selected ? studyNodes.findIndex((node) => node.id === selected.id) : -1;
   const textbook = detail?.project.workspace_variant === "textbook";
+  const freeProject = detail?.project.template_key === "free";
   const availableTabs = allowedTabs(detail?.project ?? null);
   const filteredTree = useMemo(() => filterProgramTree(treeResult.tree, query), [treeResult.tree, query]);
   const bindingSummaryByNode = useMemo(
@@ -707,7 +708,7 @@ export function ProjectWorkspace() {
   function renderTabContent(tab: WorkspaceTab) {
     if (tab === "answer") return answerPanel();
     if (tab === "source") return sourcePanel();
-    if (tab === "chat" && !textbook && projectId) {
+    if (tab === "chat" && projectId) {
       return (
         <ExamChatPanel
           projectId={projectId}
@@ -715,6 +716,7 @@ export function ProjectWorkspace() {
           onAnsweringChange={setAnsweringForTracking}
           takeAnswerSeconds={tracking.answerReset}
           onAttemptsChanged={() => setAttemptsReloadKey((value) => value + 1)}
+          studyOnly={Boolean(textbook)}
         />
       );
     }
@@ -1139,7 +1141,16 @@ export function ProjectWorkspace() {
       />
 
       <main className="workspace-main">
-        {!selectedNode ? (
+        {!selectedNode && freeProject ? (
+          <div className="workspace-free-chat">
+            <ExamChatPanel
+              projectId={projectId}
+              node={null}
+              studyOnly
+              projectChat
+            />
+          </div>
+        ) : !selectedNode ? (
           <div className="workspace-section-overview is-empty"><EmptyState title="Программа пока пуста"><p>Добавьте разделы и темы, не покидая проектную рабочую область.</p><Link className="primary-button" to={`/projects/${projectId}/program`}>Открыть программу</Link></EmptyState></div>
         ) : selectedNode.node_type === "section" ? (
           <div className="workspace-section-overview">

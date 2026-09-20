@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+from uuid import UUID, uuid4
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.models import (
+    EmbeddingBackendKind,
+    EmbeddingProfile,
+    Material,
+    MaterialState,
+    RetrievalChunk,
+    RetrievalIndex,
+    RetrievalSettings,
+    utc_now,
+)
+from app.projects.errors import ProjectConflictError, ProjectNotFoundError
+from app.retrieval.embeddings import backend_for_profile
+from app.retrieval.schemas import (
+    EmbeddingProfileRead,
+    EmbeddingProfileWrite,
+    RetrievalSettingsRead,
+    RetrievalSettingsWrite,
+)
+
+
+def create_profile(session: Session, command: EmbeddingProfileWrite) -> EmbeddingProfileRead:
+    with session.begin():
+        if session.scalar(select(EmbeddingProfile).where(EmbeddingProfile.label == command.label)):
+            raise ProjectConflictError(
+                "Профиль с таким названием уже существует",
+                code="retrieval_profile_label_exists",
+            )
+        profile = EmbeddingProfile(id=uuid4(), **command.model_dump())
+        profile.installed = profile.backend_kind == EmbeddingBackendKind.OPENAI_COMPATIBLE
+        session.add(profile)
+    return EmbeddingProfileRead.model_validate(profile)
+
+
+async def test_profile(session: Session, profile_id: UUID) -> EmbeddingProfileRead:
+    profile = session.get(EmbeddingProfile, profile_id)
+    if profile is None:
+        raise ProjectNotFoundError("Embedding-профиль не найден")
+    try:
+        vectors = await backend_for_profile(session, profile).embed_documents(
+            ["Проверка embedding-профиля Tentex"]
+        )
+        dimension = len(vectors[0])
+        if profile.dimension is not None and profile.dimension != dimension:
+            raise ProjectConflictError(
+                "Размерность модели изменилась — создайте новый профиль и индекс",
+                code="retrieval_dimension_mismatch",
+            )
+        profile.dimension = dimension
+        profile.installed = True
+        profile.test_error = None
+    except Exception as error:
+        profile.test_error = str(error)
+        profile.tested_at = utc_now()
+        session.commit()
+        raise
+    profile.tested_at = utc_now()
+    session.commit()
+    return EmbeddingProfileRead.model_validate(profile)
+
+
+def read_settings(session: Session) -> RetrievalSettingsRead:
+    row = session.get(RetrievalSettings, 1)
+    profiles = list(session.scalars(select(EmbeddingProfile).order_by(EmbeddingProfile.created_at)))
+    active = (
+        session.get(RetrievalIndex, row.active_index_id) if row and row.active_index_id else None
+    )
+    total = (
+        session.scalar(
+            select(func.count()).select_from(Material).where(Material.status == MaterialState.READY)
+        )
+        or 0
+    )
+    ready_materials = 0
+    reasons: list[str] = []
+    if active is None:
+        reasons.append("Semantic-индекс ещё не активирован")
+    else:
+        ready_materials = (
+            session.scalar(
+                select(func.count(func.distinct(RetrievalChunk.material_id))).where(
+                    RetrievalChunk.index_id == active.id,
+                    RetrievalChunk.revision
+                    == select(Material.active_parse_revision)
+                    .where(Material.id == RetrievalChunk.material_id)
+                    .scalar_subquery(),
+                )
+            )
+            or 0
+        )
+        if ready_materials < total:
+            reasons.append("Часть источников — только поиск по словам")
+    return RetrievalSettingsRead(
+        default_profile_id=row.default_profile_id if row else None,
+        preset=row.preset if row else "balanced",
+        expert_parameters=row.expert_parameters if row else {},
+        active_index=active,
+        profiles=[EmbeddingProfileRead.model_validate(profile) for profile in profiles],
+        ready_materials=ready_materials,
+        total_ready_materials=total,
+        degraded=bool(reasons),
+        degradation_reasons=reasons,
+    )
+
+
+def update_settings(session: Session, command: RetrievalSettingsWrite) -> RetrievalSettingsRead:
+    with session.begin():
+        row = session.get(RetrievalSettings, 1)
+        if row is None:
+            row = RetrievalSettings(id=1)
+            session.add(row)
+        if (
+            command.default_profile_id
+            and session.get(EmbeddingProfile, command.default_profile_id) is None
+        ):
+            raise ProjectNotFoundError("Embedding-профиль не найден")
+        row.default_profile_id = command.default_profile_id
+        row.preset = command.preset
+        row.expert_parameters = command.expert_parameters
+        row.updated_at = utc_now()
+    return read_settings(session)

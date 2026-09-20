@@ -1,9 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { Plus, Send, Square } from "lucide-react";
-import type { ChatCapability } from "../../../api/chat";
+import type { ChatCapability, ChatMode } from "../../../api/chat";
 import { DictationButton } from "../../../components/domain";
-import { Button, IconButton, Tooltip } from "../../../components/ui";
+import { Button, IconButton, SegmentedTabs } from "../../../components/ui";
 
 export interface ChatComposerHandle {
   focus: () => void;
@@ -17,6 +17,8 @@ interface ChatComposerProps {
   /** Палитра навыков — только у экзаменационного чата; без неё кнопка `+` не рендерится. */
   onOpenPalette?: () => void;
   modes?: ChatCapability[];
+  currentMode?: ChatMode;
+  onModeChange?: (mode: ChatMode) => void;
   /** Индикатор режима (сейчас — «Экзамен») — экзаменационная специфика. */
   showModeIndicator?: boolean;
   sending: boolean;
@@ -29,14 +31,14 @@ interface ChatComposerProps {
  */
 export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer(
   {
-    value, onChange, onSend, onStop, onOpenPalette, modes = [],
+    value, onChange, onSend, onStop, onOpenPalette, modes = [], currentMode = "exam",
+    onModeChange,
     showModeIndicator = true, sending, disabled,
   },
   forwardedRef,
 ) {
   const ref = useRef<HTMLTextAreaElement>(null);
-  const examMode = modes.find((mode) => mode.key === "exam");
-  const studyMode = modes.find((mode) => mode.key === "study");
+  const availableModes = modes.filter((mode) => mode.available);
 
   useImperativeHandle(forwardedRef, () => ({ focus: () => ref.current?.focus() }), []);
 
@@ -93,11 +95,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             </IconButton>
           )}
           {showModeIndicator && (
-            <Tooltip label={studyMode?.available ? "Разобраться" : "«Разобраться» появится позже"}>
-              <span className="chat-composer-mode" aria-label="Режим чата: экзамен">
-                {examMode?.title ?? "Экзамен"}
-              </span>
-            </Tooltip>
+            <SegmentedTabs
+              label="Режим чата"
+              value={currentMode}
+              tabs={availableModes.map((mode) => ({ value: mode.key, label: mode.title }))}
+              onChange={(value) => onModeChange?.(value as ChatMode)}
+            />
           )}
         </div>
         <div className="chat-composer-row-right">

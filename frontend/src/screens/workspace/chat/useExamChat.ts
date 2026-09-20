@@ -16,7 +16,9 @@ import {
   type AttemptOutcome,
   type ChatCapabilities,
   type ChatContextPreview,
+  type ChatKnowledgePolicy,
   type ChatMessageRead,
+  type ChatRetrievalScope,
   type ChatSessionDetail,
   type ChatSessionSummary,
   type ChatSettingsPatch,
@@ -35,6 +37,7 @@ interface UseExamChatOptions {
   projectId: string;
   node: ProgramNodeRead | null;
   onAttemptsChanged?: () => void;
+  projectChat?: boolean;
 }
 
 /**
@@ -45,7 +48,7 @@ interface UseExamChatOptions {
  * `started` и дальше только обновляется по месту (delta → completed), поэтому
  * лента не мигает и `completed` не требует полного перечитывания сессии.
  */
-export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatOptions) {
+export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = false }: UseExamChatOptions) {
   const [urlParams] = useSearchParams();
   const preferredChat = urlParams.get("chat");
   const [sessions, setSessions] = useState<ChatSessionSummary[] | null>(null);
@@ -73,7 +76,7 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
   const flushScheduled = useRef(false);
 
   useEffect(() => {
-    if (!node) {
+    if (!node && !projectChat) {
       setSessions(null);
       setActiveSessionId(null);
       return;
@@ -84,10 +87,10 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
     setSessions(null);
     (async () => {
       try {
-        const list = await listChatSessions(projectId, node.id, controller.signal);
+        const list = await listChatSessions(projectId, node?.id ?? null, controller.signal);
         if (loadToken.current !== token) return;
         if (list.length === 0) {
-          const created = await createChatSession(projectId, node.id);
+          const created = await createChatSession(projectId, node?.id ?? null);
           if (loadToken.current !== token) return;
           setSessions([{
             id: created.id,
@@ -109,17 +112,17 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
       }
     })();
     return () => controller.abort();
-  }, [projectId, node?.id, sessionsReloadKey, preferredChat]);
+  }, [projectId, node?.id, projectChat, sessionsReloadKey, preferredChat]);
 
   useEffect(() => {
-    if (!node) {
+    if (!node && !projectChat) {
       setCapabilities(null);
       return;
     }
     const controller = new AbortController();
-    getChatCapabilities(projectId, node.id, controller.signal).then(setCapabilities).catch(() => undefined);
+    getChatCapabilities(projectId, node?.id ?? null, controller.signal).then(setCapabilities).catch(() => undefined);
     return () => controller.abort();
-  }, [projectId, node?.id]);
+  }, [projectId, node?.id, projectChat]);
 
   function applySessionDetail(value: ChatSessionDetail) {
     setSession(value);
@@ -215,7 +218,14 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
     requestAnimationFrame(() => flushDelta(messageId));
   }
 
-  async function sendMessage(retryText?: string) {
+  async function sendMessage(
+    retryText?: string,
+    retrieval?: {
+      scope: ChatRetrievalScope;
+      knowledgePolicy: ChatKnowledgePolicy;
+      materialIds?: string[];
+    },
+  ) {
     const text = (retryText ?? draft).trim();
     if (!activeSessionId || !text || streamingMessageId || preparing) return;
     const controller = new AbortController();
@@ -244,7 +254,13 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
     setDraft("");
     let examinerId: string | null = null;
     try {
-      for await (const event of streamMessage(projectId, activeSessionId, text, controller.signal)) {
+      for await (const event of streamMessage(
+        projectId,
+        activeSessionId,
+        text,
+        controller.signal,
+        retrieval,
+      )) {
         if (event.type === "started") {
           examinerId = event.messageId;
           setPreparing(false);
@@ -269,6 +285,9 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
         } else if (event.type === "delta" && examinerId) {
           deltaBuffer.current += event.text;
           scheduleFlush(examinerId);
+        } else if (event.type === "reset" && examinerId) {
+          deltaBuffer.current = "";
+          patchMessage(examinerId, { text: "" });
         } else if (event.type === "completed") {
           if (examinerId) flushDelta(examinerId);
           upsertMessage(event.message);
@@ -350,8 +369,8 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
   }
 
   async function startNewChat() {
-    if (!node) return;
-    const created = await createChatSession(projectId, node.id);
+    if (!node && !projectChat) return;
+    const created = await createChatSession(projectId, node?.id ?? null);
     setSessions((current) => [
       {
         id: created.id, project_id: created.project_id, program_node_id: created.program_node_id,

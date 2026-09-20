@@ -13,7 +13,10 @@ export type BackgroundJobKind =
   | "link_answers"
   | "ai_answer_sections"
   | "ai_program_build"
-  | "coverage_research";
+  | "coverage_research"
+  | "retrieval_index"
+  | "retrieval_model_install"
+  | "retrieval_exhaustive";
 
 export type BackgroundJobState =
   | "queued"

@@ -1,4 +1,4 @@
-# Этап 0: два сервиса, оба в режиме разработки с перезагрузкой по изменению файлов.
+# API, worker, model service retrieval и Vite работают отдельными процессами.
 # Данные (SQLite и файловое хранилище) лежат в ./data на хосте — контейнер их не уносит.
 
 services:
@@ -11,6 +11,7 @@ services:
       - ./data:/data
     environment:
       TENTEX_DATA_DIR: /data
+      TENTEX_RETRIEVAL_MODEL_URL: http://retrieval-model:8010
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
       interval: 10s
@@ -27,6 +28,7 @@ services:
       - ./data/models:/root/.paddlex
     environment:
       TENTEX_DATA_DIR: /data
+      TENTEX_RETRIEVAL_MODEL_URL: http://retrieval-model:8010
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
     # Упавший воркер ничем себя не выдаёт: задачи просто остаются в очереди, и
     # в интерфейсе это выглядит как бесконечная обработка. Перезапуск возвращает
@@ -35,6 +37,24 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      retrieval-model:
+        condition: service_healthy
+
+  retrieval-model:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.retrieval
+    volumes:
+      - ./backend:/app
+      - ./data:/data
+    environment:
+      TENTEX_DATA_DIR: /data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
 
   web:
     build: ./frontend

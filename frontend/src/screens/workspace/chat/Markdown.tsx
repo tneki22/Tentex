@@ -4,13 +4,18 @@ import type { ReactNode } from "react";
 // огороженный код, **жирный**, *курсив*, `код». Модель не присылает HTML/JSX —
 // рендерер сам собирает React-узлы и никогда не зовёт dangerouslySetInnerHTML.
 // Решение и его причина — план вертикали «Экзамен с ИИ», задача 4.
-const INLINE = /(\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`]+`)/g;
+const INLINE = /(\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`]+`|\[S\d+\])/g;
 const HEADING_RE = /^(#{3,5})\s+(.*)$/;
 const ORDERED_RE = /^(\d+)\.\s+(.*)$/;
 const BULLET_RE = /^[-*]\s+(.*)$/;
 const FENCE_RE = /^```/;
 
-function inline(text: string, prefix: string): ReactNode[] {
+function inline(
+  text: string,
+  prefix: string,
+  citationIds: Set<string>,
+  onCitation?: (id: string) => void,
+): ReactNode[] {
   return text
     .split(INLINE)
     .filter(Boolean)
@@ -19,6 +24,10 @@ function inline(text: string, prefix: string): ReactNode[] {
       if (chunk.startsWith("**") && chunk.endsWith("**")) return <strong key={key}>{chunk.slice(2, -2)}</strong>;
       if (chunk.startsWith("`") && chunk.endsWith("`")) return <code key={key}>{chunk.slice(1, -1)}</code>;
       if (chunk.startsWith("*") && chunk.endsWith("*")) return <em key={key}>{chunk.slice(1, -1)}</em>;
+      if (/^\[S\d+]$/.test(chunk) && citationIds.has(chunk.slice(1, -1))) {
+        const id = chunk.slice(1, -1);
+        return <button type="button" className="chat-citation" key={key} onClick={() => onCitation?.(id)}>{chunk}</button>;
+      }
       return <span key={key}>{chunk}</span>;
     });
 }
@@ -28,7 +37,7 @@ interface ListState {
   items: string[];
 }
 
-function parseBlocks(text: string): ReactNode[] {
+function parseBlocks(text: string, citationIds: Set<string>, onCitation?: (id: string) => void): ReactNode[] {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let paragraph: string[] = [];
@@ -39,13 +48,13 @@ function parseBlocks(text: string): ReactNode[] {
 
   function flushParagraph() {
     if (paragraph.length === 0) return;
-    blocks.push(<p key={key++}>{inline(paragraph.join(" "), `p${key}`)}</p>);
+    blocks.push(<p key={key++}>{inline(paragraph.join(" "), `p${key}`, citationIds, onCitation)}</p>);
     paragraph = [];
   }
 
   function flushList() {
     if (!list) return;
-    const items = list.items.map((item, index) => <li key={index}>{inline(item, `li${key}-${index}`)}</li>);
+    const items = list.items.map((item, index) => <li key={index}>{inline(item, `li${key}-${index}`, citationIds, onCitation)}</li>);
     blocks.push(list.type === "ul" ? <ul key={key++}>{items}</ul> : <ol key={key++}>{items}</ol>);
     list = null;
   }
@@ -74,7 +83,7 @@ function parseBlocks(text: string): ReactNode[] {
       flushList();
       const level = heading[1].length;
       const Tag = (level === 3 ? "h3" : level === 4 ? "h4" : "h5") as "h3" | "h4" | "h5";
-      blocks.push(<Tag key={key++}>{inline(heading[2], `h${key}`)}</Tag>);
+      blocks.push(<Tag key={key++}>{inline(heading[2], `h${key}`, citationIds, onCitation)}</Tag>);
       continue;
     }
     const bullet = BULLET_RE.exec(line);
@@ -116,6 +125,14 @@ function parseBlocks(text: string): ReactNode[] {
   return blocks;
 }
 
-export function Markdown({ text }: { text: string }) {
-  return <div className="chat-markdown">{parseBlocks(text)}</div>;
+export function Markdown({
+  text,
+  citationIds = [],
+  onCitation,
+}: {
+  text: string;
+  citationIds?: string[];
+  onCitation?: (id: string) => void;
+}) {
+  return <div className="chat-markdown">{parseBlocks(text, new Set(citationIds), onCitation)}</div>;
 }

@@ -42,7 +42,7 @@ from app.models import (
     WorkspaceVariant,
     utc_now,
 )
-from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
+from app.projects.errors import ProjectDomainError, ProjectNotFoundError
 
 # Требуются одновременно и streaming, и structured output: одна выбранная
 # модель обслуживает и обычный ответ, и судью той же сессии (AI-CHATS.md §21.3).
@@ -56,11 +56,6 @@ def _require_exam_project(session: Session, project_id: UUID) -> Project:
     project = session.get(Project, project_id)
     if project is None or project.status != ProjectStatus.ACTIVE:
         raise ProjectNotFoundError()
-    if project.workspace_variant != WorkspaceVariant.EXAM:
-        raise ProjectConflictError(
-            "Чат доступен только экзаменационным проектам",
-            code="chat_exam_only",
-        )
     return project
 
 
@@ -72,9 +67,7 @@ def _require_chat_node(session: Session, project_id: UUID, node_id: UUID) -> Pro
         or node.is_archived
         or node.node_type not in STUDY_NODE_TYPES
     ):
-        raise ProjectDomainError(
-            "Вопрос не найден", status=404, code="chat_node_not_found"
-        )
+        raise ProjectDomainError("Вопрос не найден", status=404, code="chat_node_not_found")
     return node
 
 
@@ -101,9 +94,10 @@ def _summary(chat: ChatSession, message_count: int) -> ChatSessionSummary:
     )
 
 
-def list_sessions(session: Session, project_id: UUID, node_id: UUID) -> list[ChatSession]:
+def list_sessions(session: Session, project_id: UUID, node_id: UUID | None) -> list[ChatSession]:
     _require_exam_project(session, project_id)
-    _require_chat_node(session, project_id, node_id)
+    if node_id is not None:
+        _require_chat_node(session, project_id, node_id)
     return list(
         session.scalars(
             select(ChatSession)
@@ -114,7 +108,7 @@ def list_sessions(session: Session, project_id: UUID, node_id: UUID) -> list[Cha
 
 
 def list_session_summaries(
-    session: Session, project_id: UUID, node_id: UUID
+    session: Session, project_id: UUID, node_id: UUID | None
 ) -> list[ChatSessionSummary]:
     chats = list_sessions(session, project_id, node_id)
     if not chats:
@@ -123,25 +117,36 @@ def list_session_summaries(
     return [_summary(chat, counts.get(chat.id, 0)) for chat in chats]
 
 
-def create_session(session: Session, project_id: UUID, node_id: UUID) -> ChatSession:
+def create_session(session: Session, project_id: UUID, node_id: UUID | None) -> ChatSession:
     with project_write_transaction(session, project_id):
-        _require_exam_project(session, project_id)
-        node = _require_chat_node(session, project_id, node_id)
+        project = _require_exam_project(session, project_id)
+        node = _require_chat_node(session, project_id, node_id) if node_id else None
+        if node is None and project.template_key != "free":
+            raise ProjectDomainError(
+                "Чат без темы доступен только в свободном проекте",
+                status=422,
+                code="chat_node_required",
+            )
         existing = session.scalar(
             select(func.count(ChatSession.id)).where(
                 ChatSession.project_id == project_id, ChatSession.program_node_id == node_id
             )
         )
         ordinal = existing + 1
-        base_title = _title(node)
+        base_title = _title(node) if node else "Свободное изучение"
         title = base_title if ordinal == 1 else f"{base_title} · {ordinal}"
         chat = ChatSession(
             project_id=project_id,
             program_node_id=node_id,
-            section_scope_node_id=section_scope(session, node),
+            section_scope_node_id=section_scope(session, node) if node else None,
             title=title,
             persona=ExaminerPersona.NEUTRAL_EXAMINER,
             strictness=ExaminerStrictness.NORMAL,
+            mode=(
+                ChatMode.EXAM
+                if project.workspace_variant == WorkspaceVariant.EXAM
+                else ChatMode.STUDY
+            ),
             draft_text="",
         )
         session.add(chat)
@@ -173,9 +178,7 @@ def get_session_detail(session: Session, project_id: UUID, chat_id: UUID) -> Cha
     _require_exam_project(session, project_id)
     chat = _require_session(session, project_id, chat_id)
     messages = session.scalars(
-        select(ChatMessage)
-        .where(ChatMessage.session_id == chat.id)
-        .order_by(ChatMessage.sequence)
+        select(ChatMessage).where(ChatMessage.session_id == chat.id).order_by(ChatMessage.sequence)
     )
     return ChatSessionDetail(
         id=chat.id,
@@ -211,12 +214,6 @@ def update_settings(
         _require_exam_project(session, project_id)
         chat = _require_session(session, project_id, chat_id)
         if "mode" in fields and command.mode is not None:
-            if command.mode is ChatMode.STUDY:
-                raise ProjectDomainError(
-                    "Режим «Разобраться» пока недоступен",
-                    status=422,
-                    code="chat_mode_unavailable",
-                )
             chat.mode = command.mode
         if "persona" in fields and command.persona is not None:
             chat.persona = command.persona
@@ -251,9 +248,7 @@ def update_settings(
     return chat
 
 
-def context_preview(
-    session: Session, project_id: UUID, chat_id: UUID
-) -> ChatContextPreviewRead:
+def context_preview(session: Session, project_id: UUID, chat_id: UUID) -> ChatContextPreviewRead:
     _require_exam_project(session, project_id)
     chat = _require_session(session, project_id, chat_id)
     ctx = build_context(session, chat, for_judge=False)
@@ -262,7 +257,7 @@ def context_preview(
     return ChatContextPreviewRead(
         session_id=chat.id,
         node_id=chat.program_node_id,
-        question=ctx.node.title,
+        question=ctx.question,
         persona=chat.persona,
         strictness=chat.strictness,
         model_source="override" if override else "auto",
@@ -312,6 +307,7 @@ def finish_turn(
     text: str,
     stream_state: ChatStreamState,
     ai_run_id: UUID | None,
+    context_snapshot: dict[str, Any] | None = None,
 ) -> ChatMessage:
     with project_write_transaction(session, project_id):
         _require_exam_project(session, project_id)
@@ -324,6 +320,7 @@ def finish_turn(
             text=text,
             stream_state=stream_state,
             ai_run_id=ai_run_id,
+            context_snapshot=context_snapshot or {},
         )
 
 
@@ -342,26 +339,43 @@ _SKILL_TITLES: dict[str, str] = {
 _AVAILABLE_SKILLS = frozenset({"answer"})
 
 
-def get_capabilities(session: Session, project_id: UUID, node_id: UUID) -> ChatCapabilitiesRead:
+def get_capabilities(
+    session: Session, project_id: UUID, node_id: UUID | None
+) -> ChatCapabilitiesRead:
     from app.chat_tools.registry import list_tool_specs
 
-    _require_exam_project(session, project_id)
-    _require_chat_node(session, project_id, node_id)
+    project = _require_exam_project(session, project_id)
+    if node_id is not None:
+        _require_chat_node(session, project_id, node_id)
     modes = [
-        CapabilityRead(key="exam", title="Экзамен", available=True),
+        CapabilityRead(
+            key="exam",
+            title="Экзамен",
+            available=project.workspace_variant == WorkspaceVariant.EXAM,
+            unavailable_reason=(
+                None
+                if project.workspace_variant == WorkspaceVariant.EXAM
+                else "exam_mode_not_applicable"
+            ),
+        ),
         CapabilityRead(
             key="study",
             title="Разобраться",
-            available=False,
-            unavailable_reason="chat_mode_unavailable",
+            available=True,
         ),
     ]
     skills = [
         CapabilityRead(
             key=key,
             title=title,
-            available=key in _AVAILABLE_SKILLS,
-            unavailable_reason=None if key in _AVAILABLE_SKILLS else "skill_not_implemented",
+            available=(
+                key in _AVAILABLE_SKILLS and project.workspace_variant == WorkspaceVariant.EXAM
+            ),
+            unavailable_reason=(
+                None
+                if key in _AVAILABLE_SKILLS and project.workspace_variant == WorkspaceVariant.EXAM
+                else "skill_not_implemented"
+            ),
         )
         for key, title in _SKILL_TITLES.items()
     ]

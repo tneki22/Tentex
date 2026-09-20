@@ -242,6 +242,9 @@ class BackgroundJobKind(StrEnum):
     AI_ANSWER_SECTIONS = "ai_answer_sections"
     AI_PROGRAM_BUILD = "ai_program_build"
     COVERAGE_RESEARCH = "coverage_research"
+    RETRIEVAL_INDEX = "retrieval_index"
+    RETRIEVAL_MODEL_INSTALL = "retrieval_model_install"
+    RETRIEVAL_EXHAUSTIVE = "retrieval_exhaustive"
 
 
 class BackgroundJobState(StrEnum):
@@ -263,6 +266,31 @@ class ProcessingStage(StrEnum):
 class BlockClass(StrEnum):
     CONTENT = "content"
     SERVICE = "service"
+
+
+class EmbeddingBackendKind(StrEnum):
+    """Источник embeddings с одинаковым контрактом для индекса и запроса."""
+
+    LOCAL_HF = "local_hf"
+    OPENAI_COMPATIBLE = "openai_compatible"
+
+
+class RetrievalIndexState(StrEnum):
+    BUILDING = "building"
+    READY = "ready"
+    ACTIVE = "active"
+    FAILED = "failed"
+
+
+class RetrievalPreset(StrEnum):
+    FAST = "fast"
+    BALANCED = "balanced"
+    ACCURATE = "accurate"
+
+
+class RetrievalChunkKind(StrEnum):
+    TEXT = "text"
+    TYPST_SOURCE = "typst_source"
 
 
 class ModuleKey(StrEnum):
@@ -947,6 +975,195 @@ class BackgroundJob(Base):
     # у задач, которые применяются сами, и у тех, чей результат ещё ждёт
     # проверки — см. `background.registry.REVIEW_REQUIRED_KINDS`.
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class EmbeddingProfile(Base):
+    """Воспроизводимая конфигурация модели, независимо от места её запуска."""
+
+    __tablename__ = "embedding_profiles"
+    __table_args__ = (
+        CheckConstraint("dimension IS NULL OR dimension > 0", name="dimension_positive"),
+        CheckConstraint("batch_size > 0", name="batch_size_positive"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    label: Mapped[str] = mapped_column(String, unique=True)
+    backend_kind: Mapped[EmbeddingBackendKind] = mapped_column(
+        enum_type(EmbeddingBackendKind, "embedding_backend_kind")
+    )
+    model_id: Mapped[str] = mapped_column(String)
+    model_revision: Mapped[str | None] = mapped_column(String, nullable=True)
+    provider_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("ai_provider_connections.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    dimension: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    batch_size: Mapped[int] = mapped_column(Integer, default=32)
+    normalize: Mapped[bool] = mapped_column(Boolean, default=True)
+    pooling: Mapped[str] = mapped_column(String(16), default="mean")
+    query_template: Mapped[str] = mapped_column(Text, default="{text}")
+    document_template: Mapped[str] = mapped_column(Text, default="{text}")
+    installed: Mapped[bool] = mapped_column(Boolean, default=False)
+    tested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    test_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class RetrievalIndex(Base):
+    """Неизменяемый снимок корпуса; READY становится ACTIVE только вручную."""
+
+    __tablename__ = "retrieval_indexes"
+    __table_args__ = (
+        CheckConstraint("chunk_target_tokens > 0", name="chunk_target_positive"),
+        CheckConstraint("chunk_max_tokens >= chunk_target_tokens", name="chunk_max_valid"),
+        CheckConstraint("chunk_overlap_tokens >= 0", name="chunk_overlap_nonnegative"),
+        CheckConstraint("chunk_count >= 0", name="chunk_count_nonnegative"),
+        Index("ix_retrieval_indexes_state_created", "state", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    profile_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("embedding_profiles.id", ondelete="RESTRICT")
+    )
+    state: Mapped[RetrievalIndexState] = mapped_column(
+        enum_type(RetrievalIndexState, "retrieval_index_state"),
+        default=RetrievalIndexState.BUILDING,
+    )
+    preset: Mapped[RetrievalPreset] = mapped_column(
+        enum_type(RetrievalPreset, "retrieval_preset"), default=RetrievalPreset.BALANCED
+    )
+    chunk_target_tokens: Mapped[int] = mapped_column(Integer, default=384)
+    chunk_max_tokens: Mapped[int] = mapped_column(Integer, default=480)
+    chunk_overlap_tokens: Mapped[int] = mapped_column(Integer, default=64)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    material_count: Mapped[int] = mapped_column(Integer, default=0)
+    corpus_manifest: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    diagnostics: Mapped[list[str]] = mapped_column(JSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class RetrievalSettings(Base):
+    """Единственная строка настроек общего retrieval-контура установки."""
+
+    __tablename__ = "retrieval_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    active_index_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("retrieval_indexes.id", ondelete="SET NULL"), nullable=True
+    )
+    default_profile_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("embedding_profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    preset: Mapped[RetrievalPreset] = mapped_column(
+        enum_type(RetrievalPreset, "retrieval_settings_preset"),
+        default=RetrievalPreset.BALANCED,
+    )
+    expert_parameters: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class RetrievalChunk(Base):
+    """Структурный кусок с точным обратным переходом к исходному материалу."""
+
+    __tablename__ = "retrieval_chunks"
+    __table_args__ = (
+        UniqueConstraint("index_id", "sort_order", name="uq_retrieval_chunks_index_order"),
+        CheckConstraint("revision > 0", name="revision_positive"),
+        CheckConstraint("sort_order >= 0", name="sort_order_nonnegative"),
+        CheckConstraint("token_count > 0", name="token_count_positive"),
+        CheckConstraint(
+            "page_from IS NULL OR (page_from > 0 AND page_to >= page_from)",
+            name="page_range_valid",
+        ),
+        Index("ix_retrieval_chunks_index_material", "index_id", "material_id"),
+        Index("ix_retrieval_chunks_index_block", "index_id", "block_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    index_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("retrieval_indexes.id", ondelete="CASCADE")
+    )
+    material_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE")
+    )
+    revision: Mapped[int] = mapped_column(Integer)
+    block_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("material_blocks.id", ondelete="SET NULL"), nullable=True
+    )
+    kind: Mapped[RetrievalChunkKind] = mapped_column(
+        enum_type(RetrievalChunkKind, "retrieval_chunk_kind")
+    )
+    sort_order: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
+    text: Mapped[str] = mapped_column(Text)
+    token_count: Mapped[int] = mapped_column(Integer)
+    page_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quality: Mapped[PageQuality | None] = mapped_column(
+        enum_type(PageQuality, "retrieval_chunk_quality"), nullable=True
+    )
+    fragment_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    locator: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+
+
+class RetrievalBenchmarkCase(Base):
+    __tablename__ = "retrieval_benchmark_cases"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    query: Mapped[str] = mapped_column(Text)
+    relevant_material_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    relevant_locator_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class RetrievalBenchmarkRun(Base):
+    __tablename__ = "retrieval_benchmark_runs"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    index_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("retrieval_indexes.id", ondelete="CASCADE")
+    )
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    case_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class RetrievalExhaustiveRun(Base):
+    """Зафиксированный полный обзор корпуса, переживающий перезапуск worker."""
+
+    __tablename__ = "retrieval_exhaustive_runs"
+    __table_args__ = (Index("ix_retrieval_exhaustive_session_created", "session_id", "created_at"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    job_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("background_jobs.id", ondelete="CASCADE"), unique=True
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    )
+    session_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="CASCADE")
+    )
+    user_message_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True
+    )
+    final_message_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True
+    )
+    query: Mapped[str] = mapped_column(Text)
+    scope: Mapped[str] = mapped_column(String(32))
+    corpus_manifest: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ProgramNode(Base):

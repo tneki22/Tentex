@@ -85,6 +85,9 @@ def reindex_material(session: Session, material_id: UUID) -> int:
     ).all()
     for fragment_id, fragment_text in rows:
         _insert_fragment(session, fragment_id, material_id, fragment_text)
+    from app.retrieval.indexing import queue_incremental_reindex
+
+    queue_incremental_reindex(session, material_id)
     return len(rows)
 
 
@@ -345,9 +348,7 @@ def search_fragments(
     return SearchOutcome(terms=terms, prefix=prefix, hits=hits)
 
 
-def _hit_pages(
-    pages: dict[int, dict], terms: set[str], prefix: str | None
-) -> list[SearchHitPage]:
+def _hit_pages(pages: dict[int, dict], terms: set[str], prefix: str | None) -> list[SearchHitPage]:
     """Разложить попадание по страницам в порядке чтения документа."""
     result: list[SearchHitPage] = []
     for page_number in sorted(pages):

@@ -7,6 +7,7 @@ import {
   Globe,
   Play,
   Plus,
+  Search,
   Trash2,
   Video,
   X,
@@ -22,6 +23,11 @@ import {
   type MaterialPurpose,
   type MaterialsDeletePreview,
 } from "../api/materials";
+import {
+  searchLibraryContent,
+  type RetrievalHitRead,
+  type SearchStrategy,
+} from "../api/retrieval";
 import { QualityBadge } from "../components/domain";
 import {
   Button,
@@ -33,6 +39,7 @@ import {
   LoadingState,
   PageHead,
   StatusBadge,
+  SegmentedTabs,
 } from "../components/ui";
 import { AddLibraryMaterialDialog } from "./library/AddLibraryMaterialDialog";
 import {
@@ -134,6 +141,12 @@ export function Library() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [addOpen, setAddOpen] = useState(false);
+  const [searchSurface, setSearchSurface] = useState<"names" | "content">("names");
+  const [contentQuery, setContentQuery] = useState("");
+  const [contentStrategy, setContentStrategy] = useState<SearchStrategy>("hybrid");
+  const [contentHits, setContentHits] = useState<RetrievalHitRead[]>([]);
+  const [contentReasons, setContentReasons] = useState<string[]>([]);
+  const [contentSearching, setContentSearching] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   /* Кого сейчас подтверждают к удалению. Пустой массив — диалог закрыт. */
   const [deleteTargets, setDeleteTargets] = useState<LibraryMaterialRead[]>([]);
@@ -343,6 +356,26 @@ export function Library() {
     }
   }
 
+  async function runContentSearch() {
+    const query = contentQuery.trim();
+    if (!query) return;
+    setContentSearching(true);
+    setError("");
+    try {
+      const response = await searchLibraryContent(
+        query,
+        materials.filter((material) => material.status === "ready").map((material) => material.id),
+        contentStrategy,
+      );
+      setContentHits(response.results);
+      setContentReasons(response.degradation_reasons);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Не удалось выполнить поиск по содержимому");
+    } finally {
+      setContentSearching(false);
+    }
+  }
+
   if (loading) return <LoadingState label="Загружаем Библиотеку" placement="page" />;
 
   const allVisibleSelected = visible.length > 0 && selected.length === visible.length;
@@ -366,6 +399,69 @@ export function Library() {
       {error && <ErrorState message={error} />}
 
       {materials.length > 0 && (
+        <section className="lib-search-surface" aria-label="Режим поиска в Библиотеке">
+          <SegmentedTabs
+            label="Где искать"
+            value={searchSurface}
+            tabs={[
+              { value: "names", label: "По названиям" },
+              { value: "content", label: "По содержимому" },
+            ]}
+            onChange={(value) => setSearchSurface(value as "names" | "content")}
+          />
+          {searchSurface === "content" && (
+            <div className="lib-content-search">
+              <div className="lib-content-search-form">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  value={contentQuery}
+                  onChange={(event) => setContentQuery(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === "Enter") void runContentSearch(); }}
+                  placeholder="Термин, вопрос или формулировка"
+                  aria-label="Запрос по содержимому Библиотеки"
+                />
+                <SegmentedTabs
+                  label="Стратегия поиска"
+                  value={contentStrategy}
+                  tabs={[
+                    { value: "hybrid", label: "Оба" },
+                    { value: "lexical", label: "По словам" },
+                    { value: "semantic", label: "По смыслу" },
+                  ]}
+                  onChange={(value) => setContentStrategy(value as SearchStrategy)}
+                />
+                <Button disabled={contentSearching || !contentQuery.trim()} onClick={() => void runContentSearch()}>
+                  {contentSearching ? "Ищем…" : "Найти"}
+                </Button>
+              </div>
+              {contentReasons.map((reason) => <p className="retrieval-neutral-note" key={reason}>{reason}</p>)}
+              {contentHits.length > 0 && (
+                <div className="lib-content-results">
+                  {contentHits.map((hit) => (
+                    <button
+                      type="button"
+                      key={hit.locator.chunk_id}
+                      onClick={() => navigate(`/library/${hit.locator.material_id}${hit.locator.page_from ? `?page=${hit.locator.page_from}` : ""}`)}
+                    >
+                      <span className="lib-content-result-head">
+                        <strong>{hit.locator.material_name}</strong>
+                        <StatusBadge tone="neutral">
+                          {hit.signals.length === 2 ? "слова + смысл" : hit.signals[0] === "semantic" ? "по смыслу" : "по словам"}
+                        </StatusBadge>
+                      </span>
+                      <small>{hit.locator.block_title ?? hit.locator.typst_path ?? "Фрагмент материала"}{hit.locator.page_from ? ` · стр. ${hit.locator.page_from}` : ""}</small>
+                      <span>{hit.text}</span>
+                      {hit.warning && <em>{hit.warning}</em>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
+      {materials.length > 0 && searchSurface === "names" && (
         <section className="lib-summary" aria-label="Сводка Библиотеки">
           <span>
             <strong>{materials.length}</strong>
@@ -388,7 +484,7 @@ export function Library() {
         </section>
       )}
 
-      {materials.length > 0 && (
+      {materials.length > 0 && searchSurface === "names" && (
         <LibraryFilters
           value={filters}
           total={materials.length}
@@ -399,7 +495,7 @@ export function Library() {
         />
       )}
 
-      {selected.length > 0 && (
+      {selected.length > 0 && searchSurface === "names" && (
         <div className="lib-bulk-bar" role="group" aria-label="Действия над выбранными файлами">
           <strong>Выбрано: {selected.length}</strong>
           {!allVisibleSelected && (
@@ -436,6 +532,12 @@ export function Library() {
           </p>
           <Button onClick={() => setAddOpen(true)}>Добавить первый материал</Button>
         </EmptyState>
+      ) : searchSurface === "content" ? (
+        contentHits.length === 0 && !contentSearching ? (
+          <EmptyState title="Поиск по содержимому">
+            <p>Спросите своими словами или найдите точный термин во всех готовых материалах.</p>
+          </EmptyState>
+        ) : null
       ) : visible.length === 0 ? (
         <EmptyState title="Под фильтры ничего не подошло">
           <p>Попробуйте другой запрос или сбросьте фильтры.</p>

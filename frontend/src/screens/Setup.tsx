@@ -1,15 +1,17 @@
-import { Image, Bot, BrainCircuit, DatabaseBackup, HardDrive, ScanText } from "lucide-react";
+import { Image, Bot, BrainCircuit, DatabaseBackup, HardDrive, ScanText, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { EmptyState, PageHead } from "../components/ui";
 import { AiSettingsSection } from "./AiSettingsSection";
 import { OcrSettingsSection } from "./OcrSettingsSection";
+import { SearchSettingsSection } from "./SearchSettingsSection";
 
 import { BackgroundSettingsSection } from "./BackgroundSettingsSection";
 
 const SECTIONS = [
   { id: "background", label: "Задний фон", icon: Image },
   { id: "ai", label: "ИИ", icon: BrainCircuit },
+  { id: "search", label: "Поиск", icon: Search },
   { id: "ocr", label: "Распознавание", icon: ScanText },
   { id: "bot", label: "Бот", icon: Bot },
   { id: "backups", label: "Резервные копии", icon: DatabaseBackup },
@@ -39,13 +41,24 @@ const OCR_SUBSECTIONS = [
 
 export type OcrSettingsSubsection = typeof OCR_SUBSECTIONS[number]["id"];
 
+const SEARCH_SUBSECTIONS = [
+  { id: "overview", label: "Обзор" },
+  { id: "models", label: "Модели" },
+  { id: "index", label: "Индекс" },
+  { id: "quality", label: "Качество" },
+  { id: "advanced", label: "Дополнительно" },
+] as const;
+
+export type SearchSettingsSubsection = typeof SEARCH_SUBSECTIONS[number]["id"];
+
 /** Разделы без подсекций (`bot`/`backups`/`storage`) сюда не входят — у них нет якорей для прокрутки. */
 const SUBSECTIONS: Partial<Record<SetupSection, readonly { id: string; label: string }[]>> = {
   ai: AI_SUBSECTIONS,
   ocr: OCR_SUBSECTIONS,
+  search: SEARCH_SUBSECTIONS,
 };
 
-const FUTURE_COPY: Record<Exclude<SetupSection, "ai" | "ocr" | "background">, { title: string; body: string }> = {
+const FUTURE_COPY: Record<Exclude<SetupSection, "ai" | "ocr" | "search" | "background">, { title: string; body: string }> = {
   bot: {
     title: "Бот пока не настроен",
     body: "Здесь появятся подключение Telegram, расписание сообщений и тихие часы — после отдельного серверного среза.",
@@ -105,7 +118,7 @@ export function Setup() {
     });
   }
 
-  const future = active === "ai" || active === "ocr" || active === "background" ? null : FUTURE_COPY[active];
+  const future = active === "ai" || active === "ocr" || active === "search" || active === "background" ? null : FUTURE_COPY[active];
 
   return (
     <div className="screen setup-screen">
@@ -152,6 +165,11 @@ export function Setup() {
           ) : active === "ocr" ? (
             <OcrSettingsSection
               subsection={activeSubsection as OcrSettingsSubsection}
+              onActiveSubsection={setActiveSubsection}
+            />
+          ) : active === "search" ? (
+            <SearchSettingsSection
+              subsection={activeSubsection as SearchSettingsSubsection}
               onActiveSubsection={setActiveSubsection}
             />
           ) : active === "background" ? <BackgroundSettingsSection /> : future ? (

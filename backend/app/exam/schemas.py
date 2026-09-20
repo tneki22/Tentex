@@ -25,13 +25,13 @@ class ApiModel(BaseModel):
 
 
 class ChatSessionCreateWrite(ApiModel):
-    program_node_id: UUID
+    program_node_id: UUID | None = None
 
 
 class ChatSessionSummary(ApiModel):
     id: UUID
     project_id: UUID
-    program_node_id: UUID
+    program_node_id: UUID | None
     title: str
     updated_at: datetime
     message_count: int
@@ -48,7 +48,7 @@ class ChatModelOverrideRead(ApiModel):
 class ChatSessionDetail(ApiModel):
     id: UUID
     project_id: UUID
-    program_node_id: UUID
+    program_node_id: UUID | None
     section_scope_node_id: UUID | None
     title: str
     mode: ChatMode
@@ -83,7 +83,7 @@ class ChatDraftWrite(ApiModel):
 
 class ChatContextPreviewRead(ApiModel):
     session_id: UUID
-    node_id: UUID
+    node_id: UUID | None
     question: str
     persona: ExaminerPersona
     strictness: ExaminerStrictness
@@ -130,6 +130,11 @@ class ChatDraftRead(ApiModel):
 
 class ChatMessageWrite(ApiModel):
     text: NonBlank = Field(max_length=20_000)
+    retrieval_scope: Literal["linked_topic", "topic_project", "project", "selected_materials"] = (
+        "topic_project"
+    )
+    retrieval_material_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    knowledge_policy: Literal["sources_only", "allow_model"] = "sources_only"
 
 
 class ChatAnswerWrite(ApiModel):

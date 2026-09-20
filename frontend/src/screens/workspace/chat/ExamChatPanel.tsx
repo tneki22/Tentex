@@ -1,8 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { BookOpenCheck, FileQuestion, History, ListChecks, MessageSquare, MessageSquareText, ScrollText, Search } from "lucide-react";
-import type { ChatContextFlags, ChatContextPreview } from "../../../api/chat";
+import { cancelBackgroundJob } from "../../../api/backgroundJobs";
+import type {
+  ChatContextFlags,
+  ChatContextPreview,
+  ChatKnowledgePolicy,
+  ChatRetrievalScope,
+} from "../../../api/chat";
 import type { ProgramNodeRead } from "../../../api/projects";
-import { Button, EmptyState, ErrorState, LoadingState } from "../../../components/ui";
+import { ProjectApiError } from "../../../api/projects";
+import { startExhaustiveReview } from "../../../api/retrieval";
+import { Button, EmptyState, ErrorState, LoadingState, Select, Switch } from "../../../components/ui";
+import { useBackgroundJob } from "../../../hooks/useBackgroundJob";
 import { AnswerFormCard } from "./AnswerFormCard";
 import { ChatComposer } from "./ChatComposer";
 import { ChatHeader } from "./ChatHeader";
@@ -64,6 +73,8 @@ interface ExamChatPanelProps {
   onAttemptsChanged?: () => void;
   onAnsweringChange?: (value: boolean) => void;
   takeAnswerSeconds?: () => number;
+  studyOnly?: boolean;
+  projectChat?: boolean;
 }
 
 function nextOrdinal(messages: { payload_kind: string }[]): number {
@@ -102,8 +113,8 @@ function MaterialSearchPrompt({
   );
 }
 
-export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringChange, takeAnswerSeconds }: ExamChatPanelProps) {
-  const chat = useExamChat({ projectId, node, onAttemptsChanged });
+export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringChange, takeAnswerSeconds, studyOnly = false, projectChat = false }: ExamChatPanelProps) {
+  const chat = useExamChat({ projectId, node, onAttemptsChanged, projectChat });
   const [answering, setAnswering] = useState(false);
   const [answerMode, setAnswerMode] = useState<"memory" | "supported">("memory");
   useEffect(() => { onAnsweringChange?.(answering); return () => onAnsweringChange?.(false); }, [answering, onAnsweringChange]);
@@ -112,8 +123,28 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
   const [searching, setSearching] = useState(false);
   const [toolBusy, setToolBusy] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [retrievalScope, setRetrievalScope] = useState<ChatRetrievalScope>(
+    projectChat ? "project" : studyOnly ? "topic_project" : "linked_topic",
+  );
+  const [knowledgePolicy, setKnowledgePolicy] = useState<ChatKnowledgePolicy>("sources_only");
+  const [exhaustiveJobId, setExhaustiveJobId] = useState<string | null>(null);
+  const [exhaustiveError, setExhaustiveError] = useState("");
+  const completedExhaustiveJob = useRef<string | null>(null);
+  const exhaustive = useBackgroundJob(exhaustiveJobId);
 
-  if (!node) {
+  useEffect(() => {
+    if (
+      exhaustive.job?.state === "completed"
+      && completedExhaustiveJob.current !== exhaustive.job.id
+    ) {
+      completedExhaustiveJob.current = exhaustive.job.id;
+      chat.reloadDetail();
+    }
+  }, [exhaustive.job?.id, exhaustive.job?.state]);
+
+  const topicTitle = node?.title ?? "материалы проекта";
+
+  if (!node && !projectChat) {
     return <EmptyState title="Выберите вопрос слева" icon={<MessageSquare size={26} />}><p>Чат откроется для выбранного вопроса.</p></EmptyState>;
   }
 
@@ -130,6 +161,7 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
 
   function runCommand(def: PaletteCommandDef) {
     if (def.key === "answer") {
+      if (studyOnly) return;
       setAnswerDraft(chat.draft);
       setAnswering(true);
       return;
@@ -152,6 +184,51 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
     }
   }
 
+  async function startExhaustive() {
+    if (!chat.activeSessionId) return;
+    const query = chat.draft.trim() || `Сделай полный обзор: ${topicTitle}`;
+    const command = {
+      query,
+      scope: retrievalScope,
+      node_id: node?.id ?? null,
+      material_ids: [],
+    };
+    setExhaustiveError("");
+    try {
+      await startExhaustiveReview(projectId, chat.activeSessionId, {
+        ...command,
+        confirmed: false,
+      });
+    } catch (error) {
+      if (
+        !(error instanceof ProjectApiError)
+        || error.code !== "retrieval_exhaustive_confirmation_required"
+      ) {
+        setExhaustiveError(error instanceof Error ? error.message : "Обзор не запущен");
+        return;
+      }
+      const count = Number(error.context.material_count ?? 0);
+      const bytes = Number(error.context.size_bytes ?? 0);
+      const accepted = window.confirm(
+        `Настроенная модель последовательно прочитает ${count} материал(а), `
+        + `примерно ${(bytes / 1024 / 1024).toFixed(1)} МБ. Запустить полный обзор?`,
+      );
+      if (!accepted) return;
+    }
+    try {
+      const run = await startExhaustiveReview(projectId, chat.activeSessionId, {
+        ...command,
+        confirmed: true,
+      });
+      completedExhaustiveJob.current = null;
+      setExhaustiveJobId(run.job_id);
+      chat.setDraft("");
+      chat.reloadDetail();
+    } catch (error) {
+      setExhaustiveError(error instanceof Error ? error.message : "Обзор не запущен");
+    }
+  }
+
   const isEmpty = chat.messages.length === 0 && !chat.preparing && !answering && !searching;
 
   return (
@@ -164,6 +241,7 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
         onSelectSession={chat.setActiveSessionId}
         onNewChat={() => void chat.startNewChat()}
         onSettingsChange={chat.updateSettings}
+        showModelControl={!studyOnly}
       />
 
       {chat.detailLoading && <LoadingState label="Загружаем переписку" />}
@@ -180,9 +258,12 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
             <div className="chat-empty-invite">
               <p>Выберите действие или напишите сообщение</p>
               <div className="chat-empty-actions">
-                <Button onClick={() => { setAnswerDraft(""); setAnswering(true); }}>
+                {!studyOnly && <Button onClick={() => { setAnswerDraft(""); setAnswering(true); }}>
                   <BookOpenCheck size={14} />Сдать ответ
-                </Button>
+                </Button>}
+                {studyOnly && <Button onClick={() => chat.setDraft(`Объясни «${topicTitle}» по шагам`)}>
+                  <BookOpenCheck size={14} />Объяснить
+                </Button>}
                 <Button variant="secondary" onClick={() => setSearching(true)}>
                   <Search size={14} />Найти в материалах
                 </Button>
@@ -202,6 +283,50 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
             />
           )}
 
+          {chat.session.mode === "study" && (
+            <div className="chat-retrieval-controls">
+              <Select
+                ariaLabel="Область поиска"
+                value={retrievalScope}
+                options={[
+                  ...(!projectChat ? [
+                    { value: "linked_topic", label: "Связано с темой" },
+                    { value: "topic_project", label: "Найти по теме" },
+                  ] : []),
+                  { value: "project", label: "Весь проект" },
+                ]}
+                onValueChange={(value) => value && setRetrievalScope(value as ChatRetrievalScope)}
+              />
+              <Switch
+                checked={knowledgePolicy === "allow_model"}
+                onCheckedChange={(checked) => setKnowledgePolicy(checked ? "allow_model" : "sources_only")}
+                label="Знания модели"
+                hint="Дополнение будет отделено от источников"
+              />
+              <div className="chat-retrieval-commands" aria-label="Команды тьютора">
+                {["Объяснить", "Найти подтверждения", "Сравнить источники", "Найти расхождения"].map((label) => (
+                  <button type="button" key={label} onClick={() => chat.setDraft(`${label}: ${topicTitle}`)}>{label}</button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => void startExhaustive()}
+                  disabled={Boolean(exhaustive.job && ["queued", "running", "paused"].includes(exhaustive.job.state))}
+                >По всем источникам</button>
+              </div>
+              {exhaustive.job && ["queued", "running", "paused"].includes(exhaustive.job.state) && (
+                <div className="chat-exhaustive-progress" role="status">
+                  <span>Полный обзор · {exhaustive.job.done} из {exhaustive.job.total}</span>
+                  <Button variant="ghost" onClick={() => void cancelBackgroundJob(exhaustive.job!.id)}>
+                    Отменить
+                  </Button>
+                </div>
+              )}
+              {(exhaustiveError || exhaustive.error || exhaustive.job?.error) && (
+                <p className="retrieval-error">{exhaustiveError || exhaustive.error || exhaustive.job?.error}</p>
+              )}
+            </div>
+          )}
+
           <ContextChips
             chips={buildExamContextChips(chat.contextPreview)}
             contextFlags={chat.session.context_flags}
@@ -213,7 +338,7 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
           {answering ? (
             <AnswerFormCard
               mode="composing"
-              question={node.title}
+              question={topicTitle}
               ordinal={nextOrdinal(chat.messages)}
               value={answerDraft}
               answerMode={answerMode}
@@ -233,10 +358,15 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
             <ChatComposer
               value={chat.draft}
               onChange={chat.setDraft}
-              onSend={() => void chat.sendMessage()}
+              onSend={() => void chat.sendMessage(undefined, {
+                scope: retrievalScope,
+                knowledgePolicy,
+              })}
               onStop={chat.stopMessage}
               onOpenPalette={() => setPaletteOpen(true)}
               modes={chat.capabilities?.modes ?? []}
+              currentMode={chat.session.mode}
+              onModeChange={(mode) => void chat.updateSettings({ mode })}
               sending={chat.sending}
             />
           )}

@@ -191,7 +191,7 @@ export function TextbookSourcePanel({
       </form>
       {searching && <LoadingState label="Ищем в материалах" />}
       {searched && !searching && places.length === 0 && <EmptyState title="Совпадений нет" />}
-      {places.length > 0 && <ul>{places.map((place) => <li key={place.key}><span><strong>{place.materialName} · стр. {place.pageNumber}</strong><p>{place.text}</p></span><Button variant="secondary" disabled={busy} onClick={() => void bind(place)}>Привязать</Button></li>)}</ul>}
+      {places.length > 0 && <ul>{places.map((place) => <li key={place.key}><span><strong>{place.materialName} · стр. {place.pageNumber}</strong><small>{place.signals.length > 1 ? "по словам и смыслу" : place.signals[0] === "semantic" ? "по смыслу" : "по словам"}</small><p>{place.text}</p>{place.warning && <em>{place.warning}</em>}</span><Button variant="secondary" disabled={busy} onClick={() => void bind(place)}>Привязать</Button></li>)}</ul>}
     </section>}
 
     <LessonEvidenceDialog

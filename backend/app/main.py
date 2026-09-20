@@ -25,6 +25,7 @@ from app.preparation.router import router as preparation_router
 from app.projects.demo import seed_demo_project
 from app.projects.errors import ProjectDomainError
 from app.projects.router import router as projects_router
+from app.retrieval.router import router as retrieval_router
 
 api = APIRouter(prefix="/api")
 
@@ -130,6 +131,7 @@ def create_app() -> FastAPI:
     app.include_router(exam_router)
     app.include_router(background_router)
     app.include_router(preparation_router)
+    app.include_router(retrieval_router)
     return app
 
 

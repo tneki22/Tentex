@@ -76,10 +76,16 @@ AI_JOB_KINDS = frozenset(
         BackgroundJobKind.AI_ANSWER_SECTIONS,
         BackgroundJobKind.AI_PROGRAM_BUILD,
         BackgroundJobKind.COVERAGE_RESEARCH,
+        BackgroundJobKind.RETRIEVAL_INDEX,
+        BackgroundJobKind.RETRIEVAL_EXHAUSTIVE,
     }
 )
 LOCAL_JOB_KINDS = frozenset(
-    {BackgroundJobKind.TYPST_COMPILE, BackgroundJobKind.LINK_ANSWERS}
+    {
+        BackgroundJobKind.TYPST_COMPILE,
+        BackgroundJobKind.LINK_ANSWERS,
+        BackgroundJobKind.RETRIEVAL_MODEL_INSTALL,
+    }
 )
 
 
@@ -135,9 +141,7 @@ def claim_job(
             expired_job.state = BackgroundJobState.QUEUED
             expired_job.lease_owner = None
             expired_job.lease_expires_at = None
-        statement = select(BackgroundJob).where(
-            BackgroundJob.state == BackgroundJobState.QUEUED
-        )
+        statement = select(BackgroundJob).where(BackgroundJob.state == BackgroundJobState.QUEUED)
         if lane is not None:
             statement = statement.where(_lane_condition(lane))
         job = session.scalar(statement.order_by(BackgroundJob.created_at).limit(1))
@@ -641,9 +645,7 @@ def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:
         # а у Typst каждая сборка даёт новый PDF — без сброса просмотрщик показывал
         # бы страницы прошлой версии.
         shutil.rmtree(material_path(f"pages/{material_id}"), ignore_errors=True)
-        _save_typst_chunks(
-            session, task_id, material_id, revision, bundle, entrypoint, len(pages)
-        )
+        _save_typst_chunks(session, task_id, material_id, revision, bundle, entrypoint, len(pages))
         _finish(session, task_id)
         _register_typst_build(
             session, task_id, material_id, revision, result, render_path, len(pages)
@@ -703,11 +705,7 @@ def _renew_lease(session: Session, job_id: UUID, worker_id: str) -> bool:
     """Продлить лиз своей running-задачи; чужую или завершённую не трогать."""
     with job_write_transaction(session, job_id):
         job = session.get(BackgroundJob, job_id)
-        if (
-            job is None
-            or job.state != BackgroundJobState.RUNNING
-            or job.lease_owner != worker_id
-        ):
+        if job is None or job.state != BackgroundJobState.RUNNING or job.lease_owner != worker_id:
             return False
         now = utc_now()
         job.heartbeat_at = now
@@ -751,6 +749,18 @@ def _process_claimed_job(job: BackgroundJob) -> None:
                 from app.coverage.research import process_coverage_job
 
                 process_coverage_job(session, job)
+            elif job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
+                from app.retrieval.indexing import process_index_job
+
+                process_index_job(session, job)
+            elif job.kind == BackgroundJobKind.RETRIEVAL_MODEL_INSTALL:
+                from app.retrieval.local_models import process_install_job
+
+                process_install_job(session, job)
+            elif job.kind == BackgroundJobKind.RETRIEVAL_EXHAUSTIVE:
+                from app.retrieval.exhaustive import process_exhaustive_job
+
+                process_exhaustive_job(session, job)
             else:
                 process_ai_job(session, job)
             log.info(

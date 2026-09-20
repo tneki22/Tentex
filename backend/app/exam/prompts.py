@@ -1,4 +1,4 @@
-from app.models import ExaminerPersona, ExaminerStrictness
+from app.models import ChatMode, ExaminerPersona, ExaminerStrictness
 
 CHAT_REPLY_PROMPT_VERSION = "chat-reply-v2"  # совпадает с app/ai/roles.py
 ANSWER_JUDGE_PROMPT_VERSION = "answer-judge-v1"  # совпадает с app/ai/roles.py
@@ -19,6 +19,16 @@ CHAT_EXAM_MODE_PROMPT = """Ты помогаешь готовиться к эк�
 их не хватает, честно скажи об этом, а не додумывай факт по памяти. Не
 выставляй оценку и не говори «засчитано» — проверку ответа делает отдельный
 разбор после отправки формы «Сдать ответ»."""
+
+CHAT_STUDY_MODE_PROMPT = """Ты учебный тьютор. Твоя задача — помочь разобраться:
+объясняй причинно-следственные связи, сопоставляй источники и проверяй понимание
+короткими вопросами. Не выставляй экзаменационную оценку. Следуй переданной
+политике knowledge_policy; если данных недостаточно, прямо назови пробел."""
+
+CHAT_CITATION_PROMPT = """Каждое проверяемое утверждение о предмете сопровождай
+ссылкой на источник в формате [S1]. Используй только идентификаторы S*, которые
+есть в переданных блоках <retrieval_source>. Не придумывай идентификаторы. Если
+retrieval-источников нет, честно скажи, что ответ по источникам невозможен."""
 
 # Слой persona (AI-CHATS.md §6): тон и способ объяснения. Не меняет факты.
 PERSONA_PROMPTS: dict[ExaminerPersona, str] = {
@@ -49,12 +59,17 @@ STRICTNESS_PROMPTS: dict[ExaminerStrictness, str] = {
 }
 
 
-def build_chat_reply_prompt(persona: ExaminerPersona, strictness: ExaminerStrictness) -> str:
+def build_chat_reply_prompt(
+    persona: ExaminerPersona,
+    strictness: ExaminerStrictness,
+    mode: ChatMode = ChatMode.EXAM,
+) -> str:
     """Собирает системный prompt обычной реплики из слоёв base → mode → persona → strictness."""
     return "\n\n".join(
         [
             CHAT_BASE_PROMPT,
-            CHAT_EXAM_MODE_PROMPT,
+            CHAT_STUDY_MODE_PROMPT if mode == ChatMode.STUDY else CHAT_EXAM_MODE_PROMPT,
+            CHAT_CITATION_PROMPT if mode == ChatMode.STUDY else "",
             PERSONA_PROMPTS[persona],
             STRICTNESS_PROMPTS[strictness],
         ]

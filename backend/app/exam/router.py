@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID, uuid4
@@ -44,6 +46,9 @@ from app.exam.schemas import (
 )
 from app.models import AiRun, ChatMessage, ChatMessageRole, ChatSession, ChatStreamState, Grade
 from app.projects.errors import ProjectDomainError
+from app.retrieval.context import ContextAssembler
+from app.retrieval.schemas import RetrievalScope, RetrievalSearchWrite, SearchStrategy
+from app.retrieval.search import HybridRetriever
 
 SessionDependency = Annotated[Session, Depends(get_session)]
 GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
@@ -52,7 +57,7 @@ router = APIRouter(prefix="/api", tags=["exam-chat"])
 
 @router.get("/projects/{project_id}/chat/sessions", response_model=list[ChatSessionSummary])
 def list_chat_sessions(
-    project_id: UUID, node_id: UUID, session: SessionDependency
+    project_id: UUID, session: SessionDependency, node_id: UUID | None = None
 ) -> list[ChatSessionSummary]:
     return chat_service.list_session_summaries(session, project_id, node_id)
 
@@ -65,18 +70,14 @@ def create_chat_session(
     return chat_service.get_session_detail(session, project_id, chat.id)
 
 
-@router.get(
-    "/projects/{project_id}/chat/sessions/{session_id}", response_model=ChatSessionDetail
-)
+@router.get("/projects/{project_id}/chat/sessions/{session_id}", response_model=ChatSessionDetail)
 def get_chat_session(
     project_id: UUID, session_id: UUID, session: SessionDependency
 ) -> ChatSessionDetail:
     return chat_service.get_session_detail(session, project_id, session_id)
 
 
-@router.put(
-    "/projects/{project_id}/chat/sessions/{session_id}/draft", response_model=ChatDraftRead
-)
+@router.put("/projects/{project_id}/chat/sessions/{session_id}/draft", response_model=ChatDraftRead)
 def put_chat_draft(
     project_id: UUID, session_id: UUID, command: ChatDraftWrite, session: SessionDependency
 ) -> ChatDraftRead:
@@ -108,11 +109,9 @@ def get_chat_context(
     return chat_service.context_preview(session, project_id, session_id)
 
 
-@router.get(
-    "/projects/{project_id}/chat/capabilities", response_model=ChatCapabilitiesRead
-)
+@router.get("/projects/{project_id}/chat/capabilities", response_model=ChatCapabilitiesRead)
 def get_chat_capabilities(
-    project_id: UUID, node_id: UUID, session: SessionDependency
+    project_id: UUID, session: SessionDependency, node_id: UUID | None = None
 ) -> ChatCapabilitiesRead:
     return chat_service.get_capabilities(session, project_id, node_id)
 
@@ -153,8 +152,21 @@ def _model_override(chat: ChatSession) -> AiModelSelection | None:
     )
 
 
-def _reply_request(chat: ChatSession, ctx: ChatContext, user_text: str) -> AiTextRequest:
-    grounding = [f"Вопрос: {ctx.node.title}"]
+def _reply_request(
+    chat: ChatSession,
+    ctx: ChatContext,
+    user_text: str,
+    retrieval_sources: list[dict[str, object]] | None = None,
+    knowledge_policy: str = "sources_only",
+    retrieval_notes: list[str] | None = None,
+) -> AiTextRequest:
+    grounding = [f"Вопрос: {ctx.question}"]
+    grounding.append(
+        "<knowledge_policy>Только переданные источники.</knowledge_policy>"
+        if knowledge_policy == "sources_only"
+        else "<knowledge_policy>Общие знания модели разрешены, но вынеси их в отдельный "
+        "раздел «Дополнение модели» без фиктивных цитат.</knowledge_policy>"
+    )
     if ctx.profile:
         grounding.append(
             f"<profile_data>\n{json.dumps(ctx.profile, ensure_ascii=False)}\n</profile_data>"
@@ -164,8 +176,18 @@ def _reply_request(chat: ChatSession, ctx: ChatContext, user_text: str) -> AiTex
     for fragment in ctx.fragments:
         heading = f'material="{fragment.material_name}" page="{fragment.page_number}"'
         grounding.append(f"<fragment_data {heading}>\n{fragment.text}\n</fragment_data>")
+    for source in retrieval_sources or []:
+        grounding.append(
+            '<retrieval_source id="{id}" material="{material}" locator="{locator}">\n'
+            "{text}\n</retrieval_source>".format(**source)
+        )
+    for note in retrieval_notes or []:
+        grounding.append(f"<retrieval_note>{note}</retrieval_note>")
     messages = [
-        AiMessage(role="system", content=build_chat_reply_prompt(chat.persona, chat.strictness)),
+        AiMessage(
+            role="system",
+            content=build_chat_reply_prompt(chat.persona, chat.strictness, chat.mode),
+        ),
         AiMessage(role="user", content="\n\n".join(grounding)),
         *_history_messages(ctx.tail),
         AiMessage(role="user", content=user_text),
@@ -174,7 +196,7 @@ def _reply_request(chat: ChatSession, ctx: ChatContext, user_text: str) -> AiTex
         role="exam_chat_reply",
         messages=messages,
         project_id=chat.project_id,
-        context_manifest=ctx.manifest,
+        context_manifest=[*ctx.manifest, *(retrieval_sources or [])],
         request_model_override=_model_override(chat),
         source_fingerprint={"chat_id": str(chat.id)},
     )
@@ -189,7 +211,49 @@ async def post_chat_message(
     gateway: GatewayDependency,
 ) -> StreamingResponse:
     chat, ctx = chat_service.start_turn(session, project_id, session_id, command.text)
-    request = _reply_request(chat, ctx, command.text)
+    retrieval_sources: list[dict[str, object]] = []
+    retrieval_notes: list[str] = []
+    if chat.mode.value == "study":
+        result = await HybridRetriever().search(
+            session,
+            RetrievalSearchWrite(
+                query=command.text,
+                strategy=SearchStrategy.HYBRID,
+                scope=RetrievalScope(command.retrieval_scope),
+                project_id=project_id,
+                node_id=chat.program_node_id,
+                material_ids=command.retrieval_material_ids,
+                limit=10,
+            ),
+        )
+        assembled = ContextAssembler().assemble(session, result)
+        retrieval_notes = result.degradation_reasons
+        for number, hit in enumerate(assembled.sources, start=1):
+            locator = hit.locator.typst_path or (
+                f"стр. {hit.locator.page_from}" if hit.locator.page_from else "без страницы"
+            )
+            retrieval_sources.append(
+                {
+                    "kind": "retrieval_source",
+                    "id": f"S{number}",
+                    "material": hit.locator.material_name,
+                    "material_id": str(hit.locator.material_id),
+                    "locator": locator,
+                    "page": hit.locator.page_from,
+                    "chunk_id": str(hit.locator.chunk_id),
+                    "text": hit.text,
+                    "included": True,
+                    "bytes": len(hit.text.encode()),
+                }
+            )
+    request = _reply_request(
+        chat,
+        ctx,
+        command.text,
+        retrieval_sources,
+        command.knowledge_policy,
+        retrieval_notes,
+    )
     # Локальная проверка (роль/модель/ключ настроены) без сети — падает здесь
     # обычным ProjectDomainError, до того как клиент увидит поток.
     await gateway.preflight(request)
@@ -224,37 +288,71 @@ async def _events(project_id: UUID, chat_id: UUID, request: AiTextRequest) -> As
                 text="".join(chunks),
                 stream_state=stream_state,
                 ai_run_id=run_id,
+                context_snapshot={
+                    "retrieval_sources": [
+                        item
+                        for item in request.context_manifest
+                        if item.get("kind") == "retrieval_source"
+                    ]
+                },
             )
             saved = True
             return message
 
         try:
-            async for event in ModelGateway(db).stream(request):
-                if event.kind == "started":
-                    run_id = event.run_id
-                    yield _frame(
-                        "started", {"message_id": str(message_id), "run_id": str(run_id)}
-                    )
-                elif event.kind == "delta":
-                    chunks.append(event.delta)
-                    yield _frame("delta", {"text": event.delta})
-                elif event.kind == "completed":
-                    usage = event.usage.model_dump(mode="json") if event.usage else {}
-                    # Сообщение сохраняется до кадра completed, чтобы фронтенд мог
-                    # заменить оптимистичную запись готовым ChatMessageRead без
-                    # повторного чтения всей сессии (AI-CHATS.md §21.4).
-                    message = _save(ChatStreamState.COMPLETE)
-                    yield _frame(
-                        "completed",
-                        {
-                            "message_id": str(message_id),
-                            "message": ChatMessageRead.model_validate(message).model_dump(
-                                mode="json"
+            current_request = request
+            for citation_attempt in range(2):
+                completed_usage: dict[str, object] = {}
+                async for event in ModelGateway(db).stream(current_request):
+                    if event.kind == "started":
+                        run_id = event.run_id
+                        yield _frame(
+                            "started", {"message_id": str(message_id), "run_id": str(run_id)}
+                        )
+                    elif event.kind == "delta":
+                        chunks.append(event.delta)
+                        yield _frame("delta", {"text": event.delta})
+                    elif event.kind == "completed":
+                        completed_usage = event.usage.model_dump(mode="json") if event.usage else {}
+                citation_error = _citation_error("".join(chunks), request.context_manifest)
+                if citation_error and citation_attempt == 0:
+                    chunks.clear()
+                    yield _frame("reset", {"reason": citation_error})
+                    current_request = replace(
+                        request,
+                        messages=[
+                            *request.messages,
+                            AiMessage(
+                                role="user",
+                                content=(
+                                    "Исправь ответ: используй хотя бы одну цитату и только "
+                                    "разрешённые ID источников. Не комментируй исправление."
+                                ),
                             ),
-                            "usage": usage,
-                            "cached": False,
-                        },
+                        ],
                     )
+                    continue
+                if citation_error:
+                    yield _frame(
+                        "error",
+                        {"code": "chat_invalid_citations", "detail": citation_error},
+                    )
+                    _save(ChatStreamState.FAILED)
+                    break
+                # Сообщение сохраняется до кадра completed, чтобы фронтенд мог
+                # заменить оптимистичную запись готовым ChatMessageRead без
+                # повторного чтения всей сессии (AI-CHATS.md §21.4).
+                message = _save(ChatStreamState.COMPLETE)
+                yield _frame(
+                    "completed",
+                    {
+                        "message_id": str(message_id),
+                        "message": ChatMessageRead.model_validate(message).model_dump(mode="json"),
+                        "usage": completed_usage,
+                        "cached": False,
+                    },
+                )
+                break
         except asyncio.CancelledError:
             if not saved:
                 _save(ChatStreamState.STOPPED)
@@ -268,6 +366,23 @@ async def _events(project_id: UUID, chat_id: UUID, request: AiTextRequest) -> As
                 _save(ChatStreamState.FAILED)
 
 
+def _citation_error(text: str, manifest: list[dict[str, Any]]) -> str | None:
+    allowed = {
+        str(item["id"])
+        for item in manifest
+        if item.get("kind") == "retrieval_source" and item.get("id")
+    }
+    if not allowed:
+        return None
+    used = set(re.findall(r"\[(S\d+)]", text))
+    unknown = used - allowed
+    if unknown:
+        return "Ответ сослался на неизвестные источники: " + ", ".join(sorted(unknown))
+    if not used:
+        return "Ответ по найденным источникам не содержит проверяемых цитат"
+    return None
+
+
 @router.post(
     "/projects/{project_id}/chat/sessions/{session_id}/answer", response_model=ChatAnswerResult
 )
@@ -279,8 +394,13 @@ async def post_chat_answer(
     gateway: GatewayDependency,
 ) -> ChatAnswerResult:
     result = await attempt_service.submit_answer(
-        session, gateway, project_id, session_id, command.text,
-        answer_mode=command.answer_mode, active_seconds=command.active_seconds,
+        session,
+        gateway,
+        project_id,
+        session_id,
+        command.text,
+        answer_mode=command.answer_mode,
+        active_seconds=command.active_seconds,
     )
     return ChatAnswerResult(
         messages=[ChatMessageRead.model_validate(item) for item in result.messages],
@@ -296,12 +416,8 @@ def _grade_read(session: Session, grade: Grade) -> GradeRead:
         output_tokens=run.output_tokens or 0 if run is not None else 0,
         reasoning_tokens=run.reasoning_tokens or 0 if run is not None else 0,
         provider_cached_tokens=run.provider_cached_tokens or 0 if run is not None else 0,
-        actual_cost_usd=(
-            run.actual_cost_usd if run is not None else Decimal("0")
-        ),
-        actual_cost_rub=(
-            run.actual_cost_rub if run is not None else Decimal("0")
-        ),
+        actual_cost_usd=(run.actual_cost_usd if run is not None else Decimal("0")),
+        actual_cost_rub=(run.actual_cost_rub if run is not None else Decimal("0")),
     )
     return GradeRead(
         attempt_id=grade.attempt_id,
@@ -328,9 +444,7 @@ def _attempt_detail(session: Session, item: attempt_service.AttemptWithGrade) ->
     )
 
 
-@router.post(
-    "/projects/{project_id}/attempts/{attempt_id}/check", response_model=GradeRead
-)
+@router.post("/projects/{project_id}/attempts/{attempt_id}/check", response_model=GradeRead)
 async def post_attempt_check(
     project_id: UUID,
     attempt_id: UUID,
@@ -351,9 +465,7 @@ def put_attempt_self_assessment(
     command: SelfAssessmentWrite,
     session: SessionDependency,
 ) -> GradeRead:
-    grade = attempt_service.set_self_assessment(
-        session, project_id, attempt_id, command.outcome
-    )
+    grade = attempt_service.set_self_assessment(session, project_id, attempt_id, command.outcome)
     return _grade_read(session, grade)
 
 
@@ -368,21 +480,15 @@ def get_attempts(
             created_at=item.attempt.created_at,
             outcome=item.grade.outcome if item.grade is not None else None,
             method=item.grade.method if item.grade is not None else None,
-            self_assessment=(
-                item.grade.self_assessment if item.grade is not None else None
-            ),
+            self_assessment=(item.grade.self_assessment if item.grade is not None else None),
             text_preview=item.attempt.text[:180],
         )
         for item in attempt_service.list_attempts(session, project_id, node_id)
     ]
 
 
-@router.get(
-    "/projects/{project_id}/attempts/{attempt_id}", response_model=AttemptDetailRead
-)
+@router.get("/projects/{project_id}/attempts/{attempt_id}", response_model=AttemptDetailRead)
 def get_attempt_detail(
     project_id: UUID, attempt_id: UUID, session: SessionDependency
 ) -> AttemptDetailRead:
-    return _attempt_detail(
-        session, attempt_service.get_attempt(session, project_id, attempt_id)
-    )
+    return _attempt_detail(session, attempt_service.get_attempt(session, project_id, attempt_id))

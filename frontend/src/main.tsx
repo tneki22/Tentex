@@ -18,6 +18,7 @@ import "./styles/cards.css";
 import "./styles/chat.css";
 import "./styles/library-viewer.css";
 import "./styles/ocr.css";
+import "./styles/retrieval.css";
 import "./styles/conspects.css";
 import "./styles/preparation.css";
 import "./styles/lessons.css";

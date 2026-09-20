@@ -13,6 +13,7 @@
 | Эталонные ответы | `stage-4-reference-answers.md` | `check_stage4.py` |
 | Конвейер материалов | `stage-5-material-pipeline.md`; практический сквозной guide — `../../LIBRARY_FILE_PROCESSING.md` | `check_stage5.py` |
 | Поиск и ручные привязки | `pre-stage-6-search-and-manual-binding.md` | `check_manual_binding.py` |
+| Общий retrieval, RAG и гибридный поиск | `retrieval.md` | pytest (`test_retrieval.py`), typecheck/build |
 | Просмотрщик и автопривязка | `materials-viewer-and-answers-autolink.md` | pytest |
 | Шлюз внешних моделей | `ai-model-gateway.md` | `check_ai_gateway.py` |
 | Провайдеры и модели | `ai-provider-model-settings.md` | pytest |
