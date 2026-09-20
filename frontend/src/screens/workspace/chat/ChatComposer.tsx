@@ -1,7 +1,8 @@
-import { forwardRef, useImperativeHandle, useLayoutEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
-import { Mic, Plus, Send, Square } from "lucide-react";
+import { Plus, Send, Square } from "lucide-react";
 import type { ChatCapability } from "../../../api/chat";
+import { DictationButton } from "../../../components/domain";
 import { Button, IconButton, Tooltip } from "../../../components/ui";
 
 export interface ChatComposerHandle {
@@ -18,7 +19,6 @@ interface ChatComposerProps {
   modes?: ChatCapability[];
   /** Индикатор режима (сейчас — «Экзамен») — экзаменационная специфика. */
   showModeIndicator?: boolean;
-  showDictation?: boolean;
   sending: boolean;
   disabled?: boolean;
 }
@@ -30,7 +30,7 @@ interface ChatComposerProps {
 export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer(
   {
     value, onChange, onSend, onStop, onOpenPalette, modes = [],
-    showModeIndicator = true, showDictation = true, sending, disabled,
+    showModeIndicator = true, sending, disabled,
   },
   forwardedRef,
 ) {
@@ -39,6 +39,18 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const studyMode = modes.find((mode) => mode.key === "study");
 
   useImperativeHandle(forwardedRef, () => ({ focus: () => ref.current?.focus() }), []);
+
+  // Расшифровка приходит через секунды: за это время в поле могли дописать своё,
+  // поэтому добавляем к актуальному тексту, а не к тому, что был при нажатии.
+  const latestValue = useRef(value);
+  useEffect(() => {
+    latestValue.current = value;
+  }, [value]);
+  function appendDictation(text: string) {
+    const current = latestValue.current.trimEnd();
+    onChange(current ? `${current} ${text}` : text);
+    ref.current?.focus();
+  }
 
   useLayoutEffect(() => {
     const node = ref.current;
@@ -89,13 +101,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           )}
         </div>
         <div className="chat-composer-row-right">
-          {showDictation && (
-            <Tooltip label="Диктовка появится вместе с распознаванием речи">
-              <IconButton label="Диктовка" disabled>
-                <Mic size={15} />
-              </IconButton>
-            </Tooltip>
-          )}
+          <DictationButton onText={appendDictation} disabled={disabled} />
           {sending && onStop ? (
             <Button variant="secondary" className="chat-composer-send" onClick={onStop}>
               <Square size={13} />Остановить

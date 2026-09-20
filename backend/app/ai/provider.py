@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from collections import deque
 from collections.abc import AsyncIterator, Sequence
@@ -39,6 +40,16 @@ class ProviderModel:
 _SPEECH_TO_TEXT_MARKERS = ("whisper", "transcribe")
 
 
+def is_speech_to_text_id(model_id: str) -> bool:
+    """Семейство распознавания речи по ID: whisper-*, *-transcribe.
+
+    Такие модели говорят через `/audio/transcriptions`, а не через чат, поэтому
+    проверка связи и вызов у них устроены иначе, чем у текстовых.
+    """
+    lowered = model_id.lower()
+    return any(marker in lowered for marker in _SPEECH_TO_TEXT_MARKERS)
+
+
 def _infer_modalities(
     model_id: str, input_modalities: list[str], output_modalities: list[str]
 ) -> tuple[list[str], list[str]]:
@@ -49,9 +60,7 @@ def _infer_modalities(
     в выбор модели для речи. Догадываемся строго по ID семейства
     распознавания речи; остальное по-прежнему задаётся руками.
     """
-    if input_modalities or not any(
-        marker in model_id.lower() for marker in _SPEECH_TO_TEXT_MARKERS
-    ):
+    if input_modalities or not is_speech_to_text_id(model_id):
         return input_modalities, output_modalities
     return ["audio"], output_modalities or ["text"]
 
@@ -68,6 +77,14 @@ class ProviderUsage:
 @dataclass(frozen=True)
 class ProviderCompletion:
     content: str
+    actual_model_id: str
+    usage: ProviderUsage
+    request_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ProviderTranscription:
+    text: str
     actual_model_id: str
     usage: ProviderUsage
     request_id: str | None = None
@@ -109,6 +126,16 @@ class OpenAICompatibleTransport(Protocol):
         max_output_tokens: int,
         parameters: dict[str, object],
     ) -> AsyncIterator[ProviderStreamEvent]: ...
+
+    async def transcribe(
+        self,
+        *,
+        model: str,
+        audio: bytes,
+        audio_format: str,
+        language: str,
+        via_chat: bool = False,
+    ) -> ProviderTranscription: ...
 
 
 def _decimal(value: object) -> Decimal | None:
@@ -215,8 +242,23 @@ def normalize_provider_error(error: Exception) -> ProviderError:
     return ProviderError("ai_provider_unavailable", "Вызов внешней модели завершился ошибкой")
 
 
+def _transcription_usage(value: object) -> ProviderUsage:
+    """Расход распознавания: токены есть у gpt-4o-transcribe, у Whisper — только секунды."""
+    data = value.model_dump() if hasattr(value, "model_dump") else (value or {})
+    if not isinstance(data, dict):
+        return ProviderUsage()
+    return ProviderUsage(
+        input_tokens=data.get("input_tokens") or 0,
+        output_tokens=data.get("output_tokens") or 0,
+        cost_usd=_decimal(data.get("cost")),
+    )
+
+
 class OpenAITransport:
-    def __init__(self, base_url: str, api_key: str) -> None:
+    def __init__(
+        self, base_url: str, api_key: str, catalog_profile: str = "openai_compatible"
+    ) -> None:
+        self.catalog_profile = catalog_profile
         self.client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key,
@@ -273,8 +315,12 @@ class OpenAITransport:
             "model": model,
             "messages": messages,
             "max_tokens": max_output_tokens,
-            "extra_body": {"usage": {"include": True}},
         }
+        # `usage.include` — расширение OpenRouter, из него приходит стоимость. Groq
+        # и прочие OpenAI-совместимые API отвечают на незнакомое поле отказом,
+        # а токены у них и так возвращаются в обычном `usage`.
+        if self.catalog_profile == "openrouter":
+            kwargs["extra_body"] = {"usage": {"include": True}}
         self._apply_parameters(kwargs, parameters)
         if response_schema is not None:
             kwargs["response_format"] = {
@@ -329,6 +375,101 @@ class OpenAITransport:
         except Exception as error:
             raise normalize_provider_error(error) from error
 
+    async def transcribe(
+        self,
+        *,
+        model: str,
+        audio: bytes,
+        audio_format: str,
+        language: str,
+        via_chat: bool = False,
+    ) -> ProviderTranscription:
+        if via_chat:
+            return await self._transcribe_via_chat(model, audio, audio_format, language)
+        try:
+            if self.catalog_profile == "openrouter":
+                # У OpenRouter собственный JSON-протокол: аудио уходит base64 в теле,
+                # а не файлом multipart, как у OpenAI и Groq.
+                data = await self.client.post(
+                    "/audio/transcriptions",
+                    body={
+                        "model": model,
+                        "input_audio": {
+                            "data": base64.b64encode(audio).decode("ascii"),
+                            "format": audio_format,
+                        },
+                        "language": language,
+                    },
+                    cast_to=object,
+                )
+                return ProviderTranscription(
+                    text=str(data.get("text") or ""),
+                    actual_model_id=model,
+                    usage=_transcription_usage(data.get("usage")),
+                )
+            result = await self.client.audio.transcriptions.create(
+                model=model,
+                file=(f"dictation.{audio_format}", audio),
+                language=language,
+                response_format="json",
+            )
+        except Exception as error:
+            raise normalize_provider_error(error) from error
+        return ProviderTranscription(
+            text=result.text or "",
+            actual_model_id=model,
+            usage=_transcription_usage(getattr(result, "usage", None)),
+        )
+
+    async def _transcribe_via_chat(
+        self, model: str, audio: bytes, audio_format: str, language: str
+    ) -> ProviderTranscription:
+        """Мультимодальная чат-модель (Gemini и подобные): аудио идёт частью сообщения.
+
+        У таких моделей нет `/audio/transcriptions` — провайдер отвечает, что
+        модели не существует, поэтому расшифровку просим обычным запросом.
+        """
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": 4000,
+            "temperature": 0,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Дословно расшифруй речь из записи (язык: {language}). "
+                            "Верни только текст расшифровки без комментариев и кавычек. "
+                            "Если в записи нет речи, верни пустой ответ."
+                        ),
+                    },
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": base64.b64encode(audio).decode("ascii"),
+                            "format": audio_format,
+                        },
+                    },
+                ],
+            }],
+        }
+        if self.catalog_profile == "openrouter":
+            kwargs["extra_body"] = {"usage": {"include": True}}
+        try:
+            result = await self.client.chat.completions.create(**kwargs)
+        except Exception as error:
+            raise normalize_provider_error(error) from error
+        choice = result.choices[0] if result.choices else None
+        content = choice.message.content if choice is not None else None
+        return ProviderTranscription(
+            # Пустой ответ здесь — не сбой, а «речи нет».
+            text=content if isinstance(content, str) else "",
+            actual_model_id=result.model,
+            usage=_usage(result.usage),
+            request_id=getattr(result, "id", None),
+        )
+
     @staticmethod
     def _apply_parameters(kwargs: dict[str, Any], parameters: dict[str, object]) -> None:
         direct = {
@@ -358,14 +499,17 @@ class FakeTransport:
         models: Sequence[ProviderModel] = (),
         completions: Sequence[ProviderCompletion | Exception] = (),
         streams: Sequence[Sequence[ProviderStreamEvent] | Exception] = (),
+        transcriptions: Sequence[ProviderTranscription | Exception] = (),
     ) -> None:
         self.models = list(models)
         self.completions = deque(completions)
         self.streams = deque(streams)
+        self.transcriptions = deque(transcriptions)
         self.list_calls = 0
         self.complete_calls = 0
         self.stream_calls = 0
         self.complete_requests: list[dict[str, object]] = []
+        self.transcribe_requests: list[dict[str, object]] = []
 
     async def list_models(self) -> list[ProviderModel]:
         self.list_calls += 1
@@ -393,6 +537,31 @@ class FakeTransport:
         if not self.completions:
             raise ProviderError("ai_provider_unavailable", "Fake response queue is empty")
         result = self.completions.popleft()
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    async def transcribe(
+        self,
+        *,
+        model: str,
+        audio: bytes,
+        audio_format: str,
+        language: str,
+        via_chat: bool = False,
+    ) -> ProviderTranscription:
+        self.transcribe_requests.append(
+            {
+                "model": model,
+                "bytes": len(audio),
+                "format": audio_format,
+                "language": language,
+                "via_chat": via_chat,
+            }
+        )
+        if not self.transcriptions:
+            raise ProviderError("ai_provider_unavailable", "Fake transcription queue is empty")
+        result = self.transcriptions.popleft()
         if isinstance(result, Exception):
             raise result
         return result

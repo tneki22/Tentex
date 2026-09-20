@@ -241,6 +241,21 @@ ROLE_SPECS = {
             parameter_model=ModelTestParameters,
             visible=False,
         ),
+        # Отдельная роль, а не `speech_transcription`: та может быть выключена в
+        # Параметрах, а проверка явно выбранной модели от этого зависеть не должна.
+        AiRoleSpec(
+            "settings_speech_model_test",
+            "Проверка модели распознавания речи",
+            "Проверяет, принимает ли явно выбранная модель аудио.",
+            "speech",
+            frozenset({"audio_transcription"}),
+            cache_policy="none",
+            prompt_version="settings-speech-model-test-v1",
+            default_parameters={"language": "ru"},
+            allow_request_model_override=True,
+            parameter_model=SpeechRoleParameters,
+            visible=False,
+        ),
     )
 }
 

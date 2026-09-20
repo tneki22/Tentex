@@ -11,6 +11,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.ai.credentials import decrypt_secret, encrypt_secret
+from app.ai.provider import is_speech_to_text_id
 from app.ai.roles import (
     ROLE_SPECS,
     AiModality,
@@ -64,6 +65,18 @@ def model_capabilities(row: AiModelCatalogEntry) -> set[str]:
     if "image" in row.input_modalities:
         capabilities.add("image_input")
     return capabilities
+
+
+def is_transcription_model(row: AiModelCatalogEntry) -> bool:
+    """Модель распознавания речи: принимает аудио и не умеет вести чат.
+
+    Только `audio` во входе недостаточно: Gemini принимает и аудио, но отвечает
+    в чате. У OpenRouter Whisper приходит с `text` во входе, поэтому решает ещё и
+    семейство по ID.
+    """
+    if "audio" not in row.input_modalities:
+        return False
+    return "text" not in row.input_modalities or is_speech_to_text_id(row.model_id)
 
 
 def validate_model_selection(

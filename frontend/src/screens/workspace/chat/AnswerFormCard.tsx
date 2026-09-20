@@ -1,6 +1,7 @@
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { RotateCcw, Send } from "lucide-react";
 import type { AnswerFormPayload } from "../../../api/chat";
+import { DictationButton } from "../../../components/domain";
 import { Button, SegmentedTabs } from "../../../components/ui";
 
 function timeLabel(iso: string): string {
@@ -44,7 +45,13 @@ type AnswerFormCardProps = SubmittedAnswerCardProps | ComposingAnswerCardProps;
 
 /** Форма ответа: до отправки — черновик текущего чата, после — нередактируемая карточка. */
 export function AnswerFormCard(props: AnswerFormCardProps) {
-  const growRef = useAutoGrow(props.mode === "composing" ? props.value : "");
+  const draft = props.mode === "composing" ? props.value : "";
+  const growRef = useAutoGrow(draft);
+  // Расшифровка приходит через секунды — дописываем к актуальному тексту ответа.
+  const latestDraft = useRef(draft);
+  useEffect(() => {
+    latestDraft.current = draft;
+  }, [draft]);
 
   if (props.mode === "submitted") {
     const { payload, createdAt, onAnswerAgain, onCheckAgain, headingRef } = props;
@@ -86,6 +93,14 @@ export function AnswerFormCard(props: AnswerFormCardProps) {
         disabled={busy}
       />
       <div className="chat-answer-actions">
+        <DictationButton
+          disabled={busy}
+          onText={(text) => {
+            const current = latestDraft.current.trimEnd();
+            onChange(current ? `${current} ${text}` : text);
+            growRef.current?.focus();
+          }}
+        />
         <Button variant="ghost" onClick={onCancel} disabled={busy}>Отменить</Button>
         <Button onClick={onSubmit} disabled={busy || !value.trim()}>
           <Send size={14} />{busy ? "Отправляем…" : "Сдать ответ"}

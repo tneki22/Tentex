@@ -770,20 +770,24 @@ function ModelsPanel({
     const key = modelKey(model);
     setBusy(key);
     setNote(null);
-    setTests((current) => ({ ...current, [key]: { status: "pending", title: "спрашиваем модель…", detail: "" } }));
+    setTests((current) => ({ ...current, [key]: { status: "pending", title: "проверяем модель…", detail: "" } }));
     try {
       const result = await testAiModel({ provider_id: model.provider_id, model_id: model.model_id });
-      const facts = [
-        { label: "Время ответа", value: duration(result.duration_ms) },
-        { label: "Токены", value: `${result.input_tokens} → ${result.output_tokens}` },
-      ];
+      const speech = result.kind === "speech";
+      const facts = [{ label: "Время ответа", value: duration(result.duration_ms) }];
+      // Модель речи получает секунду тишины, токенов у неё нет.
+      if (!speech) facts.push({ label: "Токены", value: `${result.input_tokens} → ${result.output_tokens}` });
       if (result.actual_model_id && result.actual_model_id !== model.model_id) {
         facts.push({ label: "Ответила модель", value: result.actual_model_id });
       }
       setTests((current) => ({ ...current, [key]: {
         status: "ok",
-        title: "модель ответила",
-        detail: `«${result.answer}»`,
+        title: speech ? "модель приняла аудио" : "модель ответила",
+        detail: speech
+          ? (result.answer
+            ? `Тестовая запись — тишина, модель услышала: «${result.answer}»`
+            : "Тестовая запись — секунда тишины, слов в ней нет, поэтому текст пустой.")
+          : `«${result.answer}»`,
         facts,
       } }));
       onSettings(await getAiSettings());

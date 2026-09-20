@@ -7,6 +7,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.ai.dictation import router as dictation_router
 from app.ai.router import router as ai_router
 from app.background.router import router as background_router
 from app.bindings.router import router as bindings_router
@@ -124,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(conspects_router)
     app.include_router(lessons_router)
     app.include_router(ai_router)
+    app.include_router(dictation_router)
     app.include_router(ocr_router)
     app.include_router(exam_router)
     app.include_router(background_router)

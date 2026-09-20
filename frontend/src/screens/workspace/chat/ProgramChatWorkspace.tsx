@@ -164,7 +164,6 @@ export function ProgramChatWorkspace({ projectId, program, execute, onMessagesCh
             onChange={chat.setDraft}
             onSend={() => void chat.sendMessage(chat.draft)}
             showModeIndicator={false}
-            showDictation={false}
             sending={chat.sending}
           />
         </>

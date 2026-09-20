@@ -82,7 +82,8 @@ strict JSON Schema и затем независимо проверяет рез�
 | `exam_chat_reply` | text | streaming | none | да |
 | `exam_answer_judge` | text | structured output | exact | да |
 | `exam_chat_memory` | text | structured output | none | позже |
-| `speech_transcription` | speech | audio transcription | content hash | позже |
+| `speech_transcription` | speech | audio transcription | нет | да |
+| `settings_speech_model_test` | speech (скрытая) | audio transcription | нет | да |
 
 Порядок разрешения:
 
@@ -343,8 +344,38 @@ Apply сопоставляет каждый пункт ответа со ста�
 | `ai_timeout` | 504 | локальный timeout |
 | `ai_invalid_structured_output` | 422 | ответ не прошёл Pydantic |
 | `ai_cancelled` | 499 | поток отменён пользователем |
+| `ai_audio_empty` | 422 | пустая запись |
+| `ai_audio_too_large` | 413 | запись больше 20 МБ |
+| `ai_audio_format_unsupported` | 415 | тип файла не аудио, которое мы принимаем |
 
 Provider body и текст исключения наружу не передаются.
+
+## Распознавание речи
+
+`POST /api/ai/transcriptions` (multipart, поле `file`) → `{text, run_id, duration_ms}`.
+Ходит через `ModelGateway.transcribe` роли `speech_transcription`: модель берётся из
+«Параметров ИИ → Для речи», расход попадает в `AiRun`, текст записи в журнал не
+пишется (`response_payload = {}`). Подтверждение стоимости не запрашивается — это явное
+нажатие на микрофон, — а дневной лимит и лимит вызова действуют.
+
+Способ вызова зависит от модели (`is_transcription_model` в `settings.py`):
+
+| Модель | Как зовём |
+|---|---|
+| Whisper и `*-transcribe`, провайдер `openai_compatible` (Groq, OpenAI) | `/audio/transcriptions`, multipart |
+| Они же, профиль `openrouter` | `/audio/transcriptions`, JSON с `input_audio` в base64 |
+| Мультимодальная чат-модель с аудиовходом (Gemini) | `/chat/completions` с частью `input_audio` |
+
+Whisper, добавленный из поиска у провайдера без `architecture` в `/models` (Groq), получает
+вход `audio` по ID (`provider._infer_modalities`); у уже сохранённых это поправила
+миграция `20260920_0051`. Фронтенд всегда шлёт WAV 16 кГц моно (`dictationAudio.ts`):
+webm из Chrome не принимают чат-модели, а WAV понимают все три пути.
+
+`Тест` аудиомодели отправляет секунду тишины скрытой ролью `settings_speech_model_test` и
+отвечает `kind: "speech"`; обычной модели по-прежнему задаётся вопрос.
+
+`usage.include` в chat-запросе — расширение OpenRouter (стоимость), поэтому шлётся только
+профилю `openrouter`: Groq отвечает на неизвестное поле отказом.
 
 ## Проверки
 

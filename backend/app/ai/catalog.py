@@ -27,7 +27,9 @@ def production_transport(session: Session, provider_id: UUID) -> OpenAITransport
         raise AiGatewayError("Провайдер не найден", code="ai_provider_not_found", status=404)
     if not provider.base_url:
         raise AiGatewayError("Подключение не настроено", code="ai_connection_not_configured")
-    return OpenAITransport(provider.base_url, credential(session, provider_id))
+    return OpenAITransport(
+        provider.base_url, credential(session, provider_id), provider.catalog_profile
+    )
 
 
 async def test_connection(

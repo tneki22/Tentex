@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import time
+import wave
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -41,6 +42,7 @@ from app.ai.settings import (
     AiGatewayError,
     ResolvedModel,
     credential,
+    is_transcription_model,
     model_capabilities,
     resolve_model,
 )
@@ -94,6 +96,10 @@ _CAPABILITY_LABELS = {
 # провайдеров они отличаются, но порядок тот же — числа нужны, чтобы
 # предупредить о стоимости заранее, а не чтобы вести бухгалтерию. Фактический
 # расход всё равно приходит в `usage` от провайдера.
+# Потолок одной записи: у Groq и OpenAI лимит файла 25 МБ, запас — на заголовки.
+# Реплика в чат весит килобайты; больше — это уже не диктовка.
+MAX_AUDIO_BYTES = 20 * 1024 * 1024
+
 IMAGE_TILE_PX = 768
 IMAGE_SMALL_PX = 384
 IMAGE_TILE_TOKENS = 258
@@ -164,6 +170,26 @@ class AiStreamEvent:
     delta: str = ""
     run_id: UUID | None = None
     usage: AiUsage | None = None
+
+
+@dataclass(frozen=True)
+class AiTranscription:
+    text: str
+    run_id: UUID
+    duration_ms: int
+    actual_model_id: str
+    usage: AiUsage
+
+
+def _silent_wav() -> bytes:
+    """Секунда тишины: провайдеру нужен настоящий аудиофайл, а слов для проверки не нужно."""
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as file:
+        file.setnchannels(1)
+        file.setsampwidth(2)
+        file.setframerate(16_000)
+        file.writeframes(bytes(2 * 16_000))
+    return buffer.getvalue()
 
 
 def _error_status(code: str) -> int:
@@ -424,6 +450,9 @@ class ModelGateway:
         yield AiStreamEvent(kind="completed", run_id=run.id, usage=usage)
 
     async def test_model(self, selection: AiModelSelection) -> AiModelTestRead:
+        entry = self.session.get(AiModelCatalogEntry, (selection.provider_id, selection.model_id))
+        if entry is not None and is_transcription_model(entry):
+            return await self._test_transcription_model(selection)
         request = AiTextRequest(
             role="settings_model_test",
             messages=[AiMessage(role="user", content="Ответь одним словом: работает")],
@@ -468,10 +497,88 @@ class ModelGateway:
             output_tokens=result.usage.output_tokens,
         )
 
-    async def transcribe(self, _request: object) -> None:
-        raise AiGatewayError(
-            "Распознавание речи появится вместе с диктовкой",
-            code="ai_capability_unsupported",
+    async def transcribe(
+        self,
+        audio: bytes,
+        audio_format: str,
+        *,
+        role: str = "speech_transcription",
+        request_model_override: AiModelSelection | None = None,
+        project_id: UUID | None = None,
+    ) -> AiTranscription:
+        """Превращает запись в текст моделью речи; расход идёт в общий журнал запусков.
+
+        Подтверждение стоимости здесь не спрашивается: это явное нажатие на
+        микрофон, а короткая реплика стоит копейки, и «цена неизвестна» у
+        Whisper была бы на каждой диктовке. Лимиты — дневной и на вызов — при
+        этом действуют как обычно. Текст записи в журнал не попадает.
+        """
+        if not audio:
+            raise AiGatewayError("Запись пустая", code="ai_audio_empty")
+        if len(audio) > MAX_AUDIO_BYTES:
+            raise AiGatewayError(
+                "Запись слишком большая: сократите реплику или продиктуйте по частям",
+                code="ai_audio_too_large",
+                status=413,
+                context={"limit_bytes": MAX_AUDIO_BYTES},
+            )
+        fingerprint = hashlib.sha256(audio).hexdigest()
+        request = AiTextRequest(
+            role=role,
+            messages=[AiMessage(
+                role="user",
+                content=f"[аудио {audio_format}, {len(audio)} байт, sha256:{fingerprint}]",
+            )],
+            request_model_override=request_model_override,
+            project_id=project_id,
+        )
+        preflight = await self.preflight(request)
+        resolved = resolve_model(self.session, role, request_model_override)
+        transport = self.transport or production_transport(self.session, resolved.provider.id)
+        run = self._start_run(request, resolved, preflight)
+        started = time.monotonic()
+        try:
+            result = await transport.transcribe(
+                model=resolved.model_id,
+                audio=audio,
+                audio_format=audio_format,
+                language=str(resolved.parameters.get("language", "ru")),
+                via_chat=not is_transcription_model(resolved.model),
+            )
+        except asyncio.CancelledError:
+            self._fail_run(run.id, "ai_cancelled", started, status="cancelled")
+            raise
+        except ProviderError as error:
+            self._fail_run(run.id, error.code, started)
+            raise _gateway_error(error.code, error.detail) from error
+        usage = self._finish_run(
+            run.id, {}, result.actual_model_id, result.request_id, result.usage, started,
+            cache=False,
+        )
+        return AiTranscription(
+            text=result.text.strip(),
+            run_id=run.id,
+            duration_ms=round((time.monotonic() - started) * 1000),
+            actual_model_id=result.actual_model_id,
+            usage=usage,
+        )
+
+    async def _test_transcription_model(self, selection: AiModelSelection) -> AiModelTestRead:
+        transcription = await self.transcribe(
+            _silent_wav(),
+            "wav",
+            role="settings_speech_model_test",
+            request_model_override=selection,
+        )
+        return AiModelTestRead(
+            status="answered",
+            kind="speech",
+            run_id=transcription.run_id,
+            duration_ms=transcription.duration_ms,
+            answer=transcription.text[:400],
+            actual_model_id=transcription.actual_model_id,
+            input_tokens=transcription.usage.input_tokens,
+            output_tokens=transcription.usage.output_tokens,
         )
 
     def _catalog_model(self, resolved: ResolvedModel) -> AiModelCatalogEntry:

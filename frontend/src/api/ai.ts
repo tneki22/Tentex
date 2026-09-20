@@ -35,7 +35,10 @@ export type AiErrorCode =
   | "ai_role_not_found"
   | "ai_role_parameters_invalid"
   | "ai_model_override_forbidden"
-  | "ai_secret_mismatch";
+  | "ai_secret_mismatch"
+  | "ai_audio_empty"
+  | "ai_audio_too_large"
+  | "ai_audio_format_unsupported";
 
 export type AiApiError = ProjectApiError & { readonly code: AiErrorCode };
 
@@ -48,7 +51,8 @@ const AI_ERROR_CODES = new Set<AiErrorCode>([
   "ai_fx_snapshot_incomplete", "ai_model_not_in_catalog", "ai_model_modality_unsupported",
   "ai_model_in_use", "ai_provider_not_found", "ai_provider_in_use", "ai_provider_label_exists",
   "ai_role_selection_incomplete", "ai_role_not_found", "ai_role_parameters_invalid",
-  "ai_model_override_forbidden", "ai_secret_mismatch",
+  "ai_model_override_forbidden", "ai_secret_mismatch", "ai_audio_empty", "ai_audio_too_large",
+  "ai_audio_format_unsupported",
 ]);
 
 export function isAiApiError(error: unknown): error is AiApiError {
@@ -206,8 +210,16 @@ export interface AiProviderTestRead {
   tested_at: string;
 }
 
+export interface AiTranscriptionRead {
+  text: string;
+  run_id: string;
+  duration_ms: number;
+}
+
 export interface AiModelTestRead {
   status: "answered";
+  /** «speech» — модель распознавания речи: проверяется записью тишины, а не вопросом. */
+  kind: "text" | "speech";
   run_id: string;
   duration_ms: number;
   answer: string;
@@ -381,6 +393,14 @@ export const testAiModel = (
   `${AI_PATH}/providers/${selection.provider_id}/models/test`,
   { method: "POST", body: JSON.stringify({ model_id: selection.model_id }), signal },
 );
+
+/** Расшифровка записи моделью речи из «Параметров ИИ → Для речи». */
+export function transcribeAudio(audio: Blob, signal?: AbortSignal): Promise<AiTranscriptionRead> {
+  const body = new FormData();
+  // Бэкенд определяет формат по типу содержимого; имя нужно только multipart.
+  body.append("file", audio, "dictation");
+  return request("/api/ai/transcriptions", { method: "POST", body, signal });
+}
 
 export const updateAiProviderFavorites = (
   providerIds: string[], signal?: AbortSignal,

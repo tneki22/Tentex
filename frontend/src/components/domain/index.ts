@@ -21,6 +21,7 @@ export { AutoMatchDialog } from "./AutoMatchDialog";
 export type { ConspectEditorHandle, ConspectEditorProps } from "./ConspectEditor";
 export type { ConspectSummaryProps } from "./ConspectSummary";
 export { CostEstimate } from "./CostEstimate";
+export { DictationButton } from "./DictationButton";
 export { EvidenceCard } from "./EvidenceCard";
 export { EvidenceDecisionMenu } from "./EvidenceDecisionMenu";
 export { EvidenceInspector } from "./EvidenceInspector";

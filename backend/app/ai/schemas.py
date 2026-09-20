@@ -180,8 +180,16 @@ class AiModelTestWrite(ApiModel):
     model_id: NonBlank
 
 
+class AiTranscriptionRead(ApiModel):
+    text: str
+    run_id: UUID
+    duration_ms: int
+
+
 class AiModelTestRead(ApiModel):
     status: Literal["answered"]
+    # «speech» — модель распознавания речи: её проверяют записью тишины, а не вопросом.
+    kind: Literal["text", "speech"] = "text"
     run_id: UUID
     duration_ms: int
     answer: str
