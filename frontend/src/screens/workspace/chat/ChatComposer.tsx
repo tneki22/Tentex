@@ -101,8 +101,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               <Square size={13} />Остановить
             </Button>
           ) : sending ? (
-            <Button variant="secondary" className="chat-composer-send" disabled>
-              Отправляем…
+            <Button variant="secondary" className="chat-composer-send is-waiting" disabled aria-busy="true">
+              <span className="chat-send-spinner" aria-hidden="true" />Ждём ответ
             </Button>
           ) : (
             <Button className="chat-composer-send" onClick={onSend} disabled={disabled || !value.trim()}>

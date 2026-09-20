@@ -66,9 +66,9 @@ export function ProgramChatWorkspace({ projectId, program, execute, onMessagesCh
   const [proposalBusy, setProposalBusy] = useState<string | null>(null);
 
   useEffect(() => {
-    onMessagesChange?.(chat.session?.messages ?? []);
+    onMessagesChange?.(chat.messages);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chat.session?.messages]);
+  }, [chat.messages]);
 
   if (chat.loadError) {
     return (
@@ -81,7 +81,7 @@ export function ProgramChatWorkspace({ projectId, program, execute, onMessagesCh
   if (chat.sessions === null) return <LoadingState label="Загружаем чат" />;
 
   const nodeTitles = Object.fromEntries(program.nodes.map((node) => [node.id, node.title]));
-  const isEmpty = (chat.session?.messages.length ?? 0) === 0;
+  const isEmpty = chat.messages.length === 0;
 
   async function handleApply(messageId: string, selected: number[]) {
     setProposalBusy(messageId);
@@ -118,7 +118,7 @@ export function ProgramChatWorkspace({ projectId, program, execute, onMessagesCh
       {chat.detailError && (
         <div className="chat-panel-error">
           <ErrorState title="Переписка не загрузилась" message={chat.detailError} />
-          <Button onClick={chat.reloadDetail}>Повторить</Button>
+          <Button onClick={chat.retryDetail}>Повторить</Button>
         </div>
       )}
 
@@ -141,9 +141,9 @@ export function ProgramChatWorkspace({ projectId, program, execute, onMessagesCh
           ) : (
             <ChatTimeline
               projectId={projectId}
-              messages={chat.session.messages}
+              messages={chat.messages}
               streamingMessageId={null}
-              preparing={false}
+              preparing={chat.sending}
               failure={chat.sendError ? { code: "program_chat_send_error", detail: chat.sendError } : null}
               onRetry={() => void chat.sendMessage(chat.draft)}
               onApplyProposal={handleApply}

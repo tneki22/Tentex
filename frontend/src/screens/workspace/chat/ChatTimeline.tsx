@@ -44,6 +44,7 @@ export function ChatTimeline({
   const followTailRef = useRef(true);
   const headingRefs = useRef(new Map<string, HTMLHeadingElement>());
   const previousAtomicIds = useRef<Set<string> | null>(null);
+  const previousLength = useRef(messages.length);
   const wasStreaming = useRef(false);
   const [showJump, setShowJump] = useState(false);
   const [streamAnnouncement, setStreamAnnouncement] = useState("");
@@ -68,6 +69,11 @@ export function ChatTimeline({
   useLayoutEffect(() => {
     const node = scrollRef.current;
     if (!node) return;
+    // Своё только что отправленное сообщение видно всегда, даже если ленту
+    // перед этим прокрутили вверх.
+    const grew = messages.length > previousLength.current;
+    previousLength.current = messages.length;
+    if (grew && messages.at(-1)?.role === "user") followTailRef.current = true;
     if (followTailRef.current) {
       node.scrollTop = node.scrollHeight;
       setShowJump(false);
@@ -75,7 +81,21 @@ export function ChatTimeline({
       setShowJump(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, messages.at(-1)?.text]);
+  }, [messages.length, messages.at(-1)?.text, preparing]);
+
+  // Высота ленты меняется и без новых сообщений: поле ввода растёт и схлопывается
+  // после отправки, раскрывается диф. Пока читатель внизу, держим его внизу.
+  useEffect(() => {
+    const node = scrollRef.current;
+    const rail = node?.firstElementChild;
+    if (!node || !rail || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(() => {
+      if (followTailRef.current) node.scrollTop = node.scrollHeight;
+    });
+    observer.observe(node);
+    observer.observe(rail);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const current = new Set(
@@ -160,7 +180,10 @@ export function ChatTimeline({
           ))}
           {preparing && (
             <div className="chat-timeline-item">
-              <p className="chat-status-line" role="status">Готовлю ответ…</p>
+              <p className="chat-status-line" role="status">
+                Готовлю ответ
+                <span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span>
+              </p>
             </div>
           )}
           {failureView && <div className="chat-timeline-item">{failureView}</div>}
