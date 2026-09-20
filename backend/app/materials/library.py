@@ -43,6 +43,7 @@ from app.db import job_write_transaction
 from app.materials import revisions as revision_registry
 from app.materials.external import fetch_web_page, fetch_youtube_transcript
 from app.materials.lexicon import index_text, prefix_term, query_terms
+from app.materials.naming import material_display_name, project_material_display_name
 from app.materials.outline import find_printed_outline
 from app.materials.outline_titles import GENERAL_TITLE_RE, TOPIC_TITLE_RE
 from app.materials.parsers.base import ParsedElement, ParsedPage
@@ -59,6 +60,7 @@ from app.materials.schemas import (
     LibraryMaterialAttachWrite,
     LibraryMaterialCapabilities,
     LibraryMaterialDetailRead,
+    LibraryMaterialMetadataUpdate,
     LibraryMaterialRead,
     LibrarySearchHit,
     LibrarySearchResult,
@@ -89,6 +91,7 @@ from app.models import (
     BackgroundJobKind,
     BackgroundJobState,
     BlockClass,
+    GoalPassport,
     Material,
     MaterialBlock,
     MaterialFragment,
@@ -432,11 +435,12 @@ class LibraryAggregate:
     quality_counts: dict[PageQuality, int]
     block_count: int
     fragment_count: int
+    heading_count: int
     usage: list[tuple[ProjectMaterial, Project]]
 
 
 EMPTY_LIBRARY_AGGREGATE = LibraryAggregate(
-    quality_counts={}, block_count=0, fragment_count=0, usage=[]
+    quality_counts={}, block_count=0, fragment_count=0, heading_count=0, usage=[]
 )
 
 
@@ -495,6 +499,20 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
         ).all()
     )
 
+    heading_counts: dict[UUID, int] = dict(
+        session.execute(
+            select(MaterialFragment.material_id, func.count())
+            .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+            .join(Material, Material.id == MaterialFragment.material_id)
+            .where(
+                MaterialFragment.material_id.in_(material_ids),
+                MaterialPage.revision == Material.active_parse_revision,
+                MaterialFragment.structure_level.is_not(None),
+            )
+            .group_by(MaterialFragment.material_id)
+        ).all()
+    )
+
     usage_by_material: dict[UUID, list[tuple[ProjectMaterial, Project]]] = defaultdict(list)
     for link, project in session.execute(
         select(ProjectMaterial, Project)
@@ -509,6 +527,7 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
             quality_counts=quality_counts.get(material.id, {}),
             block_count=block_counts.get(material.id, 0),
             fragment_count=fragment_counts.get(material.id, 0),
+            heading_count=heading_counts.get(material.id, 0),
             usage=usage_by_material.get(material.id, []),
         )
         for material in materials
@@ -521,7 +540,7 @@ def _usage_read(material: Material, aggregate: LibraryAggregate) -> list[Library
             project_id=project.id,
             project_name=project.name or "Без названия",
             project_status=project.status.value,
-            display_name=link.display_name or material.original_name,
+            display_name=project_material_display_name(material, link),
             source_role=link.source_role,
             purposes=[MaterialPurpose(value) for value in link.purposes if value in PURPOSE_VALUES],
             exam_slot=link.exam_slot,
@@ -534,6 +553,8 @@ def library_read(material: Material, aggregate: LibraryAggregate) -> LibraryMate
     return LibraryMaterialRead(
         id=material.id,
         original_name=material.original_name,
+        display_name=material_display_name(material),
+        subject=material.subject,
         media_type=material.media_type,
         source_kind=material.source_kind,
         source_url=material.source_url,
@@ -546,6 +567,7 @@ def library_read(material: Material, aggregate: LibraryAggregate) -> LibraryMate
         ocr_low_page_count=aggregate.quality_counts.get(PageQuality.OCR_LOW, 0),
         block_count=aggregate.block_count,
         fragment_count=aggregate.fragment_count,
+        has_outline=bool(material.outline) or aggregate.heading_count > 0,
         sha256=material.sha256,
         created_at=material.created_at,
         usage=_usage_read(material, aggregate),
@@ -630,6 +652,22 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
         raster_token=raster_token(session, material_id),
         typst=typst,
     )
+
+
+def update_library_material_metadata(
+    session: Session, material_id: UUID, command: LibraryMaterialMetadataUpdate
+) -> LibraryMaterialDetailRead:
+    """Изменить пользовательские метаданные, не трогая исходный файл и его имя."""
+    with session.begin():
+        material = material_or_404(session, material_id)
+        values = command.model_dump(exclude_unset=True)
+        if "display_name" in values and values["display_name"] is not None:
+            material.display_name = values["display_name"]
+        if "subject" in values:
+            material.subject = values["subject"]
+        material.updated_at = utc_now()
+        session.flush()
+    return read_library_material(session, material_id)
 
 
 # ── Чтение страниц, исходника и версий ──────────────────────────────────────
@@ -1098,6 +1136,7 @@ def _existing_or_new(
     *,
     sha256: str,
     original_name: str,
+    subject: str | None = None,
     storage_path: str,
     media_type: str,
     source_kind: MaterialSourceKind,
@@ -1111,13 +1150,18 @@ def _existing_or_new(
     outline: list[dict[str, object]] | None = None,
 ) -> Material:
     """Дедупликация по содержимому: один файл в установке хранится один раз."""
+    normalized_subject = subject.strip() if subject and subject.strip() else None
     material = session.scalar(select(Material).where(Material.sha256 == sha256))
     if material is not None:
+        if material.subject is None and normalized_subject:
+            material.subject = normalized_subject
         return material
     now = utc_now()
     material = Material(
         sha256=sha256,
         original_name=original_name,
+        display_name=original_name,
+        subject=normalized_subject,
         storage_path=storage_path,
         media_type=media_type,
         source_kind=source_kind,
@@ -1177,12 +1221,15 @@ async def store_uploaded_file(upload: UploadFile) -> UploadedFile:
     )
 
 
-def register_uploaded_material(session: Session, uploaded: UploadedFile) -> Material:
+def register_uploaded_material(
+    session: Session, uploaded: UploadedFile, *, subject: str | None = None
+) -> Material:
     """Строка материала для уже сохранённого файла. Транзакцией управляет вызывающий."""
     return _existing_or_new(
         session,
         sha256=uploaded.sha256,
         original_name=uploaded.original_name,
+        subject=subject,
         storage_path=uploaded.storage_path,
         media_type=uploaded.media_type,
         source_kind=(
@@ -1199,18 +1246,24 @@ def register_uploaded_material(session: Session, uploaded: UploadedFile) -> Mate
     )
 
 
-async def create_library_upload(session: Session, upload: UploadFile) -> LibraryMaterialDetailRead:
+async def create_library_upload(
+    session: Session, upload: UploadFile, *, subject: str | None = None
+) -> LibraryMaterialDetailRead:
     """Файл в Библиотеку без всякого проекта."""
     uploaded = await store_uploaded_file(upload)
     session.rollback()
     with session.begin():
-        material = register_uploaded_material(session, uploaded)
+        material = register_uploaded_material(session, uploaded, subject=subject)
         material_id = material.id
     return read_library_material(session, material_id)
 
 
 def create_typst_material(
-    session: Session, bundle: Bundle, input_kind: str, display_name: str | None = None
+    session: Session,
+    bundle: Bundle,
+    input_kind: str,
+    display_name: str | None = None,
+    subject: str | None = None,
 ) -> tuple[LibraryMaterialDetailRead, BackgroundJob]:
     """Регистрирует bundle и ставит единственную автоматическую сборку Typst.
 
@@ -1228,6 +1281,7 @@ def create_typst_material(
                 display_name
                 or (Path(bundle.entrypoint).name if bundle.entrypoint else "Typst-проект.zip")
             ),
+            subject=subject,
             storage_path=storage_path,
             media_type="application/zip",
             source_kind=MaterialSourceKind.TYPST,
@@ -1362,7 +1416,9 @@ def create_library_external(
     fetched = fetch_external(command)
     session.rollback()
     with session.begin():
-        material_id = create_external_material_row(session, *fetched).id
+        material_id = create_external_material_row(
+            session, *fetched, subject=command.subject
+        ).id
     return read_library_material(session, material_id)
 
 
@@ -1372,6 +1428,7 @@ def create_text_material_row(session: Session, command: LibraryTextMaterialCreat
         session,
         sha256=sha256,
         original_name=original_name,
+        subject=command.subject,
         storage_path=storage_path,
         media_type=media_type,
         source_kind=MaterialSourceKind.TEXT,
@@ -1399,12 +1456,14 @@ def create_external_material_row(
     source_url: str,
     retrieved_at: Any,
     source_kind: MaterialSourceKind,
+    subject: str | None = None,
 ) -> Material:
     sha256, storage_path, size, original_name, media_type = store_text(name, text)
     return _existing_or_new(
         session,
         sha256=sha256,
         original_name=original_name,
+        subject=subject,
         storage_path=storage_path,
         media_type=media_type,
         source_kind=source_kind,
@@ -1457,7 +1516,11 @@ def guard_single_answers_file(
     if existing is None or existing.material_id == material_id:
         return
     material = session.get(Material, existing.material_id)
-    name = existing.display_name or (material.original_name if material else "")
+    name = (
+        project_material_display_name(material, existing)
+        if material is not None
+        else ""
+    )
     raise ProjectConflictError(
         f"Для этого входа уже выбран материал: «{name}». Сначала уберите его",
         code="exam_slot_already_set" if exam_slot else "reference_answers_already_set",
@@ -1471,7 +1534,7 @@ def attach_material_to_project(
     """Подключение — это только новая связь. Файл не копируется, разбор не запускается."""
     session.rollback()
     with session.begin():
-        material_or_404(session, material_id)
+        material = material_or_404(session, material_id)
         project = session.get(Project, command.project_id)
         if project is None:
             raise ProjectNotFoundError()
@@ -1485,6 +1548,9 @@ def attach_material_to_project(
             raise ProjectConflictError(
                 "Этот материал уже подключён к проекту", code="material_already_attached"
             )
+        passport = session.get(GoalPassport, command.project_id)
+        if material.subject is None and passport is not None and passport.subject:
+            material.subject = passport.subject
         purposes = list(dict.fromkeys(command.purposes)) or [MaterialPurpose.STUDY_SOURCE]
         guard_single_answers_file(
             session, command.project_id, purposes, material_id, command.exam_slot
@@ -2243,7 +2309,10 @@ def refresh_source(session: Session, material_id: UUID) -> SourceRefreshResult:
             material.size_bytes = size
             material.source_url = source_url
             material.retrieved_at = retrieved_at
+            previous_original_name = material.original_name
             material.original_name = name
+            if material.display_name == previous_original_name:
+                material.display_name = name
             material.page_count = 1
             material.status = MaterialState.READY
             material.active_parse_revision = target

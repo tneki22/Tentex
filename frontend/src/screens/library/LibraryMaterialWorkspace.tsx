@@ -12,6 +12,7 @@ import {
   restoreMaterialRevision,
   searchLibraryMaterial,
   updateLibraryPageText,
+  updateLibraryMaterialMetadata,
   type MaterialDeletePreview,
   type MaterialPageRead,
   type MaterialPurpose,
@@ -501,7 +502,7 @@ export function LibraryMaterialWorkspace() {
             </button>
           </Tooltip>
           <div className="library-head-title">
-            <h1 title={detail.original_name}>{detail.original_name}</h1>
+            <h1 title={detail.original_name}>{detail.display_name}</h1>
             {detail.status !== "ready" && <div className="library-head-meta">
               <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
             </div>}
@@ -647,6 +648,10 @@ export function LibraryMaterialWorkspace() {
               return result;
             })}
             onDelete={() => void getMaterialDeletePreview(detail.id).then(setDeletePreview)}
+            onSaveMetadata={async (command) => {
+              await store.run(() => updateLibraryMaterialMetadata(detail.id, command));
+              setNotice("Название и предмет сохранены.");
+            }}
           />
         )}
       </div>
@@ -724,6 +729,10 @@ export function LibraryMaterialWorkspace() {
             onAddToProject={() => setAttachOpen(true)}
             onRefreshSource={() => void store.run(() => refreshLibrarySource(detail.id))}
             onDelete={() => void getMaterialDeletePreview(detail.id).then(setDeletePreview)}
+            onSaveMetadata={async (command) => {
+              await store.run(() => updateLibraryMaterialMetadata(detail.id, command));
+              setNotice("Название и предмет сохранены.");
+            }}
           />
         </div>
       )}
@@ -749,7 +758,7 @@ export function LibraryMaterialWorkspace() {
           projectId={null}
           material={{
             id: detail.id,
-            display_name: detail.original_name,
+            display_name: detail.display_name,
             active_parse_revision: detail.active_parse_revision,
           }}
           page={page}
@@ -768,7 +777,7 @@ export function LibraryMaterialWorkspace() {
       <HeaderFooterDialog
         open={headerFooterOpen}
         projectId={null}
-        material={{ id: detail.id, display_name: detail.original_name }}
+        material={{ id: detail.id, display_name: detail.display_name }}
         onOpenChange={setHeaderFooterOpen}
         onReload={async () => {
           await store.refreshDetail();
@@ -783,7 +792,7 @@ export function LibraryMaterialWorkspace() {
       <AddToProjectDialog
         open={attachOpen}
         materialId={detail.id}
-        materialName={detail.original_name}
+        materialName={detail.display_name}
         attachedProjectIds={detail.usage.map((usage) => usage.project_id)}
         onOpenChange={setAttachOpen}
         onAttached={() => {
@@ -795,7 +804,7 @@ export function LibraryMaterialWorkspace() {
       <ConfirmDialog
         open={deletePreview !== null}
         onOpenChange={(open) => !open && setDeletePreview(null)}
-        title={`Удалить ${detail.original_name}?`}
+        title={`Удалить ${detail.display_name}?`}
         confirmLabel="Удалить файл везде"
         destructive
         onConfirm={() => void deleteLibraryMaterial(detail.id).then(goBack)}

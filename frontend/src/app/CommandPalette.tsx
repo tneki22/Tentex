@@ -135,7 +135,7 @@ export function CommandPalette() {
   const materialItems: PaletteItem[] = useMemo(() => materials.map((material) => ({
     id: `m-${material.id}`,
     group: "Материалы" as const,
-    label: material.original_name,
+    label: material.display_name,
     hint: material.usage.length > 0
       ? `в ${material.usage.length} проект${material.usage.length === 1 ? "е" : material.usage.length < 5 ? "ах" : "ах"}`
       : STATUS_HINTS[material.status],

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.coverage.budget import budget_usage
 from app.coverage.lifecycle import require_run
 from app.coverage.snapshots import require_project, snapshot_current, snapshots_current
+from app.materials.naming import material_display_name
 from app.models import (
     BackgroundJob,
     Binding,
@@ -441,7 +442,7 @@ def overview(session, project_id):
         source_rows.append(
             {
                 "id": str(material.id),
-                "name": display_name or material.original_name,
+                "name": display_name or material_display_name(material),
                 "revision": material.active_parse_revision,
                 "total": sum(by_material[(str(material.id), bucket)] for bucket in BUCKETS),
                 "distribution": {
@@ -511,7 +512,7 @@ def _titles(ids, titles) -> list[str]:
 def _known_extraction_limits(material):
     """И0а ещё не выполнен: экран обязан честно показать известные границы адаптера."""
     limits = []
-    name = material.original_name.casefold()
+    name = material_display_name(material).casefold()
     if name.endswith(".docx"):
         limits.append("docx_tables_not_enumerated")
     if name.endswith((".md", ".markdown")):

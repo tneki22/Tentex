@@ -21,6 +21,7 @@ from app.materials.schemas import (
     LibraryExternalMaterialCreate,
     LibraryMaterialAttachWrite,
     LibraryMaterialDetailRead,
+    LibraryMaterialMetadataUpdate,
     LibraryMaterialRead,
     LibrarySearchResult,
     LibraryTextMaterialCreate,
@@ -67,9 +68,11 @@ def list_library_materials(session: SessionDependency) -> list[LibraryMaterialRe
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def upload_library_material(
-    session: SessionDependency, file: Annotated[UploadFile, File()]
+    session: SessionDependency,
+    file: Annotated[UploadFile, File()],
+    subject: Annotated[str | None, Form()] = None,
 ) -> LibraryMaterialDetailRead:
-    return await library.create_library_upload(session, file)
+    return await library.create_library_upload(session, file, subject=subject)
 
 
 @router.post(
@@ -82,6 +85,7 @@ async def upload_typst_material(
     files: Annotated[list[UploadFile] | None, File()] = None,
     paths: Annotated[list[str] | None, Form()] = None,
     entrypoint: Annotated[str | None, Form()] = None,
+    subject: Annotated[str | None, Form()] = None,
 ) -> TypstStartRead:
     """Принимает один `.typ`, дерево браузера или ZIP и сразу ставит сборку."""
     display_name: str | None = None
@@ -102,7 +106,9 @@ async def upload_typst_material(
         raise ProjectDomainError(
             "Тип загрузки Typst не поддерживается", status=422, code="typst_bundle_invalid"
         )
-    _, job = library.create_typst_material(session, bundle, input_kind, display_name)
+    _, job = library.create_typst_material(
+        session, bundle, input_kind, display_name, subject
+    )
     return TypstStartRead(material_id=job.material_id, job_id=job.id)
 
 
@@ -181,6 +187,15 @@ def create_library_external_material(
     command: LibraryExternalMaterialCreate, session: SessionDependency
 ) -> LibraryMaterialDetailRead:
     return library.create_library_external(session, command)
+
+
+@router.patch("/materials/{material_id}", response_model=LibraryMaterialDetailRead)
+def update_library_material_metadata(
+    material_id: UUID,
+    command: LibraryMaterialMetadataUpdate,
+    session: SessionDependency,
+) -> LibraryMaterialDetailRead:
+    return library.update_library_material_metadata(session, material_id, command)
 
 
 @router.post("/materials/delete-preview", response_model=MaterialsDeletePreview)

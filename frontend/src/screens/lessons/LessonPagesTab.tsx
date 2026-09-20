@@ -91,7 +91,7 @@ export function LessonPagesTab({
       </div>
 
       {raster
-        ? <img className="lessons-pages-image" src={materialPageImageUrl(projectId, material.id, page)} alt={`${material.original_name}, страница ${page}`} />
+        ? <img className="lessons-pages-image" src={materialPageImageUrl(projectId, material.id, page)} alt={`${material.display_name}, страница ${page}`} />
         : <p className="lessons-panel-hint">У этого формата нет исходного листа — откройте страницу, чтобы выбрать абзацы по подготовленному тексту.</p>}
 
       <div className="lessons-outline-actions">

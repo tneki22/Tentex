@@ -212,7 +212,7 @@ export function LibraryProcessingPanel({
     return {
       id: task.id,
       kind: material.presentation_kind === "typst" ? "typst_compile" : "parse",
-      subject: material.original_name,
+      subject: material.display_name,
       unit: "страниц",
       done: task.done,
       total: task.total,
@@ -220,7 +220,7 @@ export function LibraryProcessingPanel({
       state: task.state,
       error: task.error ?? undefined,
     };
-  }, [task, material.original_name]);
+  }, [task, material.display_name]);
 
   // Технические отметки конвейера человеку не нужны: список чистится, а не
   // печатается как есть. Пустой после чистки — раздела нет вовсе.

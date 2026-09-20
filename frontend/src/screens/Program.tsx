@@ -50,6 +50,7 @@ import { GOAL_LEVELS, GoalLevelPicker, LibraryMaterialPickerDialog, ProgramTreeP
 import type { GoalLevelValue, TextbookProgramView } from "../components/domain";
 import {
   Button,
+  Card,
   ContextMenu,
   Dialog,
   Disclosure,
@@ -553,19 +554,21 @@ export function Program() {
           mode={textbookMode}
           selectedNodeId={selectedId}
           onSelectedNodeChange={setSelectedId}
-          aiContent={<div className="textbook-program-ai-layout">
-            <ProgramChatWorkspace
-              projectId={projectId}
-              program={detail.program}
-              execute={runTextbookCommand}
-              onMessagesChange={setAiChatMessages}
-            />
-            <ProgramTreePreview
-              program={detail.program}
-              pendingOperations={lastPendingDiffValue?.operations}
-              pendingStates={lastPendingDiffValue?.operation_states}
-            />
-          </div>}
+          aiContent={detail.project.template_key === "free"
+            ? <Card className="free-study-ai-placeholder"><h2>Составление по цели появится здесь</h2><p>ИИ предложит темы по вашей цели и, если вы попросите, учтёт выбранный учебник. Пока программу можно собрать вручную или импортировать из оглавления.</p></Card>
+            : <div className="textbook-program-ai-layout">
+              <ProgramChatWorkspace
+                projectId={projectId}
+                program={detail.program}
+                execute={runTextbookCommand}
+                onMessagesChange={setAiChatMessages}
+              />
+              <ProgramTreePreview
+                program={detail.program}
+                pendingOperations={lastPendingDiffValue?.operations}
+                pendingStates={lastPendingDiffValue?.operation_states}
+              />
+            </div>}
           renderHeader={(actions) => <PageHead
             title="Программа"
             actions={<>

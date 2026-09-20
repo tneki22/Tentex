@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import project_write_transaction
+from app.materials.naming import project_material_display_name
 from app.materials.outline_titles import GENERAL_TITLE_RE, TOPIC_TITLE_RE
 from app.models import (
     GoalPassport,
@@ -250,7 +251,7 @@ def import_outlines(
             prepared = _prepare_items(source.items, material.page_count)
             section_indices = _section_indices(prepared)
             imported_by_index: dict[int, ProgramNode] = {}
-            source_name = link.display_name or material.original_name
+            source_name = project_material_display_name(material, link)
             for index, item in enumerate(prepared):
                 if not item.value.selected:
                     continue

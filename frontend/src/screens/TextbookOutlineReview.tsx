@@ -59,6 +59,7 @@ interface TextbookOutlineReviewProps {
   materials: MaterialRead[];
   values: OutlinesByMaterialId;
   onChange: (materialId: string, next: OutlineDraftState | null) => void;
+  allowModel?: boolean;
 }
 
 /**
@@ -67,7 +68,7 @@ interface TextbookOutlineReviewProps {
  * происходит — это только визуальная проверка перед шагом 4 (Работа 5 плана
  * правок мастера учебника).
  */
-export function TextbookOutlineReview({ projectId, materials, values, onChange }: TextbookOutlineReviewProps) {
+export function TextbookOutlineReview({ projectId, materials, values, onChange, allowModel = true }: TextbookOutlineReviewProps) {
   const candidates = materials.filter((material) => (material.page_count ?? 0) > 0);
   const [materialId, setMaterialId] = useState(
     () => Object.keys(values)[0]
@@ -100,13 +101,17 @@ export function TextbookOutlineReview({ projectId, materials, values, onChange }
   const fetchedFor = useRef<string | null>(null);
 
   useEffect(() => {
+    if (!allowModel) {
+      setAiSettingsLoaded(true);
+      return;
+    }
     const abort = new AbortController();
     void getAiSettings(abort.signal)
       .then(setAiSettings)
       .catch(() => undefined)
       .finally(() => setAiSettingsLoaded(true));
     return () => abort.abort();
-  }, []);
+  }, [allowModel]);
 
   useEffect(() => {
     if (!materialId) return;
@@ -368,13 +373,13 @@ export function TextbookOutlineReview({ projectId, materials, values, onChange }
           <p>Оглавление не найдено ни закладками PDF, ни печатной страницей, ни заголовками текста.</p>
           {aiError && <p className="inline-error" role="alert">{aiError}</p>}
           <div className="material-entry-actions">
-            <Button variant="secondary" disabled={aiRunning || Boolean(modelReason)} onClick={() => void runModel()}>
+            {allowModel && <Button variant="secondary" disabled={aiRunning || Boolean(modelReason)} onClick={() => void runModel()}>
               <WandSparkles size={15} aria-hidden="true" />
               {aiRunning ? "Ищем с ИИ…" : "Попробовать с ИИ"}
-            </Button>
+            </Button>}
             <Button variant="ghost" onClick={skipOutline}>Продолжить без оглавления</Button>
           </div>
-          {modelReason && <p className="textbook-outline-source-note">{modelReason}</p>}
+          {allowModel && modelReason && <p className="textbook-outline-source-note">{modelReason}</p>}
         </div>
       )}
     </section>

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.marker_labels import marker_label, material_image_label
+from app.materials.naming import material_display_name
 from app.materials.storage import material_path, store_answer_upload
 from app.models import (
     Binding,
@@ -502,7 +503,7 @@ async def add_attachment(
             )
         )
         bound_image_labels = {
-            material_image_label(material.id, material.original_name, asset_path)
+            material_image_label(material.id, material_display_name(material), asset_path)
             for material, asset_path in session.execute(
                 select(Material, MaterialFragment.asset_path)
                 .join(Binding, Binding.material_id == Material.id)

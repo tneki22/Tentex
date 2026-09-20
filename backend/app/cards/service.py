@@ -35,6 +35,7 @@ from app.cards.schemas import (
     TodayUnitRead,
 )
 from app.db import project_write_transaction
+from app.materials.naming import material_display_name
 from app.models import (
     Activity,
     ActivityKind,
@@ -145,7 +146,7 @@ def _fragment_snapshot(session: Session, project_id: UUID, fragment_id: UUID) ->
         )
     fragment, page, material = row
     return {
-        "material_name": material.original_name,
+        "material_name": material_display_name(material),
         "page_number": page.page_number,
         "bbox": fragment.bbox,
         "text": fragment.text,

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.background.schemas import BackgroundJobStartRead
 from app.bindings import answer_sections
 from app.marker_labels import material_image_label
+from app.materials.naming import material_display_name, project_material_display_name
 from app.materials.schemas import ExamMaterialSlot, MaterialPurpose
 from app.models import (
     BackgroundJob,
@@ -164,7 +165,7 @@ class _Section:
         for fragment in fragments:
             if fragment.element_kind in {"image", "table"} and fragment.asset_path:
                 label = material_image_label(
-                    material.id, material.original_name, fragment.asset_path
+                    material.id, material_display_name(material), fragment.asset_path
                 )
                 body.append(f"[изображение: {label}]")
             elif fragment.element_kind == "formula" and fragment.text.strip():
@@ -650,7 +651,7 @@ def _require_answers_material(
     if material is None or material.status != MaterialState.READY:
         raise ProjectConflictError("Сначала завершите разбор файла", code="material_not_ready")
     exam_kind = _ANSWERS_SLOT_KIND.get(link.exam_slot)
-    return material, link.display_name or material.original_name, exam_kind
+    return material, project_material_display_name(material, link), exam_kind
 
 
 def iter_link_answers_material(

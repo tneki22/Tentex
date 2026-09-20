@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.background.schemas import BackgroundJobRead
 from app.materials import library
+from app.materials.naming import material_display_name
 from app.models import (
     AiSettings,
     BackgroundJob,
@@ -71,7 +72,7 @@ def _subject(session: Session, job: BackgroundJob) -> str:
     if job.material_id is not None:
         material = session.get(Material, job.material_id)
         if material is not None:
-            return material.original_name
+            return material_display_name(material)
     if job.project_id is not None:
         project = session.get(Project, job.project_id)
         if project is not None:

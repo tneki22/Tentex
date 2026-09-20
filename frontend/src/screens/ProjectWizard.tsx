@@ -7,11 +7,13 @@ import { Button, Card, ConfirmDialog, ErrorState, IconButton, LoadingState, Stat
 import { ExamWizard } from "./project-wizard/ExamWizard";
 import { WizardChrome } from "./project-wizard/WizardChrome";
 import { TextbookWizard } from "./TextbookWizard";
+import { FreeStudyWizard } from "./FreeStudyWizard";
 
-type Track = "exam" | "textbook";
+type Track = "exam" | "textbook" | "free";
 
 const EXAM_STEP_LABELS = ["Формат", "Материалы", "Загрузка", "Паспорт", "Проверка"];
 const TEXTBOOK_STEP_LABELS = ["Источники", "Профиль", "Проверка", "Программы", "Итог"];
+const FREE_STEP_LABELS = ["Цель", "Материалы", "Проверка"];
 
 const TRACKS = [
   {
@@ -42,15 +44,17 @@ const TRACKS = [
     description: "Есть цель, но нет обязательной программы или одного главного источника. Начнём с ориентира и дополним его по ходу.",
     need: "Цель и примерное представление о желаемом результате",
     result: "Гибкая программа, которую можно уточнять материалами",
-    available: false,
+    available: true,
   },
 ] as const;
 
 function draftBranch(draft: WizardDraftSummary): string {
+  if (draft.template_key === "free") return "Свободное изучение";
   return draft.template_key === "textbook" ? "Изучение по учебнику" : "Подготовка к экзамену";
 }
 
 function stepLabelsFor(templateKey: TemplateKey): readonly string[] {
+  if (templateKey === "free") return FREE_STEP_LABELS;
   return templateKey === "textbook" ? TEXTBOOK_STEP_LABELS : EXAM_STEP_LABELS;
 }
 
@@ -58,7 +62,7 @@ export function ProjectWizard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const initialTrack = searchParams.get("track");
-  const [track, setTrack] = useState<Track | null>(initialTrack === "exam" || initialTrack === "textbook" ? initialTrack : null);
+  const [track, setTrack] = useState<Track | null>(initialTrack === "exam" || initialTrack === "textbook" || initialTrack === "free" ? initialTrack : null);
   const [resumeId, setResumeId] = useState<string | null>(searchParams.get("draft"));
   const [drafts, setDrafts] = useState<WizardDraftSummary[]>([]);
   const [loadingDrafts, setLoadingDrafts] = useState(true);
@@ -98,7 +102,7 @@ export function ProjectWizard() {
   }, [controller.detail?.project.id, track]);
 
   function resume(draft: WizardDraftSummary) {
-    const nextTrack = draft.template_key === "textbook" ? "textbook" : "exam";
+    const nextTrack = draft.template_key;
     setTrack(nextTrack);
     setResumeId(draft.project_id);
     setRequestedStep(null);
@@ -165,8 +169,8 @@ export function ProjectWizard() {
 
   const currentStep = track ? requestedStep ?? controller.detail?.draft.current_step ?? 1 : 0;
   const maxStep = track ? controller.detail?.draft.max_completed_step ?? 1 : 0;
-  const trackLabel = track === "exam" ? "Экзамен" : track === "textbook" ? "Учебник" : null;
-  const stepLabels = track === "textbook" ? TEXTBOOK_STEP_LABELS : EXAM_STEP_LABELS;
+  const trackLabel = track === "exam" ? "Экзамен" : track === "textbook" ? "Учебник" : track === "free" ? "Свободное изучение" : null;
+  const stepLabels = track === "textbook" ? TEXTBOOK_STEP_LABELS : track === "free" ? FREE_STEP_LABELS : EXAM_STEP_LABELS;
 
   if (activatedProject) {
     const textbook = activatedProject.project.workspace_variant === "textbook";
@@ -217,7 +221,7 @@ export function ProjectWizard() {
                 >
                   <span className="wizard-track-top">
                     <span className="wizard-track-icon"><Icon size={24} aria-hidden="true" /></span>
-                    {!item.available && <StatusBadge>После этапа 7</StatusBadge>}
+                    {!item.available && <StatusBadge>Скоро</StatusBadge>}
                   </span>
                   <small className="wizard-track-eyebrow">{item.eyebrow}</small>
                   <h2>{item.title}</h2>
@@ -227,7 +231,7 @@ export function ProjectWizard() {
                     <span><b>Что получится</b>{item.result}</span>
                   </span>
                   <span className="wizard-track-action">
-                    {item.available ? "Выбрать этот путь" : "После этапа 7"}
+                    {item.available ? "Выбрать этот путь" : "Скоро"}
                     {item.available && <ArrowRight size={16} aria-hidden="true" />}
                   </span>
                 </button>
@@ -277,9 +281,9 @@ export function ProjectWizard() {
         onSaveAndExit={controller.detail ? () => void saveAndExit() : undefined}
         onDiscard={controller.detail ? () => setDiscardOpen(true) : undefined}
       >
-        {track === "exam"
-          ? <ExamWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} />
-          : <TextbookWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} />}
+        {track === "exam" && <ExamWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} />}
+        {track === "textbook" && <TextbookWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} />}
+        {track === "free" && <FreeStudyWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} />}
       </WizardChrome>
       <ConfirmDialog open={discardOpen} onOpenChange={setDiscardOpen} title="Удалить черновик?" confirmLabel="Удалить черновик" destructive onConfirm={discard}>
         <p>Паспорт и данные этого черновика будут удалены. Общие материалы других проектов не затрагиваются.</p>

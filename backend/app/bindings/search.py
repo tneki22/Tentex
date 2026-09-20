@@ -35,6 +35,7 @@ from app.materials.lexicon import (
     query_terms,
     tokenize_with_positions,
 )
+from app.materials.naming import material_display_name
 from app.materials.presentation import MaterialPresentationKind, presentation_kind
 from app.models import Material, MaterialBlock, MaterialFragment, MaterialPage, PageQuality
 
@@ -328,7 +329,7 @@ def search_fragments(
             SearchHit(
                 fragment_ids=group["fragment_ids"],
                 material_id=material.id,
-                material_name=material.original_name,
+                material_name=material_display_name(material),
                 presentation_kind=presentation_kind(material),
                 block_id=block.id,
                 block_title=block.title,
