@@ -28,10 +28,15 @@ def _exhausted(limits, used, tokens, cost):
 
 def budget_usage(session, run_id) -> dict:
     """Зарезервированная/неизвестная попытка никогда не становится бесплатной."""
+    # Счёт ведётся по receipts, а целая задача несёт ещё checkpoint с сохранённым
+    # ответом модели. Бюджет спрашивают перед каждым вызовом, и лишние килобайты
+    # JSON на участок превращались в заметную паузу между пакетами.
     receipts = [
         r
-        for task in session.scalars(select(CoverageTask).where(CoverageTask.run_id == run_id))
-        for r in task.call_receipts
+        for (call_receipts,) in session.execute(
+            select(CoverageTask.call_receipts).where(CoverageTask.run_id == run_id)
+        )
+        for r in call_receipts
     ]
     return {
         "calls": len(receipts),

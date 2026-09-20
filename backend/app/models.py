@@ -1180,6 +1180,9 @@ class CoverageTask(Base):
     __table_args__ = (
         UniqueConstraint("run_id", "task_key"),
         Index("ix_coverage_tasks_run_state", "run_id", "state"),
+        # Бюджет читает только receipts, а они лежат за checkpoint, result и
+        # dependencies — четвертью мегабайта на задачу. В индексе они рядом с run_id.
+        Index("ix_coverage_tasks_run_receipts", "run_id", "call_receipts"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     run_id: Mapped[UUID] = mapped_column(ForeignKey("coverage_runs.id", ondelete="CASCADE"))
@@ -1206,6 +1209,22 @@ class CoverageBlockResult(Base):
         UniqueConstraint("run_id", "block_id"),
         Index("ix_coverage_results_material_revision", "material_id", "material_revision"),
         Index("ix_coverage_results_run_state", "run_id", "work_state"),
+        # Перекрывающий индекс: manifest и result весят десятки килобайт и лежат
+        # физически раньше publication_state и reason, поэтому чтение даже лёгких
+        # колонок тащило всю строку через overflow-страницы — 1,2 с на прогон из
+        # 936 блоков. Все нужные экранам колонки лежат в самом индексе, и строка
+        # таблицы больше не открывается.
+        Index(
+            "ix_coverage_results_projection",
+            "run_id",
+            "block_id",
+            "work_state",
+            "outcome",
+            "publication_state",
+            "material_id",
+            "reason",
+            "id",
+        ),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     run_id: Mapped[UUID] = mapped_column(ForeignKey("coverage_runs.id", ondelete="CASCADE"))

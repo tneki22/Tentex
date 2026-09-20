@@ -65,12 +65,22 @@ def run_read(session, project_id, run_id):
     """Исторический знаменатель неизменен, incomplete не превращается в 100%."""
     run = require_run(session, project_id, run_id)
     job = session.get(BackgroundJob, run.job_id)
+    # Прогрессу нужны два поля, а целая строка тянет manifest и result: на книге
+    # в девятьсот блоков это тридцать мегабайт JSON ради двух счётчиков.
     rows = list(
-        session.scalars(select(CoverageBlockResult).where(CoverageBlockResult.run_id == run.id))
+        session.execute(
+            select(CoverageBlockResult.work_state, CoverageBlockResult.outcome).where(
+                CoverageBlockResult.run_id == run.id
+            )
+        )
     )
-    work = Counter(r.work_state for r in rows)
-    outcomes = Counter(r.outcome for r in rows if r.work_state == "inspected")
-    tasks = list(session.scalars(select(CoverageTask).where(CoverageTask.run_id == run.id)))
+    work = Counter(state for state, _ in rows)
+    outcomes = Counter(outcome for state, outcome in rows if state == "inspected")
+    tasks = list(
+        session.execute(
+            select(CoverageTask.kind, CoverageTask.state).where(CoverageTask.run_id == run.id)
+        )
+    )
     return {
         "id": str(run.id),
         "job_id": str(job.id),

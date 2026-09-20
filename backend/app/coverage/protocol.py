@@ -74,7 +74,12 @@ def build_prompt(task_input) -> str:
     topics = [
         {"alias": alias, "title": title} for alias, title in task_input.topic_aliases.values()
     ]
-    payload = {"targets": targets, "context": context, "topics": topics}
+    # Порядок ключей задаёт кэш провайдера: он совпадает по общему началу запроса.
+    # Правила и дерево тем одинаковы у всех пакетов прогона, текст блоков — нет,
+    # поэтому постоянная часть идёт первой. Когда targets стояли раньше topics,
+    # общее начало обрывалось на первом же блоке, не дотягивало до минимума
+    # кэширования и все шесть тысяч токенов оплачивались заново каждым пакетом.
+    payload = {"topics": topics, "targets": targets, "context": context}
     return f"{SYSTEM_RULES}\n\nВХОД:\n{json.dumps(payload, ensure_ascii=False)}"
 
 

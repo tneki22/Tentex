@@ -191,9 +191,19 @@ def _merge_interval_decision(previous, checked):
 
 
 def _completed_intervals(session, run_id, block_id):
-    tasks = session.scalars(select(CoverageTask).where(CoverageTask.run_id == run_id))
-    target = str(block_id)
-    return sum(target in task.result for task in tasks)
+    """Нужен только факт наличия ключа блока, а receipts задачи весят сотни килобайт.
+
+    Вопрос задаётся на каждом интервале разрезанного блока, а прежний перебор
+    поднимал в Python все задачи прогона целиком ради одной проверки ключа.
+    """
+    return session.scalar(
+        select(func.count())
+        .select_from(CoverageTask)
+        .where(
+            CoverageTask.run_id == run_id,
+            CoverageTask.result[str(block_id)].is_not(None),
+        )
+    )
 
 
 def _require_complete_ranges(manifest, dispositions):
