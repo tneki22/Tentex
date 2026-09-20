@@ -131,7 +131,7 @@ export function MaterialSourceView({
           zoom={zoom}
           aspect={pageAspect}
           imageUrl={(number) => libraryPageImageUrl(material.id, number, material.raster_token)}
-          pageLabel={(number) => `Исходное изображение страницы ${number} — ${material.original_name}`}
+          pageLabel={(number) => `Исходное изображение страницы ${number} — ${material.display_name}`}
           overlay={(number) => (
             // Рамки известны только для загруженной страницы: в ленте соседние
             // листы показываются без них, а не с чужими координатами.
@@ -198,7 +198,7 @@ export function MaterialSourceView({
         <div className="viewer-pane-scroll">
           <div className="youtube-source">
             <span className="youtube-badge"><Video size={16} aria-hidden="true" /> YouTube</span>
-            <h2>{material.original_name}</h2>
+            <h2>{material.display_name}</h2>
             {material.retrieved_at && (
               <p className="youtube-meta">
                 субтитры получены {new Date(material.retrieved_at).toLocaleDateString("ru-RU")}

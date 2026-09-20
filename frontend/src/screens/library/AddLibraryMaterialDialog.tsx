@@ -49,6 +49,7 @@ export function AddLibraryMaterialDialog({
   const [name, setName] = useState("Заметка.md");
   const [text, setText] = useState("");
   const [url, setUrl] = useState("");
+  const [subject, setSubject] = useState("");
   const [uploadingFile, setUploadingFile] = useState<File | null>(null);
   const [uploadPercent, setUploadPercent] = useState(0);
 
@@ -58,6 +59,7 @@ export function AddLibraryMaterialDialog({
     setName("Заметка.md");
     setText("");
     setUrl("");
+    setSubject("");
     setUploadingFile(null);
     setUploadPercent(0);
   }
@@ -81,7 +83,7 @@ export function AddLibraryMaterialDialog({
   function submitFile(file: File) {
     setUploadingFile(file);
     setUploadPercent(0);
-    void submit(() => uploadLibraryMaterial(file, setUploadPercent));
+    void submit(() => uploadLibraryMaterial(file, setUploadPercent, subject));
   }
 
   function submitTypst(kind: "single" | "folder" | "zip", selected: FileList | null) {
@@ -92,6 +94,8 @@ export function AddLibraryMaterialDialog({
       kind,
       files,
       files.map((file) => file.webkitRelativePath || file.name),
+      undefined,
+      subject,
     ));
   }
 
@@ -124,7 +128,7 @@ export function AddLibraryMaterialDialog({
           <Button variant="ghost" onClick={() => setMode("choose")}>Назад</Button>
           <Button
             disabled={busy || !text.trim() || !name.trim()}
-            onClick={() => void submit(() => createLibraryTextMaterial({ name, text }))}
+            onClick={() => void submit(() => createLibraryTextMaterial({ name, text, subject: subject.trim() || null }))}
           >
             Добавить текст
           </Button>
@@ -139,6 +143,7 @@ export function AddLibraryMaterialDialog({
             onClick={() => void submit(() => createLibraryExternalMaterial({
               kind: looksLikeYoutube(url) ? "youtube" : "url",
               url: url.trim(),
+              subject: subject.trim() || null,
             }))}
           >
             Сохранить снимок
@@ -164,6 +169,10 @@ export function AddLibraryMaterialDialog({
       <input ref={typstZipInput} className="materials-file-input" type="file" accept=".zip" tabIndex={-1} aria-hidden="true" onChange={(event) => { submitTypst("zip", event.target.files); event.target.value = ""; }} />
 
       {error && <ErrorState message={error} />}
+
+      <Field label="Предмет" hint="Необязательно. Например, «Базы данных»">
+        <input value={subject} onChange={(event) => setSubject(event.target.value)} />
+      </Field>
 
       {mode === "choose" && uploadingFile && (
         <div className="materials-upload-progress">

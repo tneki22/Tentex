@@ -15,6 +15,7 @@ from app.coverage import queries
 from app.coverage.schemas import DecisionWrite
 from app.coverage.snapshots import fingerprint, require_project
 from app.db import project_write_transaction
+from app.materials.naming import project_material_display_name
 from app.models import (
     Binding,
     BindingMechanism,
@@ -345,7 +346,7 @@ def _evidence_summary(
         "binding_id": str(binding.id),
         "topic_id": str(binding.program_node_id),
         "material_id": str(binding.material_id),
-        "material_name": project_material.display_name or material.original_name,
+        "material_name": project_material_display_name(material, project_material),
         "page_from": block.page_from if block else page.page_number,
         "page_to": block.page_to if block else page.page_number,
         "fragment_ids": [str(fragment.id)],
@@ -519,7 +520,7 @@ def evidence_detail(session: Session, project_id: UUID, evidence_id: str) -> dic
         "topic_id": str(node.id),
         "topic_title": node.title,
         "material_id": str(material.id),
-        "material_name": project_material.display_name or material.original_name,
+        "material_name": project_material_display_name(material, project_material),
         "page_from": block.page_from if block else page.page_number,
         "page_to": block.page_to if block else page.page_number,
         "fragment_ids": [str(fragment.id)],

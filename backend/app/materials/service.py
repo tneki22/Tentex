@@ -25,6 +25,7 @@ from app.materials.library import (
 from app.materials.library import (
     task_read as _task_read,
 )
+from app.materials.naming import material_display_name, project_material_display_name
 from app.materials.presentation import presentation_kind
 from app.materials.schemas import (
     ExamCompositeDraftImportResult,
@@ -105,7 +106,9 @@ def _read(link: ProjectMaterial, material: Material, task: BackgroundJob | None)
     return MaterialRead(
         id=material.id,
         original_name=material.original_name,
-        display_name=link.display_name or material.original_name,
+        display_name=project_material_display_name(material, link),
+        library_display_name=material_display_name(material),
+        project_display_name=link.display_name,
         media_type=material.media_type,
         source_kind=material.source_kind,
         presentation_kind=presentation_kind(material),
@@ -201,6 +204,17 @@ def _attach(
     return link
 
 
+def _inherit_project_subject(
+    session: Session, project_id: UUID, material: Material
+) -> None:
+    """Заполнить пустой предмет материала из проекта, не меняя уже заданный."""
+    if material.subject:
+        return
+    passport = session.get(GoalPassport, project_id)
+    if passport is not None and passport.subject:
+        material.subject = passport.subject
+
+
 async def upload_material(
     session: Session,
     project_id: UUID,
@@ -216,6 +230,7 @@ async def upload_material(
     with session.begin():
         _project(session, project_id, writable=True)
         material = library.register_uploaded_material(session, uploaded)
+        _inherit_project_subject(session, project_id, material)
         link = _attach(
             session,
             project_id,
@@ -236,6 +251,7 @@ def create_text_material(
     with session.begin():
         _project(session, project_id, writable=True)
         material = library.create_text_material_row(session, command)
+        _inherit_project_subject(session, project_id, material)
         link = _attach(
             session,
             project_id,
@@ -256,7 +272,10 @@ def create_external_material(
     session.rollback()
     with session.begin():
         _project(session, project_id, writable=True)
-        material = library.create_external_material_row(session, *fetched)
+        material = library.create_external_material_row(
+            session, *fetched, subject=command.subject
+        )
+        _inherit_project_subject(session, project_id, material)
         link = _attach(
             session,
             project_id,
@@ -486,7 +505,7 @@ def preview_exam_program(
         )
     return ExamProgramPreview(
         material_id=material.id,
-        material_name=link.display_name or material.original_name,
+        material_name=project_material_display_name(material, link),
         counts={
             "tickets": parsed.tickets,
             "questions": parsed.questions,
@@ -506,7 +525,7 @@ def import_exam_program_from_material(
     command: ExamProgramImportWrite,
 ):
     parsed, material, link = _parsed_exam_from_material(session, project_id, material_id)
-    material_name = link.display_name or material.original_name
+    material_name = project_material_display_name(material, link)
     if command.dedupe_duplicates and parsed.has_duplicates:
         parsed = dedupe_first_occurrence(parsed)
     session.rollback()
@@ -527,7 +546,7 @@ def import_exam_draft_from_material(
     command: ExamProgramDraftImportWrite,
 ):
     parsed, material, link = _parsed_exam_from_material(session, project_id, material_id)
-    material_name = link.display_name or material.original_name
+    material_name = project_material_display_name(material, link)
     if command.dedupe_duplicates and parsed.has_duplicates:
         parsed = dedupe_first_occurrence(parsed)
     session.rollback()
@@ -690,7 +709,7 @@ def import_composite_exam_draft(
             parsed = parse_exam_list(raw_text, kind)
         except ExamImportError as error:
             raise ProjectConflictError(str(error), code="material_exam_parse_failed") from error
-        return parsed, link.display_name or material.original_name
+        return parsed, project_material_display_name(material, link)
 
     question_parsed, question_name = parsed_for(
         command.question_material_id, ExamMaterialSlot.QUESTION_LIST, ExamKind.QUESTION
@@ -753,7 +772,7 @@ def import_answers_from_material(
         )
     )
     raw_text = "\n\n".join(page.text for page in pages if page.text.strip())
-    label = f"{link.display_name or material.original_name} · Материал {material.id}"
+    label = f"{project_material_display_name(material, link)} · Материал {material.id}"
     session.rollback()
     result = answers.import_reference_answers(
         session,

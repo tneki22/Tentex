@@ -80,6 +80,7 @@ class MaterialUpdate(ApiModel):
 class LibraryTextMaterialCreate(ApiModel):
     name: NonBlank = "Вставленный текст.txt"
     text: NonBlank
+    subject: NonBlank | None = None
 
 
 class TextMaterialCreate(LibraryTextMaterialCreate):
@@ -91,6 +92,18 @@ class TextMaterialCreate(LibraryTextMaterialCreate):
 class LibraryExternalMaterialCreate(ApiModel):
     kind: Literal["url", "youtube"]
     url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8, max_length=2048)]
+    subject: NonBlank | None = None
+
+
+class LibraryMaterialMetadataUpdate(ApiModel):
+    display_name: NonBlank | None = None
+    subject: NonBlank | None = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "LibraryMaterialMetadataUpdate":
+        if not self.model_fields_set:
+            raise ValueError("Нужно передать хотя бы одно изменяемое поле")
+        return self
 
 
 class ExternalMaterialCreate(LibraryExternalMaterialCreate):
@@ -169,7 +182,12 @@ class ProcessingTaskRead(ApiModel):
 class MaterialRead(ApiModel):
     id: UUID
     original_name: str
+    # display_name — эффективное имя по правилу приоритета, library_display_name и
+    # project_display_name разделяют его слагаемые: интерфейсу нужно видеть, есть
+    # ли у проекта собственный псевдоним, чтобы не фиксировать его молча.
     display_name: str
+    library_display_name: str
+    project_display_name: str | None
     media_type: str
     source_kind: MaterialSourceKind
     # Вид источника считает сервер: иначе каждый экран заново гадает по MIME,
@@ -267,6 +285,8 @@ class LibraryUsageRead(ApiModel):
 class LibraryMaterialRead(ApiModel):
     id: UUID
     original_name: str
+    display_name: str
+    subject: str | None
     media_type: str
     source_kind: MaterialSourceKind
     source_url: str | None
@@ -279,6 +299,7 @@ class LibraryMaterialRead(ApiModel):
     ocr_low_page_count: int
     block_count: int
     fragment_count: int
+    has_outline: bool
     sha256: str
     created_at: datetime
     usage: list[LibraryUsageRead]

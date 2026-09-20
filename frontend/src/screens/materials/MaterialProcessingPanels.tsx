@@ -182,7 +182,7 @@ export function MaterialProcessingPanels({
       <HeaderFooterDialog
         open={headerFooterOpen}
         projectId={projectId}
-        material={{ id: detail.id, display_name: detail.original_name }}
+        material={{ id: detail.id, display_name: detail.display_name }}
         onOpenChange={setHeaderFooterOpen}
         onReload={async () => {
           await refresh();

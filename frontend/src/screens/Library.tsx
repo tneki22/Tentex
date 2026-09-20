@@ -120,6 +120,7 @@ function readFilters(params: URLSearchParams): LibraryFilterState {
     status: (params.get("status") ?? "all") as LibraryStatusFilter,
     quality: (params.get("quality") ?? "all") as LibraryQualityFilter,
     usage: (params.get("usage") ?? "all") as LibraryUsageFilter,
+    subject: params.get("subject") ?? "all",
     sort: (params.get("sort") ?? DEFAULT_FILTERS.sort) as LibrarySort,
   };
 }
@@ -189,6 +190,7 @@ export function Library() {
     if (merged.status !== "all") params.set("status", merged.status);
     if (merged.quality !== "all") params.set("quality", merged.quality);
     if (merged.usage !== "all") params.set("usage", merged.usage);
+    if (merged.subject !== "all") params.set("subject", merged.subject);
     if (merged.sort !== DEFAULT_FILTERS.sort) params.set("sort", merged.sort);
     setSearchParams(params, { replace: true });
   }
@@ -196,7 +198,7 @@ export function Library() {
   const visible = useMemo(() => {
     const needle = filters.q.trim().toLocaleLowerCase("ru");
     const list = materials.filter((material) => {
-      if (needle && !material.original_name.toLocaleLowerCase("ru").includes(needle)) return false;
+      if (needle && !material.display_name.toLocaleLowerCase("ru").includes(needle)) return false;
       if (filters.kind !== "all" && kindOf(material) !== filters.kind) return false;
       if (filters.status === "ready" && material.status !== "ready") return false;
       if (filters.status === "processing"
@@ -206,10 +208,12 @@ export function Library() {
       if (filters.quality === "needs_review" && (material.parser_mode === "fast" || material.ocr_low_page_count === 0)) return false;
       if (filters.usage === "attached" && material.usage.length === 0) return false;
       if (filters.usage === "unattached" && material.usage.length > 0) return false;
+      if (filters.subject === "none" && material.subject !== null) return false;
+      if (filters.subject !== "all" && filters.subject !== "none" && material.subject !== filters.subject) return false;
       return true;
     });
     if (filters.sort === "name_asc") {
-      return [...list].sort((a, b) => a.original_name.localeCompare(b.original_name, "ru"));
+      return [...list].sort((a, b) => a.display_name.localeCompare(b.display_name, "ru"));
     }
     if (filters.sort === "updated_desc") {
       return [...list].sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -228,6 +232,7 @@ export function Library() {
     () => visible.filter((material) => selectedIds.has(material.id)),
     [visible, selectedIds],
   );
+  const subjects = useMemo(() => [...new Set(materials.flatMap((material) => material.subject ? [material.subject] : []))].sort((a, b) => a.localeCompare(b, "ru")), [materials]);
   /* Перезапуск после ошибки — такое же обычное массовое действие, как первый
      разбор: сервер отказывает только при уже активной задаче. */
   const processable = selected.filter(
@@ -388,6 +393,7 @@ export function Library() {
           value={filters}
           total={materials.length}
           shown={visible.length}
+          subjects={subjects}
           onChange={updateFilters}
           onReset={() => setSearchParams(new URLSearchParams(), { replace: true })}
         />
@@ -457,7 +463,7 @@ export function Library() {
                   <Checkbox
                     checked={selectedIds.has(material.id)}
                     onCheckedChange={(checked) => toggleSelected(index, checked)}
-                    label={`Выбрать ${material.original_name}`}
+                    label={`Выбрать ${material.display_name}`}
                   />
                 </span>
 
@@ -477,8 +483,9 @@ export function Library() {
                 >
                   <span className="lib-row-icon"><Icon size={17} aria-hidden="true" /></span>
                   <span className="lib-row-body">
-                    <span className="lib-row-name">{material.original_name}</span>
+                    <span className="lib-row-name">{material.display_name}</span>
                     <span className="lib-row-meta">
+                      <span>{material.subject ?? "Без предмета"}</span>
                       <span>{sizeLabel(material.size_bytes)}</span>
                       {material.page_count !== null && <span>{pageLabel(material.page_count)}</span>}
                       {material.block_count > 0 && <span>блоков {material.block_count}</span>}
@@ -524,7 +531,7 @@ export function Library() {
                 </div>
 
                 <IconButton
-                  label={`Удалить ${material.original_name}`}
+                  label={`Удалить ${material.display_name}`}
                   disabled={busy}
                   onClick={() => void askDelete([material])}
                 >
@@ -553,7 +560,7 @@ export function Library() {
         }}
         title={
           deleteTargets.length === 1
-            ? `Удалить ${deleteTargets[0].original_name}?`
+            ? `Удалить ${deleteTargets[0].display_name}?`
             : `Удалить ${deleteTargets.length} ${plural(deleteTargets.length, "файл", "файла", "файлов")}?`
         }
         confirmLabel={deleteTargets.length === 1 ? "Удалить файл везде" : "Удалить все выбранные"}
@@ -575,7 +582,7 @@ export function Library() {
             {deleteTargets.length > 1 && (
               <ul className="consequences-topics">
                 {deletePreview.materials.map((material) => (
-                  <li key={material.id}>{material.original_name}</li>
+                  <li key={material.id}>{material.display_name}</li>
                 ))}
               </ul>
             )}

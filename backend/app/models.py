@@ -37,6 +37,11 @@ def utc_now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def default_material_display_name(context: Any) -> str:
+    """Начальное пользовательское имя совпадает с техническим исходным."""
+    return str(context.get_current_parameters()["original_name"])
+
+
 def default_context_flags() -> dict[str, bool]:
     """Начальные context flags новой сессии — AI-CHATS.md §21.4."""
     return {
@@ -572,6 +577,8 @@ class Material(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     sha256: Mapped[str] = mapped_column(String(64), unique=True)
     original_name: Mapped[str] = mapped_column(String)
+    display_name: Mapped[str] = mapped_column(String, default=default_material_display_name)
+    subject: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     storage_path: Mapped[str] = mapped_column(String, unique=True)
     media_type: Mapped[str] = mapped_column(String)
     source_kind: Mapped[MaterialSourceKind] = mapped_column(

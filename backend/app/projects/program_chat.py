@@ -30,6 +30,7 @@ from app.chat import common as chat_common
 from app.chat.common import ChatMessageRead, ManifestEntryRead
 from app.db import job_write_transaction, project_write_transaction
 from app.materials import library
+from app.materials.naming import project_material_display_name
 from app.models import (
     BackgroundJob,
     BackgroundJobKind,
@@ -562,7 +563,7 @@ def _sources(session: Session, project_id: UUID) -> list[SourceContext]:
         result.append(
             SourceContext(
                 material_id=material.id,
-                display_name=link.display_name or material.original_name,
+                display_name=project_material_display_name(material, link),
                 source_role=link.source_role,
                 priority=link.priority,
                 instruction=link.instruction,
@@ -1236,7 +1237,7 @@ def _resolve_outline_ref(
     )
     last_page = material.page_count or item.page
     page_to = max(item.page, (boundary - 1) if boundary is not None else last_page)
-    source_name = link.display_name or material.original_name
+    source_name = project_material_display_name(material, link)
     return material.id, source_name, item.outline_item_key, item.page, page_to
 
 

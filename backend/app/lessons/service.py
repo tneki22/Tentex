@@ -33,6 +33,7 @@ from app.lessons.schemas import (
     LessonUnbindOffer,
     LessonUpdateWrite,
 )
+from app.materials.naming import material_display_name, project_material_display_name
 from app.models import (
     Binding,
     BindingMechanism,
@@ -293,9 +294,9 @@ def _plan_source(
 
 
 def _source_name(material: Material | None, link: ProjectMaterial | None, fallback: str) -> str:
-    if link is not None and link.display_name:
-        return link.display_name
-    return material.original_name if material is not None else fallback
+    if material is not None and link is not None:
+        return project_material_display_name(material, link)
+    return material_display_name(material) if material is not None else fallback
 
 
 def _topic_sources(

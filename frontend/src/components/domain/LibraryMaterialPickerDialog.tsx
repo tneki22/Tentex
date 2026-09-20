@@ -61,6 +61,12 @@ const STATUS_ORDER: Record<LibraryMaterialRead["status"], number> = {
   failed: 3,
 };
 
+function recommendationOrder(material: LibraryMaterialRead): number {
+  if (material.status === "ready" && material.has_outline) return 0;
+  if (material.status === "ready") return 1;
+  return 2 + STATUS_ORDER[material.status];
+}
+
 type LoadMaterials = (signal?: AbortSignal) => Promise<LibraryMaterialRead[]>;
 type AttachMaterial = (
   materialId: string,
@@ -90,6 +96,7 @@ interface LibraryMaterialPickerDialogProps {
   onOpenChange: (open: boolean) => void;
   onAttached: (materials: LibraryMaterialRead[]) => void | Promise<void>;
   onCreateNew?: () => void;
+  recommendedSubject?: string;
   /** Dependency overrides keep the UI-kit example local and deterministic. */
   loadMaterials?: LoadMaterials;
   attachMaterial?: AttachMaterial;
@@ -123,6 +130,7 @@ export function LibraryMaterialPickerDialog({
   onOpenChange,
   onAttached,
   onCreateNew,
+  recommendedSubject,
   loadMaterials = listLibraryMaterials,
   attachMaterial = attachLibraryMaterial,
 }: LibraryMaterialPickerDialogProps) {
@@ -163,11 +171,17 @@ export function LibraryMaterialPickerDialog({
 
   const visible = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("ru");
+    const normalizedSubject = recommendedSubject?.trim().replace(/\s+/g, " ").toLocaleLowerCase("ru") ?? "";
     return [...(materials ?? [])]
-      .filter((material) => !needle || material.original_name.toLocaleLowerCase("ru").includes(needle))
-      .sort((left, right) => STATUS_ORDER[left.status] - STATUS_ORDER[right.status]
-        || left.original_name.localeCompare(right.original_name, "ru"));
-  }, [materials, query]);
+      .filter((material) => !needle || material.display_name.toLocaleLowerCase("ru").includes(needle))
+      .sort((left, right) => {
+        const leftMatch = normalizedSubject !== "" && left.subject?.trim().replace(/\s+/g, " ").toLocaleLowerCase("ru") === normalizedSubject;
+        const rightMatch = normalizedSubject !== "" && right.subject?.trim().replace(/\s+/g, " ").toLocaleLowerCase("ru") === normalizedSubject;
+        if (leftMatch !== rightMatch) return leftMatch ? -1 : 1;
+        return recommendationOrder(left) - recommendationOrder(right)
+          || left.display_name.localeCompare(right.display_name, "ru");
+      });
+  }, [materials, query, recommendedSubject]);
 
   const allowsMultiple = purpose === "study_source" && multiple;
   const selectedCount = selected.length;
@@ -227,7 +241,7 @@ export function LibraryMaterialPickerDialog({
               project_id: projectId,
               project_name: "Текущий проект",
               project_status: "active",
-              display_name: material.original_name,
+              display_name: material.display_name,
               source_role: roleFor(attached.findIndex((item) => item.id === material.id)),
               purposes: [purpose],
               exam_slot: examSlot ?? null,
@@ -339,8 +353,11 @@ export function LibraryMaterialPickerDialog({
                   <span className="library-picker-check" aria-hidden="true">{checked && <Check size={13} />}</span>
                   <span className="library-picker-file"><FileText size={17} aria-hidden="true" /></span>
                   <span className="library-picker-copy">
-                    <strong>{material.original_name}</strong>
+                    <strong>{material.display_name}</strong>
                     <small>{SOURCE_LABEL[material.source_kind]} · {pageLabel(material.page_count)} · {STATUS_LABEL[material.status]}</small>
+                    {recommendedSubject && material.subject?.trim().replace(/\s+/g, " ").toLocaleLowerCase("ru") === recommendedSubject.trim().replace(/\s+/g, " ").toLocaleLowerCase("ru") && (
+                      <small className="library-picker-reason">Совпадает предмет{material.has_outline ? " · есть оглавление" : ""}{material.status === "ready" ? " · текст готов" : ""}</small>
+                    )}
                     <small>{alreadyAttached ? "Уже в проекте" : usageLabel(material)}</small>
                     {rowErrors[material.id] && <small className="inline-error">{rowErrors[material.id]}</small>}
                   </span>

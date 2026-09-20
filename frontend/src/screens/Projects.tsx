@@ -96,7 +96,7 @@ function cardStrip(project: ProjectSummary, stats: ProjectStats | undefined): St
     cells.push(sourcesCell(stats.materials));
     return cells;
   }
-  if (project.template_key === "textbook") {
+  if (project.workspace_variant === "textbook") {
     /* «Тем» уже стоит крупной строкой headline — в сводке не дублируем. */
     const cells: StripCell[] = [sourcesCell(stats.materials)];
     if (stats.material_pages !== null) {
@@ -107,7 +107,6 @@ function cardStrip(project: ProjectSummary, stats: ProjectStats | undefined): St
     }
     return cells;
   }
-  /* Свободное изучение приезжает на этапе 7: считать по нему пока нечего. */
   return [];
 }
 
@@ -121,16 +120,11 @@ function urgency(days: number): Urgency {
 }
 
 type ProjectTemplate = {
-  id: "exam" | "textbook";
+  id: "exam" | "textbook" | "free";
   title: string;
   description: string;
   path: string;
   disabled: false;
-} | {
-  id: "free";
-  title: string;
-  description: string;
-  disabled: true;
 };
 
 const TEMPLATES: ProjectTemplate[] = [
@@ -151,8 +145,9 @@ const TEMPLATES: ProjectTemplate[] = [
   {
     id: "free",
     title: "Свободное изучение",
-    description: "Без дедлайна, программа из каталога, материалы добавляются позже.",
-    disabled: true,
+    description: "От цели к гибкой программе — с материалами сейчас или позже.",
+    path: "/projects/new?track=free",
+    disabled: false,
   },
 ];
 
@@ -169,7 +164,7 @@ const statusLabel: Record<ProjectSummary["status"], string> = {
  * Прошедший срок и незаданная дата остаются фактом без тревожного тона.
  */
 function CardCount({ project, stats }: { project: ProjectSummary; stats?: ProjectStats }) {
-  if (project.template_key === "textbook") {
+  if (project.workspace_variant === "textbook") {
     if (stats?.program_nodes === null || stats?.program_nodes === undefined) return null;
     return (
       <div className="b-count">

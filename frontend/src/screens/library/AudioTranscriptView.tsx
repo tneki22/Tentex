@@ -24,7 +24,7 @@ export const AudioTranscriptView = forwardRef<HTMLAudioElement, AudioTranscriptV
           >
             Ваш браузер не умеет проигрывать эту запись.
           </audio>
-          <p className="audio-caption">{material.original_name}</p>
+          <p className="audio-caption">{material.display_name}</p>
         </div>
         <p className="audio-note">
           Нажмите на сегмент расшифровки — запись перемотается к нему.

@@ -4,6 +4,7 @@ import type { MaterialRead, MaterialUpdateCommand, SourceRole } from "../api/mat
 import { Button, Field } from "../components/ui";
 
 interface SourceDraft {
+  displayName: string;
   sourceRole: SourceRole;
   priority: string;
   instruction: string;
@@ -11,6 +12,10 @@ interface SourceDraft {
 
 function draftFrom(material: MaterialRead): SourceDraft {
   return {
+    /* Пустое поле означает «своего имени нет»: иначе обычное сохранение роли
+       молча закрепило бы за проектом псевдоним, и Библиотека перестала бы
+       переименовывать материал. */
+    displayName: material.project_display_name ?? "",
     sourceRole: material.source_role,
     priority: String(material.priority),
     instruction: material.instruction ?? "",
@@ -18,7 +23,8 @@ function draftFrom(material: MaterialRead): SourceDraft {
 }
 
 function sameDraft(left: SourceDraft, right: SourceDraft): boolean {
-  return left.sourceRole === right.sourceRole
+  return left.displayName === right.displayName
+    && left.sourceRole === right.sourceRole
     && left.priority === right.priority
     && left.instruction === right.instruction;
 }
@@ -55,6 +61,7 @@ export function TextbookSourceCard({ material, busy, onSave }: TextbookSourceCar
     setSaving(true);
     try {
       const result = await onSave(material.id, {
+        display_name: draft.displayName.trim() || null,
         source_role: draft.sourceRole,
         priority,
         instruction: draft.instruction.trim() || null,
@@ -75,6 +82,14 @@ export function TextbookSourceCard({ material, busy, onSave }: TextbookSourceCar
         if (event.key === "Escape") setDraft(draftFrom(material));
       }}
     >
+      <Field label="Название в этом проекте" hint="Очистите поле, чтобы снова использовать название из Библиотеки">
+        <input
+          value={draft.displayName}
+          disabled={saving || busy}
+          onChange={(event) => setDraft((current) => ({ ...current, displayName: event.target.value }))}
+          placeholder={material.library_display_name}
+        />
+      </Field>
       <Field label="Роль источника">
         <select
           value={draft.sourceRole}

@@ -1,5 +1,5 @@
-import { Download, ExternalLink, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Download, ExternalLink, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import {
   libraryRenderedUrl,
@@ -7,7 +7,7 @@ import {
   type LibraryMaterialDetailRead,
   type MaterialPurpose,
 } from "../../api/materials";
-import { Button, ConfirmDialog, Disclosure } from "../../components/ui";
+import { Button, ConfirmDialog, Disclosure, Field } from "../../components/ui";
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "список вопросов",
@@ -28,6 +28,7 @@ interface LibraryMaterialFilePanelProps {
   onAddToProject: () => void;
   onRefreshSource: () => void;
   onDelete: () => void;
+  onSaveMetadata: (command: { display_name: string; subject: string | null }) => Promise<void>;
 }
 
 /**
@@ -41,16 +42,40 @@ export function LibraryMaterialFilePanel({
   onAddToProject,
   onRefreshSource,
   onDelete,
+  onSaveMetadata,
 }: LibraryMaterialFilePanelProps) {
   const [refreshOpen, setRefreshOpen] = useState(false);
+  const [displayName, setDisplayName] = useState(material.display_name);
+  const [subject, setSubject] = useState(material.subject ?? "");
+  useEffect(() => {
+    setDisplayName(material.display_name);
+    setSubject(material.subject ?? "");
+  }, [material.display_name, material.subject]);
   const isYoutube = material.presentation_kind === "youtube";
+  const metadataDirty = displayName.trim() !== material.display_name
+    || subject.trim() !== (material.subject ?? "");
 
   return (
     <div className="inspector-content">
       <section className="inspector-section">
         <h4>Файл</h4>
+        <div className="inspector-metadata-form">
+          <Field label="Название в Библиотеке" required>
+            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+          </Field>
+          <Field label="Предмет" hint="Широкая дисциплина, например «Физика»">
+            <input value={subject} onChange={(event) => setSubject(event.target.value)} />
+          </Field>
+          <Button
+            variant="secondary"
+            disabled={busy || !displayName.trim() || !metadataDirty}
+            onClick={() => void onSaveMetadata({ display_name: displayName.trim(), subject: subject.trim() || null })}
+          >
+            <Save size={14} aria-hidden="true" /> Сохранить метаданные
+          </Button>
+        </div>
         <dl className="inspector-facts">
-          <div><dt>Имя</dt><dd title={material.original_name}>{material.original_name}</dd></div>
+          <div><dt>Исходное имя</dt><dd title={material.original_name}>{material.original_name}</dd></div>
           <div><dt>Размер</dt><dd>{sizeLabel(material.size_bytes)}</dd></div>
           {material.page_count !== null && (
             <div><dt>Страниц</dt><dd>{material.page_count}</dd></div>

@@ -14,6 +14,7 @@ export interface LibraryFilterState {
   status: LibraryStatusFilter;
   quality: LibraryQualityFilter;
   usage: LibraryUsageFilter;
+  subject: string;
   sort: LibrarySort;
 }
 
@@ -23,6 +24,7 @@ export const DEFAULT_FILTERS: LibraryFilterState = {
   status: "all",
   quality: "all",
   usage: "all",
+  subject: "all",
   sort: "created_desc",
 };
 
@@ -68,6 +70,7 @@ interface LibraryFiltersProps {
   value: LibraryFilterState;
   total: number;
   shown: number;
+  subjects: string[];
   onChange: (next: Partial<LibraryFilterState>) => void;
   onReset: () => void;
 }
@@ -76,12 +79,13 @@ interface LibraryFiltersProps {
  * Одна компактная строка над списком. Отдельной пустой hero-зоны здесь нет:
  * заголовок и главное действие живут в общей верхней полосе экрана.
  */
-export function LibraryFilters({ value, total, shown, onChange, onReset }: LibraryFiltersProps) {
+export function LibraryFilters({ value, total, shown, subjects, onChange, onReset }: LibraryFiltersProps) {
   const dirty = value.q.trim() !== ""
     || value.kind !== "all"
     || value.status !== "all"
     || value.quality !== "all"
-    || value.usage !== "all";
+    || value.usage !== "all"
+    || value.subject !== "all";
 
   return (
     <div className="lib-filters" role="search">
@@ -97,6 +101,17 @@ export function LibraryFilters({ value, total, shown, onChange, onReset }: Libra
       </label>
 
       <div className="lib-filter-group">
+        <Select
+          className="lib-filter-select"
+          ariaLabel="Предмет"
+          value={value.subject}
+          options={[
+            { value: "all", label: "Любой предмет" },
+            { value: "none", label: "Без предмета" },
+            ...subjects.map((subject) => ({ value: subject, label: subject })),
+          ]}
+          onValueChange={(next) => onChange({ subject: next ?? "all" })}
+        />
         <Select
           className="lib-filter-select"
           ariaLabel="Вид источника"

@@ -52,6 +52,16 @@ import {
 export type TextbookProgramView = "tree" | "text" | "questions";
 const EMPTY_OUTLINES: OutlinesByMaterialId = {};
 
+/** «1 пункт», «2 пункта», «5 пунктов»: без склонения диалог импорта читается как машинный. */
+function outlineItemsWord(count: number): string {
+  const modulo100 = count % 100;
+  const modulo10 = count % 10;
+  if (modulo100 >= 11 && modulo100 <= 14) return "пунктов";
+  if (modulo10 === 1) return "пункт";
+  if (modulo10 >= 2 && modulo10 <= 4) return "пункта";
+  return "пунктов";
+}
+
 interface TextbookProgramEditorProps {
   projectId: string;
   projectName: string;
@@ -586,7 +596,7 @@ function TextbookOutlineImportDialog({
       onOpenChange={(next) => { if (!switchingSource && !busy) onOpenChange(next); }}
       title="Импортировать программу из оглавления"
       description="Выберите источники и ветви. Они добавятся отдельными корневыми ветвями в порядке приоритета источников."
-      footer={<><Button variant="ghost" disabled={busy || switchingSource !== null} onClick={() => onOpenChange(false)}>Закрыть</Button><Button disabled={busy || loading || switchingSource !== null || Boolean(error) || selectedCount === 0} onClick={() => void submit()}>Импортировать {selectedCount} {selectedCount === 1 ? "пункт" : "пунктов"}</Button></>}
+      footer={<><Button variant="ghost" disabled={busy || switchingSource !== null} onClick={() => onOpenChange(false)}>Закрыть</Button><Button disabled={busy || loading || switchingSource !== null || Boolean(error) || selectedCount === 0} onClick={() => void submit()}>Импортировать {selectedCount} {outlineItemsWord(selectedCount)}</Button></>}
     >
       {wizard && <p className="textbook-import-note">Проверить и исправить оглавления можно на предыдущем шаге.</p>}
       {loading && <LoadingState label="Загружаем оглавления" />}
@@ -595,7 +605,7 @@ function TextbookOutlineImportDialog({
         {sources.map((source) => {
           const enabled = selectedSources.has(source.material.id);
           return <section key={source.material.id} className="textbook-import-source">
-            <label className="textbook-import-source-head"><input type="checkbox" checked={enabled} disabled={source.outline.items.length === 0} onChange={(event) => toggleSource(source, event.target.checked)} /><span><b>{source.material.display_name}</b><small>{source.outline.items.length ? `${source.outline.items.length} пунктов · приоритет ${source.material.priority + 1}` : "Оглавление не найдено — источник можно оставить без импорта"}</small></span></label>
+            <label className="textbook-import-source-head"><input type="checkbox" checked={enabled} disabled={source.outline.items.length === 0} onChange={(event) => toggleSource(source, event.target.checked)} /><span><b>{source.material.display_name}</b><small>{source.outline.items.length ? `${source.outline.items.length} ${outlineItemsWord(source.outline.items.length)} · приоритет ${source.material.priority + 1}` : "Оглавление не найдено — источник можно оставить без импорта"}</small></span></label>
             {source.availableSources.length > 1 && <div className="textbook-import-source-choice">
               <span>Источник оглавления</span>
               <Select

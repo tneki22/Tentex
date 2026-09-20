@@ -98,10 +98,6 @@ def _project_detail(session: Session, project_id: UUID) -> ProjectDetail:
 
 
 def create_wizard_draft(session: Session, command: WizardDraftCreate) -> WizardDraftDetail:
-    if command.template_key == TemplateKey.FREE:
-        raise ProjectConflictError(
-            "Свободное изучение появится на этапе 7", code="unsupported_template"
-        )
     variant = (
         WorkspaceVariant.EXAM
         if command.template_key == TemplateKey.EXAM
@@ -303,15 +299,14 @@ def activate_wizard_draft(
                 context={"current_draft_revision": draft.revision},
             )
         goal_passport = session.get(GoalPassport, project_id)
-        required_goal_fields = (
-            "subject",
-            "purpose",
-            "starting_level",
-            "target_outcome",
-        )
+        required_goal_fields = ("purpose", "scope", "starting_level", "target_outcome")
+        if project.template_key != TemplateKey.FREE:
+            required_goal_fields += ("subject",)
         if project.workspace_variant == WorkspaceVariant.EXAM:
             required_goal_fields += ("study_format",)
-        if goal_passport is not None and goal_passport.scope == GoalScope.GOAL:
+        if project.template_key == TemplateKey.FREE or (
+            goal_passport is not None and goal_passport.scope == GoalScope.GOAL
+        ):
             required_goal_fields += ("goal",)
         if project.name is None or not project.name.strip():
             raise ProjectConflictError("Перед активацией укажите название проекта")
@@ -411,10 +406,8 @@ def list_project_stats(session: Session) -> list[ProjectStats]:
     stats: list[ProjectStats] = []
     for item in projects:
         materials, pages = material_counts.get(item.id, (0, None))
-        is_exam = item.template_key == TemplateKey.EXAM
-        is_textbook = item.template_key == TemplateKey.TEXTBOOK
-        # Свободное изучение приезжает на этапе 7: считать по нему нечего, и ноль
-        # вместо метрики был бы неправдой (FR-P3).
+        is_exam = item.workspace_variant == WorkspaceVariant.EXAM
+        is_textbook = item.workspace_variant == WorkspaceVariant.TEXTBOOK
         touched = [
             moment
             for moment in (attempt_activity.get(item.id), chat_activity.get(item.id))

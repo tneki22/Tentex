@@ -43,7 +43,11 @@ export interface ProcessingTaskRead {
 export interface MaterialRead {
   id: string;
   original_name: string;
+  /** Эффективное имя: псевдоним проекта, иначе название из Библиотеки. */
   display_name: string;
+  library_display_name: string;
+  /** Собственный псевдоним проекта; `null` — проект использует имя Библиотеки. */
+  project_display_name: string | null;
   media_type: string;
   source_kind: MaterialSourceKind;
   /** Вид источника от сервера: по нему видно, есть ли у страниц растр. */
@@ -74,8 +78,9 @@ export interface MaterialRead {
 }
 
 export type MaterialUpdateCommand = Partial<
-  Pick<MaterialRead, "display_name" | "source_role" | "priority" | "instruction" | "purposes" | "exam_slot">
+  Pick<MaterialRead, "source_role" | "priority" | "instruction" | "purposes" | "exam_slot">
 > & {
+  display_name?: string | null;
   replace_reference_answers?: boolean;
 };
 
@@ -145,6 +150,8 @@ export interface LibraryUsageRead {
 export interface LibraryMaterialRead {
   id: string;
   original_name: string;
+  display_name: string;
+  subject: string | null;
   media_type: string;
   source_kind: MaterialSourceKind;
   source_url: string | null;
@@ -157,6 +164,7 @@ export interface LibraryMaterialRead {
   ocr_low_page_count: number;
   block_count: number;
   fragment_count: number;
+  has_outline: boolean;
   sha256: string;
   created_at: string;
   usage: LibraryUsageRead[];
@@ -740,9 +748,11 @@ export const getLibraryMaterial = (
 export function uploadLibraryMaterial(
   file: File,
   onProgress?: (percent: number) => void,
+  subject?: string,
 ): Promise<LibraryMaterialDetailRead> {
   const form = new FormData();
   form.set("file", file);
+  if (subject?.trim()) form.set("subject", subject.trim());
   return uploadFormWithProgress<LibraryMaterialDetailRead>("/api/materials/upload", form, onProgress);
 }
 
@@ -751,10 +761,12 @@ export async function uploadTypstMaterial(
   files: File[],
   paths: string[],
   entrypoint?: string,
+  subject?: string,
 ): Promise<LibraryMaterialDetailRead> {
   const form = new FormData();
   form.set("input_kind", inputKind);
   if (entrypoint) form.set("entrypoint", entrypoint);
+  if (subject?.trim()) form.set("subject", subject.trim());
   if (inputKind === "zip") form.set("file", files[0]);
   else files.forEach((file, index) => {
     form.append("files", file);
@@ -787,14 +799,14 @@ export const buildTypstMaterial = (
 });
 
 export const createLibraryTextMaterial = (
-  command: { name: string; text: string },
+  command: { name: string; text: string; subject?: string | null },
 ): Promise<LibraryMaterialDetailRead> => request("/api/materials/text", {
   method: "POST",
   body: JSON.stringify(command),
 });
 
 export const createLibraryExternalMaterial = (
-  command: { kind: "url" | "youtube"; url: string },
+  command: { kind: "url" | "youtube"; url: string; subject?: string | null },
 ): Promise<LibraryMaterialDetailRead> => request("/api/materials/external", {
   method: "POST",
   body: JSON.stringify(command),
@@ -825,6 +837,14 @@ export const getLibraryPage = (
   const suffix = query.size ? `?${query.toString()}` : "";
   return request(`${libraryPath(materialId)}/pages/${page}${suffix}`, { signal: options.signal });
 };
+
+export const updateLibraryMaterialMetadata = (
+  materialId: string,
+  command: { display_name?: string; subject?: string | null },
+): Promise<LibraryMaterialDetailRead> => request(libraryPath(materialId), {
+  method: "PATCH",
+  body: JSON.stringify(command),
+});
 
 /**
  * Метка растра в адресе: пока файл материала не менялся, метка та же, и браузер

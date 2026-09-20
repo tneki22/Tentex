@@ -23,6 +23,7 @@ from app.bindings.schemas import (
 from app.db import project_write_transaction
 from app.lessons.refs import transfer_refs_on_revision
 from app.marker_labels import material_image_label
+from app.materials.naming import material_display_name, project_material_display_name
 from app.materials.schemas import MaterialPurpose
 from app.models import (
     Binding,
@@ -144,14 +145,14 @@ def _fragment_read(
         node_title=node.title if node is not None else "",
         fragment_id=fragment.id,
         material_id=material.id,
-        material_name=material.original_name,
+        material_name=material_display_name(material),
         block_id=binding.block_id,
         page_number=page.page_number,
         text=fragment.text,
         bbox=fragment.bbox,
         element_kind=fragment.element_kind,
         asset_label=(
-            material_image_label(material.id, material.original_name, fragment.asset_path)
+            material_image_label(material.id, material_display_name(material), fragment.asset_path)
             if fragment.element_kind in {"image", "table"} and fragment.asset_path
             else None
         ),
@@ -359,7 +360,11 @@ def remove_bindings_bulk(
             )
 
         if touched_ids:
-            label = (link.display_name if link else None) or material.original_name
+            label = (
+                project_material_display_name(material, link)
+                if link is not None
+                else material_display_name(material)
+            )
             scope = f", стр. {command.page_number}" if command.page_number is not None else ""
             if command.program_node_id is not None:
                 node = session.get(ProgramNode, command.program_node_id)

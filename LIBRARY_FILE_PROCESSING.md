@@ -12,7 +12,7 @@
 
 **Загрузить ≠ разобрать ≠ проверить ≠ подключить к проекту.**
 
-- Библиотека общая для установки. Один источник — строка `materials`; два проекта используют её через две строки `project_materials`. Разбор и исправления общие, названия и назначения внутри проекта — проектные.
+- Библиотека общая для установки. Один источник — строка `materials`; два проекта используют её через две строки `project_materials`. Разбор и исправления общие. `Material.display_name` и `subject` глобальны, а роль, назначение и необязательный проектный псевдоним принадлежат `ProjectMaterial`.
 - Обычный файл после загрузки находится в `ready_to_process`. HTTP `202` у `/materials/upload` **не означает**, что задача уже создана. Нужно отдельно нажать «Подготовить материал».
 - **Typst — исключение:** загрузка автоматически ставит сборку; при неоднозначном входе сразу просит выбрать `.typ`.
 - Для поиска и привязок нужен опубликованный разбор (`active_parse_revision > 0`). Сохранённые страницы ещё строящейся версии можно читать через `task_id`, но это не публикация всей версии.
@@ -354,7 +354,7 @@ stderr отбирается только по `error:`/`warning:`. `file not fou
 
 ## 9. Проектные связи и эталонные ответы
 
-Назначение и роль живут не в materials, а в `project_materials`: `source_role`, `priority`, `affects_program`, `instruction`, `display_name`, `purposes`, `exam_slot`. Один PDF может быть списком вопросов в одном проекте и учебным источником в другом.
+Назначение и роль живут не в materials, а в `project_materials`: `source_role`, `priority`, `affects_program`, `instruction`, `display_name`, `purposes`, `exam_slot`. Один PDF может быть списком вопросов в одном проекте и учебным источником в другом. Эффективное имя проекта: `ProjectMaterial.display_name ?? Material.display_name`; `original_name` остаётся техническим именем исходника. `PATCH /api/materials/{material_id}` меняет глобальные `display_name` и `subject`, не путь и не байты.
 
 Список вопросов: `exam_structure` → native/OCR pages → `parse_exam_program` → preview → подтверждённая замена программы; `program_nodes.origin_material_id` фиксирует источник. Шаблоны номеров и билетов — детерминированный importer, не OCR-модель, не общая сегментация и не получение embeddings.
 
@@ -393,7 +393,7 @@ SQL валидация требует `foreign_keys=ON`; приложение в
 
 Ниже имена **реальных SQL-таблиц и колонок**, а не имена TypeScript DTO. UUID в JSON API обычно с дефисами; SQLAlchemy SQLite Uuid хранит 32 hex-символа. `material_fragments` не имеет собственной колонки revision: она берётся через `page_id → material_pages.revision`.
 
-- **`materials`**: `id`, `sha256`, `original_name`, `storage_path`, `media_type`, `source_kind`, `source_url`, `retrieved_at`, `size_bytes`, `page_count`, `status`, `active_parse_revision`, `parser_mode`, `scan_page_count`, `ocr_low_page_count`, `estimated_seconds`, `outline`, `diagnostics`, `error`, `created_at`, `updated_at`. `sha256` и `storage_path` unique. [Схема](https://github.com/tneki22/Tentex/blob/9acd0f78167a6e3d0b2f79479cfc99139b1ee298/backend/app/models.py#L490-L527).
+- **`materials`**: `id`, `sha256`, `original_name`, `display_name`, `subject`, `storage_path`, `media_type`, `source_kind`, `source_url`, `retrieved_at`, `size_bytes`, `page_count`, `status`, `active_parse_revision`, `parser_mode`, `scan_page_count`, `ocr_low_page_count`, `estimated_seconds`, `outline`, `diagnostics`, `error`, `created_at`, `updated_at`. `display_name` обязателен и при миграции заполняется из `original_name`; `subject` — необязательная широкая дисциплина. `sha256` и `storage_path` unique.
 - **`project_materials`**: `project_id`, `material_id` (составной PK), `source_role`, `priority`, `affects_program`, `instruction`, `display_name`, `purposes`, `exam_slot`, `created_at`. FK project cascade, material restrict. [Схема](https://github.com/tneki22/Tentex/blob/9acd0f78167a6e3d0b2f79479cfc99139b1ee298/backend/app/models.py#L530-L550).
 - **`material_pages`**: `id`, `material_id`, `revision`, `page_number`, `width`, `height`, `text`, `markdown`, `quality`, `confidence`, `parser_mode`, `elements`, `diagnostics`, `image_path`, `reviewed_at`, `created_at`. Unique `(material_id,revision,page_number)`. [Схема](https://github.com/tneki22/Tentex/blob/9acd0f78167a6e3d0b2f79479cfc99139b1ee298/backend/app/models.py#L553-L615).
 - **`material_blocks`**: `id`, `material_id`, `revision`, `sort_order`, `title`, `block_class`, `service_reason`, `page_from`, `page_to`. Unique `(material_id,revision,sort_order)`. [Схема](https://github.com/tneki22/Tentex/blob/9acd0f78167a6e3d0b2f79479cfc99139b1ee298/backend/app/models.py#L618-L654).

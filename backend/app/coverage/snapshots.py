@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 
 from app.coverage.validation import Unit
+from app.materials.naming import project_material_display_name
 from app.models import (
     Binding,
     BindingStatus,
@@ -148,7 +149,7 @@ def source_snapshot(session, project_id, ids, *, require_ready=True) -> list[dic
         result.append(
             {
                 "id": str(material_id),
-                "name": link.display_name or material.original_name,
+                "name": project_material_display_name(material, link),
                 "source_role": link.source_role,
                 "purposes": link.purposes,
                 "revision": material.active_parse_revision,
@@ -252,7 +253,7 @@ def snapshots_current(session, runs) -> dict[UUID, bool]:
             result.append(
                 {
                     "id": str(material_id),
-                    "name": link.display_name or material.original_name,
+                    "name": project_material_display_name(material, link),
                     "source_role": link.source_role,
                     "purposes": link.purposes,
                     "revision": material.active_parse_revision,
