@@ -36,6 +36,26 @@ class ProviderModel:
     expiration_date: str | None = None
 
 
+_SPEECH_TO_TEXT_MARKERS = ("whisper", "transcribe")
+
+
+def _infer_modalities(
+    model_id: str, input_modalities: list[str], output_modalities: list[str]
+) -> tuple[list[str], list[str]]:
+    """Достраивает модальности, которые провайдер не отдал в `/models`.
+
+    OpenRouter присылает `architecture`, а Groq или OpenAI — нет: у них список
+    только с ID. Без этого Whisper оказывается «без возможностей» и не попадает
+    в выбор модели для речи. Догадываемся строго по ID семейства
+    распознавания речи; остальное по-прежнему задаётся руками.
+    """
+    if input_modalities or not any(
+        marker in model_id.lower() for marker in _SPEECH_TO_TEXT_MARKERS
+    ):
+        return input_modalities, output_modalities
+    return ["audio"], output_modalities or ["text"]
+
+
 @dataclass(frozen=True)
 class ProviderUsage:
     input_tokens: int = 0
@@ -214,6 +234,11 @@ class OpenAITransport:
             data = item.model_dump()
             pricing = data.get("pricing") or {}
             architecture = data.get("architecture") or {}
+            input_modalities, output_modalities = _infer_modalities(
+                item.id,
+                architecture.get("input_modalities") or [],
+                architecture.get("output_modalities") or [],
+            )
             models.append(
                 ProviderModel(
                     model_id=item.id,
@@ -223,8 +248,8 @@ class OpenAITransport:
                         "max_completion_tokens"
                     ),
                     supported_parameters=data.get("supported_parameters") or [],
-                    input_modalities=architecture.get("input_modalities") or [],
-                    output_modalities=architecture.get("output_modalities") or [],
+                    input_modalities=input_modalities,
+                    output_modalities=output_modalities,
                     reasoning=data.get("reasoning") or {},
                     default_parameters=data.get("default_parameters") or {},
                     prompt_price_usd=_decimal(pricing.get("prompt")),

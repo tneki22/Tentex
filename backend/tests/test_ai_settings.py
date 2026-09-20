@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.catalog import add_catalog_model, search_catalog
 from app.ai.credentials import decrypt_secret, encrypt_secret
-from app.ai.provider import FakeTransport, ProviderModel
+from app.ai.provider import FakeTransport, ProviderModel, _infer_modalities
 from app.ai.router import router
 from app.ai.schemas import (
     AiCatalogModelWrite,
@@ -310,3 +310,18 @@ def test_catalog_model_is_saved_only_after_explicit_add(
     row = session.get(AiModelCatalogEntry, (provider_id, "catalog/selected"))
     assert row is not None
     assert row.is_manually_added is False
+
+
+@pytest.mark.parametrize(
+    ("model_id", "given", "expected"),
+    [
+        ("whisper-large-v3-turbo", ([], []), (["audio"], ["text"])),
+        ("openai/gpt-4o-transcribe", ([], []), (["audio"], ["text"])),
+        ("llama-3.3-70b-versatile", ([], []), ([], [])),
+        ("whisper-1", (["text"], []), (["text"], [])),
+    ],
+)
+def test_speech_models_get_audio_input_when_provider_omits_modalities(
+    model_id: str, given: tuple[list[str], list[str]], expected: tuple[list[str], list[str]]
+) -> None:
+    assert _infer_modalities(model_id, *given) == expected
