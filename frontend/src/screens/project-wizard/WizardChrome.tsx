@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { ArrowLeft, Check, Trash2 } from "lucide-react";
 import { Link } from "react-router";
 import { BrandMark } from "../../app/BrandMark";
@@ -68,7 +68,13 @@ export function WizardChrome({
       </header>
 
       {!isLanding && (
-        <nav className="wizard-progress" aria-label="Шаги создания проекта">
+        <nav
+          className="wizard-progress"
+          aria-label="Шаги создания проекта"
+          /* Число шагов у веток разное: полоса и колонки считаются от него,
+             иначе трёхшаговый мастер занимает три колонки из пяти и уезжает влево. */
+          style={{ "--wizard-steps": stepLabels.length } as CSSProperties}
+        >
           <span className="wizard-progress-line" aria-hidden="true"><i style={{ width: `${progress}%` }} /></span>
           {stepLabels.map((label, index) => {
             const itemStep = index + 1;

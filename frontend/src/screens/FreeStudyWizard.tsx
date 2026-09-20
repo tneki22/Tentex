@@ -46,10 +46,17 @@ function suggestedProjectName(goal: string, subject: string): string {
   return phrase.slice(0, 80);
 }
 
+/* Оглавление читается закладками PDF или печатной страницей сразу после
+   загрузки, без разбора текста. Поэтому «текст не подготовлен» и «оглавление
+   есть» — не противоречие, и статус говорит об этом прямо. */
 function materialStatus(material: MaterialRead): string {
   if (material.status === "ready") return "Текст готов";
   if (material.status === "failed") return "Ошибка подготовки";
-  if (material.status === "ready_to_process") return "Текст ещё не подготовлен";
+  if (material.status === "ready_to_process") {
+    return material.outline.length > 0
+      ? "Оглавление прочитано, текст ещё не разобран"
+      : "Текст ещё не подготовлен";
+  }
   return "Материал обрабатывается";
 }
 
@@ -136,11 +143,18 @@ export function FreeStudyWizard({
     }));
   }, [form.goal, form.subject, nameManual]);
 
+  /* Роль «Основной» в карточке источника и основа программы — один и тот же
+     факт. Основа выводится из роли, иначе смена роли вручную оставляла бейдж
+     и импорт оглавления на прежнем материале. */
+  const basis = materials.materials.find((item) => item.id === basisMaterialId && item.source_role === "main")
+    ?? materials.materials.find((item) => item.source_role === "main")
+    ?? null;
+
   useEffect(() => {
-    if (basisMaterialId && !materials.loading && !materials.materials.some((item) => item.id === basisMaterialId)) {
-      setBasisMaterialId(null);
-    }
-  }, [basisMaterialId, materials.loading, materials.materials]);
+    if (materials.loading) return;
+    const derived = basis?.id ?? null;
+    if (derived !== basisMaterialId) setBasisMaterialId(derived);
+  }, [basis, basisMaterialId, materials.loading]);
 
   function passport(): GoalPassportWrite {
     return {
@@ -251,9 +265,9 @@ export function FreeStudyWizard({
   }
 
   async function chooseBasis(materialId: string) {
-    const previous = basisMaterialId;
     setBasisMaterialId(materialId);
-    if (previous && previous !== materialId) await materials.update(previous, { source_role: "additional" });
+    const demoted = materials.materials.filter((item) => item.id !== materialId && item.source_role === "main");
+    for (const item of demoted) await materials.update(item.id, { source_role: "additional" });
     await materials.update(materialId, { source_role: "main" });
   }
 
@@ -271,7 +285,6 @@ export function FreeStudyWizard({
     return controller.enqueueProgramCommand((current) => request(current.program.revision));
   }
 
-  const basis = materials.materials.find((item) => item.id === basisMaterialId) ?? null;
   const basisMaterials = basis ? [basis] : [];
   const currentNodes = useMemo(
     () => (controller.detail?.program.nodes ?? []).filter((node) => node.is_in_current_program && !node.is_archived),
@@ -304,7 +317,7 @@ export function FreeStudyWizard({
   }
 
   return (
-    <div className={`wizard-flow free-study-wizard${step === 2 ? " is-program-editor" : ""}`}>
+    <div className={`wizard-flow free-study-wizard${step === 2 ? " is-program-editor" : ""}${step === 1 ? " is-goal" : ""}`}>
       <PageHead title={step === 1 ? "Какая у вас цель?" : step === 2 ? "Подберите материалы" : "Проверьте проект"} />
       {controller.conflict && <Card><h2>Черновик изменился в другой вкладке</h2><Button onClick={() => void controller.reload()}>Загрузить серверную версию</Button></Card>}
 
@@ -327,7 +340,7 @@ export function FreeStudyWizard({
             <Field label="Желаемый срок" hint="Необязательный ориентир: календарь и прогноз пока не создаются."><input type="date" value={form.deadline} onChange={(event) => setForm((current) => ({ ...current, deadline: event.target.value }))} /></Field>
           </div>
           {errorBanner && <p className="inline-error" role="alert">{errorBanner}</p>}
-          <div className="wizard-actions"><span className="wizard-actions-spacer" /><Button disabled={busy || !form.goal.trim() || !form.name.trim()} onClick={() => void go(2)}>К материалам</Button></div>
+          <div className="wizard-actions is-single"><Button disabled={busy || !form.goal.trim() || !form.name.trim()} onClick={() => void go(2)}>К материалам</Button></div>
         </section>
       )}
 
@@ -408,7 +421,7 @@ export function FreeStudyWizard({
             </dl>
           </section>
           <Card className="textbook-summary-card"><h3>Материалы</h3>{materials.materials.map((material) => <div key={material.id}><span>{basisMaterialId === material.id ? "Основа" : "Доп."}</span><b>{material.display_name}</b><small>{materialStatus(material)}</small></div>)}{materials.materials.length === 0 && <p>Пока без материалов — для свободного изучения это нормально. Их можно добавить в любой момент.</p>}</Card>
-          <Card className="textbook-summary-card"><h3>Программа</h3><dl className="textbook-summary-metrics"><div className="is-sections"><dt>Разделы</dt><dd>{counts.sections}</dd></div><div className="is-topics"><dt>Темы</dt><dd>{counts.topics}</dd></div><div className="is-outside"><dt>Подпункты</dt><dd>{counts.subpoints}</dd></div></dl>{flat.slice(0, 8).map((node) => <div key={node.id}><span>{node.number}</span><b>{node.title}</b><small>{node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}</small></div>)}{flat.length === 0 ? <p>Программа пока пуста. После создания добавьте первую тему вручную; помощь ИИ появится в этом же разделе позже.</p> : <p>Начальная программа собрана{basis ? ` из оглавления «${basis.display_name}»` : " вручную"}. После создания её можно продолжить редактировать.</p>}</Card>
+          <Card className="textbook-summary-card"><h3>Программа</h3><dl className="textbook-summary-metrics"><div className="is-sections"><dt>Разделы</dt><dd>{counts.sections}</dd></div><div className="is-topics"><dt>Темы</dt><dd>{counts.topics}</dd></div><div className="is-outside"><dt>Подпункты</dt><dd>{counts.subpoints}</dd></div></dl>{flat.map((node) => <div key={node.id}><span>{node.number}</span><b>{node.title}</b><small>{node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}</small></div>)}{flat.length === 0 ? <p>Программа пока пуста. После создания добавьте первую тему вручную; помощь ИИ появится в этом же разделе позже.</p> : <p>Начальная программа собрана{basis ? ` из оглавления «${basis.display_name}»` : " вручную"}. После создания её можно продолжить редактировать.</p>}</Card>
           <Card className="textbook-summary-card"><h3>После создания</h3><p>После создания откроется раздел «Программа». Цель, срок и материалы можно изменить позже.</p></Card>
           {errorBanner && <p className="inline-error" role="alert">{errorBanner}</p>}
           <div className="wizard-actions"><Button variant="ghost" onClick={() => void go(2)}>Назад</Button><span className="wizard-actions-spacer" /><Button disabled={busy || !form.goal.trim() || !form.name.trim()} onClick={() => void activate()}>Создать проект</Button></div>

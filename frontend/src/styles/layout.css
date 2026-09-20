@@ -4789,6 +4789,17 @@
     var(--canvas);
 }
 
+/* Выбранный в Параметрах фон лежит фиксированным слоем под всей оболочкой,
+   поэтому Мастеру нужно снять свою заливку — иначе он закрывает фон целиком,
+   и на начальном экране выбора типа проекта тоже. */
+[data-background="custom"] .project-wizard {
+  background: radial-gradient(circle at 50% 0%, var(--accent-wash), transparent 32rem);
+}
+
+[data-background="custom"] .wizard-topbar {
+  background: color-mix(in srgb, var(--canvas) 45%, transparent);
+}
+
 .wizard-topbar {
   position: relative;
   z-index: var(--z-topbar);
@@ -4848,20 +4859,24 @@ button.wizard-back-projects {
 .wizard-topbar-actions { justify-self: end; display: inline-flex; align-items: center; gap: var(--space-3); }
 .wizard-discard { color: var(--tone-danger); }
 
+/* --wizard-steps приходит из WizardChrome: у ветки «Свободное изучение» три
+   шага, у остальных пять. Ширина и колонки считаются от этого числа, а полоса
+   идёт ровно от центра первого кружка до центра последнего. */
 .wizard-progress {
+  --wizard-steps: 5;
   position: relative;
-  width: min(720px, calc(100% - var(--space-8)));
+  width: min(720px, calc(var(--wizard-steps) * 160px), calc(100% - var(--space-8)));
   margin: var(--space-6) auto 0;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(var(--wizard-steps), 1fr);
 }
 
 .wizard-progress-line {
   position: absolute;
   z-index: 0;
   top: 15px;
-  left: 10%;
-  right: 10%;
+  left: calc(50% / var(--wizard-steps));
+  right: calc(50% / var(--wizard-steps));
   height: 2px;
   overflow: hidden;
   background: var(--line);
@@ -5709,7 +5724,12 @@ button.wizard-back-projects {
 }
 
 .free-study-step { display: grid; gap: var(--space-5); }
-.free-study-form { display: grid; gap: var(--space-5); width: min(720px, 100%); }
+/* Шаг «Цель» — одна узкая колонка: заголовок, поля и кнопка выровнены по
+   одной ширине и центрированы на странице. */
+.wizard-flow.is-goal { width: min(720px, 100%); }
+.free-study-form { display: grid; gap: var(--space-5); width: min(720px, 100%); margin-inline: auto; }
+.wizard-actions.is-single { width: min(720px, 100%); margin-inline: auto; }
+.wizard-actions.is-single .primary-button { width: 100%; justify-content: center; }
 .free-study-form textarea { resize: vertical; }
 .free-study-material-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .free-study-link-card { display: flex; align-items: end; gap: var(--space-3); }
