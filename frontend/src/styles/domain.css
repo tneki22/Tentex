@@ -949,3 +949,290 @@
   .dictation-button.is-recording { animation: none; }
   .dictation-spinner { animation-duration: 2.4s; }
 }
+
+/* Выбор модели в композере чата: пилюля-триггер, всплывашка с группами по
+   провайдеру и карточка параметров по наведению на строку модели. */
+
+.chat-model-trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 200px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+
+.chat-model-trigger:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+
+.chat-model-trigger:active:not(:disabled) {
+  background: var(--surface-sunken);
+}
+
+.chat-model-trigger:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.chat-model-trigger svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.chat-model-trigger-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Шире обычной всплывашки: в строке модели помещаются имя и цена, а на 296px
+   цена переносилась бы под название и переставала читаться столбцом. */
+.chat-model-popover {
+  width: 352px;
+}
+
+.chat-model-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--muted);
+}
+
+.chat-model-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.chat-model-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+/* Рамку и кольцо фокуса рисует обёртка целиком, вместе с иконкой; своя рамка
+   базового `input` дала бы вторую коробку внутри первой. */
+.chat-model-search input,
+.chat-model-search input:hover:not(:disabled),
+.chat-model-search input:focus-visible {
+  border: 0;
+  outline: none;
+  box-shadow: none;
+}
+
+.chat-model-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: min(380px, 50vh);
+  overflow-y: auto;
+}
+
+.chat-model-group-trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--ease-fast);
+}
+
+.chat-model-group-trigger:hover {
+  background: var(--surface-hover);
+}
+
+.chat-model-group-trigger:active {
+  background: var(--surface-sunken);
+}
+
+.chat-model-group-trigger svg {
+  flex: none;
+  color: var(--faint);
+  transition: transform var(--motion-fast) var(--motion-ease);
+}
+
+.chat-model-group-trigger[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.chat-model-group-trigger small {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+}
+
+.chat-model-group-items {
+  display: flex;
+  flex-direction: column;
+  animation: fade-in var(--motion-fast) var(--motion-ease-out);
+}
+
+.chat-model-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--ease-fast), color var(--ease-fast);
+}
+
+.chat-model-group-items .chat-model-row {
+  padding-left: var(--space-6);
+}
+
+.chat-model-row:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.chat-model-row:active {
+  background: var(--surface-sunken);
+}
+
+.chat-model-row.is-current {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.chat-model-row-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-model-row-name svg {
+  flex: none;
+  color: var(--tone-warning);
+}
+
+.chat-model-row-facts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  margin-left: auto;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chat-model-row-facts em {
+  font-style: normal;
+}
+
+.chat-model-empty {
+  margin: var(--space-3) 0 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.chat-model-params {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Четыре подписи уровня рассуждения в ширину карточки помещаются только
+   компактными: на общих 14px они налезали друг на друга. */
+.chat-model-params .segmented-tabs button {
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.chat-model-params > code {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.chat-model-params-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.chat-model-params-facts dt {
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.chat-model-params-facts dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-model-params-number {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.chat-model-params-number input {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-model-params-number input:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.chat-model-confirm-swap {
+  color: var(--ink);
+  font-weight: var(--weight-semibold);
+}
+
+.chat-model-confirm-note {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}

@@ -280,6 +280,33 @@ def test_apply_partial_then_conflict_then_reapply(session: Session, ai_config: s
     assert new_node.needs_material is True
 
 
+def test_add_at_start_places_first_and_default_goes_last(
+    session: Session, ai_config: str,
+) -> None:
+    del ai_config
+    project = _project(session)
+    chat = program_chat.create_session(session, project.id)
+    _node(session, project, "Первый", sort_order=0)
+    _node(session, project, "Второй", sort_order=1)
+    message = _diff_message(session, chat, [
+        {"op": "add", "parent_node_id": None, "at_start": True, "node_type": "section",
+         "title": "В начало", "rationale": "r", "children": []},
+        {"op": "add", "parent_node_id": None, "node_type": "section",
+         "title": "В конец", "rationale": "r", "children": []},
+    ])
+
+    result = program_chat.apply_proposal(
+        session, project.id, message.id,
+        program_chat.ProgramChatApplyWrite(selected=[0, 1], expected_program_revision=0),
+    )
+
+    roots = sorted(
+        (node for node in result.program.nodes if node.parent_id is None),
+        key=lambda node: node.sort_order,
+    )
+    assert [node.title for node in roots] == ["В начало", "Первый", "Второй", "В конец"]
+
+
 def test_set_visibility_applies_to_subtree_and_undo_restores_it(
     session: Session, ai_config: str,
 ) -> None:

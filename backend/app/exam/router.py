@@ -198,6 +198,7 @@ def _reply_request(
         project_id=chat.project_id,
         context_manifest=[*ctx.manifest, *(retrieval_sources or [])],
         request_model_override=_model_override(chat),
+        parameters=chat.model_parameters or {},
         source_fingerprint={"chat_id": str(chat.id)},
     )
 

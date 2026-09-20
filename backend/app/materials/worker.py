@@ -24,7 +24,7 @@ from app.bindings.service import transfer_bindings_on_revision
 from app.config import settings
 from app.db import SessionLocal, job_write_transaction, retry_on_locked, upgrade_database
 from app.logging_config import configure_logging
-from app.materials import library
+from app.materials import audio_job, library
 from app.materials import revisions as revision_registry
 from app.materials.parsers.base import ParsedPage
 from app.materials.parsers.cloud_vlm import CloudRecognizer
@@ -46,6 +46,7 @@ from app.models import (
     Material,
     MaterialPage,
     MaterialRevisionOrigin,
+    MaterialSourceKind,
     MaterialState,
     PageQuality,
     ParserMode,
@@ -388,6 +389,7 @@ def process_parse_job(session: Session, task: BackgroundJob) -> None:
             return
         source_path = material_path(material.storage_path)
         parser_mode = task.parser_mode
+        is_audio = material.source_kind == MaterialSourceKind.AUDIO
         selected = _selected(task)
         next_index = int(task.checkpoint.get("next_index", 0))
         # SQLAlchemy starts a read transaction for session.get(); page checkpoints
@@ -399,20 +401,27 @@ def process_parse_job(session: Session, task: BackgroundJob) -> None:
         # режимы не должны и не могут дотянуться до шлюза.
         recognizer = (
             CloudRecognizer(session, params.quality_threshold)
-            if parser_mode == ParserMode.CLOUD
+            if parser_mode == ParserMode.CLOUD and not is_audio
             else None
         )
         _prepare_revision(session, task_id)
         if next_index < len(selected):
             remaining_pages = selected[next_index:]
-            for page in iter_pages(
-                source_path,
-                parser_mode,
-                remaining_pages[0],
-                params=params,
-                page_numbers=remaining_pages,
-                recognizer=recognizer,
-            ):
+            # У записи страница одна, а расшифровка идёт минутами: ход и
+            # чекпоинт по кускам ведёт `audio_job`, а не постраничный разбор.
+            pages = (
+                audio_job.transcribe_pages(session, task_id, source_path, parser_mode)
+                if is_audio
+                else iter_pages(
+                    source_path,
+                    parser_mode,
+                    remaining_pages[0],
+                    params=params,
+                    page_numbers=remaining_pages,
+                    recognizer=recognizer,
+                )
+            )
+            for page in pages:
                 if not retry_on_locked(lambda page=page: _save_page(session, task_id, page)):
                     return
         retry_on_locked(lambda: _finish(session, task_id))

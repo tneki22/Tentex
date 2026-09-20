@@ -1,14 +1,14 @@
 """Общий retrieval-контур: профили embeddings, версионные индексы и benchmark.
 
-Revision ID: 20260920_0054
-Revises: 20260920_0053
+Revision ID: 20260920_0055
+Revises: 20260920_0054
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "20260920_0054"
-down_revision = "20260920_0053"
+revision = "20260920_0055"
+down_revision = "20260920_0054"
 branch_labels = None
 depends_on = None
 

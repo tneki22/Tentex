@@ -41,7 +41,9 @@ const SECONDS_PER_PAGE: Record<ParserMode, number> = { fast: 16, cloud: 19 };
 /** Человеческие названия для диагностики страницы. */
 const DIAGNOSTIC_LABEL: Record<string, string> = {
   formula_possible: "Возможны формулы — сверяйте с оригиналом",
-  audio_transcription_required: "Нужна локальная расшифровка аудио",
+  audio_transcription_required: "Запись ещё не расшифрована",
+  approximate_timestamps:
+    "Время фраз приблизительное: модель не вернула метки, они посчитаны по длине текста",
   manual_correction: "Есть страницы, исправленные вручную",
   source_refreshed: "Снимок источника обновлялся",
   layout_fallback: "Разметка восстановлена упрощённо: колонки могли перепутаться",
@@ -67,9 +69,18 @@ const DIAGNOSTIC_PRESENCE: Record<string, string> = {
 // элементов, факт применения разметчика. Их место в логе.
 const TECHNICAL_DIAGNOSTICS = new Set(["render_dpi", "structure_elements", "layout_markdown"]);
 
+/** Чем расшифрована запись: значение — модель, и в ней бывают двоеточия (`:free`). */
+const ASR_SOURCE_LABEL: Record<string, string> = {
+  asr_local: "Расшифровано локально",
+  asr_cloud: "Расшифровано облаком, модель",
+};
+
 /** Строка диагностики по-русски или `null`, если её показывать не нужно. */
 function diagnosticText(item: string): string | null {
-  const [key, value] = item.split(":", 2);
+  const colon = item.indexOf(":");
+  const key = colon === -1 ? item : item.slice(0, colon);
+  const value = colon === -1 ? undefined : item.slice(colon + 1);
+  if (key in ASR_SOURCE_LABEL && value) return `${ASR_SOURCE_LABEL[key]}: ${value}`;
   if (TECHNICAL_DIAGNOSTICS.has(key)) return null;
   if (value !== undefined && key in DIAGNOSTIC_PRESENCE) {
     // Ноль — это не факт, а его отсутствие: строку такое не заслуживает.
@@ -138,6 +149,9 @@ export function LibraryProcessingPanel({
   onConfirmPageReview,
 }: LibraryProcessingPanelProps) {
   const presentation = getMaterialPresentation(material.presentation_kind);
+  // У записи нет страниц и OCR: два своих способа — Whisper на процессоре и
+  // внешняя модель речи. Режимы называются так же (`fast`/`cloud`), смысл другой.
+  const isAudio = material.presentation_kind === "audio";
   // Режим не выбран, пока не пришли настройки: там лежит и список движков, и
   // выбранный пользователем режим по умолчанию (Параметры → Распознавание).
   const [mode, setMode] = useState<ParserMode | null>(null);
@@ -148,7 +162,7 @@ export function LibraryProcessingPanel({
   const task = material.task;
   const running = task && (task.state === "running" || task.state === "queued" || task.state === "paused");
   const prepared = material.active_parse_revision > 0;
-  const showOcrReview = material.parser_mode !== "fast";
+  const showOcrReview = !isAudio && material.parser_mode !== "fast";
   const reviewPages = showOcrReview ? material.ocr_low_page_count : 0;
   const processingScope = scope === "needs_review" && !showOcrReview ? "all" : scope;
   const pageCount = material.page_count ?? 1;
@@ -166,7 +180,9 @@ export function LibraryProcessingPanel({
         setOcr(settings);
         // Режим по умолчанию задан один раз в Параметрах — здесь его только
         // подставляем, и только пока пользователь не выбрал другой руками.
-        setMode((current) => current ?? settings.default_mode);
+        // Запись по умолчанию читается локально: облако уводит файл наружу и
+        // стоит денег, поэтому его выбирают осознанно, а не по режиму страниц.
+        setMode((current) => current ?? (isAudio ? "fast" : settings.default_mode));
       })
       .catch(() => {
         if (controller.signal.aborted) return;
@@ -175,10 +191,15 @@ export function LibraryProcessingPanel({
     return () => controller.abort();
   }, [material.id, material.task?.updated_at]);
 
-  const ocrModes = ocr?.engines ?? [];
+  const ocrModes = isAudio ? (ocr?.speech ?? []) : (ocr?.engines ?? []);
   const selectedMode = ocrModes.find((item) => item.mode === mode);
   const modeUnavailable = Boolean(mode) && ocrModes.length > 0 && !selectedMode?.available;
   const cloud = ocr?.cloud ?? null;
+  const speechCloud = ocr?.speech.find((item) => item.mode === "cloud") ?? null;
+  // Что читает идущую задачу — режим, с которым она поставлена, а не тот, что выбран для следующей.
+  const speechModelLabel = ocr?.speech.find(
+    (item) => item.mode === (material.parser_mode ?? mode),
+  )?.model_label;
 
   /** Стратегия — общая настройка режима «Облако», а не поле этого запуска:
    *  сохраняем сразу, чтобы выбор здесь и в Параметрах не разъезжался. */
@@ -213,24 +234,28 @@ export function LibraryProcessingPanel({
       id: task.id,
       kind: material.presentation_kind === "typst" ? "typst_compile" : "parse",
       subject: material.display_name,
-      unit: "страниц",
+      unit: isAudio ? "минут" : "страниц",
+      // У записи подпись — то, что реально читает; у страниц её подставляет реестр.
+      detail: isAudio ? speechModelLabel : undefined,
       done: task.done,
       total: task.total,
       etaMinutes: estimateEtaMinutes(task.id, task.done, task.total, task.updated_at),
       state: task.state,
       error: task.error ?? undefined,
     };
-  }, [task, material.display_name]);
+  }, [task, material.display_name, material.presentation_kind, isAudio, speechModelLabel]);
 
   // Технические отметки конвейера человеку не нужны: список чистится, а не
   // печатается как есть. Пустой после чистки — раздела нет вовсе.
   const diagnostics = useMemo(
     () => [...new Set(
       material.diagnostics
+        // «Запись ещё не расшифрована» после расшифровки — уже неправда.
+        .filter((item) => !(prepared && item === "audio_transcription_required"))
         .map(diagnosticText)
         .filter((item): item is string => item !== null),
     )],
-    [material.diagnostics],
+    [material.diagnostics, prepared],
   );
 
   const rangeInvalid = scope === "range"
@@ -357,7 +382,7 @@ export function LibraryProcessingPanel({
         <h3>{presentation.processingTitle}</h3>
       </header>
 
-      {material.parser_mode === "fast" && prepared && (
+      {!isAudio && material.parser_mode === "fast" && prepared && (
         <p className="inspector-note">
           «Быстро» распознаёт обычный текст. Формулы он не читает — сохраняет вырезом,
           чтобы они не потерялись; сверяйтесь с изображением.
@@ -390,15 +415,19 @@ export function LibraryProcessingPanel({
       {backgroundTask && (
         <>
           <p className="inspector-stage">
-            {STAGE_LABEL[task?.stage ?? "queued"] ?? "Идёт обработка"}
-            {task && task.total > 0 && task.stage === "extract"
+            {isAudio && task?.stage === "extract"
+              ? "Расшифровываем запись"
+              : (STAGE_LABEL[task?.stage ?? "queued"] ?? "Идёт обработка")}
+            {!isAudio && task && task.total > 0 && task.stage === "extract"
               ? `: ${Math.min(task.done + 1, task.total)} из ${task.total}`
               : ""}
           </p>
+          {/* Пауза у записи не нужна: локальный Whisper с середины не продолжит, а
+              облачная расшифровка при сбое и так продолжается с готовых кусков. */}
           <TaskRow
             task={backgroundTask}
-            onPause={() => onControl("pause")}
-            onResume={() => onControl("resume")}
+            onPause={isAudio ? undefined : () => onControl("pause")}
+            onResume={isAudio ? undefined : () => onControl("resume")}
             onRetry={() => onControl("retry")}
             onCancel={() => onControl("cancel")}
           />
@@ -413,11 +442,11 @@ export function LibraryProcessingPanel({
 
       {!readOnly && !running && (
         <>
-          {material.capabilities.can_run_ocr ? (
+          {material.capabilities.can_run_ocr || isAudio ? (
             <>
               <RadioCards
                 className="ocr-modes"
-                label="Режим распознавания"
+                label={isAudio ? "Способ расшифровки" : "Режим распознавания"}
                 layout="rows"
                 value={mode}
                 options={ocrModes.map((item) => ({
@@ -432,13 +461,43 @@ export function LibraryProcessingPanel({
               />
               {modeUnavailable && (
                 <p className="inspector-note">
-                  <Link to="/setup?section=ocr&subsection=engines">
-                    <Settings2 size={14} aria-hidden="true" /> Открыть параметры распознавания
+                  <Link
+                    to={isAudio
+                      ? "/setup?section=ai&subsection=defaults"
+                      : "/setup?section=ocr&subsection=engines"}
+                  >
+                    <Settings2 size={14} aria-hidden="true" />
+                    {isAudio ? " Открыть параметры моделей" : " Открыть параметры распознавания"}
                   </Link>
                 </p>
               )}
 
-              {mode === "cloud" && cloud && (
+              {isAudio && mode === "cloud" && speechCloud?.available && (
+                <p className="inspector-note">
+                  Читать будет <b>{speechCloud.model_label}</b>
+                  {speechCloud.provider_label ? ` · ${speechCloud.provider_label}` : ""}
+                  {" — "}
+                  <Link to="/setup?section=ai&subsection=defaults">сменить модель</Link>.
+                </p>
+              )}
+
+              {isAudio && mode === "cloud" && speechCloud?.available && (
+                <p className="inspector-note">
+                  Запись уходит провайдеру кусками по несколько минут; цена зависит от
+                  длины записи и тарифа модели. Готовые куски сохраняются: при сбое
+                  «Повторить» не платит за них второй раз.
+                </p>
+              )}
+
+              {isAudio && mode === "fast" && (
+                <p className="inspector-note">
+                  Локальная расшифровка идёт медленнее записи и на разговорной речи
+                  ошибается заметно чаще облачной. Если результат плохой, расшифруйте
+                  запись заново облаком.
+                </p>
+              )}
+
+              {!isAudio && mode === "cloud" && cloud && (
                 <div className="cloud-run-setup">
                   <p className="inspector-note">
                     Читать будет <b>{cloud.model_id ?? "модель не выбрана"}</b>
@@ -541,7 +600,7 @@ export function LibraryProcessingPanel({
             </div>
           )}
 
-          {mode && !rangeInvalid && plannedPages > 0 && (
+          {!isAudio && mode && !rangeInvalid && plannedPages > 0 && (
             <p className="inspector-estimate">
               {plannedPages} стр. · {durationLabel(plannedPages, mode)}
               {mode === "cloud" && (
@@ -563,8 +622,18 @@ export function LibraryProcessingPanel({
             )}
           >
             {prepared
-              ? <><RotateCcw size={14} aria-hidden="true" /> Запустить заново</>
-              : <><Play size={14} aria-hidden="true" /> Подготовить материал</>}
+              ? (
+                <>
+                  <RotateCcw size={14} aria-hidden="true" />
+                  {isAudio ? " Расшифровать заново" : " Запустить заново"}
+                </>
+              )
+              : (
+                <>
+                  <Play size={14} aria-hidden="true" />
+                  {isAudio ? " Расшифровать запись" : " Подготовить материал"}
+                </>
+              )}
           </Button>
           {rangeInvalid && (
             <p className="inspector-error" role="alert">
@@ -574,7 +643,7 @@ export function LibraryProcessingPanel({
         </>
       )}
 
-      {prepared && (
+      {prepared && !isAudio && (
         <section className="inspector-section">
           <h4>Текущая страница</h4>
           {readOnly ? (

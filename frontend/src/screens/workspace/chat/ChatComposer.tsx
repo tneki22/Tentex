@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef } from "react";
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { Plus, Send, Square } from "lucide-react";
 import type { ChatCapability, ChatMode } from "../../../api/chat";
 import { DictationButton } from "../../../components/domain";
@@ -16,6 +16,8 @@ interface ChatComposerProps {
   onStop?: () => void;
   /** Палитра навыков — только у экзаменационного чата; без неё кнопка `+` не рендерится. */
   onOpenPalette?: () => void;
+  /** Выбор модели. Подаётся сверху: композер общий и про модели не знает. */
+  modelPicker?: ReactNode;
   modes?: ChatCapability[];
   currentMode?: ChatMode;
   onModeChange?: (mode: ChatMode) => void;
@@ -31,7 +33,7 @@ interface ChatComposerProps {
  */
 export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer(
   {
-    value, onChange, onSend, onStop, onOpenPalette, modes = [], currentMode = "exam",
+    value, onChange, onSend, onStop, onOpenPalette, modelPicker, modes = [], currentMode = "exam",
     onModeChange,
     showModeIndicator = true, sending, disabled,
   },
@@ -89,6 +91,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       />
       <div className="chat-composer-row">
         <div className="chat-composer-row-left">
+          {modelPicker}
           {onOpenPalette && (
             <IconButton label="Команды" onClick={onOpenPalette} disabled={disabled}>
               <Plus size={15} />

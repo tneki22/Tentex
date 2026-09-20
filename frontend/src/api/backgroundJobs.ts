@@ -39,6 +39,8 @@ export interface BackgroundJobRead {
   subject: string;
   /** Чем читается материал: локальный движок или внешняя модель. У ролей ИИ пусто. */
   model_label: string;
+  /** Что считают `done` и `total`: «страниц» у разбора, «минут» у расшифровки записи. */
+  progress_unit: string;
   /** Задача досчиталась, но её предложение ещё никто не принял и не убрал.
    *  Считает сервер (`registry._needs_review`) — по виду задачи и `reviewed_at`. */
   needs_review: boolean;

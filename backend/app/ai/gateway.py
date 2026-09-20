@@ -29,6 +29,7 @@ from app.ai.provider import (
     OpenAICompatibleTransport,
     ProviderError,
     ProviderUsage,
+    TimedSegment,
 )
 from app.ai.schemas import (
     AiImagePart,
@@ -68,7 +69,7 @@ ZERO = Decimal("0")
 # вызовов подряд, и без повтора один чужой всплеск ронял всю обработку.
 # `ai_invalid_credentials` и лимиты стоимости не повторяются никогда: ключ и
 # кошелёк от ожидания не чинятся.
-_RETRYABLE_PROVIDER_CODES = {
+RETRYABLE_PROVIDER_CODES = {
     "ai_provider_unavailable",
     "ai_empty_response",
     "ai_rate_limited",
@@ -179,6 +180,8 @@ class AiTranscription:
     duration_ms: int
     actual_model_id: str
     usage: AiUsage
+    # Время фраз, если провайдер его отдал; иначе пусто (см. `TimedSegment`).
+    segments: tuple[TimedSegment, ...] = ()
 
 
 def _silent_wav() -> bytes:
@@ -358,7 +361,7 @@ class ModelGateway:
             except ProviderError as error:
                 if budget_receipt is not None:
                     request.budget_context.settle(budget_receipt, None)
-                if not last_attempt and error.code in _RETRYABLE_PROVIDER_CODES:
+                if not last_attempt and error.code in RETRYABLE_PROVIDER_CODES:
                     await asyncio.sleep(self.retry_backoff[attempt])
                     continue
                 self._fail_run(run.id, error.code, started)
@@ -505,6 +508,7 @@ class ModelGateway:
         role: str = "speech_transcription",
         request_model_override: AiModelSelection | None = None,
         project_id: UUID | None = None,
+        timestamps: bool = False,
     ) -> AiTranscription:
         """Превращает запись в текст моделью речи; расход идёт в общий журнал запусков.
 
@@ -544,6 +548,7 @@ class ModelGateway:
                 audio_format=audio_format,
                 language=str(resolved.parameters.get("language", "ru")),
                 via_chat=not is_transcription_model(resolved.model),
+                timestamps=timestamps,
             )
         except asyncio.CancelledError:
             self._fail_run(run.id, "ai_cancelled", started, status="cancelled")
@@ -561,6 +566,7 @@ class ModelGateway:
             duration_ms=round((time.monotonic() - started) * 1000),
             actual_model_id=result.actual_model_id,
             usage=usage,
+            segments=result.segments,
         )
 
     async def _test_transcription_model(self, selection: AiModelSelection) -> AiModelTestRead:

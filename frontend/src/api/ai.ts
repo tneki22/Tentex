@@ -159,6 +159,12 @@ export interface AiTodayUsage {
   cache_hits: number;
 }
 
+export interface AiChatPreset {
+  provider_id: string;
+  model_id: string;
+  parameters: Record<string, unknown>;
+}
+
 export interface AiSettingsRead {
   external_models_enabled: boolean;
   daily_limit_usd: DecimalValue | null;
@@ -169,6 +175,7 @@ export interface AiSettingsRead {
   usd_rub_rate_date: string | null;
   default_text: AiModelSelection | null;
   default_speech: AiModelSelection | null;
+  chat_preset: AiChatPreset | null;
   providers: AiProviderRead[];
   roles: AiRoleRead[];
   models: AiModelRead[];

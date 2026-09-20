@@ -285,7 +285,13 @@ export function MaterialTextView({
             <p>Запустите распознавание в панели обработки справа.</p>
           </EmptyState>
         ) : (
-          <LoadingState label={processing ? "Страница ещё обрабатывается" : "Открываем текст"} />
+          <LoadingState
+            label={processing
+              ? (material.presentation_kind === "audio"
+                ? "Запись ещё расшифровывается"
+                : "Страница ещё обрабатывается")
+              : "Открываем текст"}
+          />
         )}
       </div>
     );

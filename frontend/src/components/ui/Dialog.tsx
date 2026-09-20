@@ -90,6 +90,8 @@ interface ConfirmDialogProps {
   destructive?: boolean;
   /** Подтверждение ждёт: последствия ещё не посчитаны. */
   confirmDisabled?: boolean;
+  /** Подпись кнопки, пока действие идёт. По умолчанию — про удаление. */
+  pendingLabel?: string;
 }
 
 /**
@@ -104,6 +106,7 @@ export function ConfirmDialog({
   onConfirm,
   destructive = false,
   confirmDisabled = false,
+  pendingLabel = "Удаляем…",
   children,
 }: PropsWithChildren<ConfirmDialogProps>) {
   const [pending, setPending] = useState(false);
@@ -136,7 +139,7 @@ export function ConfirmDialog({
             disabled={pending || confirmDisabled}
             onClick={() => void confirm()}
           >
-            {pending ? "Удаляем…" : confirmLabel}
+            {pending ? pendingLabel : confirmLabel}
           </Button>
         </>
       }

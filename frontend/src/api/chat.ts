@@ -76,6 +76,8 @@ export interface ProgramChatOperationView {
   parent_node_id?: string | null;
   new_parent_node_id?: string | null;
   after_node_id?: string | null;
+  /** Поставить первым среди соседей; `after_node_id: null` без него значит «в конец». */
+  at_start?: boolean;
   is_in_current_program?: boolean;
   goal_role?: string | null;
   target_level?: string | null;
@@ -177,6 +179,7 @@ export interface ChatSessionDetail {
   persona: ExaminerPersona;
   strictness: ExaminerStrictness;
   model_override: ChatModelOverride | null;
+  model_parameters: Record<string, unknown>;
   context_flags: ChatContextFlags;
   draft_text: string;
   created_at: string;
@@ -189,6 +192,8 @@ export interface ChatSettingsPatch {
   persona?: ExaminerPersona;
   strictness?: ExaminerStrictness;
   model_override?: ChatModelOverride | null;
+  /** Ездят вместе с моделью: врозь это «рассуждение от прошлой модели». */
+  model_parameters?: Record<string, unknown> | null;
   context_flags?: Partial<ChatContextFlags>;
 }
 

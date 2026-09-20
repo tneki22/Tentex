@@ -83,11 +83,23 @@ class ProviderCompletion:
 
 
 @dataclass(frozen=True)
+class TimedSegment:
+    """Отрезок расшифровки: секунды от начала присланной записи и текст."""
+
+    start: float
+    end: float
+    text: str
+
+
+@dataclass(frozen=True)
 class ProviderTranscription:
     text: str
     actual_model_id: str
     usage: ProviderUsage
     request_id: str | None = None
+    # Пусто, если провайдер не отдаёт время фраз (чат-модели, gpt-4o-transcribe,
+    # OpenRouter): тогда у расшифровки есть только сплошной текст.
+    segments: tuple[TimedSegment, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -145,6 +157,7 @@ class OpenAICompatibleTransport(Protocol):
         audio_format: str,
         language: str,
         via_chat: bool = False,
+        timestamps: bool = False,
     ) -> ProviderTranscription: ...
 
 
@@ -262,6 +275,20 @@ def _transcription_usage(value: object) -> ProviderUsage:
         output_tokens=data.get("output_tokens") or 0,
         cost_usd=_decimal(data.get("cost")),
     )
+
+
+def _timed_segment(raw: object) -> TimedSegment | None:
+    """Отрезок из ответа `verbose_json`: у SDK это объект, у сырого JSON — словарь."""
+    if isinstance(raw, dict):
+        start, end, text = raw.get("start"), raw.get("end"), raw.get("text")
+    else:
+        start, end, text = (getattr(raw, name, None) for name in ("start", "end", "text"))
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        return TimedSegment(float(start), float(end), text.strip())  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 class OpenAITransport:
@@ -408,9 +435,14 @@ class OpenAITransport:
         audio_format: str,
         language: str,
         via_chat: bool = False,
+        timestamps: bool = False,
     ) -> ProviderTranscription:
         if via_chat:
             return await self._transcribe_via_chat(model, audio, audio_format, language)
+        if timestamps and self.catalog_profile != "openrouter" and is_speech_to_text_id(model):
+            timed = await self._transcribe_timed(model, audio, audio_format, language)
+            if timed is not None:
+                return timed
         try:
             if self.catalog_profile == "openrouter":
                 # У OpenRouter собственный JSON-протокол: аудио уходит base64 в теле,
@@ -444,6 +476,40 @@ class OpenAITransport:
             text=result.text or "",
             actual_model_id=model,
             usage=_transcription_usage(getattr(result, "usage", None)),
+        )
+
+    async def _transcribe_timed(
+        self, model: str, audio: bytes, audio_format: str, language: str
+    ) -> ProviderTranscription | None:
+        """Расшифровка с временем фраз (`verbose_json`), как отдают Whisper у Groq и OpenAI.
+
+        `None` — провайдер формат не принял, и вызывающий повторяет запрос
+        обычным `json`: без времени фраз расшифровка всё равно лучше, чем отказ.
+        Не принятым считается только отказ по самому запросу; ключ, лимиты и
+        сеть пробрасываются как есть — повтор их не вылечит.
+        """
+        try:
+            result = await self.client.audio.transcriptions.create(
+                model=model,
+                file=(f"audio.{audio_format}", audio),
+                language=language,
+                response_format="verbose_json",
+            )
+        except Exception as error:
+            normalized = normalize_provider_error(error)
+            if getattr(error, "status_code", None) in (400, 404, 415, 422):
+                return None
+            raise normalized from error
+        segments = tuple(
+            segment
+            for raw in getattr(result, "segments", None) or ()
+            if (segment := _timed_segment(raw)) is not None
+        )
+        return ProviderTranscription(
+            text=getattr(result, "text", "") or "",
+            actual_model_id=model,
+            usage=_transcription_usage(getattr(result, "usage", None)),
+            segments=segments,
         )
 
     async def _transcribe_via_chat(
@@ -497,8 +563,7 @@ class OpenAITransport:
             request_id=getattr(result, "id", None),
         )
 
-    @staticmethod
-    def _apply_parameters(kwargs: dict[str, Any], parameters: dict[str, object]) -> None:
+    def _apply_parameters(self, kwargs: dict[str, Any], parameters: dict[str, object]) -> None:
         direct = {
             "temperature",
             "top_p",
@@ -511,12 +576,32 @@ class OpenAITransport:
         for key, value in parameters.items():
             if key == "max_output_tokens":
                 continue
-            if key in direct:
+            if key == "reasoning_effort":
+                self._apply_reasoning(kwargs, extra, value)
+            elif key in direct:
                 kwargs[key] = value
             else:
                 extra[key] = value
         if extra:
             kwargs["extra_body"] = extra
+
+    def _apply_reasoning(
+        self, kwargs: dict[str, Any], extra: dict[str, Any], value: object
+    ) -> None:
+        """Один параметр — два разных поля запроса, по профилю провайдера.
+
+        У OpenRouter это объект `reasoning`, и только он умеет сказать «не
+        рассуждай» (`enabled: false`). У OpenAI-совместимых API это плоский
+        `reasoning_effort`, выключения в нём нет — там «off» значит просто не
+        слать поле и оставить поведение модели по умолчанию.
+        """
+        if value is None:
+            return
+        if self.catalog_profile == "openrouter":
+            extra["reasoning"] = {"enabled": False} if value == "off" else {"effort": value}
+            return
+        if value != "off":
+            kwargs["reasoning_effort"] = value
 
 
 class FakeTransport:
@@ -588,6 +673,7 @@ class FakeTransport:
         audio_format: str,
         language: str,
         via_chat: bool = False,
+        timestamps: bool = False,
     ) -> ProviderTranscription:
         self.transcribe_requests.append(
             {
@@ -596,6 +682,9 @@ class FakeTransport:
                 "format": audio_format,
                 "language": language,
                 "via_chat": via_chat,
+                # Ключ появляется только у запросов со временем фраз: диктовка его
+                # не просит, и её проверки на точное совпадение словаря не трогаем.
+                **({"timestamps": True} if timestamps else {}),
             }
         )
         if not self.transcriptions:

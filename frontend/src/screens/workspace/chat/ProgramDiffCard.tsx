@@ -42,7 +42,8 @@ function describeOperation(op: ProgramChatOperationView, titles: Record<string, 
       const parent = op.parent_node_id ? ` в «${nodeLabel(op.parent_node_id, titles)}»` : " в корень программы";
       const kind = op.node_type ? NODE_TYPE_LABELS[op.node_type] ?? op.node_type : "узел";
       const outline = op.outline_ref ? " · из оглавления" : "";
-      return `Добавить ${kind} «${op.title ?? ""}»${parent}${outline}`;
+      const place = op.at_start ? ", первым" : "";
+      return `Добавить ${kind} «${op.title ?? ""}»${parent}${place}${outline}`;
     }
     case "rename":
       return `Переименовать «${nodeLabel(op.node_id, titles)}» → «${op.title ?? ""}»`;
@@ -50,7 +51,7 @@ function describeOperation(op: ProgramChatOperationView, titles: Record<string, 
       const parent = op.new_parent_node_id
         ? `в «${nodeLabel(op.new_parent_node_id, titles)}»`
         : "в корень программы";
-      return `Перенести «${nodeLabel(op.node_id, titles)}» ${parent}`;
+      return `Перенести «${nodeLabel(op.node_id, titles)}» ${parent}${op.at_start ? ", первым" : ""}`;
     }
     case "change_type": {
       const kind = op.node_type ? NODE_TYPE_LABELS[op.node_type] ?? op.node_type : "узел";

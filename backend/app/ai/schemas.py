@@ -22,6 +22,18 @@ class AiModelSelection(ApiModel):
     model_id: NonBlank
 
 
+class AiChatPreset(ApiModel):
+    """Последний выбор модели в композере — засев для каждого нового чата."""
+
+    provider_id: UUID
+    model_id: NonBlank
+    parameters: dict[str, object] = Field(default_factory=dict)
+
+
+class AiChatPresetWrite(ApiModel):
+    preset: AiChatPreset | None = None
+
+
 class AiGlobalSettingsWrite(ApiModel):
     external_models_enabled: bool
     daily_limit_usd: Decimal | None = Field(default=None, ge=0)
@@ -164,6 +176,7 @@ class AiSettingsRead(ApiModel):
     usd_rub_rate_date: date | None
     default_text: AiModelSelection | None
     default_speech: AiModelSelection | None
+    chat_preset: AiChatPreset | None
     providers: list[AiProviderRead]
     roles: list[AiRoleRead]
     models: list[AiModelRead]

@@ -23,7 +23,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.gateway import AiTextRequest, ModelGateway
-from app.ai.schemas import AiMessage
+from app.ai.roles import validate_role_parameters
+from app.ai.schemas import AiMessage, AiModelSelection
+from app.ai.settings import seed_from_preset, validate_model_selection
 from app.background.schemas import BackgroundJobStartRead
 from app.bindings.service import search_project_materials
 from app.chat import common as chat_common
@@ -82,6 +84,12 @@ CONTEXT_FLAG_KEYS = frozenset(
 )
 
 
+# Ответ приходит одной структурированной схемой (`gateway.complete` с
+# `response_model`), потока здесь нет — значит и `streaming` требовать незачем.
+CHAT_ROLE = "study_program_assistant"
+REQUIRED_MODEL_CAPABILITIES = frozenset({"structured_output"})
+
+
 def default_context_flags() -> dict[str, bool]:
     return {
         "profile": True,
@@ -109,6 +117,9 @@ class ProgramChatAddOperation(ChatApiModel):
     op: Literal["add"] = "add"
     parent_node_id: UUID | None = None
     after_node_id: UUID | None = None
+    # `after_node_id=None` значит «в конец», поэтому «в начало» нужен явный флаг;
+    # если заданы оба, побеждает `at_start`.
+    at_start: bool = False
     node_type: NodeType
     title: NonBlank = Field(max_length=300)
     rationale: str = Field(default="", max_length=1000)
@@ -128,6 +139,7 @@ class ProgramChatMoveOperation(ChatApiModel):
     node_id: UUID
     new_parent_node_id: UUID | None = None
     after_node_id: UUID | None = None
+    at_start: bool = False
     rationale: str = Field(default="", max_length=1000)
 
 
@@ -210,6 +222,18 @@ class ProgramChatSessionSummary(ChatApiModel):
     message_count: int
 
 
+class ProgramChatModelOverrideRead(ChatApiModel):
+    provider_id: UUID
+    model_id: str
+
+
+class ProgramChatSettingsWrite(ChatApiModel):
+    """Смена модели чата: выбор и его параметры приходят одним запросом."""
+
+    model_override: ProgramChatModelOverrideRead | None = None
+    model_parameters: dict[str, object] | None = None
+
+
 class ProgramChatSessionDetail(ChatApiModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
@@ -217,6 +241,8 @@ class ProgramChatSessionDetail(ChatApiModel):
     project_id: UUID
     section_scope_node_id: UUID | None
     title: str
+    model_override: ProgramChatModelOverrideRead | None
+    model_parameters: dict[str, object]
     context_flags: dict[str, bool]
     draft_text: str
     created_at: Any
@@ -290,6 +316,10 @@ operations и ответь в summary.
 - Ссылайся только на node_id, которые реально есть в переданном дереве.
   Новые узлы создаёт только операция add (через children для целого
   поддерева) — другие операции не могут ссылаться на узел, которого ещё нет.
+- Место нового или перенесённого узла среди соседей: after_node_id — после
+  указанного соседа, at_start=true — первым в своём родителе (так ставь
+  «в начало»), иначе — в конец. Одного after_node_id=null для «в начало»
+  недостаточно: он означает «в конец».
 - merge объединяет несколько существующих узлов: первый в списке — выживает.
 - rationale — короткое объяснение по-русски для каждой операции: его увидит
   пользователь рядом с чекбоксом."""
@@ -377,12 +407,17 @@ def create_session(session: Session, project_id: UUID) -> ChatSession:
         )
         ordinal = existing + 1
         title = "Программа" if ordinal == 1 else f"Программа · {ordinal}"
+        selection, parameters = seed_from_preset(
+            session, role=CHAT_ROLE, required=REQUIRED_MODEL_CAPABILITIES
+        )
         chat = ChatSession(
             project_id=project_id,
             program_node_id=None,
             section_scope_node_id=None,
             title=title,
             mode=ChatMode.PROGRAM,
+            model_override=selection,
+            model_parameters=parameters,
             context_flags=default_context_flags(),
             draft_text="",
         )
@@ -401,6 +436,8 @@ def _session_detail(session: Session, chat: ChatSession) -> ProgramChatSessionDe
         project_id=chat.project_id,
         section_scope_node_id=chat.section_scope_node_id,
         title=chat.title,
+        model_override=_model_override_read(chat),
+        model_parameters=chat.model_parameters or {},
         context_flags=chat.context_flags,
         draft_text=chat.draft_text,
         created_at=chat.created_at,
@@ -422,6 +459,48 @@ def save_draft(session: Session, project_id: UUID, session_id: UUID, text: str) 
         _require_textbook_project(session, project_id)
         chat = _require_session(session, project_id, session_id)
         return chat_common.save_draft_text(session, chat, text)
+
+
+def _model_override_read(chat: ChatSession) -> ProgramChatModelOverrideRead | None:
+    if not chat.model_override:
+        return None
+    return ProgramChatModelOverrideRead.model_validate(chat.model_override)
+
+
+def _request_model_override(chat: ChatSession | None) -> AiModelSelection | None:
+    if chat is None or not chat.model_override:
+        return None
+    return AiModelSelection(
+        provider_id=chat.model_override["provider_id"],
+        model_id=chat.model_override["model_id"],
+    )
+
+
+def update_settings(
+    session: Session, project_id: UUID, session_id: UUID, command: ProgramChatSettingsWrite
+) -> ChatSession:
+    with project_write_transaction(session, project_id):
+        _require_textbook_project(session, project_id)
+        chat = _require_session(session, project_id, session_id)
+        snapshot = None
+        parameters = None
+        if command.model_override is not None:
+            selection = AiModelSelection(
+                provider_id=command.model_override.provider_id,
+                model_id=command.model_override.model_id,
+            )
+            validate_model_selection(session, selection, required=REQUIRED_MODEL_CAPABILITIES)
+            snapshot = {
+                "provider_id": str(selection.provider_id),
+                "model_id": selection.model_id,
+            }
+            parameters = validate_role_parameters(CHAT_ROLE, command.model_parameters or {})
+        chat_common.apply_model_choice(
+            session, chat, selection=snapshot, parameters=parameters
+        )
+        session.flush()
+        session.refresh(chat)
+    return chat
 
 
 def update_context(
@@ -728,6 +807,9 @@ def _reply_messages(
     )
     messages.append(AiMessage(role="user", content=context_text))
     for message in tail:
+        # Служебная отметка о смене модели — часть ленты, но не часть разговора.
+        if message.role == ChatMessageRole.SYSTEM:
+            continue
         role: Literal["user", "assistant"] = (
             "user" if message.role == ChatMessageRole.USER else "assistant"
         )
@@ -777,13 +859,17 @@ async def send_message(
         )
         chat.draft_text = ""
         messages = _reply_messages(ctx, tail, text)
+        model_override = _request_model_override(chat)
+        parameters = dict(chat.model_parameters or {})
 
     request = AiTextRequest(
-        role="study_program_assistant",
+        role=CHAT_ROLE,
         project_id=project_id,
         messages=messages,
         response_model=ProgramChatReply,
         context_manifest=ctx.manifest,
+        request_model_override=model_override,
+        parameters=parameters,
         source_fingerprint={"chat_session_id": str(session_id), "fingerprint": ctx.fingerprint},
         confirmed=True,
         minimum_output_tokens=2000,
@@ -839,6 +925,8 @@ async def _run_build_call(
     fingerprint: str,
     extra_user_text: str,
     job_id: UUID,
+    model_override: AiModelSelection | None,
+    parameters: dict[str, object],
 ) -> ProgramChatReply:
     ctx = ProgramChatContext(
         profile=profile,
@@ -850,11 +938,13 @@ async def _run_build_call(
     )
     messages = _reply_messages(ctx, [], extra_user_text)
     request = AiTextRequest(
-        role="study_program_assistant",
+        role=CHAT_ROLE,
         project_id=project_id,
         messages=messages,
         response_model=ProgramChatReply,
         context_manifest=manifest,
+        request_model_override=model_override,
+        parameters=parameters,
         source_fingerprint={"fingerprint": fingerprint},
         confirmed=True,
         minimum_output_tokens=4000,
@@ -1005,6 +1095,8 @@ async def run_build(
             ctx.fingerprint,
             scenario_prompt,
             job_id,
+            _request_model_override(chat),
+            dict(chat.model_parameters or {}),
         )
         packet_results[key] = reply.model_dump(mode="json")
         job = _set_job_checkpoint(session, job_id, packets=packet_results)
@@ -1184,7 +1276,10 @@ def _position_after(
     parent_id: UUID | None,
     after_node_id: UUID | None,
     exclude_id: UUID,
+    at_start: bool = False,
 ) -> int | None:
+    if at_start:
+        return 0
     if after_node_id is None:
         return None
     siblings = sorted(
@@ -1278,7 +1373,7 @@ def _create_add_node(
         origin_material_id=material_id,
     )
     nodes.append(node)
-    position = _position_after(nodes, op.parent_node_id, op.after_node_id, node.id)
+    position = _position_after(nodes, op.parent_node_id, op.after_node_id, node.id, op.at_start)
     program._place_node(nodes, node, op.parent_node_id, position)  # noqa: SLF001
     session.add(node)
     session.flush()
@@ -1303,7 +1398,9 @@ def _create_add_node(
         _create_add_node(
             session,
             project,
-            child.model_copy(update={"parent_node_id": node.id, "after_node_id": None}),
+            child.model_copy(
+                update={"parent_node_id": node.id, "after_node_id": None, "at_start": False}
+            ),
             nodes,
             nodes_by_id,
             target_level,
@@ -1326,7 +1423,9 @@ def _apply_move(
     op: ProgramChatMoveOperation,
 ) -> None:
     program._visible_parent(nodes_by_id, op.new_parent_node_id)  # noqa: SLF001
-    position = _position_after(nodes, op.new_parent_node_id, op.after_node_id, node.id)
+    position = _position_after(
+        nodes, op.new_parent_node_id, op.after_node_id, node.id, op.at_start
+    )
     program._place_node(nodes, node, op.new_parent_node_id, position)  # noqa: SLF001
     node.origin_kind = OriginKind.MODEL
     node.origin_note = op.rationale[:500] if op.rationale else None
