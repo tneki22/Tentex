@@ -74,6 +74,8 @@ export interface ProgramChatOperationView {
   parent_node_id?: string | null;
   new_parent_node_id?: string | null;
   after_node_id?: string | null;
+  /** Поставить первым среди соседей; `after_node_id: null` без него значит «в конец». */
+  at_start?: boolean;
   is_in_current_program?: boolean;
   goal_role?: string | null;
   target_level?: string | null;

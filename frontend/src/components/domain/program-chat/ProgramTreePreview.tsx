@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { ProgramChatOperationView } from "../../../api/chat";
 import type { ProgramNodeRead, ProgramState } from "../../../api/projects";
 import { EmptyState } from "../../ui";
@@ -60,17 +61,27 @@ function collectChanges(
   return changes;
 }
 
-function addRows(operations: ProgramChatOperationView[], depth: number, prefix: string): PreviewRow[] {
-  return operations
-    .filter((op) => op.op === "add")
-    .map((op, index) => ({
-      key: `${prefix}-new-${index}`,
-      depth,
-      title: op.title ?? "",
-      nodeType: op.node_type ?? "topic",
-      status: "new",
-      children: addRows(op.children ?? [], depth + 1, `${prefix}-new-${index}`),
-    }));
+function addRow(op: ProgramChatOperationView, depth: number, key: string): PreviewRow {
+  return {
+    key,
+    depth,
+    title: op.title ?? "",
+    nodeType: op.node_type ?? "topic",
+    status: "new",
+    children: (op.children ?? []).map((child, index) => addRow(child, depth + 1, `${key}-${index}`)),
+  };
+}
+
+/** Ставит предложенный узел туда же, куда его поставит бэкенд: первым, после
+ * указанного соседа или в конец. Операции идут по порядку, как при применении. */
+function placeAdds(rows: PreviewRow[], ops: ProgramChatOperationView[], depth: number, prefix: string) {
+  ops.forEach((op, index) => {
+    const row = addRow(op, depth, `${prefix}-new-${index}`);
+    const afterIndex = op.after_node_id ? rows.findIndex((item) => item.key === op.after_node_id) : -1;
+    if (op.at_start) rows.unshift(row);
+    else if (afterIndex >= 0) rows.splice(afterIndex + 1, 0, row);
+    else rows.push(row);
+  });
 }
 
 /** Строит дерево текущих узлов и добавляет предложенные ветви рядом с родителями. */
@@ -96,24 +107,26 @@ function buildTree(
     addsByParent.set(parentId, list);
   }
 
-  function walk(parentId: string | null, depth: number): PreviewRow[] {
+  // Скрытие узла уносит всё его поддерево, поэтому потомки удаляемого красятся так же.
+  function walk(parentId: string | null, depth: number, parentRemoved: boolean): PreviewRow[] {
     const rows: PreviewRow[] = (childrenByParent.get(parentId) ?? []).map((node) => {
       const pending = changes.get(node.id);
+      const removed = parentRemoved || Boolean(pending?.removed);
       return {
         key: node.id,
         depth,
         title: node.title,
         nodeType: node.node_type,
-        status: pending?.removed ? "removed" : "unchanged",
+        status: removed ? "removed" : "unchanged",
         nextTitle: pending?.nextTitle,
         nextType: pending?.nextType,
-        children: walk(node.id, depth + 1),
+        children: walk(node.id, depth + 1, removed),
       };
     });
-    rows.push(...addRows(addsByParent.get(parentId) ?? [], depth, parentId ?? "root"));
+    placeAdds(rows, addsByParent.get(parentId) ?? [], depth, parentId ?? "root");
     return rows;
   }
-  return walk(null, 0);
+  return walk(null, 0, false);
 }
 
 function Row({ row }: { row: PreviewRow }) {
@@ -149,6 +162,17 @@ export function ProgramTreePreview({ program, pendingOperations = [], pendingSta
   const pendingAdds = pendingOperations.filter((op, index) => pendingStates[index] === "pending" && op.op === "add");
   const rows = buildTree(program, pendingAdds, changes);
 
+  // Правка может стоять далеко от верха длинной программы — без прокрутки
+  // подсветка есть, но за краем экрана. Ключ — сами непринятые операции.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const pendingKey = JSON.stringify(pendingOperations.filter((_op, index) => pendingStates[index] === "pending"));
+  useEffect(() => {
+    if (pendingKey === "[]") return;
+    containerRef.current
+      ?.querySelector(".program-tree-preview-row.is-new, .program-tree-preview-row.is-removed, .program-tree-preview-title.is-new")
+      ?.scrollIntoView({ block: "start" });
+  }, [pendingKey]);
+
   if (rows.length === 0) {
     return (
       <div className="program-tree-preview">
@@ -161,7 +185,7 @@ export function ProgramTreePreview({ program, pendingOperations = [], pendingSta
   }
 
   return (
-    <div className="program-tree-preview" role="tree" aria-label="Предпросмотр программы">
+    <div ref={containerRef} className="program-tree-preview" role="tree" aria-label="Предпросмотр программы">
       <PreviewHeader />
       <ul className="program-tree-preview-root">
         {rows.map((row) => <Row key={row.key} row={row} />)}

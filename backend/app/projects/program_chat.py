@@ -117,6 +117,9 @@ class ProgramChatAddOperation(ChatApiModel):
     op: Literal["add"] = "add"
     parent_node_id: UUID | None = None
     after_node_id: UUID | None = None
+    # `after_node_id=None` значит «в конец», поэтому «в начало» нужен явный флаг;
+    # если заданы оба, побеждает `at_start`.
+    at_start: bool = False
     node_type: NodeType
     title: NonBlank = Field(max_length=300)
     rationale: str = Field(default="", max_length=1000)
@@ -136,6 +139,7 @@ class ProgramChatMoveOperation(ChatApiModel):
     node_id: UUID
     new_parent_node_id: UUID | None = None
     after_node_id: UUID | None = None
+    at_start: bool = False
     rationale: str = Field(default="", max_length=1000)
 
 
@@ -312,6 +316,10 @@ operations и ответь в summary.
 - Ссылайся только на node_id, которые реально есть в переданном дереве.
   Новые узлы создаёт только операция add (через children для целого
   поддерева) — другие операции не могут ссылаться на узел, которого ещё нет.
+- Место нового или перенесённого узла среди соседей: after_node_id — после
+  указанного соседа, at_start=true — первым в своём родителе (так ставь
+  «в начало»), иначе — в конец. Одного after_node_id=null для «в начало»
+  недостаточно: он означает «в конец».
 - merge объединяет несколько существующих узлов: первый в списке — выживает.
 - rationale — короткое объяснение по-русски для каждой операции: его увидит
   пользователь рядом с чекбоксом."""
@@ -1268,7 +1276,10 @@ def _position_after(
     parent_id: UUID | None,
     after_node_id: UUID | None,
     exclude_id: UUID,
+    at_start: bool = False,
 ) -> int | None:
+    if at_start:
+        return 0
     if after_node_id is None:
         return None
     siblings = sorted(
@@ -1362,7 +1373,7 @@ def _create_add_node(
         origin_material_id=material_id,
     )
     nodes.append(node)
-    position = _position_after(nodes, op.parent_node_id, op.after_node_id, node.id)
+    position = _position_after(nodes, op.parent_node_id, op.after_node_id, node.id, op.at_start)
     program._place_node(nodes, node, op.parent_node_id, position)  # noqa: SLF001
     session.add(node)
     session.flush()
@@ -1387,7 +1398,9 @@ def _create_add_node(
         _create_add_node(
             session,
             project,
-            child.model_copy(update={"parent_node_id": node.id, "after_node_id": None}),
+            child.model_copy(
+                update={"parent_node_id": node.id, "after_node_id": None, "at_start": False}
+            ),
             nodes,
             nodes_by_id,
             target_level,
@@ -1410,7 +1423,9 @@ def _apply_move(
     op: ProgramChatMoveOperation,
 ) -> None:
     program._visible_parent(nodes_by_id, op.new_parent_node_id)  # noqa: SLF001
-    position = _position_after(nodes, op.new_parent_node_id, op.after_node_id, node.id)
+    position = _position_after(
+        nodes, op.new_parent_node_id, op.after_node_id, node.id, op.at_start
+    )
     program._place_node(nodes, node, op.new_parent_node_id, position)  # noqa: SLF001
     node.origin_kind = OriginKind.MODEL
     node.origin_note = op.rationale[:500] if op.rationale else None

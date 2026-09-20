@@ -3706,6 +3706,15 @@
   color: var(--accent);
 }
 
+/* Убранная правкой ветка: в дереве её уже нет, поэтому строка не кликается. */
+.project-recent-item.is-removed,
+.project-recent-item.is-removed:hover {
+  color: var(--tone-danger);
+  background: transparent;
+  cursor: default;
+}
+.project-recent-item.is-removed > span:first-child { text-decoration: line-through; }
+
 .program-latest-action {
   margin: 0 0 var(--space-2);
   padding: 0 var(--space-2);
@@ -7505,6 +7514,8 @@ button.wizard-back-projects {
 .program-tree-preview-head p span.is-removed { background: var(--tone-danger); }
 
 .program-tree-preview-row {
+  /* Место под липкую шапку, когда к строке прокручивают из кода. */
+  scroll-margin-top: calc(var(--space-16) + var(--space-4));
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;

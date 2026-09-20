@@ -121,6 +121,34 @@ function recentTime(value: string): string {
   return new Date(value).toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+const RECENT_BATCH_WINDOW_MS = 10_000;
+const RECENT_BATCH_LIMIT = 8;
+const RECENT_MIN_ROWS = 5;
+
+/** Узлы последнего изменения (одна правка ИИ трогает много узлов за секунды) —
+ * верхние узлы каждой ветки, включая скрытые: убранную тему иначе нигде не видно.
+ * Если правка маленькая, добавляет к ней прошлые видимые узлы. */
+function recentProgramNodes(nodes: ProgramNodeRead[]): Array<{ node: ProgramNodeRead; hidden: boolean }> {
+  const stamped = nodes
+    .filter((node) => !node.is_archived)
+    .map((node) => ({ node, at: Date.parse(node.updated_at) }))
+    .filter((item) => Number.isFinite(item.at))
+    .sort((left, right) => right.at - left.at);
+  if (stamped.length === 0) return [];
+  const newest = stamped[0].at;
+  const batch = stamped.filter((item) => newest - item.at <= RECENT_BATCH_WINDOW_MS);
+  const batchIds = new Set(batch.map((item) => item.node.id));
+  const rows = batch
+    .filter((item) => !item.node.parent_id || !batchIds.has(item.node.parent_id))
+    .slice(0, RECENT_BATCH_LIMIT)
+    .map(({ node }) => ({ node, hidden: !node.is_in_current_program }));
+  const older = stamped
+    .filter((item) => !batchIds.has(item.node.id) && item.node.is_in_current_program)
+    .slice(0, Math.max(0, RECENT_MIN_ROWS - rows.length))
+    .map(({ node }) => ({ node, hidden: false }));
+  return [...rows, ...older];
+}
+
 export function Program() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
@@ -212,10 +240,7 @@ export function Program() {
   const flat = useMemo(() => flattenProgramTree(treeResult.tree), [treeResult.tree]);
   const selected = detail?.program.nodes.find((node) => node.id === selectedId) ?? null;
   const textbook = detail?.project.workspace_variant === "textbook";
-  const recentTextbookNodes = useMemo(() => (detail?.program.nodes ?? [])
-    .filter((node) => node.is_in_current_program && !node.is_archived)
-    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-    .slice(0, 5), [detail?.program.nodes]);
+  const recentTextbookNodes = useMemo(() => recentProgramNodes(detail?.program.nodes ?? []), [detail?.program.nodes]);
   const kindOptions: Array<[AddKind, string]> = textbook
     ? [["section", "Раздел"], ["topic", "Тема"], ["subpoint", "Подпункт"]]
     : [["section", "Раздел"], ["ticket", "Билет"], ["question", "Вопрос"], ["task", "Задача"]];
@@ -518,7 +543,13 @@ export function Program() {
             {detail.latest_undoable_action && <p className="program-latest-action">Можно отменить: {detail.latest_undoable_action.target_title}</p>}
             {recentTextbookNodes.length === 0
               ? <p className="sidebar-empty">Изменённые узлы появятся здесь.</p>
-              : recentTextbookNodes.map((node) => (
+              : recentTextbookNodes.map(({ node, hidden }) => hidden ? (
+                // Убранного узла в дереве нет — выбирать его нечем, поэтому не кнопка.
+                <div className="project-recent-item program-recent-node is-removed" key={node.id}>
+                  <span>{node.title}</span>
+                  <small>убрано · {kindLabel(node.node_type)} · {originLabel(node.origin_kind)} · <time dateTime={node.updated_at}>{recentTime(node.updated_at)}</time></small>
+                </div>
+              ) : (
                 <button type="button" className={`project-recent-item program-recent-node ${selectedId === node.id ? "is-active" : ""}`.trim()} key={node.id} onClick={() => setSelectedId(node.id)}>
                   <span>{node.title}</span>
                   <small>{kindLabel(node.node_type)} · {originLabel(node.origin_kind)} · <time dateTime={node.updated_at}>{recentTime(node.updated_at)}</time></small>
