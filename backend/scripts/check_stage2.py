@@ -175,7 +175,7 @@ def run() -> None:
                 "goal_passport": {
                     "subject": "Базы данных",
                     "purpose": "exam",
-                    "scope": None,
+                    "scope": "whole",
                     "starting_level": "familiar",
                     "current_knowledge": "Помню SQL, хуже понимаю нормализацию",
                     "target_outcome": "mastery",

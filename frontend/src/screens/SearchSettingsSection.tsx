@@ -346,6 +346,13 @@ export function SearchSettingsSection({
               onClick={buildCandidate}
             ><Play size={14} /> Собрать кандидат</Button>
           </header>
+          {!settings.default_profile_id && (
+            <p className="retrieval-neutral-note">
+              {settings.profiles.length === 0
+                ? "Сначала скачайте модель и добавьте профиль на вкладке «Модели»."
+                : "Выберите профиль ниже — после этого кнопка «Собрать кандидат» станет активной."}
+            </p>
+          )}
           <div className="ai-setting-row">
             <div><strong>Профиль для новой сборки</strong><small>Смена модели или chunking требует нового индекса.</small></div>
             <Select

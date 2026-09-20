@@ -304,3 +304,27 @@ def test_exhaustive_run_requires_confirmation_with_corpus_snapshot(session: Sess
 
     assert excinfo.value.code == "retrieval_exhaustive_confirmation_required"
     assert excinfo.value.context["material_count"] == 1
+
+
+def test_first_tested_profile_becomes_default_for_index_build(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Без выбранного профиля кнопка «Собрать кандидат» серая, а причина не видна."""
+    import asyncio
+
+    from app.retrieval import settings as retrieval_settings
+
+    first, second = _profile(session), _profile(session)
+
+    class _Backend:
+        async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return [[0.1, 0.2, 0.3] for _ in texts]
+
+    monkeypatch.setattr(retrieval_settings, "backend_for_profile", lambda *_: _Backend())
+
+    asyncio.run(retrieval_settings.test_profile(session, first.id))
+    asyncio.run(retrieval_settings.test_profile(session, second.id))
+
+    session.expire_all()
+    row = session.get(RetrievalSettings, 1)
+    assert row is not None and row.default_profile_id == first.id

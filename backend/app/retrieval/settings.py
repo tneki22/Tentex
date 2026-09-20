@@ -55,6 +55,14 @@ async def test_profile(session: Session, profile_id: UUID) -> EmbeddingProfileRe
         profile.dimension = dimension
         profile.installed = True
         profile.test_error = None
+        # Первый проверенный профиль сразу годится для сборки индекса: иначе кнопка
+        # «Собрать кандидат» остаётся серой, и причину нигде не видно.
+        row = session.get(RetrievalSettings, 1)
+        if row is None:
+            row = RetrievalSettings(id=1)
+            session.add(row)
+        if row.default_profile_id is None:
+            row.default_profile_id = profile.id
     except Exception as error:
         profile.test_error = str(error)
         profile.tested_at = utc_now()
