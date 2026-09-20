@@ -16,7 +16,7 @@ from app.models import (
     OcrSettings,
     utc_now,
 )
-from app.ocr import cloud_catalog, downloads
+from app.ocr import cloud_catalog, downloads, speech
 from app.ocr.catalog import (
     LICENSE_TITLE,
     LICENSE_URL,
@@ -431,6 +431,7 @@ def read_settings(session: Session) -> OcrSettingsRead:
         raster_scale=row.raster_scale,
         engines=engines,
         cloud=_cloud_read(session),
+        speech=speech.speech_engines(session),
     )
 
 

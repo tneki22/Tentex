@@ -1,11 +1,12 @@
 import { ExternalLink, Save, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type {
-  MaterialPurpose,
-  MaterialRead,
-  MaterialSourceKind,
-  MaterialUpdateCommand,
-  SourceRole,
+import {
+  PARSER_MODE_TITLES,
+  type MaterialPurpose,
+  type MaterialRead,
+  type MaterialSourceKind,
+  type MaterialUpdateCommand,
+  type SourceRole,
 } from "../../api/materials";
 import { Button, Checkbox, ConfirmDialog, Field, Select, StatusBadge } from "../../components/ui";
 
@@ -20,6 +21,15 @@ const ROLE_OPTIONS = [
   { value: "additional", label: "Дополнительный", description: "Расширяет основной материал" },
   { value: "reference", label: "Справочный", description: "Для ответов и пояснений" },
 ];
+
+/** Как материал был разобран. У записи режимы называются по-своему: это Whisper и модель речи. */
+function parseModeLabel(material: MaterialRead): string {
+  if (material.source_kind === "audio") {
+    if (material.parser_mode === "cloud") return "Облако — внешняя модель речи";
+    return material.parser_mode === "fast" ? "Локально — Whisper" : "Не запускалась";
+  }
+  return material.parser_mode ? PARSER_MODE_TITLES[material.parser_mode] : "Не запускался";
+}
 
 const SOURCE_LABEL: Record<MaterialSourceKind, string> = {
   file: "Загруженный файл",
@@ -269,7 +279,7 @@ export function MaterialFileTab({
           <div><dt>Страницы</dt><dd>{material.page_count ?? "—"}</dd></div>
           <div><dt>Сканы</dt><dd>{material.scan_page_count}</dd></div>
           {material.parser_mode !== "fast" && <div><dt>Низкое качество</dt><dd>{material.ocr_low_page_count || "нет"}</dd></div>}
-          <div><dt>Режим разбора</dt><dd>{material.parser_mode === "fast" ? "Быстро" : "Не запускался"}</dd></div>
+          <div><dt>{material.source_kind === "audio" ? "Расшифровка" : "Режим разбора"}</dt><dd>{parseModeLabel(material)}</dd></div>
           <div><dt>Добавлен в проект</dt><dd>{dateLabel(material.attached_at)}</dd></div>
           <div><dt>Загружен</dt><dd>{dateLabel(material.created_at)}</dd></div>
           <div><dt>Изменён</dt><dd>{dateLabel(material.updated_at)}</dd></div>

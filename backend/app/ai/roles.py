@@ -211,6 +211,18 @@ ROLE_SPECS = {
             parameter_model=SpeechRoleParameters,
         ),
         AiRoleSpec(
+            "material_audio_transcription",
+            "Расшифровка аудиоматериала",
+            "Превращает запись лекции или голосовое сообщение в текст с временными метками. "
+            "Работает в режиме расшифровки «Облако»; модель берётся из «Для речи».",
+            "speech",
+            frozenset({"audio_transcription"}),
+            "none",
+            "audio-material-v1",
+            {"language": "ru"},
+            parameter_model=SpeechRoleParameters,
+        ),
+        AiRoleSpec(
             "study_outline_extract",
             "Оглавление учебника",
             "Восстанавливает структуру учебника, когда закладок и печатного оглавления нет.",

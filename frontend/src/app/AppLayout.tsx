@@ -85,8 +85,8 @@ function toBackgroundTask(job: BackgroundJobRead): BackgroundTask {
     kind: job.kind as TaskKind,
     subject: backgroundJobSubject(job),
     detail: job.model_label,
-    // Сборка Typst тоже считает страницы собранного PDF, а не абстрактные шаги.
-    unit: job.kind === "parse" || job.kind === "typst_compile" ? "страниц" : "",
+    // Единицу называет сервер: у записи это минуты, у разбора и сборки Typst — страницы.
+    unit: job.progress_unit,
     done: job.done,
     total: job.total,
     etaMinutes: estimateEtaMinutes(job.id, job.done, job.total, job.updated_at),

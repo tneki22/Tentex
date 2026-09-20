@@ -21,11 +21,13 @@ from app.models import (
     BackgroundJobKind,
     BackgroundJobState,
     Material,
+    MaterialSourceKind,
     OcrEngineConfig,
     ParserMode,
     Project,
     utc_now,
 )
+from app.ocr import speech
 from app.ocr.engines import DEFAULT_FAST_MODEL_ID
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 
@@ -80,6 +82,20 @@ def _subject(session: Session, job: BackgroundJob) -> str:
     return ""
 
 
+def _is_audio(session: Session, job: BackgroundJob) -> bool:
+    if job.material_id is None:
+        return False
+    material = session.get(Material, job.material_id)
+    return material is not None and material.source_kind == MaterialSourceKind.AUDIO
+
+
+def _progress_unit(session: Session, job: BackgroundJob) -> str:
+    """Чем измеряется `done` из `total`: у разбора страницы, у записи минуты."""
+    if job.kind not in (BackgroundJobKind.PARSE, BackgroundJobKind.TYPST_COMPILE):
+        return ""
+    return "минут" if _is_audio(session, job) else "страниц"
+
+
 def _model_label(session: Session, job: BackgroundJob) -> str:
     """Чем именно читается материал: локальный движок или внешняя модель.
 
@@ -88,6 +104,9 @@ def _model_label(session: Session, job: BackgroundJob) -> str:
     """
     if job.kind != BackgroundJobKind.PARSE:
         return ""
+    if _is_audio(session, job):
+        # Запись читает не OCR: подпись «PP-OCRv5» у неё была бы неправдой.
+        return speech.mode_label(session, job.parser_mode)
     if job.parser_mode == ParserMode.CLOUD:
         row = session.get(AiSettings, 1)
         return (row.default_vision_model_id if row else None) or "внешняя модель"
@@ -100,6 +119,7 @@ def _read(session: Session, job: BackgroundJob) -> BackgroundJobRead:
         update={
             "subject": _subject(session, job),
             "model_label": _model_label(session, job),
+            "progress_unit": _progress_unit(session, job),
             "needs_review": _needs_review(job),
         }
     )

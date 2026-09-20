@@ -110,6 +110,7 @@ from app.models import (
     utc_now,
 )
 from app.ocr import settings as ocr_settings
+from app.ocr import speech
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
 
 ACTIVE_TASK_STATES = {
@@ -1672,7 +1673,12 @@ def start_processing_core(
     # Готовность движка спрашиваем у реестра распознавания, а не у сервиса
     # напрямую: там же считается статус на экране настроек, и разъехаться они
     # не могут. Для «Быстро» это в том числе проверка, что модели скачаны.
-    ready, reason = ocr_settings.engine_ready(session, command.parser_mode.value)
+    # У записи свои два способа — Whisper и модель речи, — и готовность спрашивается
+    # у них: облачный режим страниц может быть готов, а модели речи не быть вовсе.
+    if material.source_kind == MaterialSourceKind.AUDIO:
+        ready, reason = speech.engine_ready(session, command.parser_mode)
+    else:
+        ready, reason = ocr_settings.engine_ready(session, command.parser_mode.value)
     if not ready:
         raise ProjectConflictError(
             reason or "Этот режим распознавания сейчас недоступен",

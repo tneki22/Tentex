@@ -141,9 +141,25 @@ class OcrCloudRead(ApiModel):
     price_per_page_usd: Decimal | None
 
 
+class SpeechEngineRead(ApiModel):
+    """Один способ расшифровки аудио: локальный Whisper или внешняя модель речи."""
+
+    # `fast` — Whisper на процессоре, `cloud` — модель речи через шлюз.
+    mode: ParserMode
+    title: str
+    description: str
+    available: bool
+    # Почему недоступно и что сделать; для доступного способа пусто.
+    status_detail: str
+    # Какая модель будет читать: «Whisper small» или ID модели провайдера.
+    model_label: str
+    provider_label: str
+
+
 class OcrSettingsRead(ApiModel):
     default_mode: ParserMode
     quality_threshold: float
     raster_scale: float
     engines: list[OcrEngineRead]
     cloud: OcrCloudRead
+    speech: list[SpeechEngineRead]

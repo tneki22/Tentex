@@ -29,6 +29,9 @@ class BackgroundJobRead(ApiModel):
     # подставляет их отдельным шагом (`registry._read`).
     subject: str = ""
     model_label: str = ""
+    # Что считают `done` и `total`: «страниц» у разбора, «минут» у расшифровки
+    # записи, пусто у задач без счётчика.
+    progress_unit: str = ""
     # Готовое предложение, которое ещё никто не принял и не убрал. Считается
     # реестром по виду задачи и `reviewed_at` (`registry._needs_review`).
     needs_review: bool = False

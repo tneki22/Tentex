@@ -16,8 +16,14 @@ export const AI_ROLE_CATEGORIES: readonly AiRoleCategory[] = [
   {
     id: "materials",
     title: "Материалы и покрытие",
-    description: "Чтение страниц, уборка текста и разбор материала по программе.",
-    roles: ["material_page_recognition", "material_text_cleanup", "coverage_overview", "coverage_research"],
+    description: "Чтение страниц, расшифровка записей, уборка текста и разбор материала по программе.",
+    roles: [
+      "material_page_recognition",
+      "material_audio_transcription",
+      "material_text_cleanup",
+      "coverage_overview",
+      "coverage_research",
+    ],
   },
   {
     id: "program",

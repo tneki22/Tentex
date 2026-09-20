@@ -106,12 +106,27 @@ export interface OcrCloudSettingsWrite {
   strategy: OcrCloudStrategy;
 }
 
+/** Способ расшифровки аудио: `fast` — Whisper на процессоре, `cloud` — модель речи
+ *  из «Параметров ИИ». Режимы названы как у страниц: в задаче это то же `parser_mode`. */
+export interface SpeechEngineRead {
+  mode: ParserMode;
+  title: string;
+  description: string;
+  available: boolean;
+  /** Почему недоступно и что сделать; у доступного способа пусто. */
+  status_detail: string;
+  /** Какая модель будет читать: «Whisper small» или ID модели провайдера. */
+  model_label: string;
+  provider_label: string;
+}
+
 export interface OcrSettingsRead {
   default_mode: ParserMode;
   quality_threshold: number;
   raster_scale: number;
   engines: OcrEngineRead[];
   cloud: OcrCloudRead;
+  speech: SpeechEngineRead[];
 }
 
 export interface OcrGlobalSettingsWrite {
