@@ -7512,6 +7512,7 @@ button.wizard-back-projects {
 }
 .program-tree-preview-head p span.is-new { background: var(--tone-success); }
 .program-tree-preview-head p span.is-removed { background: var(--tone-danger); }
+.program-tree-preview-head p span.is-moved { background: var(--tone-warning); }
 
 .program-tree-preview-row {
   /* Место под липкую шапку, когда к строке прокручивают из кода. */
@@ -7535,6 +7536,27 @@ button.wizard-back-projects {
 .program-tree-preview-type.is-removed {
   color: var(--tone-danger);
   text-decoration: line-through;
+}
+
+/* Перенос: оранжевый — у заголовка и пометки самой строки; потомки едут вместе
+ * и остаются обычными. Слово-тип красит основание, как точки в ручном просмотре. */
+.program-tree-preview-row.is-moved > .program-tree-preview-title,
+.program-tree-preview-row.is-moved > .program-tree-preview-note {
+  color: var(--tone-warning);
+}
+
+.program-tree-preview-type.is-basis-outline { color: var(--tone-info); }
+.program-tree-preview-type.is-basis-custom { color: var(--accent); }
+
+/* Пустое место, откуда узел уедет. */
+.program-tree-preview-row.is-ghost {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.program-tree-preview-note {
+  font-size: var(--text-xs);
+  color: var(--muted);
 }
 
 .program-tree-preview-type {

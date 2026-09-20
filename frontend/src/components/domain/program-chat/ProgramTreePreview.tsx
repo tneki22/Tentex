@@ -18,7 +18,9 @@ interface PreviewRow {
   depth: number;
   title: string;
   nodeType: string;
-  status: "unchanged" | "new" | "removed";
+  /** Основание узла: из оглавления или вне его — красит слово «тема/раздел/подпункт». */
+  basis?: string;
+  status: "unchanged" | "new" | "removed" | "moved" | "ghost";
   nextTitle?: string;
   nextType?: string;
   children: PreviewRow[];
@@ -67,6 +69,7 @@ function addRow(op: ProgramChatOperationView, depth: number, key: string): Previ
     depth,
     title: op.title ?? "",
     nodeType: op.node_type ?? "topic",
+    basis: op.outline_ref ? "outline" : "custom",
     status: "new",
     children: (op.children ?? []).map((child, index) => addRow(child, depth + 1, `${key}-${index}`)),
   };
@@ -84,20 +87,68 @@ function placeAdds(rows: PreviewRow[], ops: ProgramChatOperationView[], depth: n
   });
 }
 
+interface TreeEntry {
+  node: ProgramNodeRead;
+  /** Узел, который переедет: в новом месте рисуется синим. */
+  moved?: boolean;
+  /** Пустое место, откуда узел уедет: приглушённая строка без потомков. */
+  ghost?: boolean;
+}
+
+/** Переносит узлы по непринятым `move` в порядке операций: на старом месте остаётся
+ * «призрак», на новом — узел с поддеревом. Позиция считается так же, как на бэкенде. */
+function applyMoves(
+  childrenByParent: Map<string | null, TreeEntry[]>,
+  nodesById: Map<string, ProgramNodeRead>,
+  moves: ProgramChatOperationView[],
+) {
+  const currentParent = new Map<string, string | null>();
+  const everMoved = new Set<string>();
+  for (const move of moves) {
+    const node = move.node_id ? nodesById.get(move.node_id) : undefined;
+    if (!node) continue;
+    const from = childrenByParent.get(currentParent.get(node.id) ?? node.parent_id) ?? [];
+    const fromIndex = from.findIndex((entry) => entry.node.id === node.id && !entry.ghost);
+    if (fromIndex >= 0) {
+      // Первое перемещение оставляет призрак, повторное просто убирает прошлую копию.
+      if (everMoved.has(node.id)) from.splice(fromIndex, 1);
+      else from[fromIndex] = { node, ghost: true };
+    }
+    everMoved.add(node.id);
+
+    const parentId = move.new_parent_node_id ?? null;
+    const target = childrenByParent.get(parentId) ?? [];
+    childrenByParent.set(parentId, target);
+    const entry: TreeEntry = { node, moved: true };
+    const afterIndex = move.after_node_id
+      ? target.findIndex((item) => item.node.id === move.after_node_id && !item.ghost)
+      : -1;
+    if (move.at_start) target.unshift(entry);
+    else if (afterIndex >= 0) target.splice(afterIndex + 1, 0, entry);
+    else target.push(entry);
+    currentParent.set(node.id, parentId);
+  }
+}
+
 /** Строит дерево текущих узлов и добавляет предложенные ветви рядом с родителями. */
 function buildTree(
   program: ProgramState,
   pendingAdds: ProgramChatOperationView[],
+  pendingMoves: ProgramChatOperationView[],
   changes: Map<string, PreviewChange>,
 ): PreviewRow[] {
-  const childrenByParent = new Map<string | null, ProgramNodeRead[]>();
-  for (const node of program.nodes) {
-    if (!node.is_in_current_program || node.is_archived) continue;
+  const childrenByParent = new Map<string | null, TreeEntry[]>();
+  const nodesById = new Map<string, ProgramNodeRead>();
+  const ordered = program.nodes
+    .filter((node) => node.is_in_current_program && !node.is_archived)
+    .sort((a, b) => a.sort_order - b.sort_order);
+  for (const node of ordered) {
+    nodesById.set(node.id, node);
     const list = childrenByParent.get(node.parent_id) ?? [];
-    list.push(node);
+    list.push({ node });
     childrenByParent.set(node.parent_id, list);
   }
-  for (const list of childrenByParent.values()) list.sort((a, b) => a.sort_order - b.sort_order);
+  applyMoves(childrenByParent, nodesById, pendingMoves);
 
   const addsByParent = new Map<string | null, ProgramChatOperationView[]>();
   for (const op of pendingAdds) {
@@ -109,7 +160,10 @@ function buildTree(
 
   // Скрытие узла уносит всё его поддерево, поэтому потомки удаляемого красятся так же.
   function walk(parentId: string | null, depth: number, parentRemoved: boolean): PreviewRow[] {
-    const rows: PreviewRow[] = (childrenByParent.get(parentId) ?? []).map((node) => {
+    const rows: PreviewRow[] = (childrenByParent.get(parentId) ?? []).map(({ node, moved, ghost }) => {
+      if (ghost) {
+        return { key: `${node.id}-from`, depth, title: node.title, nodeType: node.node_type, basis: node.basis_kind, status: "ghost", children: [] };
+      }
       const pending = changes.get(node.id);
       const removed = parentRemoved || Boolean(pending?.removed);
       return {
@@ -117,7 +171,8 @@ function buildTree(
         depth,
         title: node.title,
         nodeType: node.node_type,
-        status: removed ? "removed" : "unchanged",
+        basis: node.basis_kind,
+        status: removed ? "removed" : moved ? "moved" : "unchanged",
         nextTitle: pending?.nextTitle,
         nextType: pending?.nextType,
         children: walk(node.id, depth + 1, removed),
@@ -130,9 +185,11 @@ function buildTree(
 }
 
 function Row({ row }: { row: PreviewRow }) {
+  // У добавляемых и удаляемых слово-тип остаётся зелёным/красным вместе со строкой.
+  const basisClass = row.basis && ["unchanged", "moved", "ghost"].includes(row.status) ? `is-basis-${row.basis}` : "";
   return (
     <li className={`program-tree-preview-row is-${row.status}`} style={{ marginInlineStart: row.depth * 16 }}>
-      <span className={`program-tree-preview-type ${row.nextType ? "is-removed" : ""}`}>
+      <span className={`program-tree-preview-type ${row.nextType ? "is-removed" : basisClass}`}>
         {NODE_TYPE_LABELS[row.nodeType] ?? row.nodeType}
       </span>
       <span className={`program-tree-preview-title ${row.nextTitle ? "is-removed" : ""}`}>{row.title}</span>
@@ -140,6 +197,8 @@ function Row({ row }: { row: PreviewRow }) {
         <span className="program-tree-preview-type is-new">{NODE_TYPE_LABELS[row.nextType] ?? row.nextType}</span>
       )}
       {row.nextTitle && <span className="program-tree-preview-title is-new">{row.nextTitle}</span>}
+      {row.status === "moved" && <span className="program-tree-preview-note">перенесено</span>}
+      {row.status === "ghost" && <span className="program-tree-preview-note">было здесь</span>}
       {row.children.length > 0 && (
         <ul className="program-tree-preview-children">
           {row.children.map((child) => <Row key={child.key} row={child} />)}
@@ -160,7 +219,8 @@ interface ProgramTreePreviewProps {
 export function ProgramTreePreview({ program, pendingOperations = [], pendingStates = [] }: ProgramTreePreviewProps) {
   const changes = collectChanges(pendingOperations, pendingStates);
   const pendingAdds = pendingOperations.filter((op, index) => pendingStates[index] === "pending" && op.op === "add");
-  const rows = buildTree(program, pendingAdds, changes);
+  const pendingMoves = pendingOperations.filter((op, index) => pendingStates[index] === "pending" && op.op === "move");
+  const rows = buildTree(program, pendingAdds, pendingMoves, changes);
 
   // Правка может стоять далеко от верха длинной программы — без прокрутки
   // подсветка есть, но за краем экрана. Ключ — сами непринятые операции.
@@ -169,7 +229,7 @@ export function ProgramTreePreview({ program, pendingOperations = [], pendingSta
   useEffect(() => {
     if (pendingKey === "[]") return;
     containerRef.current
-      ?.querySelector(".program-tree-preview-row.is-new, .program-tree-preview-row.is-removed, .program-tree-preview-title.is-new")
+      ?.querySelector(".program-tree-preview-row.is-new, .program-tree-preview-row.is-removed, .program-tree-preview-row.is-moved, .program-tree-preview-title.is-new")
       ?.scrollIntoView({ block: "start" });
   }, [pendingKey]);
 
@@ -198,7 +258,7 @@ function PreviewHeader() {
   return (
     <header className="program-tree-preview-head">
       <h2>Предпросмотр программы</h2>
-      <p><span />Без изменений <span className="is-new" />Добавится <span className="is-removed" />Удалится</p>
+      <p><span />Без изменений <span className="is-new" />Добавится <span className="is-removed" />Удалится <span className="is-moved" />Переместится</p>
     </header>
   );
 }
