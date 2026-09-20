@@ -1,6 +1,7 @@
 import {
   Check,
   CircleAlert,
+  ChevronRight,
   CircleCheck,
   KeyRound,
   MoreHorizontal,
@@ -12,6 +13,7 @@ import {
   Wifi,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Collapsible } from "radix-ui";
 import { useSearchParams } from "react-router";
 import {
   addAiCatalogModel,
@@ -60,6 +62,7 @@ import {
   StatusBadge,
   Switch,
 } from "../components/ui";
+import { groupAiRoles, type AiRoleGroup } from "./aiRoleCategories";
 import type { AiSettingsSubsection } from "./Setup";
 
 /** Запрос «покажи вот эту модель в списке»: nonce нужен, чтобы повторный клик тоже сработал. */
@@ -1115,8 +1118,27 @@ function RoleCard({ settings, role, onSettings }: { settings: AiSettingsRead; ro
   </article>;
 }
 
+function RoleCategory({ group, settings, onSettings }: { group: AiRoleGroup; settings: AiSettingsRead; onSettings: (settings: AiSettingsRead) => void }) {
+  const [open, setOpen] = useState(false);
+  const [first, ...rest] = group.roles;
+  return <Collapsible.Root open={open} onOpenChange={setOpen} className="ai-role-category">
+    <header className="ai-role-category-head"><h3>{group.title}</h3><p>{group.description}</p></header>
+    <div className="ai-role-list">
+      <RoleCard settings={settings} role={first} onSettings={onSettings} />
+      <Collapsible.Content className="disclosure-content">
+        {rest.map((role) => <RoleCard key={role.role} settings={settings} role={role} onSettings={onSettings} />)}
+      </Collapsible.Content>
+    </div>
+    {rest.length > 0 && <Collapsible.Trigger className="disclosure-trigger ai-role-category-toggle">
+      <ChevronRight size={15} aria-hidden="true" />
+      {open ? "Свернуть" : `Показать остальные (${rest.length})`}
+    </Collapsible.Trigger>}
+  </Collapsible.Root>;
+}
+
 function FunctionsPanel({ settings, onSettings }: { settings: AiSettingsRead; onSettings: (settings: AiSettingsRead) => void }) {
-  return <section className="ai-settings-group is-first"><header className="ai-group-head"><div><h2>Функции</h2><p>Для каждой функции можно оставить модель по умолчанию или выбрать другую.</p></div></header><div className="ai-role-list">{settings.roles.map((role) => <RoleCard key={role.role} settings={settings} role={role} onSettings={onSettings} />)}</div></section>;
+  const groups = groupAiRoles(settings.roles);
+  return <section className="ai-settings-group is-first"><header className="ai-group-head"><div><h2>Функции</h2><p>Для каждой функции можно оставить модель по умолчанию или выбрать другую. Откройте категорию, чтобы увидеть все её функции.</p></div></header>{groups.map((group) => <RoleCategory key={group.id} group={group} settings={settings} onSettings={onSettings} />)}</section>;
 }
 
 function LimitsPanel({ settings, onSettings }: { settings: AiSettingsRead; onSettings: (settings: AiSettingsRead) => void }) {

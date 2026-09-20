@@ -33,7 +33,7 @@ export type AiSettingsSubsection = typeof AI_SUBSECTIONS[number]["id"];
 const OCR_SUBSECTIONS = [
   { id: "overview", label: "Обзор" },
   { id: "engines", label: "Режимы" },
-  { id: "models", label: "Модели" },
+  { id: "models", label: "Установка" },
   { id: "quality", label: "Качество" },
 ] as const;
 

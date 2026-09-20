@@ -2124,6 +2124,40 @@
   display: grid;
 }
 
+/* Категория функций: заголовок, первая функция всегда видна, остальные раскрываются. */
+.ai-role-category {
+  padding: var(--space-6) 0 var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.ai-role-category:first-of-type {
+  padding-top: var(--space-2);
+  border-top: 0;
+}
+
+.ai-role-category-head h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.ai-role-category-head p {
+  max-width: 62ch;
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+/* Общее правило `.ai-role-card:first-child` снимает черту и у первой карточки раскрывающейся
+   части, потому что она первая в своём контейнере, — возвращаем разделитель. */
+.ai-role-category .disclosure-content > .ai-role-card:first-child {
+  border-top: 1px solid var(--line);
+}
+
+.ai-role-category-toggle {
+  margin-top: var(--space-1);
+}
+
 .ai-role-row {
   display: grid;
   grid-template-columns: minmax(220px, 0.9fr) minmax(280px, 1.1fr);

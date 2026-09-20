@@ -92,7 +92,7 @@ const SETTINGS_ITEMS: { label: string; to: string }[] = [
   { label: "Параметры → ИИ → История", to: "/setup?section=ai&subsection=usage" },
   { label: "Параметры → Распознавание → Обзор", to: "/setup?section=ocr&subsection=overview" },
   { label: "Параметры → Распознавание → Режимы", to: "/setup?section=ocr&subsection=engines" },
-  { label: "Параметры → Распознавание → Модели", to: "/setup?section=ocr&subsection=models" },
+  { label: "Параметры → Распознавание → Установка", to: "/setup?section=ocr&subsection=models" },
   { label: "Параметры → Распознавание → Качество", to: "/setup?section=ocr&subsection=quality" },
   { label: "Параметры → Бот", to: "/setup?section=bot" },
   { label: "Параметры → Резервные копии", to: "/setup?section=backups" },
