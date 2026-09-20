@@ -51,14 +51,14 @@ class LocalEmbeddingBackend:
             "pooling": self.profile.pooling,
             "normalize": self.profile.normalize,
         }
-        async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(f"{settings.retrieval_model_url}/embed", json=payload)
         try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.post(f"{settings.retrieval_model_url}/embed", json=payload)
             response.raise_for_status()
             vectors = response.json()["vectors"]
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
             raise ProjectDomainError(
-                "Локальный model service не вернул embeddings",
+                f"Локальный model service не вернул embeddings: {_failure_reason(error)}",
                 status=503,
                 code="retrieval_local_model_unavailable",
             ) from error
@@ -70,6 +70,19 @@ class LocalEmbeddingBackend:
 
     async def embed_query(self, text: str) -> list[float]:
         return (await self._embed([text], self.profile.query_template))[0]
+
+
+def _failure_reason(error: Exception) -> str:
+    """Причина отказа model service: без неё не отличить «модель не докачана» от «сервис лежит»."""
+    if isinstance(error, httpx.HTTPStatusError):
+        try:
+            detail = error.response.json()["detail"]
+        except (KeyError, TypeError, ValueError):
+            detail = error.response.text
+        return str(detail)[:300]
+    if isinstance(error, httpx.HTTPError):
+        return f"сервис недоступен ({type(error).__name__})"
+    return "неожиданный ответ сервиса"
 
 
 def backend_for_profile(session: Session, profile: EmbeddingProfile) -> EmbeddingBackend:

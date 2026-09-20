@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from huggingface_hub import snapshot_download
+from huggingface_hub import list_repo_files, snapshot_download
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -52,13 +52,32 @@ def model_path(model_id: str) -> Path:
     return settings.embedding_models_dir / f"{digest}-{model_id.rsplit('/', 1)[-1]}"
 
 
-def list_models() -> list[LocalModelRead]:
+def _partial_path(model_id: str) -> Path:
+    """Куда идёт скачивание: в финальный каталог модель попадает только целиком."""
+    final = model_path(model_id)
+    return final.with_name(f"{final.name}.partial")
+
+
+def _active_install_jobs(session: Session) -> dict[str, UUID]:
+    """Незавершённые установки: `model_id` → задача. Ключ лежит в checkpoint."""
+    jobs = session.scalars(
+        select(BackgroundJob).where(
+            BackgroundJob.kind == BackgroundJobKind.RETRIEVAL_MODEL_INSTALL,
+            BackgroundJob.state.in_((BackgroundJobState.QUEUED, BackgroundJobState.RUNNING)),
+        )
+    )
+    return {str(job.checkpoint["model_id"]): job.id for job in jobs}
+
+
+def list_models(session: Session) -> list[LocalModelRead]:
+    installing = _active_install_jobs(session)
     return [
         LocalModelRead(
             model_id=model_id,
             label=label,
             role=role,
             installed=model_path(model_id).is_dir(),
+            installing=model_id in installing,
             recommended_for=recommended_for,
         )
         for model_id, label, role, recommended_for in CURATED_MODELS
@@ -68,6 +87,10 @@ def list_models() -> list[LocalModelRead]:
 def start_install(session: Session, model_id: str, revision: str | None) -> UUID:
     validate_model_id(model_id)
     with session.begin():
+        running = _active_install_jobs(session).get(model_id)
+        if running is not None:
+            # Повторный клик по «Скачать» не ставит в очередь второе скачивание тех же гигабайт.
+            return running
         job = BackgroundJob(
             id=uuid4(),
             kind=BackgroundJobKind.RETRIEVAL_MODEL_INSTALL,
@@ -90,12 +113,34 @@ def remove_model(session: Session, model_id: str) -> None:
             "Модель используется retrieval-индексом; сначала удалите неактивные индексы",
             code="retrieval_model_in_use",
         )
-    path = model_path(model_id).resolve()
     root = settings.embedding_models_dir.resolve()
-    if path.parent != root:
-        raise ProjectConflictError("Небезопасный путь модели", code="retrieval_invalid_model_path")
-    if path.exists():
-        shutil.rmtree(path)
+    for path in (model_path(model_id).resolve(), _partial_path(model_id).resolve()):
+        if path.parent != root:
+            raise ProjectConflictError(
+                "Небезопасный путь модели", code="retrieval_invalid_model_path"
+            )
+        if path.exists():
+            shutil.rmtree(path)
+
+
+# Репозитории sentence-transformers держат одни и те же веса в нескольких форматах:
+# у MiniLM это 4,6 ГБ ради 470 МБ, которые реально читает PyTorch.
+_NEVER_NEEDED = (
+    "onnx/*", "openvino/*", "coreml/*", "*.onnx", "*.h5", "*.msgpack", "*.ot", "*.tflite", "*.gguf",
+)
+
+
+def _skipped_files(model_id: str, revision: str | None) -> list[str]:
+    patterns = list(_NEVER_NEEDED)
+    try:
+        files = list_repo_files(model_id, revision=revision)
+    except Exception:
+        # Не смогли перечислить файлы — качаем всё, кроме заведомо лишнего: недоступность
+        # каталога не повод отказывать в установке.
+        return patterns
+    if any(name.endswith(".safetensors") for name in files):
+        patterns.append("pytorch_model*.bin")
+    return patterns
 
 
 def process_install_job(session: Session, detached_job: BackgroundJob) -> None:
@@ -110,11 +155,19 @@ def process_install_job(session: Session, detached_job: BackgroundJob) -> None:
     session.rollback()
     try:
         validate_model_id(model_id)
+        partial = _partial_path(model_id)
+        # Недокачанный `.partial` остаётся на диске: huggingface_hub докачивает его,
+        # а `installed` не видит его до переименования.
         snapshot_download(
             repo_id=model_id,
             revision=str(revision) if revision else None,
-            local_dir=model_path(model_id),
+            local_dir=partial,
+            ignore_patterns=_skipped_files(model_id, str(revision) if revision else None),
         )
+        final = model_path(model_id)
+        if final.exists():
+            shutil.rmtree(final)
+        partial.rename(final)
     except Exception as error:
         reason = str(error)
         write_job(

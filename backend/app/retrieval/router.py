@@ -75,8 +75,8 @@ async def test_embedding_profile(
 
 
 @router.get("/settings/retrieval/local-models", response_model=list[LocalModelRead])
-def get_local_models() -> list[LocalModelRead]:
-    return local_models.list_models()
+def get_local_models(session: SessionDependency) -> list[LocalModelRead]:
+    return local_models.list_models(session)
 
 
 @router.post(

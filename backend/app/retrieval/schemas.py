@@ -191,6 +191,7 @@ class LocalModelRead(ApiModel):
     label: str
     role: Literal["embedding", "reranker"]
     installed: bool
+    installing: bool = False
     recommended_for: str
 
 

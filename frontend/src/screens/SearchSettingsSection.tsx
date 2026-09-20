@@ -108,6 +108,15 @@ export function SearchSettingsSection({
     if (watchedJob.job) void load();
   }, [watchedJob.job?.state, watchedJob.job?.done, load]);
 
+  // Скачивание идёт в воркере и переживает перезагрузку страницы: по флагу с сервера
+  // список обновляется и тогда, когда `watchedJobId` уже потерян.
+  const hasInstalling = models.some((model) => model.installing);
+  useEffect(() => {
+    if (!hasInstalling) return;
+    const timer = window.setInterval(() => { void load(); }, 3000);
+    return () => window.clearInterval(timer);
+  }, [hasInstalling, load]);
+
   async function action(key: string, operation: () => Promise<unknown>) {
     setBusy(key);
     setError("");
@@ -185,6 +194,9 @@ export function SearchSettingsSection({
   return (
     <div className="ai-settings retrieval-settings">
       {error && <ErrorState message={error} />}
+      {watchedJob.job?.state === "failed" && (
+        <ErrorState message={`Модель не скачалась: ${watchedJob.job.error ?? "причина не указана"}`} />
+      )}
 
       {subsection === "overview" && (
         <section id="search-overview" className="ai-settings-group is-first">
@@ -253,7 +265,8 @@ export function SearchSettingsSection({
                   <span>{model.recommended_for}</span>
                 </div>
                 <div className="ai-group-actions">
-                  {model.installed ? <><StatusBadge tone="success"><Check size={13} /> Установлена</StatusBadge>
+                  {model.installing ? <StatusBadge tone="info"><Download size={13} /> Скачивается…</StatusBadge>
+                    : model.installed ? <><StatusBadge tone="success"><Check size={13} /> Установлена</StatusBadge>
                     <Button variant="ghost" disabled={busy !== ""} onClick={() => void action(`delete:${model.model_id}`, () => deleteLocalEmbeddingModel(model.model_id))}>Удалить</Button></> : (
                     <Button
                       variant="secondary"
@@ -275,7 +288,7 @@ export function SearchSettingsSection({
                   {profile && (
                     <Button
                       variant="ghost"
-                      disabled={busy !== "" || !model.installed}
+                      disabled={busy !== "" || !model.installed || model.installing}
                       onClick={() => void action(`test:${profile.id}`, () => testEmbeddingProfile(profile.id))}
                     ><RefreshCw size={14} /> Проверить</Button>
                   )}

@@ -240,8 +240,12 @@ def test_model_install_survives_another_writer_during_download(
             other.add(RetrievalSettings(id=1, preset=RetrievalPreset.FAST))
             other.commit()
         Path(str(kwargs["local_dir"])).mkdir(parents=True, exist_ok=True)
+        # Недокачанный каталог не выдаёт себя за установленную модель.
+        assert not local_models.model_path("tentex-test/embeddings").exists()
+        assert local_models.start_install(session, "tentex-test/embeddings", None) == job_id
 
     monkeypatch.setattr(local_models, "snapshot_download", fake_download)
+    monkeypatch.setattr(local_models, "list_repo_files", lambda *_, **__: ["model.safetensors"])
     detached = session.get(BackgroundJob, job_id)
     assert detached is not None
     local_models.process_install_job(session, detached)
@@ -252,6 +256,8 @@ def test_model_install_survives_another_writer_during_download(
     assert job.state == BackgroundJobState.COMPLETED
     assert job.error is None
     assert job.done == job.total
+    assert local_models.model_path("tentex-test/embeddings").is_dir()
+    assert not local_models._partial_path("tentex-test/embeddings").exists()
 
 
 def test_citation_validator_rejects_missing_and_unknown_ids() -> None:

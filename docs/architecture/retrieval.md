@@ -89,6 +89,9 @@ map-reduce по каждому chunk. Запуск связан с `BackgroundJo
 ## API и интерфейс
 
 - `/api/settings/retrieval`, `/profiles`, `/local-models`;
+  установка модели качает в `<каталог>.partial` без onnx/openvino/tf-дублей и переименовывает
+  в финальный каталог только целиком, поэтому `installed` не бывает истинным у недокачанной
+  модели; повторный старт установки отдаёт уже идущую задачу, `installing` виден в списке;
 - `/api/retrieval/indexes`, `/benchmarks`, `/exhaustive`;
 - `/api/library/search`;
 - `/api/projects/{id}/search` сохраняет старые поля и добавляет strategy/signals;

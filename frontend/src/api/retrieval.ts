@@ -62,6 +62,7 @@ export interface LocalModelRead {
   label: string;
   role: "embedding" | "reranker";
   installed: boolean;
+  installing: boolean;
   recommended_for: string;
 }
 
