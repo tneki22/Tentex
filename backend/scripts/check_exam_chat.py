@@ -393,15 +393,19 @@ async def _run(engine: object, session: Session) -> None:
         assert after_strictness.context_flags["profile"] is True
         session.commit()
 
-        # study — зарегистрирован, но стабильно недоступен.
-        try:
-            chat_router.patch_chat_settings(
-                project_id, chat_id, ChatSettingsWrite(mode="study"), session
-            )
-        except Exception as error:  # noqa: BLE001 — проверяем стабильный код домена
-            assert getattr(error, "code", None) == "chat_mode_unavailable"
-        else:
-            raise AssertionError("study должен быть недоступен в первой итерации")
+        # study открыт вертикалью retrieval: переключение применяется и не сбрасывает
+        # персону со строгостью, а обратный переход возвращает экзаменатора.
+        after_study = chat_router.patch_chat_settings(
+            project_id, chat_id, ChatSettingsWrite(mode="study"), session
+        )
+        assert after_study.mode == "study"
+        assert after_study.persona == ExaminerPersona.CALM_TEACHER.value
+        assert after_study.strictness == ExaminerStrictness.STRICT.value
+        session.commit()
+        back_to_exam = chat_router.patch_chat_settings(
+            project_id, chat_id, ChatSettingsWrite(mode="exam"), session
+        )
+        assert back_to_exam.mode == "exam"
         session.commit()
 
         # Неизвестная модель отклоняется без сохранения.
@@ -422,9 +426,9 @@ async def _run(engine: object, session: Session) -> None:
             raise AssertionError("неизвестная модель должна быть отклонена")
         session.commit()
 
-        capabilities = chat_router.get_chat_capabilities(project_id, node_id, session)
+        capabilities = chat_router.get_chat_capabilities(project_id, session, node_id)
         modes = {item.key: item.available for item in capabilities.modes}
-        assert modes == {"exam": True, "study": False}
+        assert modes == {"exam": True, "study": True}
         tools = {item.key: item.available for item in capabilities.tools}
         assert tools["search_project_materials"] is True
         assert tools["search_external_sources"] is False

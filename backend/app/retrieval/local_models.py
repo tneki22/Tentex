@@ -17,9 +17,9 @@ from app.models import (
     BackgroundJobState,
     EmbeddingProfile,
     RetrievalIndex,
-    utc_now,
 )
 from app.projects.errors import ProjectConflictError
+from app.retrieval.jobs import finish, write_job
 from app.retrieval.schemas import LocalModelRead
 
 _MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -99,31 +99,28 @@ def remove_model(session: Session, model_id: str) -> None:
 
 
 def process_install_job(session: Session, detached_job: BackgroundJob) -> None:
-    job = session.get(BackgroundJob, detached_job.id)
+    job_id = detached_job.id
+    job = session.get(BackgroundJob, job_id)
     if job is None:
         return
+    model_id = str(job.checkpoint["model_id"])
+    revision = job.checkpoint.get("revision")
+    # Скачивание идёт без открытого снимка базы: несколько гигабайт качаются
+    # минутами, и всё это время соединение не должно держать читателя.
+    session.rollback()
     try:
-        model_id = validate_model_id(str(job.checkpoint["model_id"]))
-        revision = job.checkpoint.get("revision")
+        validate_model_id(model_id)
         snapshot_download(
             repo_id=model_id,
             revision=str(revision) if revision else None,
             local_dir=model_path(model_id),
         )
-        job.state = BackgroundJobState.COMPLETED
-        job.done = 1
-        job.completed_at = utc_now()
-        job.lease_owner = None
-        job.lease_expires_at = None
-        job.updated_at = utc_now()
-        session.commit()
     except Exception as error:
-        session.rollback()
-        job = session.get(BackgroundJob, detached_job.id)
-        if job is not None:
-            job.state = BackgroundJobState.FAILED
-            job.error = str(error)
-            job.lease_owner = None
-            job.lease_expires_at = None
-            job.updated_at = utc_now()
-            session.commit()
+        reason = str(error)
+        write_job(
+            session,
+            job_id,
+            lambda _, job: finish(job, BackgroundJobState.FAILED, error=reason),
+        )
+        return
+    write_job(session, job_id, lambda _, job: finish(job, BackgroundJobState.COMPLETED))

@@ -27,6 +27,7 @@ from app.models import (
 )
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.retrieval.chunking import ChunkDraft, material_chunks
+from app.retrieval.jobs import finish, write_job
 from app.retrieval.schemas import (
     ExhaustiveRunRead,
     ExhaustiveRunWrite,
@@ -370,15 +371,15 @@ def _save_checkpoint(
     next_batch: int,
     findings: list[ExhaustiveFinding],
 ) -> None:
-    job = session.get(BackgroundJob, job_id)
-    assert job is not None
-    job.done = next_batch
-    job.checkpoint = {
-        "next_batch": next_batch,
-        "findings": [item.model_dump(mode="json") for item in findings],
-    }
-    job.updated_at = utc_now()
-    session.commit()
+    def apply(_: Session, job: BackgroundJob) -> None:
+        job.done = next_batch
+        job.checkpoint = {
+            "next_batch": next_batch,
+            "findings": [item.model_dump(mode="json") for item in findings],
+        }
+        job.updated_at = utc_now()
+
+    write_job(session, job_id, apply)
 
 
 def _cancel_requested(session: Session, job_id: UUID) -> bool:
@@ -397,15 +398,15 @@ def _finish_success(
 ) -> None:
     cited = set(_CITATION.findall(reduced.answer))
     manifest = [_source_manifest(source) for source in sources if source.source_id in cited]
-    session.rollback()
-    with session.begin():
-        run = session.get(RetrievalExhaustiveRun, run.id)
-        job = session.get(BackgroundJob, job_id)
-        assert run is not None and job is not None
-        chat = session.get(ChatSession, run.session_id)
+    run_id = run.id
+
+    def apply(inner: Session, job: BackgroundJob) -> None:
+        run = inner.get(RetrievalExhaustiveRun, run_id)
+        assert run is not None
+        chat = inner.get(ChatSession, run.session_id)
         assert chat is not None
         message = append_message_row(
-            session,
+            inner,
             chat,
             role=ChatMessageRole.EXAMINER,
             text=reduced.answer,
@@ -425,12 +426,9 @@ def _finish_success(
             "source_count": len(sources),
         }
         run.completed_at = utc_now()
-        job.state = BackgroundJobState.COMPLETED
-        job.done = job.total
-        job.completed_at = utc_now()
-        job.lease_owner = None
-        job.lease_expires_at = None
-        job.updated_at = utc_now()
+        finish(job, BackgroundJobState.COMPLETED)
+
+    write_job(session, job_id, apply)
 
 
 def _finish_cancelled(
@@ -439,26 +437,19 @@ def _finish_cancelled(
     job_id: UUID,
     findings: list[ExhaustiveFinding],
 ) -> None:
-    session.rollback()
-    with session.begin():
-        run = session.get(RetrievalExhaustiveRun, run.id)
-        job = session.get(BackgroundJob, job_id)
-        assert run is not None and job is not None
+    run_id = run.id
+
+    def apply(inner: Session, job: BackgroundJob) -> None:
+        run = inner.get(RetrievalExhaustiveRun, run_id)
+        assert run is not None
         run.result = {"partial": True, "finding_count": len(findings)}
-        job.state = BackgroundJobState.CANCELLED
-        job.completed_at = utc_now()
-        job.lease_owner = None
-        job.lease_expires_at = None
-        job.updated_at = utc_now()
+        finish(job, BackgroundJobState.CANCELLED)
+
+    write_job(session, job_id, apply)
 
 
 def _finish_failed(session: Session, job_id: UUID, error: Exception) -> None:
-    job = session.get(BackgroundJob, job_id)
-    if job is None:
-        return
-    job.state = BackgroundJobState.FAILED
-    job.error = str(error)
-    job.lease_owner = None
-    job.lease_expires_at = None
-    job.updated_at = utc_now()
-    session.commit()
+    reason = str(error)
+    write_job(
+        session, job_id, lambda _, job: finish(job, BackgroundJobState.FAILED, error=reason)
+    )

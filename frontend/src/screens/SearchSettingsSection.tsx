@@ -44,6 +44,16 @@ function errorText(caught: unknown): string {
   return caught instanceof Error ? caught.message : "Не удалось выполнить действие";
 }
 
+/** «1 кусок», «2 куска», «5 кусков»: без склонения сводка читается как машинная. */
+function plural(count: number, one: string, few: string, many: string): string {
+  const tail = Math.abs(count) % 100;
+  if (tail >= 11 && tail <= 14) return many;
+  const last = tail % 10;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+}
+
 export function SearchSettingsSection({
   subsection,
   onActiveSubsection,
@@ -192,13 +202,25 @@ export function SearchSettingsSection({
               <Cpu size={18} aria-hidden="true" />
               <small>Embedding-модель</small>
               <strong>{activeProfile?.label ?? "Не выбрана"}</strong>
-              <span>{activeProfile?.dimension ? `${activeProfile.dimension} измерений` : "Размерность не проверена"}</span>
+              <span>
+                {activeProfile?.dimension
+                  ? `${activeProfile.dimension} ${plural(activeProfile.dimension, "измерение", "измерения", "измерений")}`
+                  : "Размерность не проверена"}
+              </span>
             </article>
             <article>
               <Database size={18} aria-hidden="true" />
               <small>Активный индекс</small>
-              <strong>{settings.active_index ? `${settings.active_index.chunk_count} кусков` : "Не собран"}</strong>
-              <span>{settings.ready_materials} из {settings.total_ready_materials} материалов готовы</span>
+              <strong>
+                {settings.active_index
+                  ? `${settings.active_index.chunk_count} ${plural(settings.active_index.chunk_count, "кусок", "куска", "кусков")}`
+                  : "Не собран"}
+              </strong>
+              <span>
+                {settings.ready_materials} из {settings.total_ready_materials}{" "}
+                {plural(settings.total_ready_materials, "материала", "материалов", "материалов")}{" "}
+                {plural(settings.ready_materials, "готов", "готовы", "готовы")}
+              </span>
             </article>
             <article>
               <Gauge size={18} aria-hidden="true" />
@@ -334,7 +356,11 @@ export function SearchSettingsSection({
                   <strong>{index.state === "active" ? "Активный индекс" : "Кандидат"}</strong>
                   <StatusBadge tone={INDEX_STATUS[index.state].tone}>{INDEX_STATUS[index.state].label}</StatusBadge>
                 </span>
-                <small>{index.material_count} материалов · {index.chunk_count} кусков · {index.preset}</small>
+                <small>
+                  {index.material_count} {plural(index.material_count, "материал", "материала", "материалов")}
+                  {" · "}{index.chunk_count} {plural(index.chunk_count, "кусок", "куска", "кусков")}
+                  {" · "}{index.preset}
+                </small>
                 {index.error && <span className="retrieval-error">{index.error}</span>}
               </div>
               {index.state === "ready" && (

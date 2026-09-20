@@ -27,7 +27,7 @@ from app.models import (
 )
 from app.projects.errors import ProjectNotFoundError
 from app.retrieval.embeddings import backend_for_profile
-from app.retrieval.presets import PRESETS
+from app.retrieval.presets import PRESETS, PresetConfig
 from app.retrieval.schemas import (
     RetrievalHitRead,
     RetrievalLocatorRead,
@@ -59,38 +59,23 @@ class HybridRetriever:
         self.index_id = index_id
 
     async def search(self, session: Session, command: RetrievalSearchWrite) -> RetrievalSearchRead:
+        """Найти места по стратегии запроса и собрать из них проверяемую выдачу.
+
+        Порядок фиксированный: кандидаты BM25 → кандидаты по смыслу → слияние →
+        optional reranker → чтение кусков. Отсутствие индекса, устаревшая ревизия
+        и недоступный reranker не прерывают поиск: каждая такая потеря
+        превращается в причину деградации рядом с результатом.
+        """
         scope = resolve_scope(session, command)
         settings = session.get(RetrievalSettings, 1)
-        active = session.get(RetrievalIndex, self.index_id) if self.index_id else None
-        if active is None and self.index_id is None:
-            active = (
-                session.get(RetrievalIndex, settings.active_index_id)
-                if settings and settings.active_index_id
-                else None
-            )
+        active = self._active_index(session, settings)
         preset = PRESETS[settings.preset] if settings else PRESETS[RetrievalPreset.BALANCED]
         expert = settings.expert_parameters if settings else {}
         reasons: list[str] = []
-
-        lexical_hits: list[SearchHit] = []
-        if command.strategy != SearchStrategy.SEMANTIC:
-            outcome = search_fragments(
-                session,
-                scope.material_ids,
-                command.query,
-                limit=preset.lexical_candidates,
-            )
-            lexical_hits = [
-                hit
-                for hit in outcome.hits
-                if scope.block_ids is None or hit.block_id in scope.block_ids
-            ]
-
-        chunk_by_id: dict[UUID, RetrievalChunk] = {}
-        lexical_ids: list[UUID] = []
         pseudo_by_id: dict[UUID, SearchHit] = {}
-        if active is not None:
-            chunks = list(
+
+        chunks = (
+            list(
                 session.scalars(
                     select(RetrievalChunk).where(
                         RetrievalChunk.index_id == active.id,
@@ -98,105 +83,29 @@ class HybridRetriever:
                     )
                 )
             )
-            chunk_by_id = {chunk.id: chunk for chunk in chunks}
-            first_by_block = {
-                chunk.block_id: chunk.id for chunk in reversed(chunks) if chunk.block_id is not None
-            }
-            for hit in lexical_hits:
-                chunk_id = first_by_block.get(hit.block_id)
-                if chunk_id is not None:
-                    lexical_ids.append(chunk_id)
-                else:
-                    pseudo_id = hit.fragment_ids[0]
-                    lexical_ids.append(pseudo_id)
-                    pseudo_by_id[pseudo_id] = hit
-        else:
-            for hit in lexical_hits:
-                pseudo_id = hit.fragment_ids[0]
-                lexical_ids.append(pseudo_id)
-                pseudo_by_id[pseudo_id] = hit
+            if active is not None
+            else []
+        )
+        chunk_by_id = {chunk.id: chunk for chunk in chunks}
+
+        lexical_ids: list[UUID] = []
+        if command.strategy != SearchStrategy.SEMANTIC:
+            hits = _lexical_candidates(session, scope, command.query, preset.lexical_candidates)
+            lexical_ids = _lexical_ids(hits, chunks, pseudo_by_id)
 
         semantic_ids: list[UUID] = []
         if command.strategy != SearchStrategy.LEXICAL:
-            if active is None:
-                reasons.append("Активный semantic-индекс не выбран; выполнен поиск по словам")
-            else:
-                profile = session.get(EmbeddingProfile, active.profile_id)
-                if profile is None:
-                    reasons.append("Embedding-профиль активного индекса недоступен")
-                else:
-                    try:
-                        vector = await backend_for_profile(session, profile).embed_query(
-                            scope.semantic_query
-                        )
-                        semantic_ids = [
-                            hit.chunk_id
-                            for hit in self.vector_index.search(
-                                session,
-                                index_id=active.id,
-                                material_ids=scope.material_ids,
-                                query_vector=vector,
-                                limit=preset.semantic_candidates,
-                                block_ids=scope.block_ids,
-                            )
-                        ]
-                    except Exception as error:  # noqa: BLE001 — lexical fallback is the contract
-                        reasons.append(f"Поиск по смыслу недоступен: {error}")
+            semantic_ids = await self._semantic_ids(session, scope, active, preset, reasons)
 
         if not semantic_ids and command.strategy == SearchStrategy.SEMANTIC:
-            outcome = search_fragments(
-                session,
-                scope.material_ids,
-                command.query,
-                limit=preset.lexical_candidates,
-            )
-            lexical_hits = [
-                hit
-                for hit in outcome.hits
-                if scope.block_ids is None or hit.block_id in scope.block_ids
-            ]
-            lexical_ids = []
-            for hit in lexical_hits:
-                chunk_id = next(
-                    (chunk.id for chunk in chunk_by_id.values() if chunk.block_id == hit.block_id),
-                    hit.fragment_ids[0],
-                )
-                lexical_ids.append(chunk_id)
-                pseudo_by_id[hit.fragment_ids[0]] = hit
+            # Чистый semantic-запрос без индекса возвращает не пустоту, а BM25:
+            # это явно названная деградация, а не отсутствие ответа.
+            hits = _lexical_candidates(session, scope, command.query, preset.lexical_candidates)
+            lexical_ids = _lexical_ids(hits, chunks, pseudo_by_id)
             reasons.append("Semantic-поиск заменён поиском по словам")
 
-        if active is not None:
-            stale = _stale_material_names(session, active, scope.material_ids)
-            if stale:
-                reasons.append("Часть источников — только поиск по словам: " + ", ".join(stale))
-        visual = visual_page_locators(session, scope.material_ids)
-        if visual:
-            preview = ", ".join(
-                f"{name}, стр. {page}" for name, page in visual[:5]
-            )
-            suffix = "" if len(visual) <= 5 else f" и ещё {len(visual) - 5}"
-            reasons.append(
-                "Визуальные страницы не проверены vision-моделью: " + preview + suffix
-            )
-
-        if command.strategy == SearchStrategy.LEXICAL:
-            ranking = [
-                (item_id, 1.0 / rank, ["lexical"]) for rank, item_id in enumerate(lexical_ids, 1)
-            ]
-        elif command.strategy == SearchStrategy.SEMANTIC:
-            source_ids = semantic_ids or lexical_ids
-            signal = "semantic" if semantic_ids else "lexical"
-            ranking = [
-                (item_id, 1.0 / rank, [signal]) for rank, item_id in enumerate(source_ids, 1)
-            ]
-        else:
-            ranking = reciprocal_rank_fusion(
-                lexical_ids,
-                semantic_ids,
-                k=int(expert.get("rrf_k", preset.rrf_k)),
-                lexical_weight=float(expert.get("lexical_weight", 1.0)),
-                semantic_weight=float(expert.get("semantic_weight", 1.0)),
-            )
+        reasons.extend(_degradation_notes(session, active, scope))
+        ranking = _ranking(command.strategy, lexical_ids, semantic_ids, preset, expert)
 
         if preset.rerank_depth and ranking:
             try:
@@ -211,33 +120,163 @@ class HybridRetriever:
             except Exception as error:  # noqa: BLE001 — RRF remains a valid result
                 reasons.append(f"Reranker недоступен; сохранён порядок RRF: {error}")
 
-        missing_ids = [item_id for item_id, _, _ in ranking if item_id not in chunk_by_id]
-        if active is not None and missing_ids:
-            for chunk in session.scalars(
-                select(RetrievalChunk).where(RetrievalChunk.id.in_(missing_ids))
-            ):
-                chunk_by_id[chunk.id] = chunk
-        results = []
-        for item_id, score, signals in ranking:
-            chunk = chunk_by_id.get(item_id)
-            if chunk is not None:
-                result = chunk_read(session, chunk, score, signals)
-            else:
-                lexical = pseudo_by_id.get(item_id)
-                if lexical is None:
-                    continue
-                result = _lexical_read(lexical, score)
-            results.append(result)
-            if len(results) >= min(command.limit, preset.final_results):
-                break
         return RetrievalSearchRead(
             query=command.query,
             strategy=command.strategy,
             index_id=active.id if active else None,
             degraded=bool(reasons),
             degradation_reasons=reasons,
-            results=results,
+            results=self._read_ranking(
+                session, ranking, chunk_by_id, pseudo_by_id,
+                limit=min(command.limit, preset.final_results),
+                active=active,
+            ),
         )
+
+    def _active_index(
+        self, session: Session, settings: RetrievalSettings | None
+    ) -> RetrievalIndex | None:
+        """Индекс запроса: явно переданный (benchmark) или активный на установке."""
+        if self.index_id is not None:
+            return session.get(RetrievalIndex, self.index_id)
+        if settings is None or settings.active_index_id is None:
+            return None
+        return session.get(RetrievalIndex, settings.active_index_id)
+
+    async def _semantic_ids(
+        self,
+        session: Session,
+        scope: ScopeFilter,
+        active: RetrievalIndex | None,
+        preset: PresetConfig,
+        reasons: list[str],
+    ) -> list[UUID]:
+        """Кандидаты по смыслу; каждая причина отказа названа словами в `reasons`."""
+        if active is None:
+            reasons.append("Активный semantic-индекс не выбран; выполнен поиск по словам")
+            return []
+        profile = session.get(EmbeddingProfile, active.profile_id)
+        if profile is None:
+            reasons.append("Embedding-профиль активного индекса недоступен")
+            return []
+        try:
+            vector = await backend_for_profile(session, profile).embed_query(scope.semantic_query)
+            return [
+                hit.chunk_id
+                for hit in self.vector_index.search(
+                    session,
+                    index_id=active.id,
+                    material_ids=scope.material_ids,
+                    query_vector=vector,
+                    limit=preset.semantic_candidates,
+                    block_ids=scope.block_ids,
+                )
+            ]
+        except Exception as error:  # noqa: BLE001 — lexical fallback is the contract
+            reasons.append(f"Поиск по смыслу недоступен: {error}")
+            return []
+
+    def _read_ranking(
+        self,
+        session: Session,
+        ranking: list[tuple[UUID, float, list[str]]],
+        chunk_by_id: dict[UUID, RetrievalChunk],
+        pseudo_by_id: dict[UUID, SearchHit],
+        *,
+        limit: int,
+        active: RetrievalIndex | None,
+    ) -> list[RetrievalHitRead]:
+        """Прочитать выбранные места: куски индекса, иначе — исходный фрагмент BM25."""
+        missing_ids = [item_id for item_id, _, _ in ranking if item_id not in chunk_by_id]
+        if active is not None and missing_ids:
+            for chunk in session.scalars(
+                select(RetrievalChunk).where(RetrievalChunk.id.in_(missing_ids))
+            ):
+                chunk_by_id[chunk.id] = chunk
+        results: list[RetrievalHitRead] = []
+        for item_id, score, signals in ranking:
+            chunk = chunk_by_id.get(item_id)
+            if chunk is not None:
+                results.append(chunk_read(session, chunk, score, signals))
+            elif (lexical := pseudo_by_id.get(item_id)) is not None:
+                results.append(_lexical_read(lexical, score))
+            if len(results) >= limit:
+                break
+        return results
+
+
+def _lexical_candidates(
+    session: Session, scope: ScopeFilter, query: str, limit: int
+) -> list[SearchHit]:
+    """Кандидаты BM25 внутри границ области."""
+    outcome = search_fragments(session, scope.material_ids, query, limit=limit)
+    return [
+        hit for hit in outcome.hits if scope.block_ids is None or hit.block_id in scope.block_ids
+    ]
+
+
+def _lexical_ids(
+    hits: list[SearchHit],
+    chunks: list[RetrievalChunk],
+    pseudo_by_id: dict[UUID, SearchHit],
+) -> list[UUID]:
+    """Перевести найденные фрагменты в id кусков активного индекса.
+
+    Блока нет в индексе — например, материал переиндексируется прямо сейчас, —
+    и место остаётся в выдаче под id своего фрагмента, а сам фрагмент попадает в
+    `pseudo_by_id`. Так BM25 продолжает отвечать и без готового индекса.
+    """
+    first_by_block = {
+        chunk.block_id: chunk.id for chunk in reversed(chunks) if chunk.block_id is not None
+    }
+    ids: list[UUID] = []
+    for hit in hits:
+        chunk_id = first_by_block.get(hit.block_id)
+        if chunk_id is None:
+            chunk_id = hit.fragment_ids[0]
+            pseudo_by_id[chunk_id] = hit
+        ids.append(chunk_id)
+    return ids
+
+
+def _degradation_notes(
+    session: Session, active: RetrievalIndex | None, scope: ScopeFilter
+) -> list[str]:
+    """Нейтральные причины неполноты: устаревшие ревизии и визуальные страницы."""
+    notes: list[str] = []
+    if active is not None:
+        stale = _stale_material_names(session, active, scope.material_ids)
+        if stale:
+            notes.append("Часть источников — только поиск по словам: " + ", ".join(stale))
+    visual = visual_page_locators(session, scope.material_ids)
+    if visual:
+        preview = ", ".join(f"{name}, стр. {page}" for name, page in visual[:5])
+        suffix = "" if len(visual) <= 5 else f" и ещё {len(visual) - 5}"
+        notes.append("Визуальные страницы не проверены vision-моделью: " + preview + suffix)
+    return notes
+
+
+def _ranking(
+    strategy: SearchStrategy,
+    lexical_ids: list[UUID],
+    semantic_ids: list[UUID],
+    preset: PresetConfig,
+    expert: dict[str, object],
+) -> list[tuple[UUID, float, list[str]]]:
+    """Один список мест из одного или двух сигналов."""
+    if strategy == SearchStrategy.LEXICAL:
+        return [(item_id, 1.0 / rank, ["lexical"]) for rank, item_id in enumerate(lexical_ids, 1)]
+    if strategy == SearchStrategy.SEMANTIC:
+        source_ids = semantic_ids or lexical_ids
+        signal = "semantic" if semantic_ids else "lexical"
+        return [(item_id, 1.0 / rank, [signal]) for rank, item_id in enumerate(source_ids, 1)]
+    return reciprocal_rank_fusion(
+        lexical_ids,
+        semantic_ids,
+        k=int(expert.get("rrf_k", preset.rrf_k)),
+        lexical_weight=float(expert.get("lexical_weight", 1.0)),
+        semantic_weight=float(expert.get("semantic_weight", 1.0)),
+    )
 
 
 def resolve_scope(session: Session, command: RetrievalSearchWrite) -> ScopeFilter:

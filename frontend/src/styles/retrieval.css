@@ -62,7 +62,13 @@
 }
 .lib-content-results > button:hover { border-color: var(--line-strong); background: var(--surface-hover); }
 .lib-content-result-head { display: flex; justify-content: space-between; gap: var(--space-3); }
-.lib-content-results small { color: var(--muted); }
+/* Заголовок блока бывает во весь абзац: в карточку пускаем только первую строку. */
+.lib-content-results small {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .lib-content-results > button > span:not(.lib-content-result-head) {
   display: -webkit-box;
   overflow: hidden;

@@ -1,3 +1,4 @@
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -5,11 +6,13 @@ from conftest import add_page_with_fragments, make_material
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.exam import chat as chat_service
 from app.exam.router import _citation_error
 from app.models import (
     BackgroundJob,
     BackgroundJobKind,
+    BackgroundJobState,
     EmbeddingBackendKind,
     EmbeddingProfile,
     Material,
@@ -30,6 +33,7 @@ from app.models import (
     utc_now,
 )
 from app.projects.errors import ProjectConflictError, ProjectDomainError
+from app.retrieval import local_models
 from app.retrieval.chunking import ChunkAtom, chunk_atoms, material_chunks
 from app.retrieval.embeddings import _validate_vectors
 from app.retrieval.exhaustive import start_run
@@ -217,6 +221,37 @@ def test_revision_change_queues_one_local_incremental_job(session: Session) -> N
     )
     assert len(jobs) == 1
     assert jobs[0].checkpoint["mode"] == "incremental"
+
+
+def test_model_install_survives_another_writer_during_download(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Скачивание идёт минутами; за это время база уходит вперёд.
+
+    Пока задача держала снимок через всё скачивание, SQLite отказывал в записи
+    результата, и успешно скачанная модель отмечалась как провал установки.
+    """
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    job_id = local_models.start_install(session, "tentex-test/embeddings", None)
+
+    def fake_download(**kwargs: object) -> None:
+        assert not session.in_transaction()
+        with Session(session.get_bind(), expire_on_commit=False) as other:
+            other.add(RetrievalSettings(id=1, preset=RetrievalPreset.FAST))
+            other.commit()
+        Path(str(kwargs["local_dir"])).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(local_models, "snapshot_download", fake_download)
+    detached = session.get(BackgroundJob, job_id)
+    assert detached is not None
+    local_models.process_install_job(session, detached)
+
+    session.expire_all()
+    job = session.get(BackgroundJob, job_id)
+    assert job is not None
+    assert job.state == BackgroundJobState.COMPLETED
+    assert job.error is None
+    assert job.done == job.total
 
 
 def test_citation_validator_rejects_missing_and_unknown_ids() -> None:

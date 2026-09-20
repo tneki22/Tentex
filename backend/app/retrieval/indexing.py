@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -23,6 +23,7 @@ from app.models import (
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.retrieval.chunking import ChunkDraft, material_chunks
 from app.retrieval.embeddings import backend_for_profile
+from app.retrieval.jobs import finish, write_job
 from app.retrieval.schemas import RetrievalIndexBuildRead, RetrievalIndexBuildWrite
 from app.retrieval.vector import vector_blob
 
@@ -197,90 +198,71 @@ def process_index_job(session: Session, detached_job: BackgroundJob) -> None:
         if job.checkpoint.get("mode") == "incremental":
             _process_incremental(session, job, index, profile)
             return
+        index_id, profile_id = index.id, profile.id
+        manifest = list(index.corpus_manifest)
+        target, maximum, overlap = (
+            index.chunk_target_tokens,
+            index.chunk_max_tokens,
+            index.chunk_overlap_tokens,
+        )
         backend = backend_for_profile(session, profile)
-        session.execute(delete(RetrievalChunk).where(RetrievalChunk.index_id == index.id))
-        session.commit()
+        write_job(
+            session,
+            job_id,
+            lambda inner, _: inner.execute(
+                delete(RetrievalChunk).where(RetrievalChunk.index_id == index_id)
+            ),
+        )
         next_order = 0
-        for position, manifest_item in enumerate(index.corpus_manifest, start=1):
+        for position, manifest_item in enumerate(manifest, start=1):
             material = session.get(Material, UUID(manifest_item["material_id"]))
             if material is None or material.active_parse_revision != manifest_item["revision"]:
-                index.diagnostics = [
-                    *index.diagnostics,
-                    f"{manifest_item['name']}: ревизия изменилась, доступен только BM25",
-                ]
-                _progress(session, job_id, position)
+                note = f"{manifest_item['name']}: ревизия изменилась, доступен только BM25"
+                _save_chunks(session, job_id, index_id, [], position, diagnostic=note)
                 continue
             drafts = material_chunks(
-                session,
-                material,
-                target_tokens=index.chunk_target_tokens,
-                max_tokens=index.chunk_max_tokens,
-                overlap_tokens=index.chunk_overlap_tokens,
+                session, material, target_tokens=target, max_tokens=maximum,
+                overlap_tokens=overlap,
             )
+            # Эмбеддинги считаются вне транзакции: сотни векторов на материал
+            # держали бы снимок соединения открытым минутами.
+            rows: list[dict[str, object]] = []
+            dimension: int | None = None
             for start in range(0, len(drafts), profile.batch_size):
                 batch = drafts[start : start + profile.batch_size]
                 vectors = asyncio.run(backend.embed_documents([draft.text for draft in batch]))
-                if profile.dimension is None and vectors:
-                    profile.dimension = len(vectors[0])
+                if dimension is None and vectors:
+                    dimension = len(vectors[0])
                 for draft, vector in zip(batch, vectors, strict=True):
-                    session.add(
-                        RetrievalChunk(
-                            index_id=index.id,
-                            sort_order=next_order,
-                            material_id=draft.material_id,
-                            revision=draft.revision,
-                            block_id=draft.block_id,
-                            kind=draft.kind,
-                            title=draft.title,
-                            text=draft.text,
-                            token_count=draft.token_count,
-                            page_from=draft.page_from,
-                            page_to=draft.page_to,
-                            quality=draft.quality,
-                            fragment_ids=[str(value) for value in draft.fragment_ids],
-                            locator=draft.locator,
-                            content_hash=draft.content_hash,
-                            embedding=vector_blob(vector),
-                        )
-                    )
+                    rows.append(_chunk_row(index_id, next_order, draft, vector))
                     next_order += 1
-            session.commit()
-            _progress(session, job_id, position)
-        index = session.get(RetrievalIndex, index.id)
-        job = session.get(BackgroundJob, job_id)
-        assert index is not None and job is not None
-        index.chunk_count = (
-            session.scalar(
-                select(func.count())
-                .select_from(RetrievalChunk)
-                .where(RetrievalChunk.index_id == index.id)
+            _save_chunks(
+                session, job_id, index_id, rows, position,
+                profile_id=profile_id, dimension=dimension,
             )
-            or 0
-        )
-        index.state = RetrievalIndexState.READY
-        index.completed_at = utc_now()
-        job.state = BackgroundJobState.COMPLETED
-        job.done = job.total
-        job.completed_at = utc_now()
-        job.lease_owner = None
-        job.lease_expires_at = None
-        job.updated_at = utc_now()
-        session.commit()
+
+        def _complete(inner: Session, job: BackgroundJob) -> None:
+            index = inner.get(RetrievalIndex, index_id)
+            assert index is not None
+            index.chunk_count = _chunk_count(inner, index_id)
+            index.state = RetrievalIndexState.READY
+            index.completed_at = utc_now()
+            finish(job, BackgroundJobState.COMPLETED)
+
+        write_job(session, job_id, _complete)
     except Exception as error:
+        reason = str(error)
         session.rollback()
-        job = session.get(BackgroundJob, job_id)
-        if job is not None:
-            index_id = job.checkpoint.get("index_id")
-            index = session.get(RetrievalIndex, UUID(index_id)) if index_id else None
+
+        def _fail(inner: Session, job: BackgroundJob) -> None:
+            failed_index_id = job.checkpoint.get("index_id")
+            index = inner.get(RetrievalIndex, UUID(failed_index_id)) if failed_index_id else None
             if index is not None and job.checkpoint.get("mode") != "incremental":
                 index.state = RetrievalIndexState.FAILED
-                index.error = str(error)
-            job.state = BackgroundJobState.FAILED
-            job.error = str(error)
-            job.lease_owner = None
-            job.lease_expires_at = None
-            job.updated_at = utc_now()
-            session.commit()
+                index.error = reason
+            finish(job, BackgroundJobState.FAILED, error=reason)
+
+        write_job(session, job_id, _fail)
 
 
 def _process_incremental(
@@ -300,81 +282,122 @@ def _process_incremental(
         max_tokens=index.chunk_max_tokens,
         overlap_tokens=index.chunk_overlap_tokens,
     )
+    index_id, job_id = index.id, job.id
+    revision, display_name, size_bytes = (
+        material.active_parse_revision,
+        material.display_name,
+        material.size_bytes,
+    )
     backend = backend_for_profile(session, profile)
     embedded: list[tuple[ChunkDraft, list[float]]] = []
     for start in range(0, len(drafts), profile.batch_size):
         batch = drafts[start : start + profile.batch_size]
         vectors = asyncio.run(backend.embed_documents([draft.text for draft in batch]))
         embedded.extend(zip(batch, vectors, strict=True))
-    session.execute(
-        delete(RetrievalChunk).where(
-            RetrievalChunk.index_id == index.id,
-            RetrievalChunk.material_id == material_id,
-        )
-    )
-    next_order = (
-        session.scalar(
-            select(func.max(RetrievalChunk.sort_order)).where(RetrievalChunk.index_id == index.id)
-        )
-        or -1
-    ) + 1
-    for draft, vector in embedded:
-        session.add(
-            RetrievalChunk(
-                index_id=index.id,
-                sort_order=next_order,
-                material_id=draft.material_id,
-                revision=draft.revision,
-                block_id=draft.block_id,
-                kind=draft.kind,
-                title=draft.title,
-                text=draft.text,
-                token_count=draft.token_count,
-                page_from=draft.page_from,
-                page_to=draft.page_to,
-                quality=draft.quality,
-                fragment_ids=[str(value) for value in draft.fragment_ids],
-                locator=draft.locator,
-                content_hash=draft.content_hash,
-                embedding=vector_blob(vector),
+
+    def apply(inner: Session, job: BackgroundJob) -> None:
+        index = inner.get(RetrievalIndex, index_id)
+        assert index is not None
+        inner.execute(
+            delete(RetrievalChunk).where(
+                RetrievalChunk.index_id == index_id,
+                RetrievalChunk.material_id == material_id,
             )
         )
-        next_order += 1
-    index.corpus_manifest = [
-        {
-            **item,
-            "revision": material.active_parse_revision,
-            "name": material.display_name,
-            "size_bytes": material.size_bytes,
-        }
-        if item["material_id"] == str(material.id)
-        else item
-        for item in index.corpus_manifest
-    ]
-    session.flush()
-    index.chunk_count = (
+        next_order = (
+            inner.scalar(
+                select(func.max(RetrievalChunk.sort_order)).where(
+                    RetrievalChunk.index_id == index_id
+                )
+            )
+            or -1
+        ) + 1
+        rows = []
+        for draft, vector in embedded:
+            rows.append(_chunk_row(index_id, next_order, draft, vector))
+            next_order += 1
+        if rows:
+            inner.execute(insert(RetrievalChunk), rows)
+        index.corpus_manifest = [
+            {**item, "revision": revision, "name": display_name, "size_bytes": size_bytes}
+            if item["material_id"] == str(material_id)
+            else item
+            for item in index.corpus_manifest
+        ]
+        index.chunk_count = _chunk_count(inner, index_id)
+        finish(
+            job,
+            BackgroundJobState.CANCELLED
+            if job.pause_requested
+            else BackgroundJobState.COMPLETED,
+        )
+
+    write_job(session, job_id, apply)
+
+
+def _chunk_count(session: Session, index_id: UUID) -> int:
+    return (
         session.scalar(
-            select(func.count())
-            .select_from(RetrievalChunk)
-            .where(RetrievalChunk.index_id == index.id)
+            select(func.count()).select_from(RetrievalChunk).where(
+                RetrievalChunk.index_id == index_id
+            )
         )
         or 0
     )
-    job.state = (
-        BackgroundJobState.CANCELLED if job.pause_requested else BackgroundJobState.COMPLETED
-    )
-    job.done = job.total
-    job.completed_at = utc_now()
-    job.lease_owner = None
-    job.lease_expires_at = None
-    job.updated_at = utc_now()
-    session.commit()
 
 
-def _progress(session: Session, job_id: UUID, done: int) -> None:
-    job = session.get(BackgroundJob, job_id)
-    if job is None:
-        return
-    job.done = done
-    job.updated_at = utc_now()
-    session.commit()
+def _chunk_row(
+    index_id: UUID, sort_order: int, draft: ChunkDraft, vector: list[float]
+) -> dict[str, object]:
+    return {
+        "index_id": index_id,
+        "sort_order": sort_order,
+        "material_id": draft.material_id,
+        "revision": draft.revision,
+        "block_id": draft.block_id,
+        "kind": draft.kind,
+        "title": draft.title,
+        "text": draft.text,
+        "token_count": draft.token_count,
+        "page_from": draft.page_from,
+        "page_to": draft.page_to,
+        "quality": draft.quality,
+        "fragment_ids": [str(value) for value in draft.fragment_ids],
+        "locator": draft.locator,
+        "content_hash": draft.content_hash,
+        "embedding": vector_blob(vector),
+    }
+
+
+def _save_chunks(
+    session: Session,
+    job_id: UUID,
+    index_id: UUID,
+    rows: list[dict[str, object]],
+    done: int,
+    *,
+    profile_id: UUID | None = None,
+    dimension: int | None = None,
+    diagnostic: str | None = None,
+) -> None:
+    """Записать куски одного материала и прогресс одной транзакцией.
+
+    Повтор после отказа по блокировке безопасен: до успешного коммита в базе
+    нет ни одной строки этой пачки.
+    """
+
+    def apply(inner: Session, job: BackgroundJob) -> None:
+        if rows:
+            inner.execute(insert(RetrievalChunk), rows)
+        if diagnostic is not None:
+            index = inner.get(RetrievalIndex, index_id)
+            if index is not None:
+                index.diagnostics = [*index.diagnostics, diagnostic]
+        if profile_id is not None and dimension is not None:
+            profile = inner.get(EmbeddingProfile, profile_id)
+            if profile is not None and profile.dimension is None:
+                profile.dimension = dimension
+        job.done = done
+        job.updated_at = utc_now()
+
+    write_job(session, job_id, apply)
