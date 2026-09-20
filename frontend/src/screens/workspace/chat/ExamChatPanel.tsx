@@ -6,12 +6,17 @@ import { Button, EmptyState, ErrorState, LoadingState } from "../../../component
 import { AnswerFormCard } from "./AnswerFormCard";
 import { ChatComposer } from "./ChatComposer";
 import { ChatHeader } from "./ChatHeader";
+import { ChatModelControl } from "./ChatModelControl";
 import { ChatTimeline } from "./ChatTimeline";
 import type { ChipDef } from "./ContextChips";
 import { ContextChips } from "./ContextChips";
 import { SkillPalette } from "./SkillPalette";
 import type { PaletteCommandDef } from "./skills";
 import { useExamChat } from "./useExamChat";
+
+// Одна выбранная модель обслуживает и реплику, и судью той же сессии —
+// поэтому обе возможности сразу (как в `REQUIRED_MODEL_CAPABILITIES` на бэкенде).
+const EXAM_MODEL_CAPABILITIES = ["streaming", "structured_output"];
 
 /** Шесть чипов экзаменационного чата — вопрос/профиль/ответ/материал/попытки/история раздела. */
 function buildExamContextChips(preview: ChatContextPreview | null): ChipDef[] | null {
@@ -236,6 +241,20 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
               onSend={() => void chat.sendMessage()}
               onStop={chat.stopMessage}
               onOpenPalette={() => setPaletteOpen(true)}
+              modelPicker={
+                <ChatModelControl
+                  role="exam_chat_reply"
+                  capabilities={EXAM_MODEL_CAPABILITIES}
+                  value={chat.session.model_override}
+                  parameters={chat.session.model_parameters}
+                  contextBytes={chat.contextPreview?.total_bytes}
+                  messageCount={chat.messages.length}
+                  onChange={(value, parameters) => chat.updateSettings({
+                    model_override: value,
+                    model_parameters: value ? parameters : null,
+                  })}
+                />
+              }
               modes={chat.capabilities?.modes ?? []}
               sending={chat.sending}
             />

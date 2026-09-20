@@ -17,6 +17,7 @@ export { Disclosure } from "./Disclosure";
 export { EmptyState } from "./EmptyState";
 export { ErrorState } from "./ErrorState";
 export { Field } from "./Field";
+export { HoverCard } from "./HoverCard";
 export { IconButton } from "./IconButton";
 export { Kbd } from "./Kbd";
 export { LoadingState } from "./LoadingState";

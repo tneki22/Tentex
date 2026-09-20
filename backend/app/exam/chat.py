@@ -6,8 +6,9 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.roles import validate_role_parameters
 from app.ai.schemas import AiModelSelection
-from app.ai.settings import validate_model_selection
+from app.ai.settings import seed_from_preset, validate_model_selection
 from app.chat import common as chat_common
 from app.db import project_write_transaction
 from app.exam.context import (
@@ -47,6 +48,9 @@ from app.projects.errors import ProjectConflictError, ProjectDomainError, Projec
 # Требуются одновременно и streaming, и structured output: одна выбранная
 # модель обслуживает и обычный ответ, и судью той же сессии (AI-CHATS.md §21.3).
 REQUIRED_MODEL_CAPABILITIES = frozenset({"streaming", "structured_output"})
+# Параметры чата проверяются по роли ответа: судья той же сессии работает на
+# параметрах своей роли из Параметров, его снимок фиксирует только модель.
+CHAT_PARAMETERS_ROLE = "exam_chat_reply"
 
 STUDY_NODE_TYPES = {NodeType.TOPIC, NodeType.SUBPOINT}
 TITLE_MAX_LEN = 60
@@ -135,6 +139,9 @@ def create_session(session: Session, project_id: UUID, node_id: UUID) -> ChatSes
         ordinal = existing + 1
         base_title = _title(node)
         title = base_title if ordinal == 1 else f"{base_title} · {ordinal}"
+        selection, parameters = seed_from_preset(
+            session, role=CHAT_PARAMETERS_ROLE, required=REQUIRED_MODEL_CAPABILITIES
+        )
         chat = ChatSession(
             project_id=project_id,
             program_node_id=node_id,
@@ -142,6 +149,8 @@ def create_session(session: Session, project_id: UUID, node_id: UUID) -> ChatSes
             title=title,
             persona=ExaminerPersona.NEUTRAL_EXAMINER,
             strictness=ExaminerStrictness.NORMAL,
+            model_override=selection,
+            model_parameters=parameters,
             draft_text="",
         )
         session.add(chat)
@@ -187,6 +196,7 @@ def get_session_detail(session: Session, project_id: UUID, chat_id: UUID) -> Cha
         persona=chat.persona,
         strictness=chat.strictness,
         model_override=_model_override_read(chat),
+        model_parameters=chat.model_parameters or {},
         context_flags=chat.context_flags,
         draft_text=chat.draft_text,
         created_at=chat.created_at,
@@ -223,18 +233,24 @@ def update_settings(
         if "strictness" in fields and command.strictness is not None:
             chat.strictness = command.strictness
         if "model_override" in fields:
-            if command.model_override is None:
-                chat.model_override = None
-            else:
+            snapshot = None
+            parameters = None
+            if command.model_override is not None:
                 selection = AiModelSelection(
                     provider_id=command.model_override.provider_id,
                     model_id=command.model_override.model_id,
                 )
                 validate_model_selection(session, selection, required=REQUIRED_MODEL_CAPABILITIES)
-                chat.model_override = {
+                snapshot = {
                     "provider_id": str(selection.provider_id),
                     "model_id": selection.model_id,
                 }
+                parameters = validate_role_parameters(
+                    CHAT_PARAMETERS_ROLE, command.model_parameters or {}
+                )
+            chat_common.apply_model_choice(
+                session, chat, selection=snapshot, parameters=parameters
+            )
         if "context_flags" in fields and command.context_flags is not None:
             unknown = set(command.context_flags) - CONTEXT_FLAG_KEYS
             if unknown:

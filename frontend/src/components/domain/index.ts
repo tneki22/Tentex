@@ -20,6 +20,8 @@ export { AutoMatchDialog } from "./AutoMatchDialog";
 // как это уже делает ProjectWorkspace через React.lazy.
 export type { ConspectEditorHandle, ConspectEditorProps } from "./ConspectEditor";
 export type { ConspectSummaryProps } from "./ConspectSummary";
+export { ChatModelPicker } from "./ChatModelPicker";
+export type { ChatModelParameters, ReasoningEffort } from "./ChatModelPicker";
 export { CostEstimate } from "./CostEstimate";
 export { DictationButton } from "./DictationButton";
 export { EvidenceCard } from "./EvidenceCard";

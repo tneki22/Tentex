@@ -55,6 +55,7 @@ class ChatSessionDetail(ApiModel):
     persona: ExaminerPersona
     strictness: ExaminerStrictness
     model_override: ChatModelOverrideRead | None
+    model_parameters: dict[str, object]
     context_flags: dict[str, bool]
     draft_text: str
     created_at: datetime
@@ -74,6 +75,9 @@ class ChatSettingsWrite(ApiModel):
     persona: ExaminerPersona | None = None
     strictness: ExaminerStrictness | None = None
     model_override: ChatModelOverrideWrite | None = None
+    # Параметры вызова выбранной модели. Приходят вместе с самой моделью:
+    # разъехавшись, они означали бы «уровень рассуждения от прошлой модели».
+    model_parameters: dict[str, object] | None = None
     context_flags: dict[str, bool] | None = None
 
 

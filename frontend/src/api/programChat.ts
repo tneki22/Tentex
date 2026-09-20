@@ -1,4 +1,4 @@
-import type { ChatMessageRead } from "./chat";
+import type { ChatMessageRead, ChatModelOverride } from "./chat";
 import type { ProgramChangeResult } from "./projects";
 import { request } from "./projects";
 
@@ -15,6 +15,8 @@ export interface ProgramChatSessionDetail {
   project_id: string;
   section_scope_node_id: string | null;
   title: string;
+  model_override: ChatModelOverride | null;
+  model_parameters: Record<string, unknown>;
   context_flags: Record<string, boolean>;
   draft_text: string;
   created_at: string;
@@ -89,6 +91,20 @@ export const updateProgramChatContext = (
   patch: ProgramChatContextPatch,
 ): Promise<ProgramChatSessionDetail> => request(
   `${programChatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/context`,
+  { method: "PUT", body: JSON.stringify(patch) },
+);
+
+export interface ProgramChatSettingsPatch {
+  model_override: ChatModelOverride | null;
+  model_parameters: Record<string, unknown> | null;
+}
+
+export const updateProgramChatSettings = (
+  projectId: string,
+  sessionId: string,
+  patch: ProgramChatSettingsPatch,
+): Promise<ProgramChatSessionDetail> => request(
+  `${programChatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/settings`,
   { method: "PUT", body: JSON.stringify(patch) },
 );
 

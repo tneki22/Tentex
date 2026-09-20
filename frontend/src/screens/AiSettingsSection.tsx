@@ -42,9 +42,15 @@ import {
   type AiRoleRead,
   type AiRunRead,
   type AiSettingsRead,
-  type DecimalValue,
 } from "../api/ai";
 import { OfflineNotice, ProviderModelPicker } from "../components/domain";
+import {
+  modelKey,
+  money,
+  numberValue,
+  reasoningLabel,
+  sameModel,
+} from "../components/domain/modelFacts";
 import {
   Button,
   Checkbox,
@@ -85,6 +91,13 @@ interface TestOutcome {
   facts?: { label: string; value: string }[];
 }
 
+const REASONING_OPTIONS = [
+  { value: "off", label: "Выключено" },
+  { value: "low", label: "Низкий" },
+  { value: "medium", label: "Средний" },
+  { value: "high", label: "Высокий" },
+];
+
 const MODALITY_LABELS: Record<string, string> = {
   text: "текст",
   image: "изображение",
@@ -93,37 +106,12 @@ const MODALITY_LABELS: Record<string, string> = {
   video: "видео",
 };
 
-function modelKey(selection: { provider_id: string; model_id: string }): string {
-  return `${selection.provider_id}:${selection.model_id}`;
-}
-
 function modelDomId(selection: { provider_id: string; model_id: string }): string {
   return `ai-model-${modelKey(selection)}`;
 }
 
-function sameModel(
-  left: { provider_id: string; model_id: string },
-  right: { provider_id: string; model_id: string } | null | undefined,
-): boolean {
-  return right !== null && right !== undefined
-    && left.provider_id === right.provider_id && left.model_id === right.model_id;
-}
-
 function errorText(caught: unknown, fallback: string): string {
   return caught instanceof Error ? caught.message : fallback;
-}
-
-function numberValue(value: DecimalValue | null): number | null {
-  if (value === null) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function money(value: DecimalValue | null, perMillion = false): string {
-  const amount = numberValue(value);
-  if (amount === null) return "Цена неизвестна";
-  const displayed = perMillion ? amount * 1_000_000 : amount;
-  return `$${displayed.toLocaleString("ru-RU", { maximumFractionDigits: 4 })}`;
 }
 
 function dateTime(value: string | null): string {
@@ -574,13 +562,6 @@ function ProvidersPanel({
       </ConfirmDialog>
     </section>
   );
-}
-
-function reasoningLabel(model: { reasoning: Record<string, unknown> }): string {
-  const efforts = model.reasoning.supported_efforts;
-  if (Array.isArray(efforts) && efforts.length) return efforts.join(" · ");
-  if (model.reasoning.mandatory === true) return "обязательно";
-  return Object.keys(model.reasoning).length ? "поддерживается" : "нет данных";
 }
 
 /** Что модель умеет: то, что нельзя вычитать из ID и приходится задавать руками. */
@@ -1078,6 +1059,7 @@ function RoleCard({ settings, role, onSettings }: { settings: AiSettingsRead; ro
   const [note, setNote] = useState<Note | null>(null);
   const [maxTokens, setMaxTokens] = useState(String(role.parameters.max_output_tokens ?? ""));
   const [temperature, setTemperature] = useState(String(role.parameters.temperature ?? ""));
+  const [effort, setEffort] = useState(String(role.parameters.reasoning_effort ?? ""));
   const [language, setLanguage] = useState(String(role.parameters.language ?? "ru"));
 
   async function save(patch: { enabled?: boolean; selection?: AiModelSelection | null; parameters?: Record<string, unknown> }) {
@@ -1110,11 +1092,23 @@ function RoleCard({ settings, role, onSettings }: { settings: AiSettingsRead; ro
         <div className="ai-form-grid compact">
           <Field label="Максимум токенов ответа"><input type="number" min="64" value={maxTokens} onChange={(event) => setMaxTokens(event.target.value)} placeholder="По умолчанию" /></Field>
           <Field label="Температура"><input type="number" min="0" max="2" step="0.1" value={temperature} onChange={(event) => setTemperature(event.target.value)} placeholder="По умолчанию" /></Field>
+          {/* Применяется только к моделям, которые умеют рассуждать; остальные
+              провайдер просто игнорирует. Пустое — «как решит модель». */}
+          <Field label="Уровень рассуждения" hint="Только у рассуждающих моделей">
+            <Select
+              ariaLabel="Уровень рассуждения"
+              value={effort || null}
+              emptyOption="По умолчанию"
+              options={REASONING_OPTIONS}
+              onValueChange={(value) => setEffort(value ?? "")}
+            />
+          </Field>
         </div>
         <Button variant="secondary" onClick={() => void save({ parameters: {
           ...role.parameters,
           ...(maxTokens ? { max_output_tokens: Number(maxTokens) } : {}),
           ...(temperature ? { temperature: Number(temperature) } : {}),
+          ...(effort ? { reasoning_effort: effort } : {}),
         } })}>Сохранить параметры</Button>
       </>}
     </Disclosure>

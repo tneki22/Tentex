@@ -470,8 +470,7 @@ class OpenAITransport:
             request_id=getattr(result, "id", None),
         )
 
-    @staticmethod
-    def _apply_parameters(kwargs: dict[str, Any], parameters: dict[str, object]) -> None:
+    def _apply_parameters(self, kwargs: dict[str, Any], parameters: dict[str, object]) -> None:
         direct = {
             "temperature",
             "top_p",
@@ -484,12 +483,32 @@ class OpenAITransport:
         for key, value in parameters.items():
             if key == "max_output_tokens":
                 continue
-            if key in direct:
+            if key == "reasoning_effort":
+                self._apply_reasoning(kwargs, extra, value)
+            elif key in direct:
                 kwargs[key] = value
             else:
                 extra[key] = value
         if extra:
             kwargs["extra_body"] = extra
+
+    def _apply_reasoning(
+        self, kwargs: dict[str, Any], extra: dict[str, Any], value: object
+    ) -> None:
+        """Один параметр — два разных поля запроса, по профилю провайдера.
+
+        У OpenRouter это объект `reasoning`, и только он умеет сказать «не
+        рассуждай» (`enabled: false`). У OpenAI-совместимых API это плоский
+        `reasoning_effort`, выключения в нём нет — там «off» значит просто не
+        слать поле и оставить поведение модели по умолчанию.
+        """
+        if value is None:
+            return
+        if self.catalog_profile == "openrouter":
+            extra["reasoning"] = {"enabled": False} if value == "off" else {"effort": value}
+            return
+        if value != "off":
+            kwargs["reasoning_effort"] = value
 
 
 class FakeTransport:

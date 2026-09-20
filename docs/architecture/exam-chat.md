@@ -134,7 +134,7 @@ upgrade/downgrade сохраняют пустой `PRAGMA foreign_key_check`.
 | POST | `/projects/{project}/chat/sessions` | новый чат для `program_node_id` |
 | GET | `/projects/{project}/chat/sessions/{chat}` | чат, черновик и полная лента |
 | PUT | `/projects/{project}/chat/sessions/{chat}/draft` | сохранённый черновик |
-| PUT | `/projects/{project}/chat/sessions/{chat}/settings` | частичный PATCH mode/persona/strictness/model_override/context_flags |
+| PUT | `/projects/{project}/chat/sessions/{chat}/settings` | частичный PATCH mode/persona/strictness/model_override/model_parameters/context_flags |
 | GET | `/projects/{project}/chat/sessions/{chat}/context` | manifest, fingerprint, объём и источник модели — preview перед вызовом |
 | GET | `/projects/{project}/chat/capabilities?node_id=…` | режимы, навыки и Tools с `available`/`unavailable_reason` |
 | POST | `/projects/{project}/chat/sessions/{chat}/tools/{tool_key}/runs` | синхронный запуск Tool через `ToolExecutor` |
@@ -158,6 +158,25 @@ null` явно возвращает сессию к `Auto`; неизвестна
 кодом `ai_model_not_in_catalog`/`ai_capability_unsupported` — одна модель
 обслуживает и обычный ответ, и судью той же сессии. `mode: study` отклоняется
 стабильным `chat_mode_unavailable`.
+
+`model_parameters` ездят тем же запросом, что и сама модель, и проверяются по
+роли `exam_chat_reply` (`max_output_tokens`, `temperature`, `reasoning_effort`).
+Судья остаётся на параметрах своей роли из Параметров: снимок Попытки фиксирует
+только модель, и расширять его ради уровня рассуждения было бы изменением
+контракта проверки ради настройки диалога.
+
+Смена модели в чате, где уже есть сообщения, дописывает в ленту сообщение
+`role=system`, `payload_kind=none` с текстом `Модель: было → стало`. Имена
+резолвятся в момент записи — по той же причине, что `model_override` хранится
+JSON-снимком: подключение провайдера могут удалить позже. Это первое
+использование `ChatMessageRole.SYSTEM`; в промпт такие сообщения не попадают
+(`_history_messages` разбирает только `USER` и `EXAMINER`, чат программы
+пропускает `SYSTEM` явно). В пустом чате отметка не пишется.
+
+Явный выбор модели дополнительно сохраняется в `AiSettings.chat_model_preset`
+(`{provider_id, model_id, parameters}`) и засевается в каждый новый чат обоих
+режимов, если проходит проверку возможностей этого чата. Непригодный пресет
+молча даёт `Auto`. Сбросить его можно `PUT /api/settings/ai/chat-preset`.
 
 `POST …/tools/{tool_key}/runs` принимает `{"input": {...}}`. Неизвестный ключ
 даёт `chat_tool_not_found`; зарегистрированный, но не опубликованный Tool
@@ -280,8 +299,14 @@ Exact-кэш судьи привязан к теме, SHA-256 текста от�
 нормализованно (`messagesById` + `messageOrder`), обычная реплика заводится по
 `started` и обновляется на месте по `delta`/`completed` — без промежуточного
 исчезновения. Шапка (`ChatHeader.tsx`) держит историю чатов области и
-`ExaminerControl.tsx` — единый попап персоны, строгости и модели
-(`ProviderModelPicker`, отфильтрованный по `streaming`+`structured_output`).
+`ExaminerControl.tsx` — попап персоны и строгости. Модель выбирается не здесь,
+а слева в композере (`ChatModelControl.tsx` → `ChatModelPicker`): провайдеры
+свёрнутыми группами, цена в строке, параметры — в `HoverCard` по наведению,
+список отфильтрован по `streaming`+`structured_output`. В непустом чате смена
+сначала спрашивает подтверждение с числами: сколько сообщений и токенов уйдёт
+в новую модель и во что обойдётся следующий ответ против текущей модели.
+Оценка считается на клиенте по `total_bytes` предпросмотра и ценам каталога,
+без обращения к `preflight`.
 Шапка не повторяет формулировку вопроса или название сессии: они уже видны в
 верхней панели Рабочей области; история показывает только дату и число сообщений,
 причём текущий локальный день подписан `Сегодня, HH:mm`. `ContextChips.tsx`
@@ -298,8 +323,7 @@ Exact-кэш судьи привязан к теме, SHA-256 текста от�
 `MaterialSearchResults.tsx` со ссылкой на страницу/фрагмент через уже
 существующий маршрут `/projects/:id/materials/:materialId?page=…&focus=…`.
 Пустой чат предлагает «Сдать ответ» и «Найти в материалах»; отдельной кнопки
-«Задать вопрос» нет, обычное сообщение вводится прямо в композере. Popover
-экзаменатора и его выбор модели складываются в одну колонку на узкой ширине.
+«Задать вопрос» нет, обычное сообщение вводится прямо в композере. Popover экзаменатора складывается в одну колонку на узкой ширине.
 
 Интерфейс проверен в светлой и тёмной темах, на ширине 390 px и клавиатурой,
 на реальных данных демо-проекта (`app.projects.demo.seed_demo_project`) в

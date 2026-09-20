@@ -176,6 +176,7 @@ def _reply_request(chat: ChatSession, ctx: ChatContext, user_text: str) -> AiTex
         project_id=chat.project_id,
         context_manifest=ctx.manifest,
         request_model_override=_model_override(chat),
+        parameters=chat.model_parameters or {},
         source_fingerprint={"chat_id": str(chat.id)},
     )
 

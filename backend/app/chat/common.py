@@ -16,6 +16,8 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.schemas import AiChatPreset
+from app.ai.settings import model_display_name, store_chat_preset
 from app.models import (
     ChatMessage,
     ChatMessageRole,
@@ -125,6 +127,66 @@ def append_message_row(
 def append_message(session: Session, chat: ChatSession, **fields: Any) -> ChatMessage:
     with session.begin():
         return append_message_row(session, chat, **fields)
+
+
+def apply_model_choice(
+    session: Session,
+    chat: ChatSession,
+    *,
+    selection: dict[str, Any] | None,
+    parameters: dict[str, Any] | None,
+) -> None:
+    """Смена модели чата: запись выбора, отметка в ленте и обновление пресета.
+
+    Общая для обоих чатов — расходится у них только проверка возможностей
+    модели, которая делается до вызова. Внутри чужой транзакции, своей не
+    открывает.
+    """
+    before = chat.model_override
+    chat.model_override = selection
+    chat.model_parameters = parameters
+    if selection != before:
+        _note_model_switch(session, chat, before=before, after=selection)
+        store_chat_preset(
+            session,
+            None
+            if selection is None
+            else AiChatPreset(
+                provider_id=UUID(str(selection["provider_id"])),
+                model_id=str(selection["model_id"]),
+                parameters=parameters or {},
+            ),
+        )
+
+
+def _note_model_switch(
+    session: Session,
+    chat: ChatSession,
+    *,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+) -> None:
+    """Строка «было → стало» в ленте.
+
+    Только в непустом чате: в пустом отмечать нечего, а начинать переписку
+    служебной строкой незачем. Имена резолвятся сейчас, а не при чтении, по
+    той же причине, по которой сам выбор хранится снимком: подключение
+    провайдера могут удалить позже, а запись должна остаться читаемой.
+    """
+    has_messages = session.scalar(
+        select(func.count(ChatMessage.id)).where(ChatMessage.session_id == chat.id)
+    )
+    if not has_messages:
+        return
+    append_message_row(
+        session,
+        chat,
+        role=ChatMessageRole.SYSTEM,
+        text=(
+            f"Модель: {model_display_name(session, before)}"
+            f" → {model_display_name(session, after)}"
+        ),
+    )
 
 
 def save_draft_text(session: Session, chat: ChatSession, text: str) -> ChatSession:

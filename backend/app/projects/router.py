@@ -406,6 +406,20 @@ def update_program_chat_context(
     return program_chat.get_session_detail(session, project_id, session_id)
 
 
+@projects.put(
+    "/{project_id}/program-chat/sessions/{session_id}/settings",
+    response_model=program_chat.ProgramChatSessionDetail,
+)
+def update_program_chat_settings(
+    project_id: UUID,
+    session_id: UUID,
+    command: program_chat.ProgramChatSettingsWrite,
+    session: SessionDependency,
+) -> program_chat.ProgramChatSessionDetail:
+    program_chat.update_settings(session, project_id, session_id, command)
+    return program_chat.get_session_detail(session, project_id, session_id)
+
+
 @projects.post(
     "/{project_id}/program-chat/sessions/{session_id}/build",
     response_model=BackgroundJobStartRead,

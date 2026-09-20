@@ -563,6 +563,26 @@
   fill: var(--paper-strong);
 }
 
+/* Карточка по наведению. Живёт над всплывашкой, из которой её вызвали, —
+   отдельного уровня для «слой над слоем» в токенах нет, и `.select-content`
+   решает это тем же способом. */
+.hover-card {
+  transform-origin: var(--radix-hover-card-content-transform-origin);
+  z-index: calc(var(--z-popover) + 1);
+  width: 300px;
+  max-width: calc(100vw - var(--space-6));
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper-strong);
+  box-shadow: var(--shadow-lg);
+  animation: popover-in var(--motion-fast) var(--motion-ease-out);
+}
+
+.hover-card-arrow {
+  fill: var(--paper-strong);
+}
+
 .popover-link {
   display: block;
   padding: var(--space-2) 0;

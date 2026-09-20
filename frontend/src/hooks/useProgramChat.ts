@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChatMessageRead } from "../api/chat";
+import type { ChatMessageRead, ChatModelOverride } from "../api/chat";
 import {
   createProgramChatSession,
   getProgramChatContext,
@@ -8,6 +8,7 @@ import {
   saveProgramChatDraft,
   sendProgramChatMessage,
   updateProgramChatContext,
+  updateProgramChatSettings,
   type ProgramChatContextPreview,
   type ProgramChatSessionDetail,
   type ProgramChatSessionSummary,
@@ -198,6 +199,19 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
       .catch(() => void reloadDetail());
   }
 
+  /** Смена модели дописывает в ленту системную отметку, поэтому перечитываем деталь. */
+  async function updateModel(
+    value: ChatModelOverride | null,
+    parameters: Record<string, unknown>,
+  ) {
+    if (!activeSessionId) return;
+    const detail = await updateProgramChatSettings(projectId, activeSessionId, {
+      model_override: value,
+      model_parameters: value ? parameters : null,
+    });
+    setSession(detail);
+  }
+
   const sending = pending !== null && pending.sessionId === activeSessionId;
   const messages = useMemo(() => {
     const saved = session?.messages ?? [];
@@ -211,6 +225,7 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
     sending, sendError, sendMessage,
     startNewChat,
     updateContextFlag,
+    updateModel,
     reloadSessions: () => setSessionsReloadKey((key) => key + 1),
   };
 }

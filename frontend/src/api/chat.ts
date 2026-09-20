@@ -175,6 +175,7 @@ export interface ChatSessionDetail {
   persona: ExaminerPersona;
   strictness: ExaminerStrictness;
   model_override: ChatModelOverride | null;
+  model_parameters: Record<string, unknown>;
   context_flags: ChatContextFlags;
   draft_text: string;
   created_at: string;
@@ -187,6 +188,8 @@ export interface ChatSettingsPatch {
   persona?: ExaminerPersona;
   strictness?: ExaminerStrictness;
   model_override?: ChatModelOverride | null;
+  /** Ездят вместе с моделью: врозь это «рассуждение от прошлой модели». */
+  model_parameters?: Record<string, unknown> | null;
   context_flags?: Partial<ChatContextFlags>;
 }
 

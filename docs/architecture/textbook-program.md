@@ -132,9 +132,15 @@ Undo импорта также меняет только видимость со
 
 ### Роль и схема ответа
 
-`study_program_assistant` (`ai/roles.py`) — `structured_output`, без
-`allow_request_model_override` (override внутри чата отсутствует, модель только из
-Параметров). Ответ — одна схема `ProgramChatReply {summary, pros, cons, operations}`.
+`study_program_assistant` (`ai/roles.py`) — `structured_output`, с
+`allow_request_model_override`: модель и её параметры выбираются слева в
+композере (`ChatModelControl` → `ChatModelPicker`, тот же виджет, что в
+экзаменационном чате) и хранятся в `ChatSession.model_override` /
+`model_parameters` — таблица сессий общая для обоих режимов чата. `streaming`
+не требуется: ответ приходит одним структурированным вызовом. Выбор
+подхватывает и фоновая первая сборка (`_run_build_call`). Настройка через
+`PUT …/program-chat/sessions/{id}/settings`; прежний запрет override снят,
+когда выбор переехал из Параметров в чат. Ответ — одна схема `ProgramChatReply {summary, pros, cons, operations}`.
 `operations` — дискриминированный по `op` union: `add, rename, move, change_type,
 set_goal, set_visibility, merge`. `add` — единственная операция, создающая узлы;
 вложенные `children` описывают целое поддерево одним элементом. Остальные операции

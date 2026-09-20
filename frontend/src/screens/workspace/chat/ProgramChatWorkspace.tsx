@@ -11,10 +11,15 @@ import { Button, ErrorState, LoadingState } from "../../../components/ui";
 import { useProgramChat } from "../../../hooks/useProgramChat";
 import { ChatComposer } from "./ChatComposer";
 import { ChatHeader } from "./ChatHeader";
+import { ChatModelControl } from "./ChatModelControl";
 import { ChatTimeline } from "./ChatTimeline";
 import type { ChipDef } from "./ContextChips";
 import { ContextChips } from "./ContextChips";
 import { parsePayload } from "./payload";
+
+// Ответ приходит одной структурированной схемой, без потока — значит и
+// `streaming` требовать незачем (так же на бэкенде, `program_chat.py`).
+const PROGRAM_MODEL_CAPABILITIES = ["structured_output"];
 
 const FLAG_META: Record<string, { title: string; icon: typeof BookOpen }> = {
   profile: { title: "Профиль цели", icon: Target },
@@ -163,6 +168,17 @@ export function ProgramChatWorkspace({ projectId, program, execute, onMessagesCh
             value={chat.draft}
             onChange={chat.setDraft}
             onSend={() => void chat.sendMessage(chat.draft)}
+            modelPicker={
+              <ChatModelControl
+                role="study_program_assistant"
+                capabilities={PROGRAM_MODEL_CAPABILITIES}
+                value={chat.session.model_override}
+                parameters={chat.session.model_parameters}
+                contextBytes={chat.contextPreview?.total_bytes}
+                messageCount={chat.messages.length}
+                onChange={chat.updateModel}
+              />
+            }
             showModeIndicator={false}
             sending={chat.sending}
           />

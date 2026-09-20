@@ -189,6 +189,26 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
     setMessageOrder((current) => (current.includes(message.id) ? current : [...current, message.id]));
   }
 
+  /**
+   * Дописывает в ленту только незнакомые сообщения — так со стороны сервера
+   * приезжает служебная отметка о смене модели, а реплика, которая прямо
+   * сейчас стримится, не затирается своей же недописанной копией с сервера.
+   */
+  function addUnknownMessages(incoming: ChatMessageRead[]) {
+    setMessagesById((current) => {
+      const fresh = incoming.filter((message) => !(message.id in current));
+      if (!fresh.length) return current;
+      const next = { ...current };
+      for (const message of fresh) next[message.id] = message;
+      return next;
+    });
+    setMessageOrder((current) => {
+      const known = new Set(current);
+      const added = incoming.filter((message) => !known.has(message.id));
+      return added.length ? [...current, ...added.map((message) => message.id)] : current;
+    });
+  }
+
   function patchMessage(id: string, patch: Partial<ChatMessageRead>) {
     setMessagesById((current) => {
       const existing = current[id];
@@ -377,6 +397,7 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
     try {
       const updated = await updateChatSettings(projectId, activeSessionId, patch);
       setSession((current) => (current ? { ...current, ...updated, messages: current.messages } : updated));
+      addUnknownMessages(updated.messages);
     } catch (error) {
       setSession(previous);
       setSettingsError(

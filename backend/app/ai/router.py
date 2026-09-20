@@ -14,6 +14,7 @@ from app.ai.gateway import ModelGateway
 from app.ai.schemas import (
     AiCatalogModelRead,
     AiCatalogModelWrite,
+    AiChatPresetWrite,
     AiDefaultWrite,
     AiGlobalSettingsWrite,
     AiManualModelWrite,
@@ -145,6 +146,12 @@ def put_ai_default(
     modality: Modality, command: AiDefaultWrite, session: SessionDependency
 ) -> AiSettingsRead:
     return settings.set_default(session, modality, command)
+
+
+@router.put("/chat-preset", response_model=AiSettingsRead)
+def put_ai_chat_preset(command: AiChatPresetWrite, session: SessionDependency) -> AiSettingsRead:
+    """Сброс пресета. Записывают его сами чаты при смене модели в композере."""
+    return settings.set_chat_preset(session, command.preset)
 
 
 @router.put("/roles/{role}", response_model=AiSettingsRead)

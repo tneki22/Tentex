@@ -12,6 +12,10 @@ from app.projects.errors import ProjectDomainError
 # новое значение здесь требует и столбца в настройках.
 AiModality = Literal["text", "speech", "vision"]
 CachePolicy = Literal["none", "exact", "content_hash"]
+# «off» — явное «думать не надо»: у части моделей рассуждение включено по
+# умолчанию, и отличить его от «параметр не задан» можно только отдельным
+# значением. Разворачивает его транспорт, по-своему для каждого профиля.
+ReasoningEffort = Literal["off", "low", "medium", "high"]
 
 
 class TextRoleParameters(BaseModel):
@@ -19,6 +23,7 @@ class TextRoleParameters(BaseModel):
 
     max_output_tokens: int = Field(ge=64, le=32_000)
     temperature: float | None = Field(default=None, ge=0, le=2)
+    reasoning_effort: ReasoningEffort | None = None
 
 
 class ModelTestParameters(BaseModel):
@@ -225,9 +230,9 @@ ROLE_SPECS = {
             "none",
             "study-program-v1",
             {"max_output_tokens": 8000},
-            # Override внутри чата отсутствует — модель выбирается только
-            # ролью в Параметрах (зафиксировано в задаче части 2 вертикали).
-            False,
+            # Модель выбирается прямо в композере чата наравне с экзаменационным:
+            # прежний запрет override снят, когда выбор переехал из Параметров в чат.
+            True,
         ),
         AiRoleSpec(
             "settings_model_test",

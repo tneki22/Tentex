@@ -1408,6 +1408,10 @@ class AiSettings(Base):
         nullable=True,
     )
     default_vision_model_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # {"provider_id": "...", "model_id": "...", "parameters": {...}} | None —
+    # последний выбор в композере чата. Засевается в каждый новый чат: иначе
+    # модель приходится переключать заново в каждой новой переписке.
+    chat_model_preset: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
@@ -1755,6 +1759,9 @@ class ChatSession(Base):
     # {"provider_id": "...", "model_id": "..."} | None — JSON-снимок, а не FK:
     # запись остаётся читаемой, если подключение провайдера позже удалено.
     model_override: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Параметры выбранной модели (`max_output_tokens`, `reasoning_effort`).
+    # Отдельно от снимка выбора: его читают валидация чата и судья.
+    model_parameters: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     context_flags: Mapped[dict[str, Any]] = mapped_column(JSON, default=default_context_flags)
     draft_text: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
