@@ -23,6 +23,7 @@ from sqlalchemy import (
     Time,
     UniqueConstraint,
     Uuid,
+    column,
 )
 from sqlalchemy import (
     text as sql_text,
@@ -757,6 +758,14 @@ class MaterialFragment(Base):
         # Покрывающий для подсчёта фрагментов: `page_id` берётся из индекса,
         # тяжёлая строка фрагмента не читается вовсе.
         Index("ix_material_fragments_material_page", "material_id", "page_id"),
+        # Частичный: Библиотека спрашивает только «есть ли у материала заголовки».
+        # Заголовков пятая часть фрагментов, поэтому полный индекс тут лишний.
+        Index(
+            "ix_material_fragments_headings",
+            "material_id",
+            "page_id",
+            sqlite_where=column("structure_level").is_not(None),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)

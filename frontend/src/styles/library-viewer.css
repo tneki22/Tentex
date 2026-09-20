@@ -284,9 +284,17 @@
 .lib-row-meta {
   display: flex;
   gap: var(--space-3);
+  overflow: hidden;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   font-size: var(--text-sm);
+}
+
+/* Каждая подпись цельная: с добавлением предмета строка стала длиннее, и без
+   этого «265 страниц» ломалось пополам. Переполнение срезает хвост, а не слова. */
+.lib-row-meta > span {
+  flex: none;
+  white-space: nowrap;
 }
 
 .lib-row-quality {

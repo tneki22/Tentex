@@ -435,12 +435,12 @@ class LibraryAggregate:
     quality_counts: dict[PageQuality, int]
     block_count: int
     fragment_count: int
-    heading_count: int
+    has_headings: bool
     usage: list[tuple[ProjectMaterial, Project]]
 
 
 EMPTY_LIBRARY_AGGREGATE = LibraryAggregate(
-    quality_counts={}, block_count=0, fragment_count=0, heading_count=0, usage=[]
+    quality_counts={}, block_count=0, fragment_count=0, has_headings=False, usage=[]
 )
 
 
@@ -499,9 +499,13 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
         ).all()
     )
 
-    heading_counts: dict[UUID, int] = dict(
-        session.execute(
-            select(MaterialFragment.material_id, func.count())
+    # Библиотеке нужен факт «заголовки есть», а не их число: подсчёт не-NULL заставлял
+    # SQLite читать все 88 тысяч строк фрагментов вместо частичного индекса заголовков
+    # (`ix_material_fragments_headings`) и стоил семи секунд на открытие экрана.
+    materials_with_headings: set[UUID] = {
+        material_id
+        for (material_id,) in session.execute(
+            select(MaterialFragment.material_id)
             .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
             .join(Material, Material.id == MaterialFragment.material_id)
             .where(
@@ -509,9 +513,9 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
                 MaterialPage.revision == Material.active_parse_revision,
                 MaterialFragment.structure_level.is_not(None),
             )
-            .group_by(MaterialFragment.material_id)
+            .distinct()
         ).all()
-    )
+    }
 
     usage_by_material: dict[UUID, list[tuple[ProjectMaterial, Project]]] = defaultdict(list)
     for link, project in session.execute(
@@ -527,7 +531,7 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
             quality_counts=quality_counts.get(material.id, {}),
             block_count=block_counts.get(material.id, 0),
             fragment_count=fragment_counts.get(material.id, 0),
-            heading_count=heading_counts.get(material.id, 0),
+            has_headings=material.id in materials_with_headings,
             usage=usage_by_material.get(material.id, []),
         )
         for material in materials
@@ -567,7 +571,7 @@ def library_read(material: Material, aggregate: LibraryAggregate) -> LibraryMate
         ocr_low_page_count=aggregate.quality_counts.get(PageQuality.OCR_LOW, 0),
         block_count=aggregate.block_count,
         fragment_count=aggregate.fragment_count,
-        has_outline=bool(material.outline) or aggregate.heading_count > 0,
+        has_outline=bool(material.outline) or aggregate.has_headings,
         sha256=material.sha256,
         created_at=material.created_at,
         usage=_usage_read(material, aggregate),
