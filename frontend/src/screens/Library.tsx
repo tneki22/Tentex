@@ -543,13 +543,27 @@ export function Library() {
           />
           {searchSurface === "content" && (
             <div className="lib-content-search">
-              {retrievalSettings?.active_index && (
-                <div className="lib-active-index" role="status">
-                  <label><strong>Активный индекс</strong><Select ariaLabel="Активный индекс" disabled value={retrievalSettings.active_index.id} options={[{ value: retrievalSettings.active_index.id, label: "Текущий активный индекс" }]} onValueChange={() => undefined} /></label>
-                  <span>{retrievalSettings.profiles.find((profile) => profile.id === retrievalSettings.active_index?.profile_id)?.label ?? "Embedding-модель"}</span>
-                  <small>{retrievalSettings.active_index.material_count} материалов · индекс один на установку</small>
-                </div>
-              )}
+              <div className="lib-active-index" role="status">
+                <label>
+                  <strong>Активный индекс</strong>
+                  <Select
+                    ariaLabel="Активный индекс"
+                    disabled
+                    value={retrievalSettings?.active_index?.id ?? "none"}
+                    options={[{
+                      value: retrievalSettings?.active_index?.id ?? "none",
+                      label: retrievalSettings?.active_index ? "Текущий активный индекс" : "Индекс не собран",
+                    }]}
+                    onValueChange={() => undefined}
+                  />
+                </label>
+                <span>{retrievalSettings?.active_index
+                  ? retrievalSettings.profiles.find((profile) => profile.id === retrievalSettings.active_index?.profile_id)?.label ?? "Embedding-модель"
+                  : "Не собран"}</span>
+                <small>{retrievalSettings?.active_index
+                  ? `${retrievalSettings.active_index.material_count} материалов · индекс один на установку`
+                  : "Соберите индекс в Параметрах → Поиск → Индекс"}</small>
+              </div>
               {retrievalSettings?.profiles.length ? (
                 <div className="lib-index-build-controls">
                   <Select
