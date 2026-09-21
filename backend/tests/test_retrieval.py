@@ -37,7 +37,12 @@ from app.retrieval import local_models
 from app.retrieval.chunking import ChunkAtom, chunk_atoms, material_chunks
 from app.retrieval.embeddings import _validate_vectors
 from app.retrieval.exhaustive import start_run
-from app.retrieval.indexing import activate_index, queue_incremental_reindex, start_index_build
+from app.retrieval.indexing import (
+    activate_index,
+    embedding_batch_size,
+    queue_incremental_reindex,
+    start_index_build,
+)
 from app.retrieval.schemas import ExhaustiveRunWrite, RetrievalIndexBuildWrite, RetrievalScope
 from app.retrieval.vector import reciprocal_rank_fusion
 
@@ -167,6 +172,23 @@ def test_embedding_dimension_mismatch_has_stable_error() -> None:
         _validate_vectors([[0.1, 0.2]], 1, 3)
 
     assert excinfo.value.code == "retrieval_dimension_mismatch"
+
+
+def test_qwen_cpu_indexing_uses_a_bounded_embedding_batch(session: Session) -> None:
+    profile = _profile(session)
+    profile.model_id = "Qwen/Qwen3-Embedding-0.6B"
+    profile.batch_size = 32
+    session.commit()
+
+    assert embedding_batch_size(profile) == 4
+
+
+def test_other_embedding_profiles_keep_their_configured_batch(session: Session) -> None:
+    profile = _profile(session)
+    profile.batch_size = 12
+    session.commit()
+
+    assert embedding_batch_size(profile) == 12
 
 
 def test_activation_switches_indexes_atomically(session: Session) -> None:

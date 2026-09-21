@@ -35,10 +35,12 @@ import {
 } from "../api/retrieval";
 import { ProjectApiError } from "../api/projects";
 import { QualityBadge } from "../components/domain";
+import { PageNumberInput } from "../components/domain/material-viewer";
 import {
   Button,
   Checkbox,
   ConfirmDialog,
+  Disclosure,
   Dialog,
   EmptyState,
   ErrorState,
@@ -187,8 +189,10 @@ export function Library() {
   const [contentMaterialIds, setContentMaterialIds] = useState<string[]>(initialContentCache.materialIds);
   const [retrievalSettings, setRetrievalSettings] = useState<Awaited<ReturnType<typeof getRetrievalSettings>> | null>(null);
   const [contentProfileId, setContentProfileId] = useState<string | null>(null);
+  const [indexBuildOpen, setIndexBuildOpen] = useState(false);
   const [indexBuilding, setIndexBuilding] = useState(false);
   const [preview, setPreview] = useState<{ hit: RetrievalHitRead; material: Awaited<ReturnType<typeof getLibraryMaterial>> | null; page: Awaited<ReturnType<typeof getLibraryPage>> | null; error: string | null } | null>(null);
+  const [previewPageLoading, setPreviewPageLoading] = useState(false);
   const [contentSearching, setContentSearching] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   /* Кого сейчас подтверждают к удалению. Пустой массив — диалог закрыт. */
@@ -321,6 +325,10 @@ export function Library() {
     [retrievalSettings?.active_index?.corpus_manifest],
   );
   const subjects = useMemo(() => [...new Set(materials.flatMap((material) => material.subject ? [material.subject] : []))].sort((a, b) => a.localeCompare(b, "ru")), [materials]);
+  const readyContentMaterials = useMemo(
+    () => materials.filter((material) => material.status === "ready"),
+    [materials],
+  );
   /* Перезапуск после ошибки — такое же обычное массовое действие, как первый
      разбор: сервер отказывает только при уже активной задаче. */
   const processable = selected.filter(
@@ -346,8 +354,12 @@ export function Library() {
   async function openPreview(hit: RetrievalHitRead) {
     setPreview({ hit, material: null, page: null, error: null });
     try {
-      const material = await getLibraryMaterial(hit.locator.material_id);
-      const page = hit.locator.page_from ? await getLibraryPage(hit.locator.material_id, hit.locator.page_from) : null;
+      /* Паспорт файла и нужная страница независимы: параллельная загрузка
+         убирает одну полную сетевую задержку до первого предпросмотра. */
+      const [material, page] = await Promise.all([
+        getLibraryMaterial(hit.locator.material_id),
+        hit.locator.page_from ? getLibraryPage(hit.locator.material_id, hit.locator.page_from) : null,
+      ]);
       setPreview({ hit, material, page, error: null });
     } catch (caught) {
       setPreview({ hit, material: null, page: null, error: caught instanceof Error ? caught.message : "Не удалось открыть страницу" });
@@ -358,13 +370,29 @@ export function Library() {
     if (!preview?.material) return;
     const total = preview.material.page_count ?? 1;
     const page = Math.min(Math.max(1, pageNumber), total);
+    if (page === preview.page?.page_number) return;
+    setPreviewPageLoading(true);
     try {
       const next = await getLibraryPage(preview.material.id, page);
       setPreview((current) => current ? { ...current, page: next, error: null } : current);
     } catch (caught) {
       setPreview((current) => current ? { ...current, error: caught instanceof Error ? caught.message : "Не удалось открыть страницу" } : current);
+    } finally {
+      setPreviewPageLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (!preview?.material || !preview.page) return;
+    if (!["pdf", "image", "typst"].includes(preview.material.presentation_kind)) return;
+    const total = preview.material.page_count ?? 1;
+    const adjacent = [preview.page.page_number - 1, preview.page.page_number + 1]
+      .filter((number) => number >= 1 && number <= total);
+    for (const pageNumber of adjacent) {
+      const image = new Image();
+      image.src = libraryPageImageUrl(preview.material.id, pageNumber, preview.material.raster_token);
+    }
+  }, [preview?.material, preview?.page]);
 
   function toggleSelected(index: number, checked: boolean) {
     const range = shiftHeld.current && anchor.current !== null
@@ -501,6 +529,7 @@ export function Library() {
         });
       }
       setNotice(`Сбор индекса запущен: ${contentMaterialIds.length} материалов · ${profile.label} · задача ${started.job_id.slice(0, 8)}`);
+      setIndexBuildOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Не удалось запустить сбор индекса");
     } finally {
@@ -543,40 +572,21 @@ export function Library() {
           />
           {searchSurface === "content" && (
             <div className="lib-content-search">
-              <div className="lib-active-index" role="status">
-                <label>
+              <div className="lib-active-index">
+                <div role="status">
                   <strong>Активный индекс</strong>
-                  <Select
-                    ariaLabel="Активный индекс"
-                    disabled
-                    value={retrievalSettings?.active_index?.id ?? "none"}
-                    options={[{
-                      value: retrievalSettings?.active_index?.id ?? "none",
-                      label: retrievalSettings?.active_index ? "Текущий активный индекс" : "Индекс не собран",
-                    }]}
-                    onValueChange={() => undefined}
-                  />
-                </label>
-                <span>{retrievalSettings?.active_index
-                  ? retrievalSettings.profiles.find((profile) => profile.id === retrievalSettings.active_index?.profile_id)?.label ?? "Embedding-модель"
-                  : "Не собран"}</span>
-                <small>{retrievalSettings?.active_index
-                  ? `${retrievalSettings.active_index.material_count} материалов · индекс один на установку`
-                  : "Соберите индекс в Параметрах → Поиск → Индекс"}</small>
-              </div>
-              {retrievalSettings?.profiles.length ? (
-                <div className="lib-index-build-controls">
-                  <Select
-                    ariaLabel="Модель для сборки индекса"
-                    value={contentProfileId}
-                    options={retrievalSettings.profiles.map((profile) => ({ value: profile.id, label: profile.label, description: profile.model_id }))}
-                    onValueChange={setContentProfileId}
-                  />
-                  <Button variant="secondary" disabled={indexBuilding || contentMaterialIds.length === 0} onClick={() => void buildSelectedContentIndex()}>
-                    {indexBuilding ? "Собираем индекс…" : "Собрать индекс по выбранным"}
-                  </Button>
+                  <span>{retrievalSettings?.active_index
+                    ? `${retrievalSettings.profiles.find((profile) => profile.id === retrievalSettings.active_index?.profile_id)?.label ?? "Embedding-модель"} · ${retrievalSettings.active_index.material_count} ${plural(retrievalSettings.active_index.material_count, "материал", "материала", "материалов")}`
+                    : "Индекс не собран"}</span>
                 </div>
-              ) : null}
+                <Button
+                  variant="secondary"
+                  disabled={!retrievalSettings?.profiles.length || readyContentMaterials.length === 0}
+                  onClick={() => setIndexBuildOpen(true)}
+                >
+                  Собрать индекс по выбранным
+                </Button>
+              </div>
               <div className="lib-content-search-form">
                 <Search size={16} aria-hidden="true" />
                 <input
@@ -601,16 +611,23 @@ export function Library() {
                 </Button>
               </div>
               <div className="lib-content-sources">
-                <strong>Искать в источниках</strong>
-                <div className="lib-content-source-list">
-                  {materials.filter((material) => material.status === "ready").map((material) => (
-                    <Checkbox
-                      key={material.id}
-                      checked={contentMaterialIds.includes(material.id)}
-                      onCheckedChange={(checked) => setContentMaterialIds((current) => checked ? [...new Set([...current, material.id])] : current.filter((id) => id !== material.id))}
-                      label={material.display_name}
-                    />
-                  ))}
+                <div className="lib-content-sources-head">
+                  <Disclosure summary={`Искать в источниках · ${contentMaterialIds.length} из ${readyContentMaterials.length}`}>
+                    <div className="lib-content-source-list">
+                      {readyContentMaterials.map((material) => (
+                        <Checkbox
+                          key={material.id}
+                          checked={contentMaterialIds.includes(material.id)}
+                          onCheckedChange={(checked) => setContentMaterialIds((current) => checked ? [...new Set([...current, material.id])] : current.filter((id) => id !== material.id))}
+                          label={material.display_name}
+                        />
+                      ))}
+                    </div>
+                  </Disclosure>
+                  <div className="lib-content-source-actions">
+                    <Button variant="ghost" onClick={() => setContentMaterialIds(readyContentMaterials.map((material) => material.id))}>Выбрать все</Button>
+                    <Button variant="ghost" onClick={() => setContentMaterialIds([])}>Снять все выборы</Button>
+                  </div>
                 </div>
               </div>
               {contentHistory.length > 0 && (
@@ -635,7 +652,7 @@ export function Library() {
                       <span>{hit.text}</span>
                       {hit.warning && <em>{hit.warning}</em>}
                       <div className="lib-content-result-actions">
-                        <Button variant="secondary" onClick={() => navigate(`/library/${hit.locator.material_id}${hit.locator.page_from ? `?page=${hit.locator.page_from}` : ""}`)}>Открыть в библиотеке</Button>
+                        <Button variant="secondary" onClick={() => navigate(`/library/${hit.locator.material_id}${hit.locator.page_from ? `?page=${hit.locator.page_from}` : ""}`)}>Открыть страницу файла</Button>
                         <Button variant="ghost" onClick={() => void openPreview(hit)}>Предпросмотр</Button>
                       </div>
                     </article>
@@ -845,6 +862,47 @@ export function Library() {
       />
 
       <Dialog
+        open={indexBuildOpen}
+        onOpenChange={setIndexBuildOpen}
+        title="Собрать индекс по выбранным"
+        description="Новый индекс строится рядом с текущим и не заменит его сам."
+        className="library-index-build-dialog"
+        footer={<Button variant="ghost" disabled={indexBuilding} onClick={() => setIndexBuildOpen(false)}>Отменить</Button>}
+      >
+        <div className="library-index-build-model">
+          <Select
+            ariaLabel="Модель для сборки индекса"
+            value={contentProfileId}
+            options={retrievalSettings?.profiles.map((profile) => ({ value: profile.id, label: profile.label, description: profile.model_id })) ?? []}
+            onValueChange={setContentProfileId}
+          />
+          <Button disabled={indexBuilding || !contentProfileId || contentMaterialIds.length === 0} onClick={() => void buildSelectedContentIndex()}>
+            {indexBuilding ? "Собираем индекс…" : "Собрать индекс"}
+          </Button>
+        </div>
+        <div className="library-index-build-materials">
+          <div>
+            <strong>Материалы</strong>
+            <small>По умолчанию выбраны все готовые материалы.</small>
+          </div>
+          <div className="lib-content-source-actions">
+            <Button variant="ghost" onClick={() => setContentMaterialIds(readyContentMaterials.map((material) => material.id))}>Выбрать все</Button>
+            <Button variant="ghost" onClick={() => setContentMaterialIds([])}>Снять все выборы</Button>
+          </div>
+          <div className="library-index-build-source-list">
+            {readyContentMaterials.map((material) => (
+              <Checkbox
+                key={material.id}
+                checked={contentMaterialIds.includes(material.id)}
+                onCheckedChange={(checked) => setContentMaterialIds((current) => checked ? [...new Set([...current, material.id])] : current.filter((id) => id !== material.id))}
+                label={material.display_name}
+              />
+            ))}
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog
         open={preview !== null}
         onOpenChange={(open) => !open && setPreview(null)}
         title={preview ? `Предпросмотр · ${preview.hit.locator.material_name}` : "Предпросмотр страницы"}
@@ -857,7 +915,7 @@ export function Library() {
               const page = preview.hit.locator.page_from;
               setPreview(null);
               navigate(`/library/${preview.hit.locator.material_id}${page ? `?page=${page}` : ""}`);
-            }}>Открыть в библиотеке</Button>
+            }}>Открыть страницу файла</Button>
           </>
         ) : undefined}
       >
@@ -878,10 +936,14 @@ export function Library() {
                 : <span>Оглавление отсутствует</span>}
             </aside>
             <section className="library-search-preview-page">
-              <div className="library-search-preview-toolbar">
-                <Button variant="ghost" disabled={preview.page.page_number <= 1} onClick={() => void changePreviewPage(preview.page!.page_number - 1)}>Назад</Button>
-                <label>Страница <input type="number" min={1} max={preview.material.page_count ?? 1} value={preview.page.page_number} onChange={(event) => void changePreviewPage(Number(event.target.value))} /></label>
-                <Button variant="ghost" disabled={preview.page.page_number >= (preview.material.page_count ?? 1)} onClick={() => void changePreviewPage(preview.page!.page_number + 1)}>Вперёд</Button>
+              <div className="library-search-preview-toolbar" aria-busy={previewPageLoading}>
+                <Button variant="ghost" disabled={previewPageLoading || preview.page.page_number <= 1} onClick={() => void changePreviewPage(preview.page!.page_number - 1)}>Назад</Button>
+                <PageNumberInput
+                  page={preview.page.page_number}
+                  pageCount={preview.material.page_count ?? 1}
+                  onPageChange={(pageNumber) => void changePreviewPage(pageNumber)}
+                />
+                <Button variant="ghost" disabled={previewPageLoading || preview.page.page_number >= (preview.material.page_count ?? 1)} onClick={() => void changePreviewPage(preview.page!.page_number + 1)}>Вперёд</Button>
               </div>
               {(preview.material.presentation_kind === "pdf" || preview.material.presentation_kind === "image" || preview.material.presentation_kind === "typst")
                 ? <img src={libraryPageImageUrl(preview.material.id, preview.page.page_number, preview.material.raster_token)} alt={`Страница ${preview.page.page_number}`} />

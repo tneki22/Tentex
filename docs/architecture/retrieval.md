@@ -67,7 +67,10 @@ Retrieval-кусок не равен фрагменту или блоку. Ма�
 `/v1/embeddings`, загружает модель один раз и запрещает `trust_remote_code`. Каталог:
 `paraphrase-multilingual-MiniLM-L12-v2`, `multilingual-e5-base`,
 `Qwen3-Embedding-0.6B`; Qwen3 reranker используется только точным профилем. Ручной HF
-профиль фиксирует pooling, normalize и query/document templates.
+профиль фиксирует pooling, normalize и query/document templates. У Qwen3 Embedding на
+CPU один HTTP-запрос ограничен четырьмя кусками: пакет из 32 крупных кусков превышает
+таймаут model service до записи первого материала; задача продолжает сборку следующими
+checkpoint-пакетами.
 
 ## Чат и цитаты
 

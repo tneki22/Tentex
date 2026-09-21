@@ -27,6 +27,23 @@ from app.retrieval.jobs import finish, write_job
 from app.retrieval.schemas import RetrievalIndexBuildRead, RetrievalIndexBuildWrite
 from app.retrieval.vector import vector_blob
 
+QWEN_CPU_MAX_BATCH_SIZE = 4
+
+
+def embedding_batch_size(profile: EmbeddingProfile) -> int:
+    """Вернуть размер запроса, который локальная модель успевает обработать.
+
+    Qwen3 0.6B на CPU не успевает обработать 32 куска по 384–480 токенов за
+    HTTP-таймаут model service. Четыре куска сохраняют предсказуемое время
+    одного запроса, а весь индекс продолжает строиться checkpoint-пакетами.
+    """
+    if (
+        profile.backend_kind == EmbeddingBackendKind.LOCAL_HF
+        and profile.model_id == "Qwen/Qwen3-Embedding-0.6B"
+    ):
+        return min(profile.batch_size, QWEN_CPU_MAX_BATCH_SIZE)
+    return profile.batch_size
+
 
 def _settings(session: Session) -> RetrievalSettings:
     row = session.get(RetrievalSettings, 1)
@@ -274,8 +291,9 @@ def process_index_job(session: Session, detached_job: BackgroundJob) -> None:
             # держали бы снимок соединения открытым минутами.
             rows: list[dict[str, object]] = []
             dimension: int | None = None
-            for start in range(0, len(drafts), profile.batch_size):
-                batch = drafts[start : start + profile.batch_size]
+            batch_size = embedding_batch_size(profile)
+            for start in range(0, len(drafts), batch_size):
+                batch = drafts[start : start + batch_size]
                 vectors = asyncio.run(backend.embed_documents([draft.text for draft in batch]))
                 if dimension is None and vectors:
                     dimension = len(vectors[0])
@@ -336,8 +354,9 @@ def _process_incremental(
     )
     backend = backend_for_profile(session, profile)
     embedded: list[tuple[ChunkDraft, list[float]]] = []
-    for start in range(0, len(drafts), profile.batch_size):
-        batch = drafts[start : start + profile.batch_size]
+    batch_size = embedding_batch_size(profile)
+    for start in range(0, len(drafts), batch_size):
+        batch = drafts[start : start + batch_size]
         vectors = asyncio.run(backend.embed_documents([draft.text for draft in batch]))
         embedded.extend(zip(batch, vectors, strict=True))
 
