@@ -15,7 +15,7 @@ const anchors = new Map<string, EtaAnchor>();
  * `updatedAt` берётся с сервера (момент сохранения страницы), а не из
  * локальных часов — так пауза между страницами не искажает скорость.
  */
-export function estimateEtaMinutes(
+export function estimateEtaSeconds(
   id: string,
   done: number,
   total: number,
@@ -36,5 +36,5 @@ export function estimateEtaMinutes(
   if (donePages < 2 || elapsedSeconds <= 0) return null;
 
   const secondsPerPage = elapsedSeconds / donePages;
-  return Math.ceil((left * secondsPerPage) / 60);
+  return Math.max(1, Math.ceil(left * secondsPerPage));
 }

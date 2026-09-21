@@ -16,7 +16,7 @@ import {
 import { getMaterialPresentation } from "../../components/domain/material-viewer";
 import { TaskRow } from "../../components/domain";
 import type { BackgroundTask } from "../../components/domain";
-import { estimateEtaMinutes } from "../../hooks/backgroundTaskEta";
+import { estimateEtaSeconds } from "../../hooks/backgroundTaskEta";
 import {
   Button,
   Disclosure,
@@ -89,10 +89,13 @@ function diagnosticText(item: string): string | null {
   return DIAGNOSTIC_LABEL[item] ?? item;
 }
 
-/** «12 страниц» → «≈ 4 мин». Меньше минуты писать бессмысленно. */
+/** «12 страниц» → «≈ 3 мин 12 с». Короткие операции тоже должны иметь оценку. */
 function durationLabel(pages: number, mode: ParserMode): string {
-  const minutes = Math.ceil((pages * SECONDS_PER_PAGE[mode]) / 60);
-  if (minutes < 60) return `≈ ${minutes} мин`;
+  const seconds = Math.ceil(pages * SECONDS_PER_PAGE[mode]);
+  if (seconds < 60) return `≈ ${seconds} с`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes < 60) return remainder ? `≈ ${minutes} мин ${remainder} с` : `≈ ${minutes} мин`;
   const hours = Math.floor(minutes / 60);
   return `≈ ${hours} ч ${minutes % 60} мин`;
 }
@@ -132,6 +135,7 @@ interface LibraryProcessingPanelProps {
   onCleanupPage: () => void;
   onFindHeaderFooter: () => void;
   onConfirmPageReview: () => void;
+  onIndexMaterial: () => void;
 }
 
 export function LibraryProcessingPanel({
@@ -147,6 +151,7 @@ export function LibraryProcessingPanel({
   onCleanupPage,
   onFindHeaderFooter,
   onConfirmPageReview,
+  onIndexMaterial,
 }: LibraryProcessingPanelProps) {
   const presentation = getMaterialPresentation(material.presentation_kind);
   // У записи нет страниц и OCR: два своих способа — Whisper на процессоре и
@@ -239,7 +244,7 @@ export function LibraryProcessingPanel({
       detail: isAudio ? speechModelLabel : undefined,
       done: task.done,
       total: task.total,
-      etaMinutes: estimateEtaMinutes(task.id, task.done, task.total, task.updated_at),
+      etaSeconds: estimateEtaSeconds(task.id, task.done, task.total, task.updated_at),
       state: task.state,
       error: task.error ?? undefined,
     };
@@ -664,6 +669,14 @@ export function LibraryProcessingPanel({
               </Button>
             </div>
           )}
+        </section>
+      )}
+
+      {prepared && !readOnly && !running && (
+        <section className="inspector-section">
+          <h4>Поиск по содержимому</h4>
+          <p className="inspector-note">Добавьте этот материал в активный индекс, чтобы искать в нём по смыслу.</p>
+          <Button variant="secondary" disabled={busy} onClick={onIndexMaterial}>Добавить в индекс</Button>
         </section>
       )}
 

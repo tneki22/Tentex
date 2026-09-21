@@ -14,6 +14,7 @@ import {
   type ParserMode,
   type ProcessingScope,
 } from "../../api/materials";
+import { indexLibraryMaterial } from "../../api/retrieval";
 import { Button, ErrorState, LoadingState } from "../../components/ui";
 import { LibraryProcessingPanel } from "../library/LibraryProcessingPanel";
 import { MaterialRevisionPanel } from "../library/MaterialRevisionPanel";
@@ -170,6 +171,7 @@ export function MaterialProcessingPanels({
         onCleanupPage={onCleanupPage}
         onFindHeaderFooter={() => setHeaderFooterOpen(true)}
         onConfirmPageReview={confirmReview}
+        onIndexMaterial={() => void run(() => indexLibraryMaterial(materialId))}
       />
       <MaterialRevisionPanel
         material={detail}

@@ -15,6 +15,9 @@ import {
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import {
   deleteLibraryMaterials,
+  getLibraryMaterial,
+  getLibraryPage,
+  libraryPageImageUrl,
   listLibraryMaterials,
   previewMaterialsDelete,
   startLibraryProcessing,
@@ -24,20 +27,25 @@ import {
   type MaterialsDeletePreview,
 } from "../api/materials";
 import {
+  buildRetrievalIndex,
   searchLibraryContent,
+  getRetrievalSettings,
   type RetrievalHitRead,
   type SearchStrategy,
 } from "../api/retrieval";
+import { ProjectApiError } from "../api/projects";
 import { QualityBadge } from "../components/domain";
 import {
   Button,
   Checkbox,
   ConfirmDialog,
+  Dialog,
   EmptyState,
   ErrorState,
   IconButton,
   LoadingState,
   PageHead,
+  Select,
   StatusBadge,
   SegmentedTabs,
 } from "../components/ui";
@@ -72,6 +80,34 @@ const STATUS_LABEL: Record<LibraryMaterialRead["status"], string> = {
 const SCROLL_KEY = "tentex-library-scroll";
 /** Проектов в строке видно два: дальше строка растёт и уводит кнопку удаления. */
 const USAGE_SHOWN = 2;
+const CONTENT_CACHE_KEY = "tentex-library-content-search";
+
+interface ContentSearchCache {
+  surface: "names" | "content";
+  query: string;
+  strategy: SearchStrategy;
+  hits: RetrievalHitRead[];
+  reasons: string[];
+  materialIds: string[];
+  history: string[];
+}
+
+function readContentSearchCache(): ContentSearchCache {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(CONTENT_CACHE_KEY) ?? "null") as Partial<ContentSearchCache> | null;
+    return {
+      surface: parsed?.surface === "content" ? "content" : "names",
+      query: parsed?.query ?? "",
+      strategy: parsed?.strategy ?? "hybrid",
+      hits: Array.isArray(parsed?.hits) ? parsed.hits : [],
+      reasons: Array.isArray(parsed?.reasons) ? parsed.reasons : [],
+      materialIds: Array.isArray(parsed?.materialIds) ? parsed.materialIds : [],
+      history: Array.isArray(parsed?.history) ? parsed.history.slice(0, 8) : [],
+    };
+  } catch {
+    return { surface: "names", query: "", strategy: "hybrid", hits: [], reasons: [], materialIds: [], history: [] };
+  }
+}
 
 /** Тот же вывод, что у сервера, но по данным списка: отдельная ручка не нужна. */
 function kindOf(material: LibraryMaterialRead): MaterialPresentationKind {
@@ -133,6 +169,7 @@ function readFilters(params: URLSearchParams): LibraryFilterState {
 }
 
 export function Library() {
+  const initialContentCache = useRef(readContentSearchCache()).current;
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -141,11 +178,17 @@ export function Library() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [addOpen, setAddOpen] = useState(false);
-  const [searchSurface, setSearchSurface] = useState<"names" | "content">("names");
-  const [contentQuery, setContentQuery] = useState("");
-  const [contentStrategy, setContentStrategy] = useState<SearchStrategy>("hybrid");
-  const [contentHits, setContentHits] = useState<RetrievalHitRead[]>([]);
-  const [contentReasons, setContentReasons] = useState<string[]>([]);
+  const [searchSurface, setSearchSurface] = useState<"names" | "content">(initialContentCache.surface);
+  const [contentQuery, setContentQuery] = useState(initialContentCache.query);
+  const [contentStrategy, setContentStrategy] = useState<SearchStrategy>(initialContentCache.strategy);
+  const [contentHits, setContentHits] = useState<RetrievalHitRead[]>(initialContentCache.hits);
+  const [contentReasons, setContentReasons] = useState<string[]>(initialContentCache.reasons);
+  const [contentHistory, setContentHistory] = useState<string[]>(initialContentCache.history);
+  const [contentMaterialIds, setContentMaterialIds] = useState<string[]>(initialContentCache.materialIds);
+  const [retrievalSettings, setRetrievalSettings] = useState<Awaited<ReturnType<typeof getRetrievalSettings>> | null>(null);
+  const [contentProfileId, setContentProfileId] = useState<string | null>(null);
+  const [indexBuilding, setIndexBuilding] = useState(false);
+  const [preview, setPreview] = useState<{ hit: RetrievalHitRead; material: Awaited<ReturnType<typeof getLibraryMaterial>> | null; page: Awaited<ReturnType<typeof getLibraryPage>> | null; error: string | null } | null>(null);
   const [contentSearching, setContentSearching] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   /* Кого сейчас подтверждают к удалению. Пустой массив — диалог закрыт. */
@@ -159,6 +202,7 @@ export function Library() {
      запоминаем на mousedown — он приходит раньше клика. */
   const shiftHeld = useRef(false);
   const anchor = useRef<number | null>(null);
+  const contentSourcesInitialized = useRef(false);
 
   const filters = useMemo(() => readFilters(searchParams), [searchParams]);
   const scrollKey = `${SCROLL_KEY}:${searchParams.toString()}`;
@@ -183,6 +227,33 @@ export function Library() {
     void load({ signal: controller.signal });
     return () => controller.abort();
   }, [load]);
+
+  useEffect(() => {
+    void getRetrievalSettings().then((next) => {
+      setRetrievalSettings(next);
+      setContentProfileId(next.default_profile_id ?? next.active_index?.profile_id ?? null);
+    }).catch(() => setRetrievalSettings(null));
+  }, []);
+
+  useEffect(() => {
+    if (materials.length === 0 || contentSourcesInitialized.current) return;
+    const ready = materials.filter((material) => material.status === "ready").map((material) => material.id);
+    const cached = initialContentCache.materialIds.filter((id) => ready.includes(id));
+    setContentMaterialIds(cached.length > 0 ? cached : ready);
+    contentSourcesInitialized.current = true;
+  }, [materials, initialContentCache]);
+
+  useEffect(() => {
+    sessionStorage.setItem(CONTENT_CACHE_KEY, JSON.stringify({
+      surface: searchSurface,
+      query: contentQuery,
+      strategy: contentStrategy,
+      hits: contentHits,
+      reasons: contentReasons,
+      materialIds: contentMaterialIds,
+      history: contentHistory,
+    } satisfies ContentSearchCache));
+  }, [searchSurface, contentQuery, contentStrategy, contentHits, contentReasons, contentMaterialIds, contentHistory]);
 
   /* Возврат из рабочей области должен вернуть и место в списке, иначе после
      каждой проверки материала приходится искать строку заново. */
@@ -245,6 +316,10 @@ export function Library() {
     () => visible.filter((material) => selectedIds.has(material.id)),
     [visible, selectedIds],
   );
+  const indexedMaterialIds = useMemo(
+    () => new Set(retrievalSettings?.active_index?.corpus_manifest.map((item) => item.material_id) ?? []),
+    [retrievalSettings?.active_index?.corpus_manifest],
+  );
   const subjects = useMemo(() => [...new Set(materials.flatMap((material) => material.subject ? [material.subject] : []))].sort((a, b) => a.localeCompare(b, "ru")), [materials]);
   /* Перезапуск после ошибки — такое же обычное массовое действие, как первый
      разбор: сервер отказывает только при уже активной задаче. */
@@ -266,6 +341,29 @@ export function Library() {
     navigate(`/library/${materialId}?returnTo=${back}`, {
       state: { libraryReturnTo: `${location.pathname}${location.search}` },
     });
+  }
+
+  async function openPreview(hit: RetrievalHitRead) {
+    setPreview({ hit, material: null, page: null, error: null });
+    try {
+      const material = await getLibraryMaterial(hit.locator.material_id);
+      const page = hit.locator.page_from ? await getLibraryPage(hit.locator.material_id, hit.locator.page_from) : null;
+      setPreview({ hit, material, page, error: null });
+    } catch (caught) {
+      setPreview({ hit, material: null, page: null, error: caught instanceof Error ? caught.message : "Не удалось открыть страницу" });
+    }
+  }
+
+  async function changePreviewPage(pageNumber: number) {
+    if (!preview?.material) return;
+    const total = preview.material.page_count ?? 1;
+    const page = Math.min(Math.max(1, pageNumber), total);
+    try {
+      const next = await getLibraryPage(preview.material.id, page);
+      setPreview((current) => current ? { ...current, page: next, error: null } : current);
+    } catch (caught) {
+      setPreview((current) => current ? { ...current, error: caught instanceof Error ? caught.message : "Не удалось открыть страницу" } : current);
+    }
   }
 
   function toggleSelected(index: number, checked: boolean) {
@@ -356,23 +454,57 @@ export function Library() {
     }
   }
 
-  async function runContentSearch() {
-    const query = contentQuery.trim();
+  async function runContentSearch(queryOverride?: string) {
+    const query = (queryOverride ?? contentQuery).trim();
     if (!query) return;
     setContentSearching(true);
     setError("");
     try {
       const response = await searchLibraryContent(
         query,
-        materials.filter((material) => material.status === "ready").map((material) => material.id),
+        contentMaterialIds,
         contentStrategy,
       );
       setContentHits(response.results);
       setContentReasons(response.degradation_reasons);
+      setContentHistory((current) => [query, ...current.filter((item) => item !== query)].slice(0, 8));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Не удалось выполнить поиск по содержимому");
     } finally {
       setContentSearching(false);
+    }
+  }
+
+  async function buildSelectedContentIndex() {
+    if (!contentProfileId || contentMaterialIds.length === 0) return;
+    const profile = retrievalSettings?.profiles.find((item) => item.id === contentProfileId);
+    if (!profile) return;
+    setIndexBuilding(true);
+    setError("");
+    try {
+      let started;
+      try {
+        started = await buildRetrievalIndex({
+          profile_id: profile.id,
+          preset: retrievalSettings?.preset ?? "balanced",
+          cloud_consent: false,
+          material_ids: contentMaterialIds,
+        });
+      } catch (caught) {
+        if (!(caught instanceof ProjectApiError) || caught.code !== "retrieval_cloud_consent_required") throw caught;
+        if (!window.confirm("Текст выбранных материалов будет отправлен внешней embedding-модели. Продолжить?")) return;
+        started = await buildRetrievalIndex({
+          profile_id: profile.id,
+          preset: retrievalSettings?.preset ?? "balanced",
+          cloud_consent: true,
+          material_ids: contentMaterialIds,
+        });
+      }
+      setNotice(`Сбор индекса запущен: ${contentMaterialIds.length} материалов · ${profile.label} · задача ${started.job_id.slice(0, 8)}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Не удалось запустить сбор индекса");
+    } finally {
+      setIndexBuilding(false);
     }
   }
 
@@ -411,6 +543,26 @@ export function Library() {
           />
           {searchSurface === "content" && (
             <div className="lib-content-search">
+              {retrievalSettings?.active_index && (
+                <div className="lib-active-index" role="status">
+                  <label><strong>Активный индекс</strong><Select ariaLabel="Активный индекс" disabled value={retrievalSettings.active_index.id} options={[{ value: retrievalSettings.active_index.id, label: "Текущий активный индекс" }]} onValueChange={() => undefined} /></label>
+                  <span>{retrievalSettings.profiles.find((profile) => profile.id === retrievalSettings.active_index?.profile_id)?.label ?? "Embedding-модель"}</span>
+                  <small>{retrievalSettings.active_index.material_count} материалов · индекс один на установку</small>
+                </div>
+              )}
+              {retrievalSettings?.profiles.length ? (
+                <div className="lib-index-build-controls">
+                  <Select
+                    ariaLabel="Модель для сборки индекса"
+                    value={contentProfileId}
+                    options={retrievalSettings.profiles.map((profile) => ({ value: profile.id, label: profile.label, description: profile.model_id }))}
+                    onValueChange={setContentProfileId}
+                  />
+                  <Button variant="secondary" disabled={indexBuilding || contentMaterialIds.length === 0} onClick={() => void buildSelectedContentIndex()}>
+                    {indexBuilding ? "Собираем индекс…" : "Собрать индекс по выбранным"}
+                  </Button>
+                </div>
+              ) : null}
               <div className="lib-content-search-form">
                 <Search size={16} aria-hidden="true" />
                 <input
@@ -430,19 +582,35 @@ export function Library() {
                   ]}
                   onChange={(value) => setContentStrategy(value as SearchStrategy)}
                 />
-                <Button disabled={contentSearching || !contentQuery.trim()} onClick={() => void runContentSearch()}>
-                  {contentSearching ? "Ищем…" : "Найти"}
+                <Button disabled={contentSearching || !contentQuery.trim() || contentMaterialIds.length === 0} onClick={() => void runContentSearch()}>
+                  <Search size={14} aria-hidden="true" /> {contentSearching ? "Ищем…" : "Искать"}
                 </Button>
               </div>
+              <div className="lib-content-sources">
+                <strong>Искать в источниках</strong>
+                <div className="lib-content-source-list">
+                  {materials.filter((material) => material.status === "ready").map((material) => (
+                    <Checkbox
+                      key={material.id}
+                      checked={contentMaterialIds.includes(material.id)}
+                      onCheckedChange={(checked) => setContentMaterialIds((current) => checked ? [...new Set([...current, material.id])] : current.filter((id) => id !== material.id))}
+                      label={material.display_name}
+                    />
+                  ))}
+                </div>
+              </div>
+              {contentHistory.length > 0 && (
+                <div className="lib-content-history" aria-label="Последние запросы">
+                  <span>Последние запросы</span>
+                  {contentHistory.map((item) => <button key={item} type="button" onClick={() => { setContentQuery(item); void runContentSearch(item); }}>{item}</button>)}
+                </div>
+              )}
+              {contentSearching && <LoadingState label="Ищем по содержимому выбранных материалов" />}
               {contentReasons.map((reason) => <p className="retrieval-neutral-note" key={reason}>{reason}</p>)}
               {contentHits.length > 0 && (
                 <div className="lib-content-results">
                   {contentHits.map((hit) => (
-                    <button
-                      type="button"
-                      key={hit.locator.chunk_id}
-                      onClick={() => navigate(`/library/${hit.locator.material_id}${hit.locator.page_from ? `?page=${hit.locator.page_from}` : ""}`)}
-                    >
+                    <article key={hit.locator.chunk_id}>
                       <span className="lib-content-result-head">
                         <strong>{hit.locator.material_name}</strong>
                         <StatusBadge tone="neutral">
@@ -452,7 +620,11 @@ export function Library() {
                       <small>{hit.locator.block_title ?? hit.locator.typst_path ?? "Фрагмент материала"}{hit.locator.page_from ? ` · стр. ${hit.locator.page_from}` : ""}</small>
                       <span>{hit.text}</span>
                       {hit.warning && <em>{hit.warning}</em>}
-                    </button>
+                      <div className="lib-content-result-actions">
+                        <Button variant="secondary" onClick={() => navigate(`/library/${hit.locator.material_id}${hit.locator.page_from ? `?page=${hit.locator.page_from}` : ""}`)}>Открыть в библиотеке</Button>
+                        <Button variant="ghost" onClick={() => void openPreview(hit)}>Предпросмотр</Button>
+                      </div>
+                    </article>
                   ))}
                 </div>
               )}
@@ -599,6 +771,9 @@ export function Library() {
                         {STATUS_LABEL[material.status]}
                       </StatusBadge>
                     )}
+                    {material.status === "ready" && !indexedMaterialIds.has(material.id) && (
+                      <StatusBadge tone="neutral">Нет индекса</StatusBadge>
+                    )}
                     {material.ocr_page_count + (material.parser_mode === "fast" ? material.ocr_low_page_count : 0) > 0 && (
                       <QualityBadge quality="ocr" count={material.ocr_page_count + (material.parser_mode === "fast" ? material.ocr_low_page_count : 0)} />
                     )}
@@ -654,6 +829,53 @@ export function Library() {
           navigate(`/library/${created.id}?returnTo=${back}`);
         }}
       />
+
+      <Dialog
+        open={preview !== null}
+        onOpenChange={(open) => !open && setPreview(null)}
+        title={preview ? `Предпросмотр · ${preview.hit.locator.material_name}` : "Предпросмотр страницы"}
+        className="library-search-preview"
+        footer={preview?.hit ? (
+          <>
+            <Button variant="ghost" onClick={() => setPreview(null)}>Закрыть</Button>
+            <Button onClick={() => {
+              if (!preview) return;
+              const page = preview.hit.locator.page_from;
+              setPreview(null);
+              navigate(`/library/${preview.hit.locator.material_id}${page ? `?page=${page}` : ""}`);
+            }}>Открыть в библиотеке</Button>
+          </>
+        ) : undefined}
+      >
+        {!preview?.material && !preview?.error && <LoadingState label="Загружаем страницу" />}
+        {preview?.error && <ErrorState message={preview.error} />}
+        {preview?.material && !preview.page && !preview.error && (
+          <div className="library-search-preview-empty">
+            <strong>Страница для этого результата не определена</strong>
+            <p>Откройте материал в библиотеке, чтобы перейти к нужному месту вручную.</p>
+          </div>
+        )}
+        {preview?.material && preview.page && (
+          <div className="library-search-preview-grid">
+            <aside className="library-search-preview-outline" aria-label="Оглавление">
+              <strong>Оглавление</strong>
+              {preview.material.outline.length > 0
+                ? preview.material.outline.map((item) => <button key={`${item.page}-${item.title}`} type="button" onClick={() => void changePreviewPage(item.page)}>{item.title}<small>стр. {item.page}</small></button>)
+                : <span>Оглавление отсутствует</span>}
+            </aside>
+            <section className="library-search-preview-page">
+              <div className="library-search-preview-toolbar">
+                <Button variant="ghost" disabled={preview.page.page_number <= 1} onClick={() => void changePreviewPage(preview.page!.page_number - 1)}>Назад</Button>
+                <label>Страница <input type="number" min={1} max={preview.material.page_count ?? 1} value={preview.page.page_number} onChange={(event) => void changePreviewPage(Number(event.target.value))} /></label>
+                <Button variant="ghost" disabled={preview.page.page_number >= (preview.material.page_count ?? 1)} onClick={() => void changePreviewPage(preview.page!.page_number + 1)}>Вперёд</Button>
+              </div>
+              {(preview.material.presentation_kind === "pdf" || preview.material.presentation_kind === "image" || preview.material.presentation_kind === "typst")
+                ? <img src={libraryPageImageUrl(preview.material.id, preview.page.page_number, preview.material.raster_token)} alt={`Страница ${preview.page.page_number}`} />
+                : <pre>{preview.page.markdown || preview.page.text}</pre>}
+            </section>
+          </div>
+        )}
+      </Dialog>
 
       <ConfirmDialog
         open={deleteTargets.length > 0}

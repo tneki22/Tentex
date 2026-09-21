@@ -71,6 +71,25 @@ def _needs_review(job: BackgroundJob) -> bool:
 
 def _subject(session: Session, job: BackgroundJob) -> str:
     """Над чем идёт работа — именем файла или проекта, а не идентификатором."""
+    if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
+        from app.models import EmbeddingProfile, RetrievalIndex
+
+        profile = None
+        profile_id = job.checkpoint.get("profile_id")
+        if profile_id:
+            profile = session.get(EmbeddingProfile, UUID(str(profile_id)))
+        if profile is None:
+            index_id = job.checkpoint.get("index_id")
+            index = session.get(RetrievalIndex, UUID(str(index_id))) if index_id else None
+            profile = session.get(EmbeddingProfile, index.profile_id) if index else None
+        model_label = (
+            f"с моделью {profile.model_id}" if profile is not None else "с embedding-моделью"
+        )
+        if job.material_id is not None:
+            material = session.get(Material, job.material_id)
+            if material is not None:
+                return f"{material_display_name(material)} · {model_label}"
+        return model_label
     if job.material_id is not None:
         material = session.get(Material, job.material_id)
         if material is not None:
@@ -79,6 +98,8 @@ def _subject(session: Session, job: BackgroundJob) -> str:
         project = session.get(Project, job.project_id)
         if project is not None:
             return project.name or "Проект без названия"
+    if job.kind == BackgroundJobKind.RETRIEVAL_MODEL_INSTALL:
+        return str(job.checkpoint.get("model_id") or "embedding-модель")
     return ""
 
 
@@ -91,6 +112,10 @@ def _is_audio(session: Session, job: BackgroundJob) -> bool:
 
 def _progress_unit(session: Session, job: BackgroundJob) -> str:
     """Чем измеряется `done` из `total`: у разбора страницы, у записи минуты."""
+    if job.kind == BackgroundJobKind.RETRIEVAL_MODEL_INSTALL:
+        return "файлов"
+    if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
+        return "материалов"
     if job.kind not in (BackgroundJobKind.PARSE, BackgroundJobKind.TYPST_COMPILE):
         return ""
     return "минут" if _is_audio(session, job) else "страниц"
@@ -99,9 +124,14 @@ def _progress_unit(session: Session, job: BackgroundJob) -> str:
 def _model_label(session: Session, job: BackgroundJob) -> str:
     """Чем именно читается материал: локальный движок или внешняя модель.
 
-    Заполняется только у разбора: у ролей ИИ модель выбирается по роли уже
-    внутри шлюза, и в самой задаче её названия нет.
+    У ролей ИИ модель выбирается по роли уже внутри шлюза, и в самой задаче её
+    названия нет; retrieval-задачи, наоборот, всегда показывают понятный тип
+    операции.
     """
+    if job.kind == BackgroundJobKind.RETRIEVAL_MODEL_INSTALL:
+        return "Скачивание embedding-модели"
+    if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
+        return "Сбор индекса"
     if job.kind != BackgroundJobKind.PARSE:
         return ""
     if _is_audio(session, job):

@@ -48,7 +48,7 @@
 }
 
 .lib-content-results { display: grid; gap: var(--space-2); }
-.lib-content-results > button {
+.lib-content-results > article {
   display: grid;
   gap: var(--space-2);
   width: 100%;
@@ -58,9 +58,8 @@
   background: var(--paper);
   color: var(--ink);
   text-align: left;
-  cursor: pointer;
 }
-.lib-content-results > button:hover { border-color: var(--line-strong); background: var(--surface-hover); }
+.lib-content-results > article:hover { border-color: var(--line-strong); background: var(--surface-hover); }
 .lib-content-result-head { display: flex; justify-content: space-between; gap: var(--space-3); }
 /* Заголовок блока бывает во весь абзац: в карточку пускаем только первую строку. */
 .lib-content-results small {
@@ -69,7 +68,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.lib-content-results > button > span:not(.lib-content-result-head) {
+.lib-content-results > article > span:not(.lib-content-result-head) {
   display: -webkit-box;
   overflow: hidden;
   color: var(--ink-soft);
@@ -78,6 +77,64 @@
   -webkit-line-clamp: 3;
 }
 .lib-content-results em { color: var(--tone-warning); font-size: var(--text-xs); font-style: normal; }
+
+.lib-active-index,
+.lib-content-sources,
+.lib-content-history,
+.retrieval-download-progress,
+.retrieval-manual-model {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+.lib-active-index { grid-template-columns: auto auto 1fr; align-items: baseline; }
+.lib-active-index label { display: inline-flex; align-items: center; gap: var(--space-2); }
+.lib-index-build-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.lib-active-index span { color: var(--accent); font-weight: var(--weight-medium); }
+.lib-active-index small,
+.lib-content-sources > strong,
+.lib-content-history > span,
+.retrieval-download-progress > span,
+.retrieval-manual-model small { color: var(--muted); font-size: var(--text-xs); }
+.lib-content-source-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: var(--space-1) var(--space-3); max-height: 9rem; overflow: auto; }
+.lib-content-history { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.lib-content-history button { border: 0; border-radius: var(--radius-pill); padding: var(--space-1) var(--space-2); background: var(--surface-sunken); color: var(--ink-soft); cursor: pointer; font: inherit; font-size: var(--text-xs); }
+.lib-content-history button:hover { background: var(--accent-wash); color: var(--accent); }
+.lib-content-result-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.retrieval-download-progress { background: var(--surface-sunken); }
+.retrieval-progress-track { height: 5px; overflow: hidden; border-radius: var(--radius-pill); background: var(--line); }
+.retrieval-progress-track > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width var(--motion-base) var(--motion-ease); }
+.retrieval-manual-model { grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) minmax(10rem, 1fr) auto; align-items: center; }
+.retrieval-manual-model > div { display: grid; gap: var(--space-1); }
+.retrieval-manual-model input { min-width: 0; }
+.retrieval-test-feedback { margin: var(--space-3) 0 0; padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-sunken); }
+.retrieval-test-feedback.is-success { color: var(--tone-success); }
+.retrieval-test-feedback.is-danger { color: var(--tone-danger); }
+.is-spinning { animation: retrieval-spin 1s linear infinite; }
+@keyframes retrieval-spin { to { transform: rotate(360deg); } }
+
+.retrieval-quality-guide { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); margin-bottom: var(--space-3); }
+.retrieval-quality-guide article { padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-sunken); }
+.retrieval-quality-guide p { margin: var(--space-1) 0 0; color: var(--muted); font-size: var(--text-xs); line-height: var(--leading-relaxed); }
+
+.library-search-preview { width: min(1100px, calc(100vw - 48px)); max-width: none; }
+.library-search-preview-grid { display: grid; grid-template-columns: minmax(12rem, 0.35fr) minmax(0, 1fr); gap: var(--space-4); min-height: 30rem; }
+.library-search-preview-outline { display: grid; align-content: start; gap: var(--space-1); max-height: 32rem; overflow: auto; padding-right: var(--space-2); }
+.library-search-preview-outline button { display: grid; gap: 2px; padding: var(--space-2); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink-soft); text-align: left; cursor: pointer; font: inherit; }
+.library-search-preview-outline button:hover { background: var(--surface-hover); color: var(--accent); }
+.library-search-preview-outline small { color: var(--muted); font-size: var(--text-xs); }
+.library-search-preview-page { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--space-3); min-width: 0; }
+.library-search-preview-toolbar { display: flex; align-items: center; justify-content: center; gap: var(--space-2); }
+.library-search-preview-toolbar label { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--muted); }
+.library-search-preview-toolbar input { width: 4rem; }
+.library-search-preview-page img { display: block; width: 100%; max-height: 32rem; object-fit: contain; background: var(--surface-sunken); outline: 1px solid var(--line); }
+.library-search-preview-page pre { overflow: auto; margin: 0; padding: var(--space-4); border-radius: var(--radius-md); background: var(--surface-sunken); white-space: pre-wrap; }
+.library-search-preview-empty { display: grid; gap: var(--space-2); padding: var(--space-8); color: var(--muted); text-align: center; }
+.library-search-preview-empty strong { color: var(--ink); }
+.library-search-preview-empty p { margin: 0; }
 
 .chat-retrieval-controls {
   display: grid;
@@ -247,6 +304,10 @@
   .lib-content-search-form { grid-template-columns: auto minmax(0, 1fr); }
   .lib-content-search-form .segmented-tabs,
   .lib-content-search-form .button { grid-column: 1 / -1; }
+  .retrieval-manual-model,
+  .retrieval-quality-guide { grid-template-columns: 1fr; }
+  .lib-active-index { grid-template-columns: 1fr; }
+  .library-search-preview-grid { grid-template-columns: 1fr; }
   .chat-retrieval-controls { grid-template-columns: 1fr; }
   .chat-retrieval-commands { grid-column: 1; }
 }

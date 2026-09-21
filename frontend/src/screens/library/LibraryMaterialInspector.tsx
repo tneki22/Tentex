@@ -43,6 +43,7 @@ interface LibraryMaterialInspectorProps {
   onCleanupPage: () => void;
   onFindHeaderFooter: () => void;
   onConfirmPageReview: () => void;
+  onIndexMaterial: () => void;
   onRestore: (revision: number) => void;
   onAddToProject: () => void;
   onRefreshSource: () => void;
@@ -75,6 +76,7 @@ export function LibraryMaterialInspector({
   onCleanupPage,
   onFindHeaderFooter,
   onConfirmPageReview,
+  onIndexMaterial,
   onRestore,
   onAddToProject,
   onRefreshSource,
@@ -114,6 +116,7 @@ export function LibraryMaterialInspector({
               onCleanupPage={onCleanupPage}
               onFindHeaderFooter={onFindHeaderFooter}
               onConfirmPageReview={onConfirmPageReview}
+              onIndexMaterial={onIndexMaterial}
             />
           </Tabs.Content>
           <Tabs.Content value="revisions">

@@ -234,7 +234,7 @@ def test_model_install_survives_another_writer_during_download(
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     job_id = local_models.start_install(session, "tentex-test/embeddings", None)
 
-    def fake_download(**kwargs: object) -> None:
+    def fake_download(*args: object, **kwargs: object) -> None:
         assert not session.in_transaction()
         with Session(session.get_bind(), expire_on_commit=False) as other:
             other.add(RetrievalSettings(id=1, preset=RetrievalPreset.FAST))
@@ -245,6 +245,7 @@ def test_model_install_survives_another_writer_during_download(
         assert local_models.start_install(session, "tentex-test/embeddings", None) == job_id
 
     monkeypatch.setattr(local_models, "snapshot_download", fake_download)
+    monkeypatch.setattr(local_models, "hf_hub_download", fake_download)
     monkeypatch.setattr(local_models, "list_repo_files", lambda *_, **__: ["model.safetensors"])
     detached = session.get(BackgroundJob, job_id)
     assert detached is not None

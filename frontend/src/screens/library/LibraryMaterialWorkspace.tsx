@@ -17,6 +17,7 @@ import {
   type MaterialPageRead,
   type MaterialPurpose,
 } from "../../api/materials";
+import { indexLibraryMaterial } from "../../api/retrieval";
 import {
   DocumentStage,
   getMaterialPresentation,
@@ -67,6 +68,7 @@ export function LibraryMaterialWorkspace() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const revisionParam = Number(searchParams.get("revision"));
+  const requestedPage = Number(searchParams.get("page"));
   const selectedRevision = Number.isFinite(revisionParam) && revisionParam > 0 ? revisionParam : null;
   const compareParam = Number(searchParams.get("compareRevision"));
   const compareRevision = Number.isFinite(compareParam) && compareParam > 0 ? compareParam : null;
@@ -133,6 +135,11 @@ export function LibraryMaterialWorkspace() {
     setMode(null);
     view.setPage(1);
   }, [materialId]);
+
+  useEffect(() => {
+    if (!Number.isFinite(requestedPage) || requestedPage < 1) return;
+    view.setPage(requestedPage);
+  }, [materialId, requestedPage]);
 
   useEffect(() => {
     if (!editSession) return;
@@ -277,6 +284,15 @@ export function LibraryMaterialWorkspace() {
     }
     const state = location.state as { libraryReturnTo?: string } | null;
     navigate(returnTo ?? state?.libraryReturnTo ?? "/library");
+  }
+
+  async function addMaterialToIndex() {
+    try {
+      await indexLibraryMaterial(materialId);
+      setNotice("Материал поставлен в очередь добавления в активный индекс.");
+    } catch (caught) {
+      setNotice(caught instanceof Error ? caught.message : "Не удалось поставить материал в индекс");
+    }
   }
 
   const returnTo = searchParams.get("returnTo");
@@ -633,6 +649,7 @@ export function LibraryMaterialWorkspace() {
               if (!page) return;
               void store.run(() => confirmLibraryPageReview(detail.id, page.page_number));
             }}
+            onIndexMaterial={() => void addMaterialToIndex()}
             onRestore={(revision) => void store.run(async () => {
               const restored = await restoreMaterialRevision(detail.id, revision);
               setParam("revision", null);
@@ -725,6 +742,7 @@ export function LibraryMaterialWorkspace() {
               if (!page) return;
               void store.run(() => confirmLibraryPageReview(detail.id, page.page_number));
             }}
+            onIndexMaterial={() => void addMaterialToIndex()}
             onRestore={(revision) => void store.run(() => restoreMaterialRevision(detail.id, revision))}
             onAddToProject={() => setAttachOpen(true)}
             onRefreshSource={() => void store.run(() => refreshLibrarySource(detail.id))}

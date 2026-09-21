@@ -495,7 +495,7 @@ export function UiKit() {
                 unit: "блок",
                 done: 640,
                 total: 1500,
-                etaMinutes: 12,
+                etaSeconds: 12 * 60,
                 state: "running",
               }}
               onPause={() => undefined}
@@ -511,7 +511,7 @@ export function UiKit() {
                 unit: "",
                 done: 0,
                 total: 0,
-                etaMinutes: null,
+                etaSeconds: null,
                 state: "running",
               }}
               onCancel={() => undefined}
@@ -524,7 +524,7 @@ export function UiKit() {
                 unit: "",
                 done: 0,
                 total: 0,
-                etaMinutes: null,
+                etaSeconds: null,
                 state: "review",
               }}
               onDismiss={() => undefined}

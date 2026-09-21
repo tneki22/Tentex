@@ -126,6 +126,16 @@ def delete_index(index_id: UUID, session: SessionDependency) -> None:
     indexing.delete_inactive_index(session, index_id)
 
 
+@router.post(
+    "/retrieval/indexes/materials/{material_id}",
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def index_material(material_id: UUID, session: SessionDependency) -> BackgroundJobStartRead:
+    """Поставить один готовый материал в очередь инкрементальной индексации."""
+    return BackgroundJobStartRead(job_id=indexing.queue_material_reindex(session, material_id))
+
+
 @router.post("/retrieval/search", response_model=RetrievalSearchRead)
 async def search(command: RetrievalSearchWrite, session: SessionDependency) -> RetrievalSearchRead:
     return await HybridRetriever().search(session, command)

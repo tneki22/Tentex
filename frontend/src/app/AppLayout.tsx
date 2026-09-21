@@ -30,7 +30,7 @@ import {
   type BackgroundJobRead,
 } from "../api/backgroundJobs";
 import { TaskRow, type BackgroundTask, type TaskKind } from "../components/domain";
-import { estimateEtaMinutes } from "../hooks/backgroundTaskEta";
+import { estimateEtaSeconds } from "../hooks/backgroundTaskEta";
 
 const BACKGROUND_POLL_MS = 4000;
 
@@ -89,7 +89,7 @@ function toBackgroundTask(job: BackgroundJobRead): BackgroundTask {
     unit: job.progress_unit,
     done: job.done,
     total: job.total,
-    etaMinutes: estimateEtaMinutes(job.id, job.done, job.total, job.updated_at),
+    etaSeconds: estimateEtaSeconds(job.id, job.done, job.total, job.updated_at),
     state: job.needs_review ? "review" : (job.state as BackgroundTask["state"]),
     error: job.error ?? undefined,
   };

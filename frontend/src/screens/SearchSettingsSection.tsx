@@ -1,5 +1,5 @@
 import { Check, Cpu, Database, Download, Gauge, Play, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getAiSettings, type AiSettingsRead } from "../api/ai";
 import { ProjectApiError } from "../api/projects";
 import {
@@ -68,10 +68,16 @@ export function SearchSettingsSection({
   const [aiSettings, setAiSettings] = useState<AiSettingsRead | null>(null);
   const [externalProvider, setExternalProvider] = useState<string | null>(null);
   const [externalModel, setExternalModel] = useState<string | null>(null);
+  const [manualModelId, setManualModelId] = useState("");
+  const [manualModelLabel, setManualModelLabel] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [watchedJobId, setWatchedJobId] = useState<string | null>(null);
+  const [testingProfileId, setTestingProfileId] = useState<string | null>(null);
+  const [testFeedback, setTestFeedback] = useState<{ tone: "success" | "danger"; text: string } | null>(null);
   const watchedJob = useBackgroundJob(watchedJobId);
+  const initialSubsection = useRef(subsection);
+  const initialScrollDone = useRef(false);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -105,6 +111,29 @@ export function SearchSettingsSection({
   }, [onActiveSubsection, subsection]);
 
   useEffect(() => {
+    if (!settings || initialScrollDone.current || initialSubsection.current === "overview") return;
+    initialScrollDone.current = true;
+    window.requestAnimationFrame(() => {
+      document.getElementById(`search-${initialSubsection.current}`)?.scrollIntoView({ block: "start" });
+    });
+  }, [settings]);
+
+  useEffect(() => {
+    if (!settings) return;
+    const sections = ["overview", "models", "index", "quality", "advanced"]
+      .map((id) => document.getElementById(`search-${id}`))
+      .filter((section): section is HTMLElement => section !== null);
+    const observer = new IntersectionObserver((entries) => {
+      const active = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((left, right) => left.boundingClientRect.top - right.boundingClientRect.top)[0];
+      if (active) onActiveSubsection(active.target.id.replace("search-", ""));
+    }, { rootMargin: "-12% 0px -72% 0px", threshold: 0 });
+    sections.forEach((section) => observer.observe(section));
+    return () => observer.disconnect();
+  }, [onActiveSubsection, settings]);
+
+  useEffect(() => {
     if (watchedJob.job) void load();
   }, [watchedJob.job?.state, watchedJob.job?.done, load]);
 
@@ -136,6 +165,51 @@ export function SearchSettingsSection({
     }
   }
 
+  async function testProfile(profileId: string) {
+    setTestingProfileId(profileId);
+    setTestFeedback(null);
+    setError("");
+    try {
+      const profile = await testEmbeddingProfile(profileId);
+      setTestFeedback({
+        tone: "success",
+        text: `Проверка прошла: ${profile.dimension ?? "?"} измерений. Профиль готов для сборки индекса.`,
+      });
+      await load();
+    } catch (caught) {
+      setTestFeedback({ tone: "danger", text: errorText(caught) });
+    } finally {
+      setTestingProfileId(null);
+    }
+  }
+
+  async function addManualModel() {
+    const modelId = manualModelId.trim();
+    if (!modelId || !modelId.includes("/")) {
+      setError("Укажите идентификатор Hugging Face в формате owner/model");
+      return;
+    }
+    setBusy("manual-model");
+    setError("");
+    try {
+      const profile = await createEmbeddingProfile({
+        label: manualModelLabel.trim() || modelId,
+        backend_kind: "local_hf",
+        model_id: modelId,
+      });
+      const started = await installLocalEmbeddingModel(modelId);
+      setWatchedJobId(started.job_id);
+      setManualModelId("");
+      setManualModelLabel("");
+      setTestFeedback({ tone: "success", text: `Модель «${profile.label}» добавлена и поставлена на скачивание.` });
+      await load();
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setBusy("");
+    }
+  }
+
   if (!settings) {
     return error
       ? <ErrorState message={error}><Button onClick={() => void load()}>Повторить</Button></ErrorState>
@@ -149,6 +223,14 @@ export function SearchSettingsSection({
   const externalModels = aiSettings?.models.filter(
     (model) => model.provider_id === externalProvider && model.is_available,
   ) ?? [];
+  const embeddingModels = externalModels.filter((model) => (
+    model.supported_parameters.some((parameter) => /embed/i.test(parameter))
+      || model.input_modalities.some((modality) => /embed/i.test(modality))
+      || /embed/i.test(`${model.model_id} ${model.display_name}`)
+  ));
+  // Некоторые OpenAI-совместимые каталоги не заполняют capability-поля.
+  // В этом случае не прячем рабочие модели, а показываем исходный каталог.
+  const externalEmbeddingModels = embeddingModels.length > 0 ? embeddingModels : externalModels;
 
   function buildCandidate() {
     if (!settings) return;
@@ -198,8 +280,8 @@ export function SearchSettingsSection({
         <ErrorState message={`Модель не скачалась: ${watchedJob.job.error ?? "причина не указана"}`} />
       )}
 
-      {subsection === "overview" && (
-        <section id="search-overview" className="ai-settings-group is-first">
+      <div id="search-overview" className="ai-anchor-section">
+        <section className="ai-settings-group is-first">
           <header className="ai-group-head">
             <div>
               <h2>Поиск по содержимому</h2>
@@ -245,10 +327,10 @@ export function SearchSettingsSection({
             <p className="retrieval-neutral-note" key={reason}>{reason}</p>
           ))}
         </section>
-      )}
+      </div>
 
-      {subsection === "models" && (
-        <section id="search-models" className="ai-settings-group is-first">
+      <div id="search-models" className="ai-anchor-section">
+        <section className="ai-settings-group is-first">
           <header className="ai-group-head">
             <div>
               <h2>Модели</h2>
@@ -288,13 +370,26 @@ export function SearchSettingsSection({
                   {profile && (
                     <Button
                       variant="ghost"
-                      disabled={busy !== "" || !model.installed || model.installing}
-                      onClick={() => void action(`test:${profile.id}`, () => testEmbeddingProfile(profile.id))}
-                    ><RefreshCw size={14} /> Проверить</Button>
+                      disabled={busy !== "" || testingProfileId !== null || !model.installed || model.installing}
+                      onClick={() => void testProfile(profile.id)}
+                    >{testingProfileId === profile.id ? <RefreshCw className="is-spinning" size={14} /> : <RefreshCw size={14} />} {testingProfileId === profile.id ? "Проверяем…" : "Проверить"}</Button>
                   )}
                 </div>
               </article>;
             })}
+          </div>
+          {watchedJob.job?.kind === "retrieval_model_install" && watchedJob.job.state !== "completed" && (
+            <div className="retrieval-download-progress" role="status">
+              <strong>{watchedJob.job.subject || "Embedding-модель"}</strong>
+              <span>{watchedJob.job.done} из {watchedJob.job.total || "?"} файлов</span>
+              <div className="retrieval-progress-track"><span style={{ width: watchedJob.job.total ? `${Math.round((watchedJob.job.done / watchedJob.job.total) * 100)}%` : "35%" }} /></div>
+            </div>
+          )}
+          <div className="retrieval-manual-model">
+            <div><strong>Добавить модель вручную</strong><small>Любой совместимый репозиторий Hugging Face. Код модели не запускается.</small></div>
+            <input value={manualModelId} onChange={(event) => setManualModelId(event.target.value)} placeholder="owner/model" aria-label="Идентификатор embedding-модели" />
+            <input value={manualModelLabel} onChange={(event) => setManualModelLabel(event.target.value)} placeholder="Название (необязательно)" aria-label="Название embedding-модели" />
+            <Button variant="secondary" disabled={busy !== "" || !manualModelId.trim()} onClick={() => void addManualModel()}><Download size={14} /> Добавить модель</Button>
           </div>
           <div className="ai-setting-row">
             <div>
@@ -313,7 +408,7 @@ export function SearchSettingsSection({
                 ariaLabel="Embedding-модель API"
                 value={externalModel}
                 emptyOption="Выберите модель"
-                options={externalModels.map((model) => ({ value: model.model_id, label: model.display_name }))}
+                options={externalEmbeddingModels.map((model) => ({ value: model.model_id, label: model.display_name }))}
                 onValueChange={setExternalModel}
               />
               <Button
@@ -331,11 +426,12 @@ export function SearchSettingsSection({
               >Добавить профиль</Button>
             </div>
           </div>
+          {testFeedback && <p className={`retrieval-test-feedback is-${testFeedback.tone}`} role="status">{testFeedback.text}</p>}
         </section>
-      )}
+      </div>
 
-      {subsection === "index" && (
-        <section id="search-index" className="ai-settings-group is-first">
+      <div id="search-index" className="ai-anchor-section">
+        <section className="ai-settings-group is-first">
           <header className="ai-group-head">
             <div>
               <h2>Индекс</h2>
@@ -373,7 +469,7 @@ export function SearchSettingsSection({
             {indexes.map((index) => <article key={index.id}>
               <div>
                 <span className="retrieval-index-head">
-                  <strong>{index.state === "active" ? "Активный индекс" : "Кандидат"}</strong>
+                  <strong>{index.state === "active" ? "Активный индекс" : "Кандидат"} · {settings.profiles.find((profile) => profile.id === index.profile_id)?.label ?? "модель не найдена"}</strong>
                   <StatusBadge tone={INDEX_STATUS[index.state].tone}>{INDEX_STATUS[index.state].label}</StatusBadge>
                 </span>
                 <small>
@@ -396,11 +492,18 @@ export function SearchSettingsSection({
             </article>)}
             {indexes.length === 0 && <p className="ai-muted">Индексов ещё нет. Выберите проверенный профиль и соберите первый кандидат.</p>}
           </div>
+          {watchedJob.job?.kind === "retrieval_index" && watchedJob.job.state !== "completed" && (
+            <div className="retrieval-download-progress" role="status">
+              <strong>{watchedJob.job.subject || "Сбор индекса"}</strong>
+              <span>{watchedJob.job.done} из {watchedJob.job.total || "?"} материалов</span>
+              <div className="retrieval-progress-track"><span style={{ width: watchedJob.job.total ? `${Math.round((watchedJob.job.done / watchedJob.job.total) * 100)}%` : "35%" }} /></div>
+            </div>
+          )}
         </section>
-      )}
+      </div>
 
-      {subsection === "quality" && (
-        <section id="search-quality" className="ai-settings-group is-first">
+      <div id="search-quality" className="ai-anchor-section">
+        <section className="ai-settings-group is-first">
           <header className="ai-group-head">
             <div><h2>Качество</h2><p>Контрольные запросы сравнивают релевантность, задержку и zero-hit на одном корпусе.</p></div>
             <Button
@@ -409,6 +512,11 @@ export function SearchSettingsSection({
               onClick={() => candidate && void action(`benchmark:${candidate.id}`, () => runRetrievalBenchmark(candidate.id))}
             >Запустить на кандидате</Button>
           </header>
+          <div className="retrieval-quality-guide" aria-label="Метрики качества">
+            <article><strong>Recall@10</strong><p>Доля известных релевантных мест, которые попали в первые десять результатов.</p></article>
+            <article><strong>NDCG@10</strong><p>Учитывает порядок: полезные результаты выше дают большую оценку.</p></article>
+            <article><strong>p95</strong><p>Время ответа для 95% запросов. Показывает задержку в тяжёлом сценарии.</p></article>
+          </div>
           <div className="retrieval-benchmark-list">
             {benchmarks.map((run) => <article key={run.id}>
               <strong>NDCG@10 {((run.metrics.ndcg_at_10 ?? 0) * 100).toFixed(1)}%</strong>
@@ -420,10 +528,10 @@ export function SearchSettingsSection({
             {benchmarks.length === 0 && <p className="ai-muted">Добавьте контрольные запросы через API — здесь появятся сравнимые запуски.</p>}
           </div>
         </section>
-      )}
+      </div>
 
-      {subsection === "advanced" && (
-        <section id="search-advanced" className="ai-settings-group is-first">
+      <div id="search-advanced" className="ai-anchor-section">
+        <section className="ai-settings-group is-first">
           <header className="ai-group-head"><div><h2>Дополнительно</h2><p>Пресет применяется сразу. Модель и размеры кусков меняются только через новый индекс.</p></div></header>
           <div className="ai-setting-row">
             <div><strong>Профиль retrieval</strong><small>Количество кандидатов, финальных мест и reranker.</small></div>
@@ -442,9 +550,14 @@ export function SearchSettingsSection({
               })))}
             />
           </div>
+          <p className="retrieval-neutral-note">{({
+            fast: "Быстро: минимум кандидатов и без reranker — подходит для коротких запросов и слабого компьютера.",
+            balanced: "Сбалансированно: равный вклад поиска по словам и смыслу, обычно лучший повседневный режим.",
+            accurate: "Точно: больше кандидатов и локальный reranker — медленнее, зато лучше для сложных формулировок.",
+          } as Record<RetrievalPreset, string>)[settings.preset]}</p>
           <p className="retrieval-neutral-note">Chunking активного индекса: цель 384, максимум 480, overlap 64 токена. Для изменения нужна пересборка.</p>
         </section>
-      )}
+      </div>
     </div>
   );
 }

@@ -169,6 +169,7 @@ export const buildRetrievalIndex = (command: {
   profile_id: string;
   preset: RetrievalPreset;
   cloud_consent: boolean;
+  material_ids?: string[];
 }): Promise<{ index: RetrievalIndexRead; job_id: string }> => request("/api/retrieval/indexes", {
   method: "POST",
   body: JSON.stringify({
@@ -176,9 +177,14 @@ export const buildRetrievalIndex = (command: {
     chunk_target_tokens: 384,
     chunk_max_tokens: 480,
     chunk_overlap_tokens: 64,
-    material_ids: [],
+    material_ids: command.material_ids ?? [],
   }),
 });
+
+export const indexLibraryMaterial = (materialId: string): Promise<BackgroundJobStartRead> => request(
+  `/api/retrieval/indexes/materials/${encodeURIComponent(materialId)}`,
+  { method: "POST" },
+);
 
 export const activateRetrievalIndex = (indexId: string): Promise<RetrievalIndexRead> =>
   request(`/api/retrieval/indexes/${encodeURIComponent(indexId)}/activate`, { method: "POST" });

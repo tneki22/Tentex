@@ -58,6 +58,18 @@ const SUBSECTIONS: Partial<Record<SetupSection, readonly { id: string; label: st
   search: SEARCH_SUBSECTIONS,
 };
 
+const LAST_SETUP_KEY = "tentex-last-setup-location";
+
+function readLastSetupLocation(): { section: SetupSection; subsection: string | null } | null {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LAST_SETUP_KEY) ?? "null") as { section?: string; subsection?: string } | null;
+    if (!parsed || !SECTIONS.some((item) => item.id === parsed.section)) return null;
+    return { section: parsed.section as SetupSection, subsection: parsed.subsection ?? null };
+  } catch {
+    return null;
+  }
+}
+
 const FUTURE_COPY: Record<Exclude<SetupSection, "ai" | "ocr" | "search" | "background">, { title: string; body: string }> = {
   bot: {
     title: "Бот пока не настроен",
@@ -75,9 +87,13 @@ const FUTURE_COPY: Record<Exclude<SetupSection, "ai" | "ocr" | "search" | "backg
 
 export function Setup() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const remembered = readLastSetupLocation();
   const requested = searchParams.get("section") as SetupSection | null;
-  const active = SECTIONS.some((section) => section.id === requested) ? requested! : "ai";
-  const requestedSubsection = searchParams.get("subsection");
+  const rememberedSection = remembered?.section ?? "ai";
+  const active = SECTIONS.some((section) => section.id === requested)
+    ? requested!
+    : rememberedSection;
+  const requestedSubsection = searchParams.get("subsection") ?? (requested ? null : remembered?.subsection);
   const activeSubsections = SUBSECTIONS[active];
   const initialSubsection = activeSubsections?.some((item) => item.id === requestedSubsection)
     ? requestedSubsection!
@@ -86,7 +102,13 @@ export function Setup() {
 
   useEffect(() => {
     if (!requested) {
-      setSearchParams({ section: "ai", subsection: "overview" }, { replace: true });
+      const rememberedSubsections = SUBSECTIONS[active];
+      setSearchParams(
+        rememberedSubsections
+          ? { section: active, subsection: rememberedSubsection(active, remembered?.subsection) }
+          : { section: active },
+        { replace: true },
+      );
       return;
     }
     const subsections = SUBSECTIONS[active];
@@ -94,6 +116,13 @@ export function Setup() {
       setSearchParams({ section: active, subsection: subsections[0].id }, { replace: true });
     }
   }, [active, requested, requestedSubsection, setSearchParams]);
+
+  useEffect(() => {
+    localStorage.setItem(LAST_SETUP_KEY, JSON.stringify({
+      section: active,
+      subsection: rememberedSubsection(active, requestedSubsection),
+    }));
+  }, [active, requestedSubsection]);
 
   useEffect(() => {
     const subsections = SUBSECTIONS[active];
@@ -104,11 +133,13 @@ export function Setup() {
 
   function selectSection(section: SetupSection) {
     const subsections = SUBSECTIONS[section];
+    localStorage.setItem(LAST_SETUP_KEY, JSON.stringify({ section, subsection: subsections?.[0]?.id ?? null }));
     setSearchParams(subsections ? { section, subsection: subsections[0].id } : { section });
   }
 
   function selectSubsection(section: SetupSection, subsection: string) {
     setActiveSubsection(subsection);
+    localStorage.setItem(LAST_SETUP_KEY, JSON.stringify({ section, subsection }));
     setSearchParams({ section, subsection }, { replace: true });
     window.requestAnimationFrame(() => {
       document.getElementById(`${section}-${subsection}`)?.scrollIntoView({
@@ -181,4 +212,9 @@ export function Setup() {
       </div>
     </div>
   );
+}
+
+function rememberedSubsection(section: SetupSection, value: string | null | undefined): string {
+  const subsections = SUBSECTIONS[section];
+  return subsections?.some((item) => item.id === value) ? value! : subsections?.[0]?.id ?? "";
 }

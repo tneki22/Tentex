@@ -315,7 +315,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
                     <IconButton label={`Удалить файл «${material.display_name}»`} disabled={materials.busy} onClick={() => void materials.detach(material.id)}><Trash2 size={15} /></IconButton>
                   </div>
                 </div>
-                {material.task && material.task.state !== "completed" && <TaskRow task={{ id: material.task.id, kind: "parse", subject: material.display_name, unit: "страниц", done: material.task.done, total: material.task.total, etaMinutes: null, state: material.task.state, error: material.task.error ?? undefined }} onPause={() => void materials.control(material.id, "pause")} onResume={() => void materials.control(material.id, "resume")} onRetry={() => void materials.control(material.id, "retry")} />}
+                {material.task && material.task.state !== "completed" && <TaskRow task={{ id: material.task.id, kind: "parse", subject: material.display_name, unit: "страниц", done: material.task.done, total: material.task.total, etaSeconds: null, state: material.task.state, error: material.task.error ?? undefined }} onPause={() => void materials.control(material.id, "pause")} onResume={() => void materials.control(material.id, "resume")} onRetry={() => void materials.control(material.id, "retry")} />}
                 <Disclosure summary="Роль и инструкция">
                   <TextbookSourceCard material={material} busy={materials.busy} onSave={materials.update} />
                 </Disclosure>

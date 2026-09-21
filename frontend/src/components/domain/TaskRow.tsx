@@ -16,7 +16,10 @@ export type TaskKind =
   | "link_answers"
   | "ai_answer_sections"
   | "ai_program_build"
-  | "coverage_research";
+  | "coverage_research"
+  | "retrieval_index"
+  | "retrieval_model_install"
+  | "retrieval_exhaustive";
 
 export interface BackgroundTask {
   id: string;
@@ -31,7 +34,7 @@ export interface BackgroundTask {
   done: number;
   total: number;
   /** Оценка остатка. null — пока не считается. */
-  etaMinutes: number | null;
+  etaSeconds: number | null;
   /** `review` — работа досчитана, но предложение ещё ждёт человека. */
   state: "queued" | "running" | "paused" | "failed" | "review";
   /** Причина падения. Показывается как есть: обтекаемое «что-то пошло не так» бесполезно. */
@@ -52,6 +55,9 @@ const KIND_LABEL: Record<TaskKind, string> = {
   ai_answer_sections: "Разметка ответов моделью",
   ai_program_build: "Составление программы",
   coverage_research: "Исследование покрытия",
+  retrieval_index: "Сбор индекса",
+  retrieval_model_install: "Установка embedding-модели",
+  retrieval_exhaustive: "Полный поиск по источникам",
 };
 
 interface TaskRowProps {
@@ -80,7 +86,11 @@ function metaText(task: BackgroundTask): string {
   if (task.total > 0) parts.push(`${task.unit ? `${task.unit} ` : ""}${task.done} из ${task.total}`);
   else if (task.state === "running") parts.push("идёт");
   if (task.state === "paused") parts.push("на паузе");
-  if (task.etaMinutes !== null && task.state === "running") parts.push(`≈${task.etaMinutes} мин`);
+  if (task.etaSeconds !== null && task.state === "running") {
+    const minutes = Math.floor(task.etaSeconds / 60);
+    const seconds = task.etaSeconds % 60;
+    parts.push(minutes > 0 ? `≈${minutes} мин ${seconds} с` : `≈${seconds} с`);
+  }
   return parts.join(" · ");
 }
 

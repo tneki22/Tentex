@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import fnmatch
 import hashlib
+import logging
 import re
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from huggingface_hub import list_repo_files, snapshot_download
+from huggingface_hub import hf_hub_download, list_repo_files, snapshot_download
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -23,6 +26,7 @@ from app.retrieval.jobs import finish, write_job
 from app.retrieval.schemas import LocalModelRead
 
 _MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+log = logging.getLogger("tentex.retrieval")
 
 CURATED_MODELS = (
     (
@@ -71,7 +75,7 @@ def _active_install_jobs(session: Session) -> dict[str, UUID]:
 
 def list_models(session: Session) -> list[LocalModelRead]:
     installing = _active_install_jobs(session)
-    return [
+    curated = [
         LocalModelRead(
             model_id=model_id,
             label=label,
@@ -82,6 +86,22 @@ def list_models(session: Session) -> list[LocalModelRead]:
         )
         for model_id, label, role, recommended_for in CURATED_MODELS
     ]
+    known = {item.model_id for item in curated}
+    custom_profiles = session.scalars(
+        select(EmbeddingProfile).order_by(EmbeddingProfile.created_at)
+    )
+    for profile in custom_profiles:
+        if profile.model_id in known or profile.backend_kind.value != "local_hf":
+            continue
+        curated.append(LocalModelRead(
+            model_id=profile.model_id,
+            label=profile.label,
+            role="embedding",
+            installed=model_path(profile.model_id).is_dir(),
+            installing=profile.model_id in installing,
+            recommended_for="Добавленная вручную модель",
+        ))
+    return curated
 
 
 def start_install(session: Session, model_id: str, revision: str | None) -> UUID:
@@ -158,12 +178,56 @@ def process_install_job(session: Session, detached_job: BackgroundJob) -> None:
         partial = _partial_path(model_id)
         # Недокачанный `.partial` остаётся на диске: huggingface_hub докачивает его,
         # а `installed` не видит его до переименования.
-        snapshot_download(
-            repo_id=model_id,
-            revision=str(revision) if revision else None,
-            local_dir=partial,
-            ignore_patterns=_skipped_files(model_id, str(revision) if revision else None),
-        )
+        ignored = _skipped_files(model_id, str(revision) if revision else None)
+        downloaded_by_snapshot = False
+        try:
+            files = [
+                name for name in list_repo_files(
+                    model_id, revision=str(revision) if revision else None
+                )
+                if not any(fnmatch.fnmatch(name, pattern) for pattern in ignored)
+            ]
+        except Exception as error:
+            # Каталог может быть недоступен, хотя сам snapshot endpoint отвечает.
+            # В этом режиме сохраняем прежний путь и честно показываем одну задачу.
+            log.warning("Не удалось перечислить файлы модели %s: %s", model_id, error)
+            write_job(session, job_id, lambda _, job: setattr(job, "total", 1))
+            snapshot_download(
+                repo_id=model_id,
+                revision=str(revision) if revision else None,
+                local_dir=partial,
+                ignore_patterns=ignored,
+            )
+            files = []
+            downloaded_by_snapshot = True
+        if not downloaded_by_snapshot:
+            if not files:
+                raise RuntimeError("В репозитории embedding-модели нет подходящих файлов")
+
+            def set_total(inner: Session, job: BackgroundJob) -> None:
+                job.total = len(files)
+                job.done = 0
+
+            write_job(session, job_id, set_total)
+
+            # В отличие от snapshot_download этот короткий слой знает, когда файл
+            # целиком появился в каталоге. Так панель показывает реальный чекпоинт,
+            # а повтор после сбоя продолжает докачку уже существующих файлов.
+            with ThreadPoolExecutor(max_workers=min(4, len(files))) as pool:
+                futures = [pool.submit(
+                    hf_hub_download,
+                    model_id,
+                    name,
+                    revision=str(revision) if revision else None,
+                    local_dir=partial,
+                ) for name in files]
+                for completed, future in enumerate(as_completed(futures), start=1):
+                    future.result()
+                    write_job(
+                        session,
+                        job_id,
+                        lambda _, job, completed=completed: setattr(job, "done", completed),
+                    )
         final = model_path(model_id)
         if final.exists():
             shutil.rmtree(final)

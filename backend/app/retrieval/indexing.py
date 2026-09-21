@@ -99,7 +99,7 @@ def start_index_build(
             kind=BackgroundJobKind.RETRIEVAL_INDEX,
             state=BackgroundJobState.QUEUED,
             total=len(materials),
-            checkpoint={"index_id": str(index.id)},
+            checkpoint={"index_id": str(index.id), "profile_id": str(profile.id)},
         )
         session.add_all([index, job])
     return RetrievalIndexBuildRead.model_validate(
@@ -155,7 +155,12 @@ def queue_incremental_reindex(session: Session, material_id: UUID) -> None:
     profile = session.get(EmbeddingProfile, active.profile_id)
     if profile is None or profile.backend_kind != EmbeddingBackendKind.LOCAL_HF:
         return
-    if str(material_id) not in {item["material_id"] for item in active.corpus_manifest}:
+    material = session.get(Material, material_id)
+    if (
+        material is None
+        or material.status != MaterialState.READY
+        or material.active_parse_revision <= 0
+    ):
         return
     pending = session.scalar(
         select(BackgroundJob.id).where(
@@ -180,6 +185,47 @@ def queue_incremental_reindex(session: Session, material_id: UUID) -> None:
             },
         )
     )
+
+
+def queue_material_reindex(session: Session, material_id: UUID) -> UUID:
+    """Добавить готовый материал в активный локальный индекс без полной пересборки."""
+    with session.begin():
+        row = _settings(session)
+        if row.active_index_id is None:
+            raise ProjectConflictError(
+                "Сначала активируйте индекс, затем добавляйте в него материалы",
+                code="retrieval_active_index_missing",
+            )
+        active = session.get(RetrievalIndex, row.active_index_id)
+        material = session.get(Material, material_id)
+        if active is None or material is None:
+            raise ProjectNotFoundError("Индекс или материал не найден")
+        if active.state != RetrievalIndexState.ACTIVE:
+            raise ProjectConflictError(
+                "Активный индекс ещё не готов", code="retrieval_index_not_ready"
+            )
+        profile = session.get(EmbeddingProfile, active.profile_id)
+        if profile is None or profile.backend_kind != EmbeddingBackendKind.LOCAL_HF:
+            raise ProjectConflictError(
+                "Добавление одного материала доступно для локальной embedding-модели",
+                code="retrieval_incremental_cloud_unsupported",
+            )
+        if material.status != MaterialState.READY or material.active_parse_revision <= 0:
+            raise ProjectConflictError("Материал ещё не подготовлен", code="material_not_ready")
+        queue_incremental_reindex(session, material_id)
+        job = session.scalar(
+            select(BackgroundJob.id).where(
+                BackgroundJob.kind == BackgroundJobKind.RETRIEVAL_INDEX,
+                BackgroundJob.material_id == material_id,
+                BackgroundJob.state.in_((BackgroundJobState.QUEUED, BackgroundJobState.RUNNING)),
+            )
+        )
+        if job is None:
+            raise ProjectConflictError(
+                "Материал уже входит в активный индекс",
+                code="retrieval_material_already_indexed",
+            )
+        return job
 
 
 def process_index_job(session: Session, detached_job: BackgroundJob) -> None:
@@ -318,12 +364,22 @@ def _process_incremental(
             next_order += 1
         if rows:
             inner.execute(insert(RetrievalChunk), rows)
-        index.corpus_manifest = [
+        manifest = [
             {**item, "revision": revision, "name": display_name, "size_bytes": size_bytes}
             if item["material_id"] == str(material_id)
             else item
             for item in index.corpus_manifest
         ]
+        if not any(item["material_id"] == str(material_id) for item in manifest):
+            manifest.append({
+                "material_id": str(material_id),
+                "name": display_name,
+                "revision": revision,
+                "size_bytes": size_bytes,
+                "source_kind": material.source_kind.value,
+            })
+        index.corpus_manifest = manifest
+        index.material_count = len(manifest)
         index.chunk_count = _chunk_count(inner, index_id)
         finish(
             job,
