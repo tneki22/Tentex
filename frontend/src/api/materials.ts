@@ -749,10 +749,12 @@ export function uploadLibraryMaterial(
   file: File,
   onProgress?: (percent: number) => void,
   subject?: string,
+  displayName?: string,
 ): Promise<LibraryMaterialDetailRead> {
   const form = new FormData();
   form.set("file", file);
   if (subject?.trim()) form.set("subject", subject.trim());
+  if (displayName?.trim()) form.set("display_name", displayName.trim());
   return uploadFormWithProgress<LibraryMaterialDetailRead>("/api/materials/upload", form, onProgress);
 }
 
@@ -762,11 +764,13 @@ export async function uploadTypstMaterial(
   paths: string[],
   entrypoint?: string,
   subject?: string,
+  displayName?: string,
 ): Promise<LibraryMaterialDetailRead> {
   const form = new FormData();
   form.set("input_kind", inputKind);
   if (entrypoint) form.set("entrypoint", entrypoint);
   if (subject?.trim()) form.set("subject", subject.trim());
+  if (displayName?.trim()) form.set("display_name", displayName.trim());
   if (inputKind === "zip") form.set("file", files[0]);
   else files.forEach((file, index) => {
     form.append("files", file);
@@ -799,14 +803,14 @@ export const buildTypstMaterial = (
 });
 
 export const createLibraryTextMaterial = (
-  command: { name: string; text: string; subject?: string | null },
+  command: { name: string; text: string; subject?: string | null; display_name?: string | null },
 ): Promise<LibraryMaterialDetailRead> => request("/api/materials/text", {
   method: "POST",
   body: JSON.stringify(command),
 });
 
 export const createLibraryExternalMaterial = (
-  command: { kind: "url" | "youtube"; url: string; subject?: string | null },
+  command: { kind: "url" | "youtube"; url: string; subject?: string | null; display_name?: string | null },
 ): Promise<LibraryMaterialDetailRead> => request("/api/materials/external", {
   method: "POST",
   body: JSON.stringify(command),

@@ -29,6 +29,12 @@ class BackgroundJobRead(ApiModel):
     # подставляет их отдельным шагом (`registry._read`).
     subject: str = ""
     model_label: str = ""
+    # Детали ИИ-задачи хранятся в checkpoint: не раздуваем общую таблицу
+    # полями, которые нужны только нескольким ролям.
+    page_number: int | None = None
+    source_revision: int | None = None
+    deadline_seconds: int | None = None
+    max_attempts: int | None = None
     # Что считают `done` и `total`: «страниц» у разбора, «минут» у расшифровки
     # записи, пусто у задач без счётчика.
     progress_unit: str = ""

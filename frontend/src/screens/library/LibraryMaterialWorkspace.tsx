@@ -44,6 +44,7 @@ import { AddToProjectDialog } from "./AddToProjectDialog";
 import { LibraryMaterialInspector, type InspectorTab } from "./LibraryMaterialInspector";
 import { MaterialSourceView, MaterialTextView } from "./MaterialSourceView";
 import { editablePageText, PageTextEditor } from "./PageTextEditor";
+import { removeYoutubeTimestamps } from "./youtubeTranscript";
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "список вопросов",
@@ -73,6 +74,7 @@ export function LibraryMaterialWorkspace() {
   const compareParam = Number(searchParams.get("compareRevision"));
   const compareRevision = Number.isFinite(compareParam) && compareParam > 0 ? compareParam : null;
   const inspectorTab = (searchParams.get("panel") as InspectorTab | null) ?? "processing";
+  const requestedCleanupJob = searchParams.get("job");
 
   const [mode, setMode] = useState<MaterialViewMode | null>(null);
   const wideEnough = () => window.innerWidth >= 900;
@@ -135,6 +137,10 @@ export function LibraryMaterialWorkspace() {
     setMode(null);
     view.setPage(1);
   }, [materialId]);
+
+  useEffect(() => {
+    if (requestedCleanupJob) setCleanupOpen(true);
+  }, [requestedCleanupJob]);
 
   useEffect(() => {
     if (!Number.isFinite(requestedPage) || requestedPage < 1) return;
@@ -322,13 +328,13 @@ export function LibraryMaterialWorkspace() {
     }
   }
 
-  function openTextEditor() {
+  function openTextEditor(draft?: string) {
     if (!page || !detail || store.pageLoading || page.page_number !== activePage || readOnly || isVersionComparison || store.busy || editOpen
       || (detail.task && ["running", "queued", "paused"].includes(detail.task.state))) return;
-    const initial = editablePageText(page);
+    const initial = draft ?? editablePageText(page);
     const draftKey = `tentex-page-draft:${detail.id}:${primaryRevision}:${page.page_number}`;
     setEditSession({ page, revision: primaryRevision, initial, draftKey });
-    setEditText(sessionStorage.getItem(draftKey) ?? initial);
+    setEditText(draft ?? sessionStorage.getItem(draftKey) ?? initial);
     setEditError(null);
     setEditOpen(true);
   }
@@ -644,6 +650,9 @@ export function LibraryMaterialWorkspace() {
             onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
             onEditPage={openTextEditor}
             onCleanupPage={() => setCleanupOpen(true)}
+            onRemoveTimestamps={() => {
+              if (page) openTextEditor(removeYoutubeTimestamps(page.markdown || page.text));
+            }}
             onFindHeaderFooter={() => setHeaderFooterOpen(true)}
             onConfirmPageReview={() => {
               if (!page) return;
@@ -737,6 +746,9 @@ export function LibraryMaterialWorkspace() {
             onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
             onEditPage={openTextEditor}
             onCleanupPage={() => setCleanupOpen(true)}
+            onRemoveTimestamps={() => {
+              if (page) openTextEditor(removeYoutubeTimestamps(page.markdown || page.text));
+            }}
             onFindHeaderFooter={() => setHeaderFooterOpen(true)}
             onConfirmPageReview={() => {
               if (!page) return;
@@ -781,6 +793,7 @@ export function LibraryMaterialWorkspace() {
           }}
           page={page}
           onOpenChange={setCleanupOpen}
+          initialJobId={requestedCleanupJob}
           onManualEdit={openTextEditor}
           onReload={async () => {
             await store.refreshDetail();

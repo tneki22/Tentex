@@ -1142,6 +1142,7 @@ def _existing_or_new(
     sha256: str,
     original_name: str,
     subject: str | None = None,
+    display_name: str | None = None,
     storage_path: str,
     media_type: str,
     source_kind: MaterialSourceKind,
@@ -1156,6 +1157,9 @@ def _existing_or_new(
 ) -> Material:
     """Дедупликация по содержимому: один файл в установке хранится один раз."""
     normalized_subject = subject.strip() if subject and subject.strip() else None
+    normalized_display_name = (
+        display_name.strip() if display_name and display_name.strip() else None
+    )
     material = session.scalar(select(Material).where(Material.sha256 == sha256))
     if material is not None:
         if material.subject is None and normalized_subject:
@@ -1165,7 +1169,7 @@ def _existing_or_new(
     material = Material(
         sha256=sha256,
         original_name=original_name,
-        display_name=original_name,
+        display_name=normalized_display_name or original_name,
         subject=normalized_subject,
         storage_path=storage_path,
         media_type=media_type,
@@ -1227,7 +1231,11 @@ async def store_uploaded_file(upload: UploadFile) -> UploadedFile:
 
 
 def register_uploaded_material(
-    session: Session, uploaded: UploadedFile, *, subject: str | None = None
+    session: Session,
+    uploaded: UploadedFile,
+    *,
+    subject: str | None = None,
+    display_name: str | None = None,
 ) -> Material:
     """Строка материала для уже сохранённого файла. Транзакцией управляет вызывающий."""
     return _existing_or_new(
@@ -1248,17 +1256,24 @@ def register_uploaded_material(
         estimated_seconds=uploaded.estimated_seconds,
         diagnostics=uploaded.diagnostics,
         outline=uploaded.outline,
+        display_name=display_name,
     )
 
 
 async def create_library_upload(
-    session: Session, upload: UploadFile, *, subject: str | None = None
+    session: Session,
+    upload: UploadFile,
+    *,
+    subject: str | None = None,
+    display_name: str | None = None,
 ) -> LibraryMaterialDetailRead:
     """Файл в Библиотеку без всякого проекта."""
     uploaded = await store_uploaded_file(upload)
     session.rollback()
     with session.begin():
-        material = register_uploaded_material(session, uploaded, subject=subject)
+        material = register_uploaded_material(
+            session, uploaded, subject=subject, display_name=display_name
+        )
         material_id = material.id
     return read_library_material(session, material_id)
 
@@ -1269,6 +1284,7 @@ def create_typst_material(
     input_kind: str,
     display_name: str | None = None,
     subject: str | None = None,
+    library_display_name: str | None = None,
 ) -> tuple[LibraryMaterialDetailRead, BackgroundJob]:
     """Регистрирует bundle и ставит единственную автоматическую сборку Typst.
 
@@ -1293,6 +1309,7 @@ def create_typst_material(
             size_bytes=bundle.size_bytes,
             page_count=None,
             estimated_seconds=1,
+            display_name=library_display_name,
         )
         typst = session.get(TypstMaterial, material.id)
         if typst is None:
@@ -1422,7 +1439,7 @@ def create_library_external(
     session.rollback()
     with session.begin():
         material_id = create_external_material_row(
-            session, *fetched, subject=command.subject
+            session, *fetched, subject=command.subject, display_name=command.display_name
         ).id
     return read_library_material(session, material_id)
 
@@ -1440,6 +1457,7 @@ def create_text_material_row(session: Session, command: LibraryTextMaterialCreat
         size_bytes=size,
         page_count=1,
         estimated_seconds=1,
+        display_name=command.display_name,
     )
 
 
@@ -1462,6 +1480,7 @@ def create_external_material_row(
     retrieved_at: Any,
     source_kind: MaterialSourceKind,
     subject: str | None = None,
+    display_name: str | None = None,
 ) -> Material:
     sha256, storage_path, size, original_name, media_type = store_text(name, text)
     return _existing_or_new(
@@ -1477,6 +1496,7 @@ def create_external_material_row(
         estimated_seconds=1,
         source_url=source_url,
         retrieved_at=retrieved_at,
+        display_name=display_name,
     )
 
 

@@ -2622,6 +2622,7 @@
 .ai-cleanup-preview,
 .ai-cleanup-original {
   display: grid;
+  grid-template-rows: var(--space-5) minmax(20rem, 52vh);
   gap: var(--space-2);
   min-width: 0;
 }
@@ -2771,6 +2772,9 @@
 .ai-cleanup-original pre {
   min-height: 20rem;
   max-height: 52vh;
+  height: 100%;
+  box-sizing: border-box;
+  align-self: stretch;
 }
 
 .ai-cleanup-preview textarea {

@@ -5,6 +5,12 @@
 делят одну таблицу и один словарь состояний. Исполнение разделено на независимые
 ресурсные полосы внутри worker-процесса.
 
+> **Дополнение 22.09.2026.** `ai_cleanup`, как и `ai_grouping`, `ai_import_repair`
+> и `ai_answer_sections`, остаётся в review после `completed` до явного
+> `POST /api/background-jobs/{id}/resolve`. Список фильтруется по `kind` и
+> `page_number`; полное предложение остаётся в `/result`. Cleanup хранит в
+> checkpoint номер страницы, снимок модели, дедлайн 120 секунд и две попытки.
+
 ## Решение и его основание
 
 Существующая таблица `processing_tasks` **повышена** до `background_jobs`

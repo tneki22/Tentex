@@ -52,6 +52,7 @@ REVIEW_REQUIRED_KINDS = {
     BackgroundJobKind.AI_GROUPING,
     BackgroundJobKind.AI_IMPORT_REPAIR,
     BackgroundJobKind.AI_ANSWER_SECTIONS,
+    BackgroundJobKind.AI_CLEANUP,
 }
 
 
@@ -153,6 +154,13 @@ def _model_label(session: Session, job: BackgroundJob) -> str:
         return "Проверка хранилища"
     if job.kind == BackgroundJobKind.STORAGE_CLEANUP:
         return "Очистка временного"
+    if job.kind in REVIEW_REQUIRED_KINDS:
+        checkpoint = job.checkpoint
+        return str(
+            checkpoint.get("model_label")
+            or (checkpoint.get("result") or {}).get("actual_model_id")
+            or "внешняя модель"
+        )
     if job.kind != BackgroundJobKind.PARSE:
         return ""
     if _is_audio(session, job):
@@ -170,6 +178,12 @@ def _read(session: Session, job: BackgroundJob) -> BackgroundJobRead:
         update={
             "subject": _subject(session, job),
             "model_label": _model_label(session, job),
+            "page_number": _positive_int(job.checkpoint.get("page_number")),
+            "source_revision": _positive_int(
+                (job.checkpoint.get("command") or {}).get("expected_revision")
+            ),
+            "deadline_seconds": _positive_int(job.checkpoint.get("deadline_seconds")),
+            "max_attempts": _positive_int(job.checkpoint.get("max_attempts")),
             "progress_unit": _progress_unit(session, job),
             "needs_review": _needs_review(job),
             "control_action": (
@@ -182,6 +196,15 @@ def _read(session: Session, job: BackgroundJob) -> BackgroundJobRead:
             ),
         }
     )
+
+
+def _positive_int(value: object) -> int | None:
+    """Безопасно вывести числовую деталь из JSON checkpoint."""
+    try:
+        result = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
 
 
 def _job_or_404(session: Session, job_id: UUID) -> BackgroundJob:
@@ -199,6 +222,8 @@ def list_jobs(
     failed_only: bool = False,
     project_id: UUID | None = None,
     material_id: UUID | None = None,
+    kind: str | None = None,
+    page_number: int | None = None,
 ) -> list[BackgroundJobRead]:
     """Список задач с фильтрами.
 
@@ -230,7 +255,25 @@ def list_jobs(
         stmt = stmt.where(BackgroundJob.project_id == project_id)
     if material_id is not None:
         stmt = stmt.where(BackgroundJob.material_id == material_id)
-    jobs = [_read(session, job) for job in session.scalars(stmt)]
+    if kind is not None:
+        try:
+            job_kind = BackgroundJobKind(kind)
+        except ValueError as error:
+            raise ProjectConflictError(
+                "Неизвестный вид фоновой задачи", code="background_job_kind_invalid"
+            ) from error
+        stmt = stmt.where(BackgroundJob.kind == job_kind)
+    rows = list(session.scalars(stmt))
+    # `checkpoint` — общий JSON-контейнер; номер страницы не заслуживает
+    # колонки или завязки общего реестра на SQLite JSON-диалект. Список задач
+    # мал, а Python-проверка одинаково читает старое число и старую строку.
+    if page_number is not None:
+        rows = [
+            job
+            for job in rows
+            if _positive_int(job.checkpoint.get("page_number")) == page_number
+        ]
+    jobs = [_read(session, job) for job in rows]
     if not pending_review:
         return jobs
     # Задача без сохранённого результата в корзину не попадает (см.

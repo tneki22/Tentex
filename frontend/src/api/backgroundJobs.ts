@@ -44,6 +44,10 @@ export interface BackgroundJobRead {
   subject: string;
   /** Чем читается материал: локальный движок или внешняя модель. У ролей ИИ пусто. */
   model_label: string;
+  page_number: number | null;
+  source_revision: number | null;
+  deadline_seconds: number | null;
+  max_attempts: number | null;
   /** Что считают `done` и `total`: «страниц» у разбора, «минут» у расшифровки записи. */
   progress_unit: string;
   /** Задача досчиталась, но её предложение ещё никто не принял и не убрал.
@@ -86,6 +90,8 @@ export const listBackgroundJobs = (
     failedOnly?: boolean;
     projectId?: string;
     materialId?: string;
+    kind?: BackgroundJobKind;
+    pageNumber?: number;
   } = {},
   signal?: AbortSignal,
 ): Promise<BackgroundJobRead[]> => {
@@ -95,6 +101,8 @@ export const listBackgroundJobs = (
   if (filters.failedOnly) params.set("failed_only", "true");
   if (filters.projectId) params.set("project_id", filters.projectId);
   if (filters.materialId) params.set("material_id", filters.materialId);
+  if (filters.kind) params.set("kind", filters.kind);
+  if (filters.pageNumber) params.set("page_number", String(filters.pageNumber));
   const query = params.toString();
   return request(`${BACKGROUND_JOBS_PATH}${query ? `?${query}` : ""}`, { signal });
 };
@@ -127,12 +135,16 @@ export const cancelBackgroundJob = (jobId: string): Promise<BackgroundJobRead> =
  */
 export async function findResumableBackgroundJob(
   kind: BackgroundJobKind,
-  filters: { projectId?: string; materialId?: string },
+  filters: { projectId?: string; materialId?: string; pageNumber?: number; jobId?: string },
   signal?: AbortSignal,
 ): Promise<BackgroundJobRead | null> {
+  // Все существующие review-диалоги используют эту функцию. Так переход из
+  // глобальной панели остаётся точным без копирования разбора `?job` в четыре
+  // экрана, а обычное открытие по-прежнему выбирает самый свежий результат.
+  const requestedJobId = filters.jobId ?? new URLSearchParams(window.location.search).get("job") ?? undefined;
   const jobs = await listBackgroundJobs(
-    { activeOnly: true, pendingReview: true, ...filters },
+    { activeOnly: true, pendingReview: true, projectId: filters.projectId, materialId: filters.materialId, pageNumber: filters.pageNumber, kind },
     signal,
   );
-  return jobs.find((job) => job.kind === kind) ?? null;
+  return jobs.find((job) => job.id === requestedJobId) ?? jobs.find((job) => job.kind === kind) ?? null;
 }

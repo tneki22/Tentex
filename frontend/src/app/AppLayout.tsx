@@ -74,7 +74,10 @@ function backgroundJobPath(job: BackgroundJobRead): string | null {
  *  Одна договорённость на все роли ИИ, а не вкладка в каждом разделе. */
 function backgroundJobReviewPath(job: BackgroundJobRead): string | null {
   const path = backgroundJobPath(job);
-  return path ? `${path}?job=${job.id}` : null;
+  if (!path) return null;
+  const params = new URLSearchParams({ job: job.id });
+  if (job.kind === "ai_cleanup" && job.page_number) params.set("page", String(job.page_number));
+  return `${path}?${params.toString()}`;
 }
 
 /** Имя файла или проекта; огрызок UUID — только если сервер не дал ничего. */
@@ -145,7 +148,10 @@ function BackgroundJobGroup({ jobs, pendingIds, navigate, onCancel, onPause, onR
   return (
     <div className="popover-task-list">
       {jobs.map((job) => {
-        const path = job.needs_review ? backgroundJobReviewPath(job) : backgroundJobPath(job);
+        const reviewableKind = ["ai_cleanup", "ai_grouping", "ai_import_repair", "ai_answer_sections"].includes(job.kind);
+        const path = job.needs_review || (job.state === "failed" && reviewableKind)
+          ? backgroundJobReviewPath(job)
+          : backgroundJobPath(job);
         return (
           <div
             key={job.id}

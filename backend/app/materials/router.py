@@ -71,8 +71,11 @@ async def upload_library_material(
     session: SessionDependency,
     file: Annotated[UploadFile, File()],
     subject: Annotated[str | None, Form()] = None,
+    display_name: Annotated[str | None, Form()] = None,
 ) -> LibraryMaterialDetailRead:
-    return await library.create_library_upload(session, file, subject=subject)
+    return await library.create_library_upload(
+        session, file, subject=subject, display_name=display_name
+    )
 
 
 @router.post(
@@ -86,28 +89,29 @@ async def upload_typst_material(
     paths: Annotated[list[str] | None, Form()] = None,
     entrypoint: Annotated[str | None, Form()] = None,
     subject: Annotated[str | None, Form()] = None,
+    display_name: Annotated[str | None, Form()] = None,
 ) -> TypstStartRead:
     """Принимает один `.typ`, дерево браузера или ZIP и сразу ставит сборку."""
-    display_name: str | None = None
+    source_name: str | None = None
     if input_kind == "zip":
         if file is None:
             raise ProjectDomainError(
                 "Для ZIP нужен файл архива", status=422, code="typst_bundle_invalid"
             )
-        display_name = file.filename
+        source_name = file.filename
         bundle = await typst.bundle_zip(file, entrypoint)
     elif input_kind in {"single", "folder"}:
         selected = files or ([file] if file else [])
         selected_paths = paths or ([file.filename or "main.typ"] if file else [])
         if input_kind == "folder":
-            display_name = typst.folder_display_name(selected_paths)
+            source_name = typst.folder_display_name(selected_paths)
         bundle = await typst.bundle_uploads(selected, selected_paths, entrypoint)
     else:
         raise ProjectDomainError(
             "Тип загрузки Typst не поддерживается", status=422, code="typst_bundle_invalid"
         )
     _, job = library.create_typst_material(
-        session, bundle, input_kind, display_name, subject
+        session, bundle, input_kind, source_name, subject, display_name
     )
     return TypstStartRead(material_id=job.material_id, job_id=job.id)
 

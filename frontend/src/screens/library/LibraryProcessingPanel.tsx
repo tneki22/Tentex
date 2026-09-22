@@ -1,4 +1,5 @@
-import { FileUp, Pencil, Play, RotateCcw, ScanLine, Settings2, Sparkles } from "lucide-react";
+import { Clock3, FileUp, Pencil, Play, RotateCcw, ScanLine, Settings2, Sparkles } from "lucide-react";
+import { hasYoutubeTimestamps } from "./youtubeTranscript";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import type {
@@ -23,6 +24,7 @@ import {
   ErrorState,
   Field,
   RadioCards,
+  Tooltip,
 } from "../../components/ui";
 
 const STAGE_LABEL: Record<string, string> = {
@@ -133,6 +135,7 @@ interface LibraryProcessingPanelProps {
   onTypstAddFile: (file: File, targetPath: string) => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
+  onRemoveTimestamps: () => void;
   onFindHeaderFooter: () => void;
   onConfirmPageReview: () => void;
   onIndexMaterial: () => void;
@@ -149,6 +152,7 @@ export function LibraryProcessingPanel({
   onTypstAddFile,
   onEditPage,
   onCleanupPage,
+  onRemoveTimestamps,
   onFindHeaderFooter,
   onConfirmPageReview,
   onIndexMaterial,
@@ -667,6 +671,15 @@ export function LibraryProcessingPanel({
               >
                 <Sparkles size={14} aria-hidden="true" /> Прибрать текст с ИИ
               </Button>
+              {material.presentation_kind === "youtube" && (
+                <Tooltip label={page && !hasYoutubeTimestamps(page.markdown || page.text) ? "В тексте уже нет таймкодов." : "Откроет предпросмотр исправленного текста"}>
+                  <span>
+                    <Button variant="ghost" disabled={busy || !page || !hasYoutubeTimestamps(page.markdown || page.text)} onClick={onRemoveTimestamps}>
+                      <Clock3 size={14} aria-hidden="true" /> Убрать таймкоды
+                    </Button>
+                  </span>
+                </Tooltip>
+              )}
             </div>
           )}
         </section>
