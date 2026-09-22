@@ -103,6 +103,10 @@ def _subject(session: Session, job: BackgroundJob) -> str:
             return project.name or "Проект без названия"
     if job.kind == BackgroundJobKind.RETRIEVAL_MODEL_INSTALL:
         return str(job.checkpoint.get("model_id") or "embedding-модель")
+    if job.kind == BackgroundJobKind.BACKUP_CREATE:
+        return "Вся установка"
+    if job.kind in {BackgroundJobKind.PROJECT_EXPORT, BackgroundJobKind.PROJECT_IMPORT}:
+        return "Перенос проекта"
     return ""
 
 
@@ -119,6 +123,10 @@ def _progress_unit(session: Session, job: BackgroundJob) -> str:
         return "файлов"
     if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
         return "материалов"
+    if job.kind == BackgroundJobKind.BACKUP_CREATE:
+        return "файлов"
+    if job.kind in {BackgroundJobKind.PROJECT_EXPORT, BackgroundJobKind.PROJECT_IMPORT}:
+        return "пакетов"
     if job.kind not in (BackgroundJobKind.PARSE, BackgroundJobKind.TYPST_COMPILE):
         return ""
     return "минут" if _is_audio(session, job) else "страниц"
@@ -135,6 +143,12 @@ def _model_label(session: Session, job: BackgroundJob) -> str:
         return "Скачивание embedding-модели"
     if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
         return "Сбор индекса"
+    if job.kind == BackgroundJobKind.BACKUP_CREATE:
+        return "Резервная копия"
+    if job.kind == BackgroundJobKind.PROJECT_EXPORT:
+        return "Экспорт проекта"
+    if job.kind == BackgroundJobKind.PROJECT_IMPORT:
+        return "Импорт проекта"
     if job.kind != BackgroundJobKind.PARSE:
         return ""
     if _is_audio(session, job):

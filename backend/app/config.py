@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     worker_cloud_concurrency: int = Field(default=2, ge=1, le=32)
     worker_ai_concurrency: int = Field(default=8, ge=1, le=32)
     retrieval_model_url: str = "http://retrieval-model:8010"
+    # Защитные пределы переносимых архивов. Сам архив может быть большим,
+    # но распакованный объём ограничен отдельно от размера HTTP-загрузки.
+    transfer_upload_max_bytes: int = Field(default=25 * 1024**3, ge=1024**2)
+    transfer_unpacked_max_bytes: int = Field(default=100 * 1024**3, ge=1024**2)
 
     @property
     def database_path(self) -> Path:
@@ -71,6 +75,26 @@ class Settings(BaseSettings):
         path = self.data_dir / "models" / "embeddings"
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    @property
+    def default_backup_dir(self) -> Path:
+        """Каталог управляемых копий; не входит в `storage/` и архивы."""
+        return self.data_dir / "backups"
+
+    @property
+    def transfer_dir(self) -> Path:
+        """Машинный staging импортов и временных экспортов."""
+        return self.data_dir / "transfers"
+
+    @property
+    def maintenance_path(self) -> Path:
+        """Координация API и worker при снимке/замене самой SQLite."""
+        return self.data_dir / "maintenance.json"
+
+    @property
+    def restore_journal_path(self) -> Path:
+        """Журнал атомарной замены, читаемый до открытия базы."""
+        return self.data_dir / "restore-journal.json"
 
 
 settings = Settings()

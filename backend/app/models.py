@@ -245,6 +245,11 @@ class BackgroundJobKind(StrEnum):
     RETRIEVAL_INDEX = "retrieval_index"
     RETRIEVAL_MODEL_INSTALL = "retrieval_model_install"
     RETRIEVAL_EXHAUSTIVE = "retrieval_exhaustive"
+    BACKUP_CREATE = "backup_create"
+    PROJECT_EXPORT = "project_export"
+    PROJECT_IMPORT = "project_import"
+    STORAGE_VERIFY = "storage_verify"
+    STORAGE_CLEANUP = "storage_cleanup"
 
 
 class BackgroundJobState(StrEnum):
@@ -254,6 +259,33 @@ class BackgroundJobState(StrEnum):
     CANCELLED = "cancelled"
     FAILED = "failed"
     COMPLETED = "completed"
+
+
+class BackupKind(StrEnum):
+    """Почему создан переносимый снимок установки."""
+
+    MANUAL = "manual"
+    AUTOMATIC = "automatic"
+    PRE_RESTORE = "pre_restore"
+
+
+class BackupArchiveState(StrEnum):
+    """Жизненный цикл файла копии, независимый от строки общей очереди."""
+
+    QUEUED = "queued"
+    CREATING = "creating"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class TransferKind(StrEnum):
+    BACKUP = "backup"
+    PROJECT = "project"
+
+
+class TransferProfile(StrEnum):
+    PERSONAL = "personal"
+    SHARE = "share"
 
 
 class ProcessingStage(StrEnum):
@@ -975,6 +1007,77 @@ class BackgroundJob(Base):
     # у задач, которые применяются сами, и у тех, чей результат ещё ждёт
     # проверки — см. `background.registry.REVIEW_REQUIRED_KINDS`.
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class StorageSettings(Base):
+    """Глобальная политика копий; строка с id=1 создаётся лениво."""
+
+    __tablename__ = "storage_settings"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="singleton"),
+        CheckConstraint("retention_days BETWEEN 1 AND 365", name="retention_days_range"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    automatic_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    daily_time: Mapped[str] = mapped_column(String(5), default="03:00")
+    retention_days: Mapped[int] = mapped_column(Integer, default=7)
+    backup_directory: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_automatic_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class BackupArchive(Base):
+    """Управляемый `.tentex-backup`; старые ручные sqlite-файлы сюда не входят."""
+
+    __tablename__ = "backup_archives"
+    __table_args__ = (Index("ix_backup_archives_created", "created_at"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    kind: Mapped[BackupKind] = mapped_column(enum_type(BackupKind, "backup_kind"))
+    state: Mapped[BackupArchiveState] = mapped_column(
+        enum_type(BackupArchiveState, "backup_archive_state"),
+        default=BackupArchiveState.QUEUED,
+    )
+    job_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("background_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    file_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    file_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class TransferArtifact(Base):
+    """Загруженный или подготовленный пакет до скачивания/подтверждения импорта."""
+
+    __tablename__ = "transfer_artifacts"
+    __table_args__ = (Index("ix_transfer_artifacts_expires", "expires_at"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    kind: Mapped[TransferKind] = mapped_column(enum_type(TransferKind, "transfer_kind"))
+    profile: Mapped[TransferProfile | None] = mapped_column(
+        enum_type(TransferProfile, "transfer_profile"), nullable=True
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
+    package_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), default=uuid4, index=True)
+    file_path: Mapped[str] = mapped_column(String)
+    file_name: Mapped[str] = mapped_column(String)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    job_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("background_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    imported_project_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
 
 
 class EmbeddingProfile(Base):
