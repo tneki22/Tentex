@@ -31,7 +31,7 @@ import {
   type BackgroundJobRead,
 } from "../api/backgroundJobs";
 import { pauseRetrievalIndexBuild, resumeRetrievalIndexBuild } from "../api/retrieval";
-import { TaskRow, type BackgroundTask, type TaskKind } from "../components/domain";
+import { TaskRow, type BackgroundTask } from "../components/domain";
 import { estimateEtaSeconds } from "../hooks/backgroundTaskEta";
 
 const BACKGROUND_POLL_MS = 4000;
@@ -85,10 +85,27 @@ function backgroundJobSubject(job: BackgroundJobRead): string {
   return "фоновая операция";
 }
 
-function toBackgroundTask(job: BackgroundJobRead): BackgroundTask {
+/** Раздел «Хранилище» уже переводит эти причины падения в понятный текст
+ *  локально (см. `StorageSettingsSection`); эта же панель глобальная и видит
+ *  задачу до того, как пользователь открыл раздел — техническую строку
+ *  (`sqlite3.OperationalError: ...`) сюда пропускать незачем. */
+const STORAGE_JOB_FAILURE: Partial<Record<BackgroundJobRead["kind"], string>> = {
+  backup_create: "Не удалось создать резервную копию.",
+  project_export: "Не удалось подготовить пакет проекта.",
+  project_import: "Не удалось импортировать пакет проекта.",
+  storage_verify: "Не удалось проверить хранилище.",
+  storage_cleanup: "Не удалось очистить временные файлы.",
+};
+
+function backgroundJobError(job: BackgroundJobRead): string | undefined {
+  if (job.state !== "failed") return undefined;
+  return STORAGE_JOB_FAILURE[job.kind] ?? job.error ?? undefined;
+}
+
+function toBackgroundTask(job: BackgroundJobRead, pendingIds: ReadonlySet<string>): BackgroundTask {
   return {
     id: job.id,
-    kind: job.kind as TaskKind,
+    kind: job.kind,
     subject: backgroundJobSubject(job),
     detail: job.model_label,
     // Единицу называет сервер: у записи это минуты, у разбора и сборки Typst — страницы.
@@ -97,13 +114,18 @@ function toBackgroundTask(job: BackgroundJobRead): BackgroundTask {
     total: job.total,
     etaSeconds: estimateEtaSeconds(job.id, job.done, job.total, job.updated_at),
     state: job.needs_review ? "review" : (job.state as BackgroundTask["state"]),
-    error: job.error ?? undefined,
+    error: backgroundJobError(job),
     finishable: job.kind === "retrieval_index" && job.material_id === null,
+    // `pause_requested` переживает опрос: отмена бегущей задачи не исчезает
+    // мгновенно (воркер должен сам заметить флаг), и после клика строка не
+    // должна выглядеть снова кликабельной, пока это не произойдёт на самом деле.
+    pending: pendingIds.has(job.id) || job.pause_requested,
   };
 }
 
 interface BackgroundJobGroupProps {
   jobs: BackgroundJobRead[];
+  pendingIds: ReadonlySet<string>;
   navigate: (path: string) => void;
   onCancel?: (jobId: string) => void;
   onPause?: (jobId: string) => void;
@@ -119,7 +141,7 @@ interface BackgroundJobGroupProps {
  * («Отменить», «Убрать») не должен ещё и переключать экран — клики,
  * начавшиеся на вложенной кнопке, отсекаются.
  */
-function BackgroundJobGroup({ jobs, navigate, onCancel, onPause, onResume, onDismiss }: BackgroundJobGroupProps) {
+function BackgroundJobGroup({ jobs, pendingIds, navigate, onCancel, onPause, onResume, onDismiss }: BackgroundJobGroupProps) {
   return (
     <div className="popover-task-list">
       {jobs.map((job) => {
@@ -142,7 +164,7 @@ function BackgroundJobGroup({ jobs, navigate, onCancel, onPause, onResume, onDis
             } : undefined}
           >
             <TaskRow
-              task={toBackgroundTask(job)}
+              task={toBackgroundTask(job, pendingIds)}
               onCancel={onCancel}
               onPause={job.kind === "retrieval_index" && !job.material_id ? onPause : undefined}
               onResume={job.kind === "retrieval_index" && !job.material_id ? onResume : undefined}
@@ -160,6 +182,7 @@ interface BackgroundJobsWidgetProps {
   reviewJobs: BackgroundJobRead[];
   runningJobs: BackgroundJobRead[];
   failedJobs: BackgroundJobRead[];
+  pendingIds: ReadonlySet<string>;
   navigate: (path: string) => void;
   onDismiss: (jobId: string) => void;
   onCancel: (jobId: string) => void;
@@ -174,6 +197,7 @@ function BackgroundJobsWidget({
   reviewJobs,
   runningJobs,
   failedJobs,
+  pendingIds,
   navigate,
   onDismiss,
   onCancel,
@@ -203,19 +227,19 @@ function BackgroundJobsWidget({
           {failedJobs.length > 0 && (
             <section className="popover-task-group">
               <h4 className="popover-task-group-title">Требуют внимания</h4>
-              <BackgroundJobGroup jobs={failedJobs} navigate={navigate} onDismiss={onDismiss} />
+              <BackgroundJobGroup jobs={failedJobs} pendingIds={pendingIds} navigate={navigate} onDismiss={onDismiss} />
             </section>
           )}
           {reviewJobs.length > 0 && (
             <section className="popover-task-group">
               <h4 className="popover-task-group-title">Ждут проверки</h4>
-              <BackgroundJobGroup jobs={reviewJobs} navigate={navigate} onDismiss={onDismiss} />
+              <BackgroundJobGroup jobs={reviewJobs} pendingIds={pendingIds} navigate={navigate} onDismiss={onDismiss} />
             </section>
           )}
           {runningJobs.length > 0 && (
             <section className="popover-task-group">
               <h4 className="popover-task-group-title">Идут сейчас</h4>
-              <BackgroundJobGroup jobs={runningJobs} navigate={navigate} onCancel={onCancel} onPause={onPause} onResume={onResume} />
+              <BackgroundJobGroup jobs={runningJobs} pendingIds={pendingIds} navigate={navigate} onCancel={onCancel} onPause={onPause} onResume={onResume} />
             </section>
           )}
         </>
@@ -251,6 +275,9 @@ export function AppLayout() {
   const [aiSnapshot, setAiSnapshot] = useState<AiSettingsRead | null>(null);
   const [aiSnapshotFailed, setAiSnapshotFailed] = useState(false);
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJobRead[]>([]);
+  // Отмена или снятие уже отправлены, ответ ещё не пришёл — строка показывает
+  // «Завершаем…» вместо того чтобы молча ничего не делать до следующего опроса.
+  const [pendingJobIds, setPendingJobIds] = useState<Set<string>>(new Set());
   const [recentStudy, setRecentStudy] = useState<RecentStudyItem[]>([]);
   const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
@@ -278,11 +305,26 @@ export function AppLayout() {
     return () => controller.abort();
   }, []);
 
+  function markPending(jobId: string) {
+    setPendingJobIds((current) => new Set(current).add(jobId));
+  }
+
+  function clearPending(jobId: string) {
+    setPendingJobIds((current) => {
+      if (!current.has(jobId)) return current;
+      const next = new Set(current);
+      next.delete(jobId);
+      return next;
+    });
+  }
+
   function cancelJob(jobId: string) {
+    markPending(jobId);
     void cancelBackgroundJob(jobId)
       .then((updated) => setBackgroundJobs((current) => current.map((job) => job.id === updated.id ? updated : job)
         .filter((job) => ACTIVE_JOB_STATES.has(job.state) || job.needs_review)))
-      .catch(() => undefined);
+      .catch((error) => console.error("Не удалось отменить фоновую задачу", error))
+      .finally(() => clearPending(jobId));
   }
 
   function updateJob(job: BackgroundJobRead) {
@@ -308,9 +350,11 @@ export function AppLayout() {
   /** Убрать готовое предложение из панели, не открывая. Результат остаётся на
    *  сервере — уходит только напоминание о том, что его ждут. */
   function dismissJob(jobId: string) {
+    markPending(jobId);
     void resolveBackgroundJob(jobId)
       .then(() => setBackgroundJobs((current) => current.filter((job) => job.id !== jobId)))
-      .catch(() => undefined);
+      .catch((error) => console.error("Не удалось убрать задачу из панели", error))
+      .finally(() => clearPending(jobId));
   }
 
   useEffect(() => {
@@ -470,6 +514,7 @@ export function AppLayout() {
               reviewJobs={reviewJobs}
               runningJobs={runningJobs}
               failedJobs={failedJobs}
+              pendingIds={pendingJobIds}
               navigate={navigate}
               onDismiss={dismissJob}
               onCancel={cancelJob}
@@ -478,7 +523,7 @@ export function AppLayout() {
             />
 
             <Popover
-              title="Внешние модели"
+              title="Статус"
               trigger={
                 <button type="button" className="app-widget">
                   <Cpu size={15} aria-hidden="true" />
@@ -494,7 +539,7 @@ export function AppLayout() {
                     <div><dt>Речь</dt><dd><select value={aiSnapshot.default_speech ? `${aiSnapshot.default_speech.provider_id}::${aiSnapshot.default_speech.model_id}` : ""} onChange={(event) => changeDefault("speech", event.target.value)}><option value="">не настроена</option>{aiSnapshot.models.filter((model) => model.input_modalities.includes("audio")).map((model) => <option key={`${model.provider_id}::${model.model_id}`} value={`${model.provider_id}::${model.model_id}`}>{model.display_name}</option>)}</select></dd></div>
                     <div><dt>Сегодня</dt><dd>${Number(aiSnapshot.today_usage.actual_cost_usd).toFixed(4)}</dd></div>
                   </dl>
-                  <div className="app-models-links"><Link to="/setup?section=search&subsection=models">Эмбеддинги и индекс</Link><Link to="/setup?section=ocr&subsection=engines">Распознавание</Link></div>
+                  <div className="app-models-links"><Link to="/setup?section=search&subsection=models">Эмбеддинги и индекс</Link><Link to="/setup?section=ocr&subsection=engines">Распознавание</Link><Link to="/setup?section=ai&subsection=functions">Функции</Link></div>
                   <Link className="secondary-button app-models-open" to="/setup?section=ai&subsection=overview">Открыть параметры</Link>
                 </div>
               ) : (
