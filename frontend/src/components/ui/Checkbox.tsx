@@ -30,7 +30,7 @@ export function Checkbox({ checked, onCheckedChange, label, disabled }: Checkbox
           <Check size={12} strokeWidth={3} aria-hidden="true" />
         </RadixCheckbox.Indicator>
       </RadixCheckbox.Root>
-      <label htmlFor={id}>{label}</label>
+      <label htmlFor={id} title={label}>{label}</label>
     </div>
   );
 }
