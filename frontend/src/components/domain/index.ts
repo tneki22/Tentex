@@ -28,6 +28,7 @@ export { EvidenceCard } from "./EvidenceCard";
 export { EvidenceDecisionMenu } from "./EvidenceDecisionMenu";
 export { EvidenceInspector } from "./EvidenceInspector";
 export { EvidenceStructuredReader } from "./EvidenceStructuredReader";
+export { ImportProjectButton } from "./ImportProjectButton";
 export { LessonEvidenceDialog } from "./LessonEvidenceDialog";
 export { GoalLevelPicker, GOAL_LEVELS, goalLevelEffect } from "./GoalLevel";
 export type { GoalLevelValue } from "./GoalLevel";

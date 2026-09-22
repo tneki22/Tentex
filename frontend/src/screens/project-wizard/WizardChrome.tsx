@@ -13,6 +13,8 @@ interface WizardChromeProps {
   onSaveAndExit?: () => void;
   onDiscard?: () => void;
   onBack?: () => void;
+  /** Заменяет подпись «Мастер проектов» на начальном экране выбора пути. */
+  landingAction?: ReactNode;
   children: ReactNode;
 }
 
@@ -26,6 +28,7 @@ export function WizardChrome({
   onSaveAndExit,
   onDiscard,
   onBack,
+  landingAction,
   children,
 }: WizardChromeProps) {
   const isLanding = step === 0;
@@ -54,10 +57,9 @@ export function WizardChrome({
         )}
         <span className="wizard-brand"><BrandMark size={20} />Tentex</span>
         <div className="wizard-topbar-actions">
-          {(isLanding || trackLabel) && (
-            <span className="wizard-step-caption">
-              {isLanding ? "Мастер проектов" : `${trackLabel} — шаг ${step} из ${stepLabels.length}`}
-            </span>
+          {isLanding && landingAction}
+          {!isLanding && trackLabel && (
+            <span className="wizard-step-caption">{`${trackLabel} — шаг ${step} из ${stepLabels.length}`}</span>
           )}
           {onDiscard && (
             <Button variant="ghost" className="wizard-discard" onClick={onDiscard}>

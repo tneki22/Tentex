@@ -4,6 +4,7 @@ import { ArrowRight, BookOpen, GraduationCap, Sparkles, Trash2 } from "lucide-re
 import { discardWizardDraft, listWizardDrafts, type ProjectDetail, type TemplateKey, type WizardDraftSummary } from "../api/projects";
 import { useWizardDraft } from "../hooks/useWizardDraft";
 import { Button, Card, ConfirmDialog, ErrorState, IconButton, LoadingState, StatusBadge } from "../components/ui";
+import { ImportProjectButton } from "../components/domain";
 import { ExamWizard } from "./project-wizard/ExamWizard";
 import { WizardChrome } from "./project-wizard/WizardChrome";
 import { TextbookWizard } from "./TextbookWizard";
@@ -202,6 +203,7 @@ export function ProjectWizard() {
           maxStep={0}
           stepLabels={EXAM_STEP_LABELS}
           onStepChange={setRequestedStep}
+          landingAction={<ImportProjectButton />}
         >
           <div className="wizard-hero">
             <h1>Как вы хотите<br />учиться?</h1>

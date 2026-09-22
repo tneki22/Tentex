@@ -5067,20 +5067,20 @@ button.wizard-back-projects {
   padding: var(--space-10) var(--space-8) var(--space-16);
 }
 
-.wizard-main.is-landing { padding-top: var(--space-16); }
+.wizard-main.is-landing { padding-top: var(--space-6); }
 .wizard-step { animation: surface-in var(--motion-slow) var(--motion-ease-out) both; }
 
 .wizard-hero {
   width: min(850px, 100%);
-  margin: 0 auto var(--space-10);
+  margin: 0 auto var(--space-6);
   text-align: center;
 }
 
 .wizard-hero h1 {
-  margin-bottom: var(--space-5);
-  font-size: clamp(var(--text-3xl), 6vw, calc(var(--text-3xl) * 1.9));
-  line-height: 1.02;
-  letter-spacing: -0.055em;
+  margin-bottom: var(--space-3);
+  font-size: clamp(var(--text-3xl), 4vw, calc(var(--text-3xl) * 1.3));
+  line-height: 1.05;
+  letter-spacing: -0.045em;
 }
 
 .wizard-hero p {
@@ -5100,7 +5100,7 @@ button.wizard-back-projects {
 
 .wizard-track-card {
   position: relative;
-  min-height: 440px;
+  min-height: 380px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
