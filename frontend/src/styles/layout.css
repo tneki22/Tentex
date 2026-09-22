@@ -2349,7 +2349,7 @@
 }
 
 .app-models-summary > p {
-  margin: 0 0 var(--space-3);
+  margin: 0 0 var(--space-2);
   color: var(--ink-soft);
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
@@ -2361,11 +2361,11 @@
 .app-models-summary dl,
 .app-models-summary dl div {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 .app-models-summary dl {
-  margin: 0 0 var(--space-3);
+  margin: 0 0 var(--space-2);
 }
 
 .app-models-summary dl div {
@@ -2385,7 +2385,7 @@
 
 .app-models-summary select {
   width: 100%;
-  min-height: 30px;
+  min-height: 28px;
   padding: 0 var(--space-2);
   font-size: var(--text-sm);
 }
@@ -2393,7 +2393,7 @@
 .app-models-links {
   display: grid;
   gap: var(--space-1);
-  margin: 0 0 var(--space-3);
+  margin: 0 0 var(--space-2);
   font-size: var(--text-sm);
 }
 

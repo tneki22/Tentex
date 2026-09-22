@@ -523,7 +523,6 @@ export function AppLayout() {
             />
 
             <Popover
-              title="Статус"
               trigger={
                 <button type="button" className="app-widget">
                   <Cpu size={15} aria-hidden="true" />
