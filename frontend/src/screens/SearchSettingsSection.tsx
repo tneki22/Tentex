@@ -227,10 +227,43 @@ export function SearchSettingsSection({
     model.supported_parameters.some((parameter) => /embed/i.test(parameter))
       || model.input_modalities.some((modality) => /embed/i.test(modality))
       || /embed/i.test(`${model.model_id} ${model.display_name}`)
-  ));
-  // Некоторые OpenAI-совместимые каталоги не заполняют capability-поля.
-  // В этом случае не прячем рабочие модели, а показываем исходный каталог.
-  const externalEmbeddingModels = embeddingModels.length > 0 ? embeddingModels : externalModels;
+  ) && !/rerank|cross.?encoder|chat|instruct|completion/i.test(`${model.model_id} ${model.display_name}`));
+  // OpenAI-compatible каталоги (в том числе LM Studio) иногда не отдают capability-поля.
+  // В этом случае оставляем только модели с явным признаком embedding: reranker/LLM
+  // нельзя предлагать в профиле, который вызывает /embeddings.
+  const externalEmbeddingModels = embeddingModels;
+
+  async function addExternalProfile() {
+    if (!externalProvider || !externalModel) return;
+    setBusy(`external:${externalModel}`);
+    setError("");
+    setTestFeedback(null);
+    try {
+      const profile = await createEmbeddingProfile({
+        label: `Embeddings · ${externalModel}`,
+        backend_kind: "openai_compatible",
+        provider_id: externalProvider,
+        model_id: externalModel,
+      });
+      try {
+        const tested = await testEmbeddingProfile(profile.id);
+        setTestFeedback({
+          tone: "success",
+          text: `Профиль «${profile.label}» добавлен и отвечает: ${tested.dimension ?? "?"} измерений.`,
+        });
+      } catch (caught) {
+        setTestFeedback({
+          tone: "danger",
+          text: `Профиль «${profile.label}» добавлен, но проверка провайдера не прошла: ${errorText(caught)}`,
+        });
+      }
+      await load();
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setBusy("");
+    }
+  }
 
   function buildCandidate() {
     if (!settings) return;
@@ -414,15 +447,7 @@ export function SearchSettingsSection({
               <Button
                 variant="secondary"
                 disabled={!externalProvider || !externalModel || busy !== ""}
-                onClick={() => externalProvider && externalModel && void action(
-                  `external:${externalModel}`,
-                  () => createEmbeddingProfile({
-                    label: `Embeddings · ${externalModel}`,
-                    backend_kind: "openai_compatible",
-                    provider_id: externalProvider,
-                    model_id: externalModel,
-                  }),
-                )}
+                onClick={() => void addExternalProfile()}
               >Добавить профиль</Button>
             </div>
           </div>
