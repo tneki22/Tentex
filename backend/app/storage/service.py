@@ -22,6 +22,7 @@ from app.models import (
     BackupArchive,
     BackupArchiveState,
     BackupKind,
+    Material,
     StorageSettings,
     TransferArtifact,
     utc_now,
@@ -103,12 +104,23 @@ def storage_snapshot(session: Session) -> StorageSnapshot:
     policy_row = _policy(session)
     backups = backup_directory(policy_row)
     database = settings.database_path.stat().st_size if settings.database_path.exists() else 0
-    files = _tree_size(settings.storage_dir, exclude={"tmp"})
-    temporary = _tree_size(settings.storage_dir / "tmp") + _tree_size(settings.transfer_dir)
-    models = _tree_size(settings.data_dir / "models") + _tree_size(
-        settings.typst_package_cache_dir
+    # Не обходить bind-mounted каталоги на каждый GET: на Windows/Docker Desktop
+    # stat для тысяч производных файлов блокирует экран на десятки секунд. База
+    # уже хранит размеры исходников и управляемых архивов, поэтому их сводка
+    # получается мгновенно; очистка/проверка остаются точными операциями по кнопке.
+    files = int(session.scalar(select(func.coalesce(func.sum(Material.size_bytes), 0))) or 0)
+    temporary = int(
+        session.scalar(select(func.coalesce(func.sum(TransferArtifact.size_bytes), 0))) or 0
     )
-    backup_bytes = _tree_size(backups)
+    models = 0
+    backup_bytes = int(
+        session.scalar(
+            select(func.coalesce(func.sum(BackupArchive.size_bytes), 0)).where(
+                BackupArchive.state == BackupArchiveState.READY
+            )
+        )
+        or 0
+    )
     usage = shutil.disk_usage(settings.data_dir)
     latest = session.scalar(
         select(func.max(BackupArchive.completed_at)).where(
