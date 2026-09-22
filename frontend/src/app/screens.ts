@@ -1,5 +1,6 @@
 import {
   CalendarDays,
+  BookOpenText,
   Files,
   FileSearch,
   FolderOpen,
@@ -217,6 +218,16 @@ export const SCREENS: ScreenMeta[] = [
     group: "Служебное",
     icon: Palette,
     depth: "служебный",
+  },
+  {
+    id: "guide",
+    path: "/guide",
+    navPath: "/guide",
+    title: "Инструкция по использованию",
+    summary: "Будущее руководство по основным сценариям Tentex.",
+    group: "Служебное",
+    icon: BookOpenText,
+    depth: "эскизом",
   },
 ];
 

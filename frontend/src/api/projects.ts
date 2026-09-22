@@ -534,6 +534,19 @@ export const listProjects = (signal?: AbortSignal): Promise<ProjectSummary[]> =>
 export const listProjectStats = (signal?: AbortSignal): Promise<ProjectStats[]> =>
   request("/api/projects/stats", { signal });
 
+export interface RecentStudyItem {
+  project_id: string;
+  project_name: string;
+  template_key: "exam" | "textbook" | "free";
+  kind: "lesson" | "question";
+  item_id: string;
+  title: string;
+  happened_at: string;
+}
+
+export const listRecentStudy = (signal?: AbortSignal): Promise<RecentStudyItem[]> =>
+  request("/api/projects/recent-study", { signal });
+
 export const saveProjectOrder = (projectIds: string[]): Promise<ProjectSummary[]> =>
   request("/api/projects/order", { method: "PUT", body: JSON.stringify({ project_ids: projectIds }) });
 

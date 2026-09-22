@@ -39,6 +39,7 @@ from app.projects.schemas import (
     ProjectSettingsWrite,
     ProjectStats,
     ProjectSummary,
+    RecentStudyItem,
     ReferenceAnswerAttachmentRead,
     ReferenceAnswerConfirm,
     ReferenceAnswerImportResult,
@@ -122,6 +123,11 @@ def save_order(command: ProjectOrderWrite, session: SessionDependency) -> list[P
 @projects.get("/stats", response_model=list[ProjectStats])
 def list_stats(session: SessionDependency) -> list[ProjectStats]:
     return service.list_project_stats(session)
+
+
+@projects.get("/recent-study", response_model=list[RecentStudyItem])
+def recent_study(session: SessionDependency) -> list[RecentStudyItem]:
+    return service.list_recent_study(session)
 
 
 @projects.get("/{project_id}", response_model=ProjectDetail)

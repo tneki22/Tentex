@@ -15,6 +15,7 @@ from app.lessons.schemas import (
 )
 from app.models import Binding, Lesson, LessonBlockKind, LessonSourceRef, MaterialFragment, Project
 from app.preparation.models import StudyActivity
+from app.projects import service as project_service
 from app.projects.errors import ProjectConflictError, ProjectDomainError
 from app.projects.program import undo_last_project_action
 from tests.test_lessons import Book, add_node, make_lessons_project
@@ -219,6 +220,21 @@ def test_completion_writes_one_history_record_and_undoes_it(session, project):
     assert session.scalars(
         select(StudyActivity).where(StudyActivity.project_id == project_id)
     ).all() == []
+
+
+def test_recent_study_lists_only_completed_lessons(session, project):
+    topic = add_node(session, project, "Ethernet", 0)
+    lesson = service.create_manual_lesson(
+        session, project.id, LessonManualWrite(program_node_id=topic.id)
+    ).lesson
+    session.rollback()
+    progress.set_completed(session, project.id, lesson.id, LessonCompletionWrite())
+
+    recent = project_service.list_recent_study(session)
+
+    assert [(item.kind, item.item_id, item.title) for item in recent] == [
+        ("lesson", lesson.id, "Ethernet")
+    ]
 
 
 def test_undo_removes_the_added_region(session, project):

@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import {
   Activity,
+  BookOpenText,
   CircleCheck,
   Cpu,
-  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   PieChart,
@@ -21,7 +21,8 @@ import { CommandPalette } from "./CommandPalette";
 import { screenById } from "./screens";
 import { SCREEN_VIEWS } from "./views";
 import { ThemeToggle } from "./ThemeToggle";
-import { getAiSettings, type AiSettingsRead } from "../api/ai";
+import { getAiSettings, updateAiDefault, type AiModality, type AiSettingsRead } from "../api/ai";
+import { listRecentStudy, type RecentStudyItem } from "../api/projects";
 import {
   ACTIVE_JOB_STATES,
   cancelBackgroundJob,
@@ -186,7 +187,7 @@ function BackgroundJobsWidget({
       trigger={
         <button type="button" className={reviewJobs.length > 0 || failedJobs.length > 0 ? "app-widget has-review" : "app-widget"}>
           <Activity size={15} aria-hidden="true" />
-          <b className="nav-label">Фоновая задача</b>
+          <b className="nav-label">Фоновые задачи</b>
           {backgroundJobs.length > 0 && (
             <span className={reviewJobs.length > 0 || failedJobs.length > 0 ? "app-widget-value is-review" : "app-widget-value"}>
               {backgroundJobs.length}
@@ -250,6 +251,7 @@ export function AppLayout() {
   const [aiSnapshot, setAiSnapshot] = useState<AiSettingsRead | null>(null);
   const [aiSnapshotFailed, setAiSnapshotFailed] = useState(false);
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJobRead[]>([]);
+  const [recentStudy, setRecentStudy] = useState<RecentStudyItem[]>([]);
   const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
 
@@ -268,6 +270,12 @@ export function AppLayout() {
       active = false;
       window.clearInterval(timer);
     };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void listRecentStudy(controller.signal).then(setRecentStudy).catch(() => undefined);
+    return () => controller.abort();
   }, []);
 
   function cancelJob(jobId: string) {
@@ -348,6 +356,17 @@ export function AppLayout() {
       localStorage.setItem(COLLAPSE_KEY, prev ? "0" : "1");
       return !prev;
     });
+  }
+
+  function changeDefault(modality: AiModality, value: string) {
+    if (!aiSnapshot) return;
+    const [provider_id, model_id] = value.split("::");
+    void updateAiDefault(modality, provider_id && model_id ? { provider_id, model_id } : null)
+      .then((snapshot) => {
+        setAiSnapshot(snapshot);
+        window.dispatchEvent(new Event("tentex:ai-settings-updated"));
+      })
+      .catch(() => undefined);
   }
 
   if (location.pathname === screenById("project-new").path) {
@@ -431,8 +450,18 @@ export function AppLayout() {
             <p className="sidebar-empty">Покрытие появится после привязок на этапе 8</p>
           </Popover>
 
-          <Disclosure className="sidebar-recent" summary="Последние темы">
-            <p className="sidebar-empty">Здесь появятся последние изученные темы</p>
+          <Disclosure className="sidebar-recent" summary="Последние занятия">
+            {recentStudy.length === 0 ? <p className="sidebar-empty">Пройденные уроки и ответы появятся здесь.</p> : (
+              <div className="sidebar-recent-list">
+                {recentStudy.map((item) => (
+                  <Link className="sidebar-recent-row" key={`${item.kind}-${item.item_id}`} to={item.kind === "lesson" ? `/projects/${item.project_id}/lessons?lesson=${item.item_id}` : `/projects/${item.project_id}?node=${item.item_id}`}>
+                    <small><span className="sidebar-project-type">{item.template_key === "exam" ? "Э" : item.template_key === "textbook" ? "Уч" : "СИ"}</span>{item.project_name}</small>
+                    <b>{item.kind === "lesson" ? "Урок:" : "Вопрос:"} {item.title}</b>
+                    <small>{new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(item.happened_at))}</small>
+                  </Link>
+                ))}
+              </div>
+            )}
           </Disclosure>
 
           <div className="app-widgets" aria-label="Состояние установки">
@@ -459,13 +488,14 @@ export function AppLayout() {
             >
               {aiSnapshot ? (
                 <div className="app-models-summary">
-                  <p>{aiSnapshot.external_models_enabled ? "Внешние модели включены" : "Внешние модели выключены"}</p>
+                  <p className={aiSnapshot.external_models_enabled ? "is-ready" : "is-offline"}>{aiSnapshot.external_models_enabled ? "Внешние модели включены" : "Внешние модели выключены"}</p>
                   <dl>
-                    <div><dt>Текст</dt><dd>{aiSnapshot.default_text?.model_id ?? "не настроена"}</dd></div>
-                    <div><dt>Речь</dt><dd>{aiSnapshot.default_speech?.model_id ?? "не настроена"}</dd></div>
+                    <div><dt>Текст</dt><dd><select value={aiSnapshot.default_text ? `${aiSnapshot.default_text.provider_id}::${aiSnapshot.default_text.model_id}` : ""} onChange={(event) => changeDefault("text", event.target.value)}><option value="">не настроена</option>{aiSnapshot.models.filter((model) => model.input_modalities.includes("text") && model.output_modalities.includes("text")).map((model) => <option key={`${model.provider_id}::${model.model_id}`} value={`${model.provider_id}::${model.model_id}`}>{model.display_name}</option>)}</select></dd></div>
+                    <div><dt>Речь</dt><dd><select value={aiSnapshot.default_speech ? `${aiSnapshot.default_speech.provider_id}::${aiSnapshot.default_speech.model_id}` : ""} onChange={(event) => changeDefault("speech", event.target.value)}><option value="">не настроена</option>{aiSnapshot.models.filter((model) => model.input_modalities.includes("audio")).map((model) => <option key={`${model.provider_id}::${model.model_id}`} value={`${model.provider_id}::${model.model_id}`}>{model.display_name}</option>)}</select></dd></div>
                     <div><dt>Сегодня</dt><dd>${Number(aiSnapshot.today_usage.actual_cost_usd).toFixed(4)}</dd></div>
                   </dl>
-                  <Link className="popover-link" to="/setup?section=ai&subsection=overview">Открыть параметры ИИ</Link>
+                  <div className="app-models-links"><Link to="/setup?section=search&subsection=models">Эмбеддинги и индекс</Link><Link to="/setup?section=ocr&subsection=engines">Распознавание</Link></div>
+                  <Link className="secondary-button app-models-open" to="/setup?section=ai&subsection=overview">Открыть параметры</Link>
                 </div>
               ) : (
                 <p className="popover-note" style={{ marginTop: 0 }}>{aiSnapshotFailed ? "Снимок моделей сейчас недоступен." : "Загружаем состояние моделей…"}</p>
@@ -490,9 +520,9 @@ export function AppLayout() {
           <div className="app-nav-footer">
             <span className="app-nav-footer-actions">
               <ThemeToggle />
-              <Tooltip label="UI-кит" side="top">
-                <NavLink to="/ui-kit" className="footer-icon" aria-label="UI-кит">
-                  <Palette size={15} aria-hidden="true" />
+              <Tooltip label="Инструкция по использованию" side="top">
+                <NavLink to="/guide" className="footer-icon" aria-label="Инструкция по использованию">
+                  <BookOpenText size={15} aria-hidden="true" />
                 </NavLink>
               </Tooltip>
               <Tooltip label={collapsed ? "Развернуть панель · Ctrl+B" : "Свернуть панель · Ctrl+B"} side="top">

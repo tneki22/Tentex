@@ -521,6 +521,18 @@ class ProjectStats(ApiModel):
     last_activity_at: datetime | None
 
 
+class RecentStudyItem(ApiModel):
+    """Недавняя завершённая учебная активность для общей панели."""
+
+    project_id: UUID
+    project_name: str
+    template_key: TemplateKey
+    kind: Literal["lesson", "question"]
+    item_id: UUID
+    title: str
+    happened_at: datetime
+
+
 class ProjectDetail(ApiModel):
     project: ProjectRead
     goal_passport: GoalPassportRead | None

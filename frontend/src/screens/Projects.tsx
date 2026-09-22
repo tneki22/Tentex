@@ -127,6 +127,19 @@ type ProjectTemplate = {
   disabled: false;
 };
 
+type ProjectTypeFilter = "all" | "exam" | "textbook" | "free";
+
+const PROJECT_TYPE_FILTERS: Array<{ value: ProjectTypeFilter; label: string }> = [
+  { value: "all", label: "Все" },
+  { value: "exam", label: "Э" },
+  { value: "textbook", label: "Уч" },
+  { value: "free", label: "СИ" },
+];
+
+function projectType(project: ProjectSummary): Exclude<ProjectTypeFilter, "all"> {
+  return project.template_key === "exam" ? "exam" : project.template_key;
+}
+
 const TEMPLATES: ProjectTemplate[] = [
   {
     id: "exam",
@@ -208,6 +221,7 @@ export function Projects() {
   const [archiveCandidate, setArchiveCandidate] = useState<ProjectSummary | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<ProjectSummary | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [typeFilter, setTypeFilter] = useState<ProjectTypeFilter>("all");
   const orderQueueRef = useRef<Promise<void>>(Promise.resolve());
   const orderGenerationRef = useRef(0);
 
@@ -245,7 +259,12 @@ export function Projects() {
 
   const active = [...projects]
     .filter((project) => project.status === "active")
-    .sort((left, right) => left.sort_order - right.sort_order);
+    .sort((left, right) => {
+      const leftActivity = stats[left.id]?.last_activity_at ?? "";
+      const rightActivity = stats[right.id]?.last_activity_at ?? "";
+      return rightActivity.localeCompare(leftActivity) || left.sort_order - right.sort_order;
+    });
+  const visibleActive = active.filter((project) => typeFilter === "all" || projectType(project) === typeFilter);
   const inactive = projects.filter((project) => project.status !== "active");
 
   function persistOrder(next: ProjectSummary[]) {
@@ -341,7 +360,7 @@ export function Projects() {
 
   return (
     <div className="screen">
-      <PageHead placement="topbar" title="Проекты" actions={<Link className="primary-button" to="/projects/new">Новый проект</Link>} />
+      <PageHead placement="topbar" title="Проекты" actions={<div className="projects-topbar-actions"><div className="project-type-filter" aria-label="Тип проекта">{PROJECT_TYPE_FILTERS.map((filter) => <button type="button" key={filter.value} className={typeFilter === filter.value ? "is-active" : ""} aria-pressed={typeFilter === filter.value} title={filter.value === "all" ? "Все проекты" : filter.value === "exam" ? "Подготовка к экзамену" : filter.value === "textbook" ? "Изучение по учебнику" : "Свободное изучение"} onClick={() => setTypeFilter(filter.value)}>{filter.label}</button>)}</div><Link className="primary-button" to="/projects/new">Новый проект</Link></div>} />
 
       {operationError && <p className="inline-error" role="alert">{operationError}</p>}
 
@@ -364,7 +383,9 @@ export function Projects() {
         </>
       ) : (
         <div className="dash-grid">
-          {active.map((project, index) => (
+          {visibleActive.map((project) => {
+            const index = active.findIndex((item) => item.id === project.id);
+            return (
             <article
               className={`dash-card v-b ${draggedId === project.id ? "is-dragging" : ""}`.trim()}
               style={{ "--proj": `var(--project-color-${color(project.color)})` } as CSSProperties}
@@ -376,6 +397,7 @@ export function Projects() {
               <div className="dash-card-id">
                 <ProjectChip icon={icon(project.icon)} color={color(project.color)} />
                 <h2 className="dash-card-name">{project.name}</h2>
+                <span className="dash-project-type" aria-label={projectType(project) === "exam" ? "Экзамен" : projectType(project) === "textbook" ? "Учебник" : "Свободное изучение"}>{PROJECT_TYPE_FILTERS.find((item) => item.value === projectType(project))?.label}</span>
                 <span
                   className="dash-drag-handle"
                   draggable
@@ -439,7 +461,9 @@ export function Projects() {
                 <Link className="primary-button" to={`/projects/${project.id}`}>Продолжить</Link>
               </div>
             </article>
-          ))}
+            );
+          })}
+          {visibleActive.length === 0 && <p className="dash-filter-empty">В этом типе пока нет активных проектов.</p>}
         </div>
       )}
 

@@ -8,11 +8,13 @@ from app.db import project_write_transaction
 from app.materials.schemas import MaterialPurpose
 from app.materials.storage import material_path, remove_storage_dir_if_empty
 from app.models import (
+    Activity,
     Attempt,
     ChatSession,
     ConspectImage,
     GoalPassport,
     GoalScope,
+    Lesson,
     Material,
     ProgramNode,
     Project,
@@ -45,6 +47,7 @@ from app.projects.schemas import (
     ProjectSettingsWrite,
     ProjectStats,
     ProjectSummary,
+    RecentStudyItem,
     WizardDraftCreate,
     WizardDraftDetail,
     WizardDraftRead,
@@ -424,6 +427,59 @@ def list_project_stats(session: Session) -> list[ProjectStats]:
             )
         )
     return stats
+
+
+def list_recent_study(session: Session) -> list[RecentStudyItem]:
+    """Пять последних действительно завершённых уроков или ответов.
+
+    Урок появляется только после явного «Урок пройден», а вопрос — после
+    сохранённой попытки ответа. Создание и простое открытие сюда не попадают.
+    """
+    lesson_rows = session.execute(
+        select(Lesson, Project)
+        .join(Project, Project.id == Lesson.project_id)
+        .where(Project.status == ProjectStatus.ACTIVE, Lesson.completed_at.is_not(None))
+        .order_by(Lesson.completed_at.desc())
+        .limit(5)
+    ).all()
+    attempt_rows = session.execute(
+        select(Attempt, Activity, ProgramNode, Project)
+        .join(Activity, Activity.id == Attempt.activity_id)
+        .join(
+            ProgramNode,
+            (ProgramNode.id == Activity.program_node_id)
+            & (ProgramNode.project_id == Attempt.project_id),
+        )
+        .join(Project, Project.id == Attempt.project_id)
+        .where(Project.status == ProjectStatus.ACTIVE, Project.template_key == TemplateKey.EXAM)
+        .order_by(Attempt.created_at.desc())
+        .limit(5)
+    ).all()
+    items = [
+        RecentStudyItem(
+            project_id=project.id,
+            project_name=project.name or "Без названия",
+            template_key=project.template_key,
+            kind="lesson",
+            item_id=lesson.id,
+            title=lesson.title,
+            happened_at=lesson.completed_at,
+        )
+        for lesson, project in lesson_rows
+    ]
+    items.extend(
+        RecentStudyItem(
+            project_id=project.id,
+            project_name=project.name or "Без названия",
+            template_key=project.template_key,
+            kind="question",
+            item_id=node.id,
+            title=node.title,
+            happened_at=attempt.created_at,
+        )
+        for attempt, _activity, node, project in attempt_rows
+    )
+    return sorted(items, key=lambda item: item.happened_at, reverse=True)[:5]
 
 
 def _latest(moments: list[datetime]) -> datetime | None:

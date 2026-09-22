@@ -14,6 +14,7 @@ import { Projects } from "../screens/Projects";
 import { ProjectSettings } from "../screens/ProjectSettings";
 import { Setup } from "../screens/Setup";
 import { UiKit } from "../screens/UiKit";
+import { Guide } from "../screens/Guide";
 
 /**
  * Экраны, которые уже сверстаны. Отсюда строятся и роутинг, и навигация:
@@ -40,4 +41,5 @@ export const SCREEN_VIEWS: Record<string, ComponentType> = {
   "library-material": LibraryMaterialWorkspace,
   setup: Setup,
   "ui-kit": UiKit,
+  guide: Guide,
 };
