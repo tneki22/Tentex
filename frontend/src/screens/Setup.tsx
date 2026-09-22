@@ -1,10 +1,11 @@
-import { Image, Bot, BrainCircuit, DatabaseBackup, HardDrive, ScanText, Search } from "lucide-react";
+import { Image, Bot, BrainCircuit, HardDrive, ScanText, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { EmptyState, PageHead } from "../components/ui";
 import { AiSettingsSection } from "./AiSettingsSection";
 import { OcrSettingsSection } from "./OcrSettingsSection";
 import { SearchSettingsSection } from "./SearchSettingsSection";
+import { StorageSettingsSection } from "./StorageSettingsSection";
 
 import { BackgroundSettingsSection } from "./BackgroundSettingsSection";
 
@@ -14,7 +15,6 @@ const SECTIONS = [
   { id: "search", label: "Поиск", icon: Search },
   { id: "ocr", label: "Распознавание", icon: ScanText },
   { id: "bot", label: "Бот", icon: Bot },
-  { id: "backups", label: "Резервные копии", icon: DatabaseBackup },
   { id: "storage", label: "Хранилище", icon: HardDrive },
 ] as const;
 
@@ -51,11 +51,21 @@ const SEARCH_SUBSECTIONS = [
 
 export type SearchSettingsSubsection = typeof SEARCH_SUBSECTIONS[number]["id"];
 
-/** Разделы без подсекций (`bot`/`backups`/`storage`) сюда не входят — у них нет якорей для прокрутки. */
+const STORAGE_SUBSECTIONS = [
+  { id: "overview", label: "Обзор" },
+  { id: "backups", label: "Резервные копии" },
+  { id: "projects", label: "Проекты" },
+  { id: "maintenance", label: "Обслуживание" },
+] as const;
+
+export type StorageSettingsSubsection = typeof STORAGE_SUBSECTIONS[number]["id"];
+
+/** Разделы без подсекций (`bot`) сюда не входят — у них нет якорей для прокрутки. */
 const SUBSECTIONS: Partial<Record<SetupSection, readonly { id: string; label: string }[]>> = {
   ai: AI_SUBSECTIONS,
   ocr: OCR_SUBSECTIONS,
   search: SEARCH_SUBSECTIONS,
+  storage: STORAGE_SUBSECTIONS,
 };
 
 const LAST_SETUP_KEY = "tentex-last-setup-location";
@@ -70,30 +80,26 @@ function readLastSetupLocation(): { section: SetupSection; subsection: string | 
   }
 }
 
-const FUTURE_COPY: Record<Exclude<SetupSection, "ai" | "ocr" | "search" | "background">, { title: string; body: string }> = {
+const FUTURE_COPY: Record<Exclude<SetupSection, "ai" | "ocr" | "search" | "background" | "storage">, { title: string; body: string }> = {
   bot: {
     title: "Бот пока не настроен",
     body: "Здесь появятся подключение Telegram, расписание сообщений и тихие часы — после отдельного серверного среза.",
-  },
-  backups: {
-    title: "Резервные копии появятся позже",
-    body: "Раздел будет управлять расписанием, хранением копий и ручным запуском. Сейчас фиктивных дат и статусов нет.",
-  },
-  storage: {
-    title: "Хранилище пока не настраивается",
-    body: "Здесь появятся папка данных, занятое место и правила очистки, когда для них будет настоящий API.",
   },
 };
 
 export function Setup() {
   const [searchParams, setSearchParams] = useSearchParams();
   const remembered = readLastSetupLocation();
-  const requested = searchParams.get("section") as SetupSection | null;
+  const rawRequested = searchParams.get("section");
+  const legacyBackups = rawRequested === "backups";
+  const requested = (legacyBackups ? "storage" : rawRequested) as SetupSection | null;
   const rememberedSection = remembered?.section ?? "ai";
   const active = SECTIONS.some((section) => section.id === requested)
     ? requested!
     : rememberedSection;
-  const requestedSubsection = searchParams.get("subsection") ?? (requested ? null : remembered?.subsection);
+  const requestedSubsection = legacyBackups
+    ? "backups"
+    : searchParams.get("subsection") ?? (requested ? null : remembered?.subsection);
   const activeSubsections = SUBSECTIONS[active];
   const initialSubsection = activeSubsections?.some((item) => item.id === requestedSubsection)
     ? requestedSubsection!
@@ -101,6 +107,10 @@ export function Setup() {
   const [activeSubsection, setActiveSubsection] = useState<string>(initialSubsection);
 
   useEffect(() => {
+    if (legacyBackups) {
+      setSearchParams({ section: "storage", subsection: "backups" }, { replace: true });
+      return;
+    }
     if (!requested) {
       const rememberedSubsections = SUBSECTIONS[active];
       setSearchParams(
@@ -115,7 +125,7 @@ export function Setup() {
     if (subsections && !subsections.some((item) => item.id === requestedSubsection)) {
       setSearchParams({ section: active, subsection: subsections[0].id }, { replace: true });
     }
-  }, [active, requested, requestedSubsection, setSearchParams]);
+  }, [active, legacyBackups, requested, requestedSubsection, setSearchParams]);
 
   useEffect(() => {
     localStorage.setItem(LAST_SETUP_KEY, JSON.stringify({
@@ -149,7 +159,7 @@ export function Setup() {
     });
   }
 
-  const future = active === "ai" || active === "ocr" || active === "search" || active === "background" ? null : FUTURE_COPY[active];
+  const future = active === "ai" || active === "ocr" || active === "search" || active === "background" || active === "storage" ? null : FUTURE_COPY[active];
 
   return (
     <div className="screen setup-screen">
@@ -201,6 +211,11 @@ export function Setup() {
           ) : active === "search" ? (
             <SearchSettingsSection
               subsection={activeSubsection as SearchSettingsSubsection}
+              onActiveSubsection={setActiveSubsection}
+            />
+          ) : active === "storage" ? (
+            <StorageSettingsSection
+              subsection={activeSubsection as StorageSettingsSubsection}
               onActiveSubsection={setActiveSubsection}
             />
           ) : active === "background" ? <BackgroundSettingsSection /> : future ? (

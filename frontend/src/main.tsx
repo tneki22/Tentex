@@ -23,6 +23,7 @@ import "./styles/conspects.css";
 import "./styles/preparation.css";
 import "./styles/lessons.css";
 import "./styles/coverage.css";
+import "./styles/storage.css";
 import "./styles/layout.css";
 import "./styles/background.css";
 

@@ -58,6 +58,7 @@ from app.models import (
 )
 from app.ocr import settings as ocr_settings
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
+from app.storage import maintenance as storage_maintenance
 
 log = logging.getLogger("tentex.worker")
 
@@ -86,6 +87,11 @@ LOCAL_JOB_KINDS = frozenset(
         BackgroundJobKind.TYPST_COMPILE,
         BackgroundJobKind.LINK_ANSWERS,
         BackgroundJobKind.RETRIEVAL_MODEL_INSTALL,
+        BackgroundJobKind.BACKUP_CREATE,
+        BackgroundJobKind.PROJECT_EXPORT,
+        BackgroundJobKind.PROJECT_IMPORT,
+        BackgroundJobKind.STORAGE_VERIFY,
+        BackgroundJobKind.STORAGE_CLEANUP,
     }
 )
 
@@ -128,6 +134,8 @@ def claim_job(
     поэтому параллельные потоки и процессы не могут забрать одну строку дважды.
     `lane=None` сохраняет поведение одноразовых проверочных запусков.
     """
+    if storage_maintenance.active():
+        return None
     now = utc_now()
     with job_write_transaction(session):
         expired = list(
@@ -770,6 +778,25 @@ def _process_claimed_job(job: BackgroundJob) -> None:
                 from app.retrieval.exhaustive import process_exhaustive_job
 
                 process_exhaustive_job(session, job)
+            elif job.kind == BackgroundJobKind.BACKUP_CREATE:
+                from app.storage.service import process_backup_job
+
+                process_backup_job(session, job)
+            elif job.kind == BackgroundJobKind.PROJECT_EXPORT:
+                from app.storage.project_transfer import process_project_export
+
+                process_project_export(session, job)
+            elif job.kind == BackgroundJobKind.PROJECT_IMPORT:
+                from app.storage.project_transfer import process_project_import
+
+                process_project_import(session, job)
+            elif job.kind in {
+                BackgroundJobKind.STORAGE_VERIFY,
+                BackgroundJobKind.STORAGE_CLEANUP,
+            }:
+                from app.storage.service import process_storage_maintenance
+
+                process_storage_maintenance(session, job)
             else:
                 process_ai_job(session, job)
             log.info(
@@ -828,8 +855,18 @@ def _fill_slots(
 def run_pool(capacities: dict[WorkerLane, int]) -> None:
     """Постоянно заполнять независимые слоты локальных, облачных и AI-задач."""
     active: dict[WorkerLane, set[Future[None]]] = {lane: set() for lane in WORKER_LANES}
+    next_schedule_check = 0.0
     with ThreadPoolExecutor(max_workers=sum(capacities.values()), thread_name_prefix="job") as pool:
         while True:
+            now = time.monotonic()
+            if now >= next_schedule_check and not storage_maintenance.active():
+                from app.storage.service import enqueue_due_automatic_backup
+
+                try:
+                    enqueue_due_automatic_backup()
+                except OperationalError as error:
+                    log.warning("automatic backup schedule check delayed: %s", error)
+                next_schedule_check = now + 60
             _reap_finished(active)
             if _fill_slots(pool, active, capacities):
                 continue

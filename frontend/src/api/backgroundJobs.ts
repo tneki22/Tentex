@@ -16,7 +16,12 @@ export type BackgroundJobKind =
   | "coverage_research"
   | "retrieval_index"
   | "retrieval_model_install"
-  | "retrieval_exhaustive";
+  | "retrieval_exhaustive"
+  | "backup_create"
+  | "project_export"
+  | "project_import"
+  | "storage_verify"
+  | "storage_cleanup";
 
 export type BackgroundJobState =
   | "queued"

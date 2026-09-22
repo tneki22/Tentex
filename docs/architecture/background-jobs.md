@@ -48,7 +48,14 @@ cleanup и Typst.
 
 `parse`, `typst_compile`, `ai_grouping`, `ai_import_repair`, `ai_preparation`,
 `ai_cleanup`, `link_answers`, `ai_answer_sections` (разметка файла эталонных ответов
-моделью), `ai_program_build` (составление программы учебника).
+моделью), `ai_program_build` (составление программы учебника), а также операции
+хранилища `backup_create`, `project_export`, `project_import`, `storage_verify`,
+`storage_cleanup`.
+
+Операции хранилища исполняются в локальной полосе. Создание полной копии и импорт
+не отменяют уже запущенные задачи: сначала перестают выдаваться новые leases, затем
+операция ждёт завершения running-задач. Детали maintenance-lock и восстановления —
+в `storage-backups.md`.
 
 `parse` и `typst_compile` выполняют `materials.worker.process_parse_job` и
 `process_typst_compile_job`; роли ИИ — `ai.jobs.process_ai_job`. `link_answers` — особый

@@ -26,6 +26,9 @@ from app.projects.demo import seed_demo_project
 from app.projects.errors import ProjectDomainError
 from app.projects.router import router as projects_router
 from app.retrieval.router import router as retrieval_router
+from app.storage import maintenance as storage_maintenance
+from app.storage.restore import recover_interrupted_restore
+from app.storage.router import router as storage_router
 
 api = APIRouter(prefix="/api")
 
@@ -40,6 +43,7 @@ def health() -> dict[str, str]:
 async def lifespan(_: FastAPI):
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
+    recover_interrupted_restore()
     database_existed = settings.database_path.exists()
     upgrade_database()
     if settings.seed_demo_project:
@@ -75,6 +79,18 @@ def create_app() -> FastAPI:
         request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
         start = time.perf_counter()
         try:
+            if (
+                storage_maintenance.active()
+                and request.method not in {"GET", "HEAD", "OPTIONS"}
+            ):
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": "Хранилище временно работает в режиме обслуживания",
+                        "code": "maintenance_busy",
+                    },
+                    headers={"Retry-After": "2", "X-Request-ID": request_id},
+                )
             response = await call_next(request)
         except Exception:
             elapsed_ms = (time.perf_counter() - start) * 1000
@@ -132,6 +148,7 @@ def create_app() -> FastAPI:
     app.include_router(background_router)
     app.include_router(preparation_router)
     app.include_router(retrieval_router)
+    app.include_router(storage_router)
     return app
 
 

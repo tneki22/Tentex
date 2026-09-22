@@ -29,6 +29,7 @@
 | Уроки: быстрый урок, чтение, ручной редактор, массовая подготовка и прохождение | `lessons.md` | pytest (`test_lessons.py`, `test_lesson_editing.py`, `test_lesson_progress.py`), typecheck/build |
 | Карточки и сохраняемый сеанс | `cards.md` | pytest, миграции, typecheck/build |
 | Фоновые операции | `background-jobs.md` | pytest |
+| Хранилище, резервные копии и перенос проектов | `storage-backups.md` | pytest (`test_storage_backups.py`), `check_storage_backups.py` |
 | Проход 2: данные, публикация и жизненный цикл | `coverage-pass-two.md` | pytest (`test_coverage*.py`), `check_coverage.py` |
 | Моя подготовка: текущие данные, расчёты, экран и интеграции | `my-preparation.md` | профильные pytest, миграции, typecheck/build |
 | Моя подготовка: инвентарь текущих и совместимых функций | `my-preparation-functions.md` | — |
