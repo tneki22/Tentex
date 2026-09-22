@@ -128,6 +128,11 @@ export function TaskRow({ task, onPause, onResume, onRetry, onCancel, onDismiss 
               <RotateCcw size={14} />
             </IconButton>
           )}
+          {failed && onDismiss && (
+            <IconButton label="Убрать ошибку" onClick={() => onDismiss(task.id)}>
+              <X size={14} />
+            </IconButton>
+          )}
           {waiting && onDismiss && (
             <IconButton label="Убрать из ожидающих" onClick={() => onDismiss(task.id)}>
               <Check size={14} />
@@ -143,7 +148,10 @@ export function TaskRow({ task, onPause, onResume, onRetry, onCancel, onDismiss 
 
       <p className="task-row-meta">
         {failed
-          ? <span className="task-row-error">{task.error ?? "задача остановилась"}</span>
+          ? <span className="task-row-error">
+            {task.total > 0 ? `${task.done} из ${task.total} · ` : ""}
+            {task.error ?? "задача остановилась"}
+          </span>
           : metaText(task)}
       </p>
 

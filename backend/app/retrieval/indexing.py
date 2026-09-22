@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, func, insert, select
@@ -28,6 +29,8 @@ from app.retrieval.schemas import RetrievalIndexBuildRead, RetrievalIndexBuildWr
 from app.retrieval.vector import vector_blob
 
 QWEN_CPU_MAX_BATCH_SIZE = 4
+EXTERNAL_MAX_BATCH_SIZE = 4
+log = logging.getLogger("tentex.retrieval")
 
 
 def embedding_batch_size(profile: EmbeddingProfile) -> int:
@@ -37,6 +40,10 @@ def embedding_batch_size(profile: EmbeddingProfile) -> int:
     HTTP-таймаут model service. Четыре куска сохраняют предсказуемое время
     одного запроса, а весь индекс продолжает строиться checkpoint-пакетами.
     """
+    if profile.backend_kind == EmbeddingBackendKind.OPENAI_COMPATIBLE:
+        # LM Studio исполняет элементы одного OpenAI batch как внутреннюю очередь.
+        # Пакет 32 давал `+27 queued`, после чего сервер рвал следующее соединение.
+        return min(profile.batch_size, EXTERNAL_MAX_BATCH_SIZE)
     if (
         profile.backend_kind == EmbeddingBackendKind.LOCAL_HF
         and profile.model_id == "Qwen/Qwen3-Embedding-0.6B"
@@ -316,6 +323,7 @@ def process_index_job(session: Session, detached_job: BackgroundJob) -> None:
         write_job(session, job_id, _complete)
     except Exception as error:
         reason = str(error)
+        log.exception("retrieval index build failed job=%s", job_id)
         session.rollback()
 
         def _fail(inner: Session, job: BackgroundJob) -> None:

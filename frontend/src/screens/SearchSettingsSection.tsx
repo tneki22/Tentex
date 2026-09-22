@@ -32,6 +32,7 @@ import {
 } from "../components/ui";
 import type { SearchSettingsSubsection } from "./Setup";
 import { useBackgroundJob } from "../hooks/useBackgroundJob";
+import { ACTIVE_JOB_STATES } from "../api/backgroundJobs";
 
 const INDEX_STATUS: Record<RetrievalIndexRead["state"], { label: string; tone: "info" | "success" | "neutral" | "danger" }> = {
   building: { label: "Собирается", tone: "info" },
@@ -232,6 +233,7 @@ export function SearchSettingsSection({
   // В этом случае оставляем только модели с явным признаком embedding: reranker/LLM
   // нельзя предлагать в профиле, который вызывает /embeddings.
   const externalEmbeddingModels = embeddingModels;
+  const watchedJobActive = watchedJob.job !== null && ACTIVE_JOB_STATES.has(watchedJob.job.state);
 
   async function addExternalProfile() {
     if (!externalProvider || !externalModel) return;
@@ -310,7 +312,9 @@ export function SearchSettingsSection({
     <div className="ai-settings retrieval-settings">
       {error && <ErrorState message={error} />}
       {watchedJob.job?.state === "failed" && (
-        <ErrorState message={`Модель не скачалась: ${watchedJob.job.error ?? "причина не указана"}`} />
+        <ErrorState message={watchedJob.job.kind === "retrieval_index"
+          ? `Сборка индекса остановилась после ${watchedJob.job.done} из ${watchedJob.job.total} материалов: ${watchedJob.job.error ?? "причина не указана"}`
+          : `Модель не скачалась: ${watchedJob.job.error ?? "причина не указана"}`} />
       )}
 
       <div id="search-overview" className="ai-anchor-section">
@@ -411,7 +415,7 @@ export function SearchSettingsSection({
               </article>;
             })}
           </div>
-          {watchedJob.job?.kind === "retrieval_model_install" && watchedJob.job.state !== "completed" && (
+          {watchedJob.job?.kind === "retrieval_model_install" && watchedJobActive && (
             <div className="retrieval-download-progress" role="status">
               <strong>{watchedJob.job.subject || "Embedding-модель"}</strong>
               <span>{watchedJob.job.done} из {watchedJob.job.total || "?"} файлов</span>
@@ -517,7 +521,7 @@ export function SearchSettingsSection({
             </article>)}
             {indexes.length === 0 && <p className="ai-muted">Индексов ещё нет. Выберите проверенный профиль и соберите первый кандидат.</p>}
           </div>
-          {watchedJob.job?.kind === "retrieval_index" && watchedJob.job.state !== "completed" && (
+          {watchedJob.job?.kind === "retrieval_index" && watchedJobActive && (
             <div className="retrieval-download-progress" role="status">
               <strong>{watchedJob.job.subject || "Сбор индекса"}</strong>
               <span>{watchedJob.job.done} из {watchedJob.job.total || "?"} материалов</span>

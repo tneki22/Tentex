@@ -57,6 +57,10 @@ function backgroundJobPath(job: BackgroundJobRead): string | null {
         : null;
     case "coverage_research":
       return job.project_id ? `/projects/${job.project_id}/coverage` : null;
+    case "retrieval_index":
+      return "/setup?section=search&subsection=index";
+    case "retrieval_model_install":
+      return "/setup?section=search&subsection=models";
     default:
       return null;
   }
@@ -144,6 +148,7 @@ interface BackgroundJobsWidgetProps {
   backgroundJobs: BackgroundJobRead[];
   reviewJobs: BackgroundJobRead[];
   runningJobs: BackgroundJobRead[];
+  failedJobs: BackgroundJobRead[];
   navigate: (path: string) => void;
   onDismiss: (jobId: string) => void;
   onCancel: (jobId: string) => void;
@@ -155,6 +160,7 @@ function BackgroundJobsWidget({
   backgroundJobs,
   reviewJobs,
   runningJobs,
+  failedJobs,
   navigate,
   onDismiss,
   onCancel,
@@ -164,11 +170,11 @@ function BackgroundJobsWidget({
       title="Фоновые задачи"
       className="popover-tasks"
       trigger={
-        <button type="button" className={reviewJobs.length > 0 ? "app-widget has-review" : "app-widget"}>
+        <button type="button" className={reviewJobs.length > 0 || failedJobs.length > 0 ? "app-widget has-review" : "app-widget"}>
           <Activity size={15} aria-hidden="true" />
           <b className="nav-label">Фоновая задача</b>
           {backgroundJobs.length > 0 && (
-            <span className={reviewJobs.length > 0 ? "app-widget-value is-review" : "app-widget-value"}>
+            <span className={reviewJobs.length > 0 || failedJobs.length > 0 ? "app-widget-value is-review" : "app-widget-value"}>
               {backgroundJobs.length}
             </span>
           )}
@@ -179,6 +185,12 @@ function BackgroundJobsWidget({
         <p className="popover-note">Фон свободен.</p>
       ) : (
         <>
+          {failedJobs.length > 0 && (
+            <section className="popover-task-group">
+              <h4 className="popover-task-group-title">Требуют внимания</h4>
+              <BackgroundJobGroup jobs={failedJobs} navigate={navigate} onDismiss={onDismiss} />
+            </section>
+          )}
           {reviewJobs.length > 0 && (
             <section className="popover-task-group">
               <h4 className="popover-task-group-title">Ждут проверки</h4>
@@ -230,10 +242,9 @@ export function AppLayout() {
   useEffect(() => {
     let active = true;
     const loadBackgroundJobs = () => {
-      // Обе корзины сразу: и то, что считается, и то, что уже досчиталось и
-      // ждёт человека. Вторая держится в панели до тех пор, пока предложение
-      // не приняли или не убрали, — раньше готовый результат просто исчезал.
-      void listBackgroundJobs({ activeOnly: true, pendingReview: true }).then((jobs) => {
+      // Активные, готовые предложения и ошибки загружаются вместе. Последние
+      // две корзины остаются до явного удаления пользователем.
+      void listBackgroundJobs({ activeOnly: true, pendingReview: true, failedOnly: true }).then((jobs) => {
         if (active) setBackgroundJobs(jobs);
       }).catch(() => undefined);
     };
@@ -257,6 +268,7 @@ export function AppLayout() {
   // завершённой задачи.
   const reviewJobs = backgroundJobs.filter((job) => job.needs_review);
   const runningJobs = backgroundJobs.filter((job) => ACTIVE_JOB_STATES.has(job.state));
+  const failedJobs = backgroundJobs.filter((job) => job.state === "failed");
 
   /** Убрать готовое предложение из панели, не открывая. Результат остаётся на
    *  сервере — уходит только напоминание о том, что его ждут. */
@@ -401,6 +413,7 @@ export function AppLayout() {
               backgroundJobs={backgroundJobs}
               reviewJobs={reviewJobs}
               runningJobs={runningJobs}
+              failedJobs={failedJobs}
               navigate={navigate}
               onDismiss={dismissJob}
               onCancel={cancelJob}

@@ -6,6 +6,7 @@ from conftest import add_page_with_fragments, make_material
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai.provider import FakeTransport, ProviderEmbeddings, ProviderError, ProviderUsage
 from app.config import settings
 from app.exam import chat as chat_service
 from app.exam.router import _citation_error
@@ -35,7 +36,7 @@ from app.models import (
 from app.projects.errors import ProjectConflictError, ProjectDomainError
 from app.retrieval import local_models
 from app.retrieval.chunking import ChunkAtom, chunk_atoms, material_chunks
-from app.retrieval.embeddings import _validate_vectors
+from app.retrieval.embeddings import OpenAIEmbeddingBackend, _validate_vectors
 from app.retrieval.exhaustive import start_run
 from app.retrieval.indexing import (
     activate_index,
@@ -189,6 +190,39 @@ def test_other_embedding_profiles_keep_their_configured_batch(session: Session) 
     session.commit()
 
     assert embedding_batch_size(profile) == 12
+
+
+def test_external_indexing_bounds_provider_batch(session: Session) -> None:
+    profile = _profile(session, external=True)
+    profile.batch_size = 32
+    session.commit()
+
+    assert embedding_batch_size(profile) == 4
+
+
+@pytest.mark.asyncio
+async def test_external_embeddings_retry_temporary_connection_failure(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _profile(session, external=True)
+    reply = ProviderEmbeddings(
+        vectors=[[0.1, 0.2]],
+        actual_model_id=profile.model_id,
+        usage=ProviderUsage(),
+    )
+    transport = FakeTransport(
+        embeddings=[ProviderError("ai_provider_unavailable", "connection dropped"), reply]
+    )
+
+    async def no_wait(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("app.retrieval.embeddings.asyncio.sleep", no_wait)
+
+    assert await OpenAIEmbeddingBackend(profile, transport).embed_documents(["текст"]) == [
+        [0.1, 0.2]
+    ]
+    assert len(transport.embed_requests) == 2
 
 
 def test_activation_switches_indexes_atomically(session: Session) -> None:

@@ -167,18 +167,17 @@ def list_jobs(
     *,
     active_only: bool = False,
     pending_review: bool = False,
+    failed_only: bool = False,
     project_id: UUID | None = None,
     material_id: UUID | None = None,
 ) -> list[BackgroundJobRead]:
     """Список задач с фильтрами.
 
-    `active_only` и `pending_review` вместе дают объединение, а не пересечение:
-    это ровно то, что показывает панель фоновых задач — и то, что идёт сейчас,
-    и то, что уже досчиталось и ждёт человека. Пересечение этих двух условий
-    пусто по определению, так что второго смысла у сочетания флагов нет.
+    Флаги дают объединение корзин: активные, ожидающие проверки и просмотренные
+    ещё не пользователем ошибки. Их пересечение пусто по определению.
     """
     stmt = select(BackgroundJob).order_by(BackgroundJob.created_at.desc())
-    if active_only or pending_review:
+    if active_only or pending_review or failed_only:
         buckets = []
         if active_only:
             buckets.append(BackgroundJob.state.in_(ACTIVE_JOB_STATES))
@@ -187,6 +186,13 @@ def list_jobs(
                 and_(
                     BackgroundJob.kind.in_(REVIEW_REQUIRED_KINDS),
                     BackgroundJob.state == BackgroundJobState.COMPLETED,
+                    BackgroundJob.reviewed_at.is_(None),
+                )
+            )
+        if failed_only:
+            buckets.append(
+                and_(
+                    BackgroundJob.state == BackgroundJobState.FAILED,
                     BackgroundJob.reviewed_at.is_(None),
                 )
             )
@@ -203,7 +209,11 @@ def list_jobs(
     return [
         job
         for job in jobs
-        if job.needs_review or (active_only and job.state in ACTIVE_JOB_STATES)
+        if (
+            job.needs_review
+            or (active_only and job.state in ACTIVE_JOB_STATES)
+            or (failed_only and job.state == BackgroundJobState.FAILED)
+        )
     ]
 
 
@@ -276,7 +286,7 @@ def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:
 
 
 def resolve_job(session: Session, job_id: UUID) -> BackgroundJobRead:
-    """Отметить, что готовое предложение разобрано, — принято или убрано.
+    """Убрать из панели разобранный результат или просмотренную ошибку.
 
     Чем именно кончилось, реестр не хранит: применённый план виден по самим
     данным (структура программы, привязки ответов), и вторая запись об этом
@@ -288,9 +298,9 @@ def resolve_job(session: Session, job_id: UUID) -> BackgroundJobRead:
     """
     job = _job_or_404(session, job_id)
     state, reviewed_at = job.state, job.reviewed_at
-    if state != BackgroundJobState.COMPLETED:
+    if state not in {BackgroundJobState.COMPLETED, BackgroundJobState.FAILED}:
         raise ProjectConflictError(
-            "Разбирать нечего: задача ещё не завершена",
+            "Задачу ещё нельзя убрать из панели",
             code="background_job_not_completed",
         )
     if reviewed_at is None:

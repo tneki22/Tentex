@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Protocol
 
 import httpx
 from sqlalchemy.orm import Session
 
 from app.ai.catalog import production_transport
+from app.ai.provider import ProviderEmbeddings, ProviderError
 from app.config import settings
 from app.models import EmbeddingBackendKind, EmbeddingProfile
 from app.projects.errors import ProjectDomainError
+
+log = logging.getLogger("tentex.retrieval")
+EXTERNAL_EMBEDDING_ATTEMPTS = 3
+RETRYABLE_PROVIDER_ERRORS = {"ai_provider_unavailable", "ai_timeout", "ai_rate_limited"}
 
 
 class EmbeddingBackend(Protocol):
@@ -25,15 +32,38 @@ class OpenAIEmbeddingBackend:
     def _render(self, template: str, text: str) -> str:
         return template.replace("{text}", text)
 
+    async def _embed(self, texts: list[str]) -> ProviderEmbeddings:
+        """Повторить только временный отказ внешнего embedding endpoint.
+
+        LM Studio может закрыть соединение между долгими пакетами, хотя сама
+        модель остаётся загруженной. Неверный ключ или запрос повторять нельзя.
+        """
+        for attempt in range(1, EXTERNAL_EMBEDDING_ATTEMPTS + 1):
+            try:
+                return await self.transport.embed(model=self.profile.model_id, texts=texts)
+            except ProviderError as error:
+                retryable = error.code in RETRYABLE_PROVIDER_ERRORS
+                if not retryable or attempt == EXTERNAL_EMBEDDING_ATTEMPTS:
+                    raise
+                log.warning(
+                    "embedding provider retry profile=%s attempt=%s/%s code=%s",
+                    self.profile.id,
+                    attempt + 1,
+                    EXTERNAL_EMBEDDING_ATTEMPTS,
+                    error.code,
+                )
+                await asyncio.sleep(2 ** (attempt - 1))
+        raise AssertionError("embedding retry loop must return or raise")
+
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
         rendered = [self._render(self.profile.document_template, text) for text in texts]
-        result = await self.transport.embed(model=self.profile.model_id, texts=rendered)
+        result = await self._embed(rendered)
         _validate_vectors(result.vectors, len(texts), self.profile.dimension)
         return result.vectors
 
     async def embed_query(self, text: str) -> list[float]:
         rendered = self._render(self.profile.query_template, text)
-        result = await self.transport.embed(model=self.profile.model_id, texts=[rendered])
+        result = await self._embed([rendered])
         _validate_vectors(result.vectors, 1, self.profile.dimension)
         return result.vectors[0]
 

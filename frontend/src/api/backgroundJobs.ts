@@ -76,6 +76,8 @@ export const listBackgroundJobs = (
     activeOnly?: boolean;
     /** Вместе с `activeOnly` — объединение корзин, а не пересечение. */
     pendingReview?: boolean;
+    /** Упавшие задачи остаются видимыми, пока пользователь не уберёт ошибку. */
+    failedOnly?: boolean;
     projectId?: string;
     materialId?: string;
   } = {},
@@ -84,6 +86,7 @@ export const listBackgroundJobs = (
   const params = new URLSearchParams();
   if (filters.activeOnly) params.set("active_only", "true");
   if (filters.pendingReview) params.set("pending_review", "true");
+  if (filters.failedOnly) params.set("failed_only", "true");
   if (filters.projectId) params.set("project_id", filters.projectId);
   if (filters.materialId) params.set("material_id", filters.materialId);
   const query = params.toString();

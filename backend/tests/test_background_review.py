@@ -76,6 +76,16 @@ def test_both_filters_give_the_union_the_panel_shows(session: Session) -> None:
     assert listed == {running.id, waiting.id}
 
 
+def test_failed_job_waits_in_attention_bucket_until_dismissed(session: Session) -> None:
+    failed = _job(session, BackgroundJobKind.RETRIEVAL_INDEX, state=BackgroundJobState.FAILED)
+
+    assert [row.id for row in registry.list_jobs(session, failed_only=True)] == [failed.id]
+
+    dismissed = registry.resolve_job(session, failed.id)
+    assert dismissed.reviewed_at is not None
+    assert registry.list_jobs(session, failed_only=True) == []
+
+
 def test_resolve_clears_the_bucket_and_repeats_harmlessly(session: Session) -> None:
     """Диалог применения и панель зовут `resolve` независимо друг от друга."""
     job = _job(session, BackgroundJobKind.AI_IMPORT_REPAIR)
