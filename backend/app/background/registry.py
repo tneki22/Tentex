@@ -149,6 +149,10 @@ def _model_label(session: Session, job: BackgroundJob) -> str:
         return "Экспорт проекта"
     if job.kind == BackgroundJobKind.PROJECT_IMPORT:
         return "Импорт проекта"
+    if job.kind == BackgroundJobKind.STORAGE_VERIFY:
+        return "Проверка хранилища"
+    if job.kind == BackgroundJobKind.STORAGE_CLEANUP:
+        return "Очистка временного"
     if job.kind != BackgroundJobKind.PARSE:
         return ""
     if _is_audio(session, job):

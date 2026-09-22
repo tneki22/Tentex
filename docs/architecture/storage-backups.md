@@ -28,6 +28,20 @@ maintenance-lock: новые задачи не берутся, HTTP-записи
 а уже running-задачи заканчиваются. Затем создаются SQLite-снимок и ZIP. Проектные
 экспорт/импорт также идут через общую очередь (`project_export`, `project_import`).
 
+Каждый переход состояния (`queued → creating → ready/failed`) обёрнут в `retry_on_locked`:
+полоса `ai` держит до 8 параллельных писателей короткими транзакциями, и без ретраев
+однократная запись иногда попадала в чужой busy-момент и валила всю копию с
+`sqlite3.OperationalError: database is locked` (было воспроизведено и исправлено
+22.09.2026, `backend/app/storage/service.py`).
+
+Проверка и очистка (`storage_verify`, `storage_cleanup`) идут тем же путём:
+`POST /api/storage/verify|cleanup` только ставит `BackgroundJob` и отвечает `202`
+с `job_id`, а не выполняет проверку синхронно. `PRAGMA quick_check` по базе в
+сотни мегабайт на Windows bind-mount под Docker Desktop занимает больше минуты —
+синхронный вызов вешал HTTP-запрос без обратной связи (воспроизведено: 105с).
+Готовый результат (`MaintenanceResult`) лежит в `checkpoint["result"]` задачи и
+читается через `GET /api/background-jobs/{id}/result`, как и у остальных ролей.
+
 ## Восстановление
 
 Загрузка сначала проверяет расширение, размер, ZIP path traversal/symlink, распакованный
@@ -47,7 +61,7 @@ maintenance-lock: новые задачи не берутся, HTTP-записи
 - `GET|POST /api/backups`, `GET|DELETE /api/backups/{id}`, `GET /file`;
 - `POST /api/storage/transfers`, `POST .../{id}/restore`, `GET /storage/restores/{id}`;
 - `POST /api/projects/{id}/exports`, `POST .../{id}/import-project`, `GET .../{id}/file`;
-- `POST /api/storage/verify`, `POST /api/storage/cleanup`.
+- `POST /api/storage/verify`, `POST /api/storage/cleanup` — оба `202` + `job_id`.
 
 Стабильные ошибки: `backup_incompatible`, `backup_corrupt`, `backup_too_large`,
 `project_package_incompatible`, `project_package_corrupt`, `insufficient_space`,

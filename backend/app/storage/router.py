@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, File, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.background.schemas import BackgroundJobStartRead
 from app.db import get_session
 from app.models import BackupKind
 from app.storage import project_transfer, restore, service, uploads
@@ -15,7 +16,6 @@ from app.storage.schemas import (
     BackupCreateRead,
     BackupPolicyRead,
     BackupPolicyWrite,
-    MaintenanceResult,
     ProjectExportCommand,
     ProjectExportRead,
     ProjectImportCommand,
@@ -136,11 +136,21 @@ def import_project(
     return ProjectImportRead(artifact_id=artifact.id, job_id=artifact.job_id)
 
 
-@router.post("/storage/verify", response_model=MaintenanceResult)
-def verify_storage() -> MaintenanceResult:
-    return service.verify_storage()
+@router.post(
+    "/storage/verify",
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def verify_storage(session: SessionDependency) -> BackgroundJobStartRead:
+    """Полная проверка SQLite синхронно занимает минуты на медленном диске —
+    результат приходит через `GET /api/background-jobs/{id}/result`."""
+    return BackgroundJobStartRead(job_id=service.start_storage_verify(session))
 
 
-@router.post("/storage/cleanup", response_model=MaintenanceResult)
-def cleanup_storage(session: SessionDependency) -> MaintenanceResult:
-    return service.cleanup_storage(session)
+@router.post(
+    "/storage/cleanup",
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def cleanup_storage(session: SessionDependency) -> BackgroundJobStartRead:
+    return BackgroundJobStartRead(job_id=service.start_storage_cleanup(session))

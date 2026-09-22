@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db import SessionLocal, job_write_transaction
+from app.db import SessionLocal, job_write_transaction, retry_on_locked
 from app.models import (
     BackgroundJob,
     BackgroundJobKind,
@@ -112,7 +112,11 @@ def storage_snapshot(session: Session) -> StorageSnapshot:
     temporary = int(
         session.scalar(select(func.coalesce(func.sum(TransferArtifact.size_bytes), 0))) or 0
     )
-    models = 0
+    # В отличие от `storage/` (тысячи страниц и фрагментов) моделей и
+    # Typst-пакетов немного и они крупные: обход дерева здесь остаётся быстрым.
+    models = _tree_size(settings.embedding_models_dir) + _tree_size(
+        settings.typst_package_cache_dir
+    )
     backup_bytes = int(
         session.scalar(
             select(func.coalesce(func.sum(BackupArchive.size_bytes), 0)).where(
@@ -212,24 +216,40 @@ def _wait_for_other_jobs(job_id: UUID) -> None:
 
 
 def _update_progress(job_id: UUID, done: int, total: int) -> None:
-    with SessionLocal() as session, job_write_transaction(session, job_id):
-        job = session.get(BackgroundJob, job_id)
-        if job is not None:
-            job.done = done
-            job.total = total
-            job.updated_at = utc_now()
+    def write() -> None:
+        with SessionLocal() as session, job_write_transaction(session, job_id):
+            job = session.get(BackgroundJob, job_id)
+            if job is not None:
+                job.done = done
+                job.total = total
+                job.updated_at = utc_now()
+
+    retry_on_locked(write)
 
 
 def process_backup_job(session: Session, detached_job: BackgroundJob) -> None:
-    """Worker-путь: дождаться покоя, снять SQLite и упаковать файловый слой."""
+    """Worker-путь: дождаться покоя, снять SQLite и упаковать файловый слой.
+
+    Каждый переход состояния ретраится через `retry_on_locked`: параллельные
+    AI-задачи (полоса `ai`, до 8 одновременно) держат writer короткими
+    транзакциями, и однократная запись сюда иногда попадает в чужой busy-момент —
+    22.09.2026 так падало само создание копии на первом же `CREATING`.
+    """
     job_id = detached_job.id
     backup_id = UUID(str(detached_job.checkpoint["backup_id"]))
     try:
-        with session.begin():
-            row = session.get(BackupArchive, backup_id)
-            if row is None:
-                raise ProjectNotFoundError("Резервная копия не найдена", code="backup_not_found")
-            row.state = BackupArchiveState.CREATING
+        def _mark_creating() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with session.begin():
+                row = session.get(BackupArchive, backup_id)
+                if row is None:
+                    raise ProjectNotFoundError(
+                        "Резервная копия не найдена", code="backup_not_found"
+                    )
+                row.state = BackupArchiveState.CREATING
+
+        retry_on_locked(_mark_creating)
         with maintenance.lock("backup", backup_id):
             _wait_for_other_jobs(job_id)
             with SessionLocal() as read_session:
@@ -245,37 +265,49 @@ def process_backup_job(session: Session, detached_job: BackgroundJob) -> None:
                 kind=kind,
                 progress=lambda done, total: _update_progress(job_id, done, total),
             )
-        with job_write_transaction(session, job_id):
-            row = session.get(BackupArchive, backup_id)
-            job = session.get(BackgroundJob, job_id)
-            assert row is not None and job is not None
-            row.state = BackupArchiveState.READY
-            row.file_path = str(destination)
-            row.file_name = file_name
-            row.size_bytes = destination.stat().st_size
-            row.sha256 = archive.sha256_file(destination)
-            row.manifest = manifest
-            row.completed_at = utc_now()
-            job.state = BackgroundJobState.COMPLETED
-            job.done = job.total
-            job.completed_at = utc_now()
-            job.lease_owner = None
-            job.lease_expires_at = None
-            job.updated_at = utc_now()
-    except Exception as error:
-        session.rollback()
-        with job_write_transaction(session, job_id):
-            row = session.get(BackupArchive, backup_id)
-            job = session.get(BackgroundJob, job_id)
-            if row is not None:
-                row.state = BackupArchiveState.FAILED
-                row.error = "Не удалось создать резервную копию"
-            if job is not None:
-                job.state = BackgroundJobState.FAILED
-                job.error = str(error)
+        def _mark_ready() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with job_write_transaction(session, job_id):
+                row = session.get(BackupArchive, backup_id)
+                job = session.get(BackgroundJob, job_id)
+                assert row is not None and job is not None
+                row.state = BackupArchiveState.READY
+                row.file_path = str(destination)
+                row.file_name = file_name
+                row.size_bytes = destination.stat().st_size
+                row.sha256 = archive.sha256_file(destination)
+                row.manifest = manifest
+                row.completed_at = utc_now()
+                job.state = BackgroundJobState.COMPLETED
+                job.done = job.total
+                job.completed_at = utc_now()
                 job.lease_owner = None
                 job.lease_expires_at = None
                 job.updated_at = utc_now()
+
+        retry_on_locked(_mark_ready)
+    except Exception as error:
+        session.rollback()
+        error_message = str(error)
+
+        def _mark_failed() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with job_write_transaction(session, job_id):
+                row = session.get(BackupArchive, backup_id)
+                job = session.get(BackgroundJob, job_id)
+                if row is not None:
+                    row.state = BackupArchiveState.FAILED
+                    row.error = "Не удалось создать резервную копию"
+                if job is not None:
+                    job.state = BackgroundJobState.FAILED
+                    job.error = error_message
+                    job.lease_owner = None
+                    job.lease_expires_at = None
+                    job.updated_at = utc_now()
+
+        retry_on_locked(_mark_failed)
         raise
 
 
@@ -300,6 +332,43 @@ def delete_backup(session: Session, backup_id: UUID) -> None:
         session.delete(row)
     if path and path.is_file():
         path.unlink()
+
+
+def _start_maintenance_job(
+    session: Session, kind: BackgroundJobKind
+) -> UUID:
+    """Проверка и очистка идут воркером: `PRAGMA quick_check` по базе в
+    сотни мегабайт на Windows bind-mount под Docker Desktop занимает минуты —
+    22.09.2026 такой вызов из HTTP-запроса завис на 105с без обратной связи.
+    """
+    if maintenance.active():
+        raise ProjectConflictError(
+            "Другая операция уже использует хранилище", code="maintenance_busy"
+        )
+    with session.begin():
+        existing = session.scalar(
+            select(BackgroundJob).where(
+                BackgroundJob.kind == kind,
+                BackgroundJob.state.in_(
+                    [BackgroundJobState.QUEUED, BackgroundJobState.RUNNING]
+                ),
+            )
+        )
+        if existing is not None:
+            return existing.id
+        job = BackgroundJob(
+            id=uuid4(), kind=kind, state=BackgroundJobState.QUEUED, checkpoint={}
+        )
+        session.add(job)
+    return job.id
+
+
+def start_storage_verify(session: Session) -> UUID:
+    return _start_maintenance_job(session, BackgroundJobKind.STORAGE_VERIFY)
+
+
+def start_storage_cleanup(session: Session) -> UUID:
+    return _start_maintenance_job(session, BackgroundJobKind.STORAGE_CLEANUP)
 
 
 def verify_storage() -> MaintenanceResult:
@@ -330,14 +399,19 @@ def cleanup_storage(session: Session) -> MaintenanceResult:
         session.scalars(select(TransferArtifact).where(TransferArtifact.expires_at < now))
     )
     expired_items = [(artifact.id, artifact.file_path) for artifact in expired]
-    session.rollback()
-    with session.begin():
-        for artifact_id, file_path in expired_items:
-            artifact = session.get(TransferArtifact, artifact_id)
-            if artifact is None:
-                continue
-            Path(file_path).unlink(missing_ok=True)
-            session.delete(artifact)
+
+    def _delete_expired() -> None:
+        if session.in_transaction():
+            session.rollback()
+        with session.begin():
+            for artifact_id, file_path in expired_items:
+                artifact = session.get(TransferArtifact, artifact_id)
+                if artifact is None:
+                    continue
+                Path(file_path).unlink(missing_ok=True)
+                session.delete(artifact)
+
+    retry_on_locked(_delete_expired)
     after = _tree_size(settings.storage_dir / "tmp") + _tree_size(settings.transfer_dir)
     return MaintenanceResult(
         ok=True,
@@ -358,25 +432,37 @@ def process_storage_maintenance(session: Session, detached_job: BackgroundJob) -
             raise ProjectConflictError(
                 "Неизвестная операция обслуживания", code="storage_job_invalid"
             )
-        with job_write_transaction(session, job_id):
-            job = session.get(BackgroundJob, job_id)
-            if job is not None:
-                job.checkpoint = {**job.checkpoint, "result": result.model_dump(mode="json")}
-                job.state = BackgroundJobState.COMPLETED
-                job.done = 1
-                job.total = 1
-                job.completed_at = utc_now()
-                job.lease_owner = None
-                job.lease_expires_at = None
+        def _mark_completed() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with job_write_transaction(session, job_id):
+                job = session.get(BackgroundJob, job_id)
+                if job is not None:
+                    job.checkpoint = {**job.checkpoint, "result": result.model_dump(mode="json")}
+                    job.state = BackgroundJobState.COMPLETED
+                    job.done = 1
+                    job.total = 1
+                    job.completed_at = utc_now()
+                    job.lease_owner = None
+                    job.lease_expires_at = None
+
+        retry_on_locked(_mark_completed)
     except Exception as error:
         session.rollback()
-        with job_write_transaction(session, job_id):
-            job = session.get(BackgroundJob, job_id)
-            if job is not None:
-                job.state = BackgroundJobState.FAILED
-                job.error = str(error)
-                job.lease_owner = None
-                job.lease_expires_at = None
+        error_message = str(error)
+
+        def _mark_failed() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with job_write_transaction(session, job_id):
+                job = session.get(BackgroundJob, job_id)
+                if job is not None:
+                    job.state = BackgroundJobState.FAILED
+                    job.error = error_message
+                    job.lease_owner = None
+                    job.lease_expires_at = None
+
+        retry_on_locked(_mark_failed)
         raise
 
 

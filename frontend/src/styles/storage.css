@@ -10,6 +10,10 @@
 .storage-paths { display: grid; gap: var(--space-2); }
 .storage-paths > div { display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: var(--space-4); align-items: baseline; }
 .storage-paths code { overflow: hidden; color: var(--ink); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.storage-path-copy { display: flex; align-items: center; min-width: 0; gap: var(--space-2); padding: var(--space-1) var(--space-2); border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: pointer; }
+.storage-path-copy code { flex: 1; min-width: 0; }
+.storage-path-copy:hover { border-color: var(--line); background: var(--surface-sunken); color: var(--accent); }
+.storage-path-copy svg { flex: none; }
 .storage-notice { display: flex; gap: var(--space-2); align-items: flex-start; padding: var(--space-3) var(--space-4); border-inline-start: 3px solid var(--tone-info); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--tone-info) 8%, transparent); color: var(--ink); font-size: var(--text-sm); }
 .storage-notice.is-warning { border-color: var(--tone-warning); background: color-mix(in srgb, var(--tone-warning) 9%, transparent); }
 .storage-notice.is-danger { border-color: var(--tone-danger); background: color-mix(in srgb, var(--tone-danger) 8%, transparent); color: var(--tone-danger); }

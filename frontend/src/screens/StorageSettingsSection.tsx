@@ -1,6 +1,8 @@
 import {
   Archive,
+  Check,
   CheckCircle2,
+  Copy,
   Download,
   FolderArchive,
   HardDrive,
@@ -10,7 +12,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ACTIVE_JOB_STATES } from "../api/backgroundJobs";
+import { ACTIVE_JOB_STATES, getBackgroundJobResult } from "../api/backgroundJobs";
 import { listProjects, type ProjectSummary } from "../api/projects";
 import {
   backupDownloadUrl,
@@ -49,6 +51,8 @@ import type { StorageSettingsSubsection } from "./Setup";
 
 const SUBSECTIONS = ["overview", "backups", "projects", "maintenance"] as const;
 
+type WatchedAction = "backup" | "export" | "import" | "verify" | "cleanup";
+
 const BACKUP_KIND: Record<BackupArchive["kind"], string> = {
   manual: "Вручную",
   automatic: "Автоматически",
@@ -83,6 +87,16 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "Не удалось выполнить действие";
 }
 
+/** Причина падения фоновой задачи — техническая строка исключения, не для
+ *  пользователя. Понятный смысл уже виден по действию, которое не удалось. */
+const WATCHED_ACTION_FAILURE: Record<WatchedAction, string> = {
+  backup: "Не удалось создать резервную копию.",
+  export: "Не удалось подготовить пакет проекта.",
+  import: "Не удалось импортировать пакет проекта.",
+  verify: "Не удалось проверить хранилище.",
+  cleanup: "Не удалось очистить временные файлы.",
+};
+
 /** Единый живой раздел хранения: настройки, архивы и проектные пакеты. */
 export function StorageSettingsSection({
   subsection,
@@ -97,7 +111,8 @@ export function StorageSettingsSection({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [feedback, setFeedback] = useState("");
-  const [watched, setWatched] = useState<{ jobId: string; artifactId?: string; action: "backup" | "export" | "import" } | null>(null);
+  const [watched, setWatched] = useState<{ jobId: string; artifactId?: string; action: WatchedAction } | null>(null);
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const watchedJob = useBackgroundJob(watched?.jobId ?? null);
   const [preview, setPreview] = useState<TransferPreview | null>(null);
   const [restoreConfirm, setRestoreConfirm] = useState(false);
@@ -169,12 +184,15 @@ export function StorageSettingsSection({
         setFeedback("Пакет проекта готов и скачивается.");
       } else if (watched.action === "import") {
         setFeedback("Проект импортирован рядом с существующими проектами.");
+      } else if (watched.action === "verify" || watched.action === "cleanup") {
+        void getBackgroundJobResult<MaintenanceResult>(watched.jobId).then(setMaintenanceResult);
+        if (watched.action === "cleanup") void load();
       } else {
         setFeedback("Резервная копия готова.");
       }
-      void load();
+      if (watched.action !== "verify" && watched.action !== "cleanup") void load();
     } else if (job.state === "failed") {
-      setError(job.error ?? "Фоновая операция завершилась с ошибкой");
+      setError(WATCHED_ACTION_FAILURE[watched.action]);
     }
     setWatched(null);
   }, [load, watched, watchedJob.job]);
@@ -205,6 +223,16 @@ export function StorageSettingsSection({
     });
     setSnapshot((current) => current ? { ...current, policy: saved } : current);
     setFeedback("Настройки резервного копирования сохранены.");
+  }
+
+  async function copyPath(path: string) {
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopiedPath(path);
+      window.setTimeout(() => setCopiedPath((current) => (current === path ? null : current)), 1500);
+    } catch {
+      setError("Не удалось скопировать путь: браузер отклонил доступ к буферу обмена.");
+    }
   }
 
   async function chooseFile(file: File | undefined) {
@@ -242,8 +270,20 @@ export function StorageSettingsSection({
             <div><span>Последняя копия</span><strong>{dateTime(snapshot.last_backup_at)}</strong></div>
           </div>
           <div className="storage-paths">
-            <div><span>Рабочие данные</span><code>{snapshot.data_directory}</code></div>
-            <div><span>Резервные копии</span><code>{snapshot.backup_directory}</code></div>
+            <div>
+              <span>Рабочие данные</span>
+              <button type="button" className="storage-path-copy" title="Скопировать путь" onClick={() => void copyPath(snapshot.data_directory)}>
+                <code>{snapshot.data_directory}</code>
+                {copiedPath === snapshot.data_directory ? <Check size={13} /> : <Copy size={13} />}
+              </button>
+            </div>
+            <div>
+              <span>Резервные копии</span>
+              <button type="button" className="storage-path-copy" title="Скопировать путь" onClick={() => void copyPath(snapshot.backup_directory)}>
+                <code>{snapshot.backup_directory}</code>
+                {copiedPath === snapshot.backup_directory ? <Check size={13} /> : <Copy size={13} />}
+              </button>
+            </div>
           </div>
           {snapshot.same_disk_warning && <div className="storage-notice is-warning">Копии находятся на том же диске, что и рабочие данные. Для защиты от поломки диска выберите другой накопитель.</div>}
           <div className="storage-breakdown" aria-label="Использование места">
@@ -317,17 +357,25 @@ export function StorageSettingsSection({
               setWatched({ jobId: result.job_id, artifactId: result.artifact_id, action: "export" });
             })}><Download size={15} />Экспортировать проект</Button>
           </div>
-          <div className="storage-notice">Пакет содержит файлы и результаты обработки, но не глобальный dense-индекс. На другом компьютере поиск сразу работает через BM25; смысловой индекс можно пересобрать.</div>
+          <div className="storage-notice">В пакет входят файлы материалов и результаты их разбора — текст страниц, блоки, привязки к программе. Глобальный смысловой (dense) индекс не переносится: на другом компьютере поиск сразу работает по обычному текстовому индексу (BM25), а смысловой можно пересобрать отдельно в любой момент.</div>
           <Button variant="secondary" onClick={() => fileInput.current?.click()}><Upload size={15} />Импортировать пакет проекта</Button>
         </div>
       </section>
 
       <section className="ai-anchor-section" id="storage-maintenance">
         <div className="ai-settings-group is-first">
-          <header className="ai-group-head"><div><h2>Обслуживание</h2><p>Проверка не меняет данные; очистка затрагивает только безопасно восстанавливаемые временные файлы.</p></div></header>
+          <header className="ai-group-head"><div><h2>Обслуживание</h2><p>Проверка сверяет базу и файлы материалов, ничего не меняя. Очистка удаляет только временное: черновой кэш разбора и просроченные пакеты экспорта/импорта — Tentex создаёт их по ходу работы и в любой момент может пересобрать заново. Материалы и резервные копии не затрагиваются. Проверка большой базы может занять несколько минут — она идёт в фоне.</p></div></header>
           <div className="storage-maintenance-actions">
-            <Button variant="secondary" disabled={Boolean(busy)} onClick={() => void run("verify", async () => setMaintenanceResult(await verifyStorage()))}><ShieldCheck size={15} />Проверить хранилище</Button>
-            <Button variant="secondary" disabled={Boolean(busy)} onClick={() => void run("cleanup", async () => { setMaintenanceResult(await cleanupStorage()); await load(); })}><Trash2 size={15} />Очистить временное</Button>
+            <Button variant="secondary" disabled={Boolean(busy) || Boolean(watched)} onClick={() => void run("verify", async () => {
+              const result = await verifyStorage();
+              setMaintenanceResult(null);
+              setWatched({ jobId: result.job_id, action: "verify" });
+            })}><ShieldCheck size={15} />Проверить хранилище</Button>
+            <Button variant="secondary" disabled={Boolean(busy) || Boolean(watched)} onClick={() => void run("cleanup", async () => {
+              const result = await cleanupStorage();
+              setMaintenanceResult(null);
+              setWatched({ jobId: result.job_id, action: "cleanup" });
+            })}><Trash2 size={15} />Очистить временное</Button>
           </div>
           {maintenanceResult && <div className={`storage-notice ${maintenanceResult.ok ? "" : "is-danger"}`}><strong>{maintenanceResult.detail}</strong>{maintenanceResult.checked_files > 0 && <span>Проверено файлов: {maintenanceResult.checked_files}.</span>}{maintenanceResult.freed_bytes > 0 && <span>Освобождено {bytes(maintenanceResult.freed_bytes)}.</span>}</div>}
           <div className="storage-links"><a href="/setup?section=search&subsection=models">Управление embedding-моделями</a><a href="/setup?section=search&subsection=index">Управление индексами</a><a href="/setup?section=ocr&subsection=models">Установка OCR-моделей</a></div>

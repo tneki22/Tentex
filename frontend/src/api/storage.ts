@@ -1,4 +1,5 @@
 import { request } from "./projects";
+import type { BackgroundJobStartRead } from "./backgroundJobs";
 
 export interface BackupPolicy {
   automatic_enabled: boolean;
@@ -112,8 +113,10 @@ export const importProject = (
   { method: "POST", body: JSON.stringify({ allow_duplicate: allowDuplicate }) },
 );
 
-export const verifyStorage = (): Promise<MaintenanceResult> =>
+/** Проверка сканирует всю SQLite: на медленном диске это минуты, поэтому
+ *  эндпоинт ставит задачу в очередь (202) вместо синхронного ответа. */
+export const verifyStorage = (): Promise<BackgroundJobStartRead> =>
   request("/api/storage/verify", { method: "POST" });
 
-export const cleanupStorage = (): Promise<MaintenanceResult> =>
+export const cleanupStorage = (): Promise<BackgroundJobStartRead> =>
   request("/api/storage/cleanup", { method: "POST" });
