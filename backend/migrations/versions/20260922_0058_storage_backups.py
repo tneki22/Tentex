@@ -1,14 +1,14 @@
 """Хранилище, переносимые копии и пакеты проектов.
 
-Revision ID: 20260922_0057
+Revision ID: 20260922_0058
 Revises: 20260922_0056
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "20260922_0057"
-down_revision = "20260922_0056"
+revision = "20260922_0058"
+down_revision = "20260922_0057"
 branch_labels = None
 depends_on = None
 
