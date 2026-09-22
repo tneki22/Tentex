@@ -1020,6 +1020,7 @@ class RetrievalIndex(Base):
         CheckConstraint("chunk_max_tokens >= chunk_target_tokens", name="chunk_max_valid"),
         CheckConstraint("chunk_overlap_tokens >= 0", name="chunk_overlap_nonnegative"),
         CheckConstraint("chunk_count >= 0", name="chunk_count_nonnegative"),
+        CheckConstraint("indexed_material_count >= 0", name="indexed_material_count_nonnegative"),
         Index("ix_retrieval_indexes_state_created", "state", "created_at"),
     )
 
@@ -1038,6 +1039,10 @@ class RetrievalIndex(Base):
     chunk_max_tokens: Mapped[int] = mapped_column(Integer, default=480)
     chunk_overlap_tokens: Mapped[int] = mapped_column(Integer, default=64)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    # `done` живёт у фоновой задачи и исчезает из экрана после завершения.
+    # Индексу нужен собственный счётчик, чтобы честно показать сохранённый
+    # частичный корпус и после перезагрузки.
+    indexed_material_count: Mapped[int] = mapped_column(Integer, default=0)
     material_count: Mapped[int] = mapped_column(Integer, default=0)
     corpus_manifest: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     diagnostics: Mapped[list[str]] = mapped_column(JSON, default=list)

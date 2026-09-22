@@ -43,6 +43,9 @@ class BackgroundJobRead(ApiModel):
     diagnostics: list[str]
     error: str | None
     pause_requested: bool
+    # Для retrieval различаем обычную паузу и просьбу сохранить candidate прямо
+    # сейчас: оба пути используют тот же безопасный чекпоинт воркера.
+    control_action: str | None = None
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None

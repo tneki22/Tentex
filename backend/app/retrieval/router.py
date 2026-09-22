@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.background.schemas import BackgroundJobStartRead
+from app.background.schemas import BackgroundJobRead, BackgroundJobStartRead
 from app.db import get_session
 from app.models import (
     RetrievalBenchmarkCase,
@@ -114,6 +114,16 @@ def post_index(
     command: RetrievalIndexBuildWrite, session: SessionDependency
 ) -> RetrievalIndexBuildRead:
     return indexing.start_index_build(session, command)
+
+
+@router.post("/retrieval/indexes/jobs/{job_id}/pause", response_model=BackgroundJobRead)
+def pause_index_job(job_id: UUID, session: SessionDependency) -> BackgroundJobRead:
+    return BackgroundJobRead.model_validate(indexing.pause_index_build(session, job_id))
+
+
+@router.post("/retrieval/indexes/jobs/{job_id}/resume", response_model=BackgroundJobRead)
+def resume_index_job(job_id: UUID, session: SessionDependency) -> BackgroundJobRead:
+    return BackgroundJobRead.model_validate(indexing.resume_index_build(session, job_id))
 
 
 @router.post("/retrieval/indexes/{index_id}/activate", response_model=RetrievalIndexRead)

@@ -252,6 +252,110 @@ def queue_material_reindex(session: Session, material_id: UUID) -> UUID:
         return job
 
 
+def pause_index_build(session: Session, job_id: UUID) -> BackgroundJob:
+    """Поставить сбор candidate на паузу, не выбрасывая записанные куски."""
+    job = session.get(BackgroundJob, job_id)
+    if job is None or job.kind != BackgroundJobKind.RETRIEVAL_INDEX:
+        raise ProjectNotFoundError("Задача сборки индекса не найдена")
+    if job.checkpoint.get("mode") == "incremental":
+        raise ProjectConflictError(
+            "Пауза доступна только для полной сборки кандидата",
+            code="retrieval_index_incremental_control_unsupported",
+        )
+    state = job.state
+    session.rollback()
+    if state == BackgroundJobState.QUEUED:
+        def pause_queued(_inner: Session, current: BackgroundJob) -> None:
+            current.state = BackgroundJobState.PAUSED
+            current.updated_at = utc_now()
+
+        write_job(session, job_id, pause_queued)
+    elif state == BackgroundJobState.RUNNING:
+        def request_pause(_inner: Session, current: BackgroundJob) -> None:
+            current.pause_requested = True
+            current.updated_at = utc_now()
+
+        write_job(session, job_id, request_pause)
+    elif state != BackgroundJobState.PAUSED:
+        raise ProjectConflictError(
+            "Сбор уже нельзя поставить на паузу", code="retrieval_index_not_running"
+        )
+    session.expire_all()
+    result = session.get(BackgroundJob, job_id)
+    assert result is not None
+    return result
+
+
+def resume_index_build(session: Session, job_id: UUID) -> BackgroundJob:
+    """Вернуть остановленный candidate в очередь с прежним чекпоинтом."""
+    job = session.get(BackgroundJob, job_id)
+    if job is None or job.kind != BackgroundJobKind.RETRIEVAL_INDEX:
+        raise ProjectNotFoundError("Задача сборки индекса не найдена")
+    if job.checkpoint.get("mode") == "incremental":
+        raise ProjectConflictError(
+            "Возобновление доступно только для полной сборки кандидата",
+            code="retrieval_index_incremental_control_unsupported",
+        )
+    if job.state != BackgroundJobState.PAUSED:
+        raise ProjectConflictError(
+            "Возобновить можно только индекс на паузе", code="retrieval_index_not_paused"
+        )
+    session.rollback()
+
+    def resume(inner: Session, current: BackgroundJob) -> None:
+        index_id = UUID(str(current.checkpoint["index_id"]))
+        index = inner.get(RetrievalIndex, index_id)
+        if index is not None:
+            index.state = RetrievalIndexState.BUILDING
+            index.completed_at = None
+        current.state = BackgroundJobState.QUEUED
+        current.pause_requested = False
+        current.checkpoint.pop("finish_requested", None)
+        current.updated_at = utc_now()
+
+    write_job(session, job_id, resume)
+    session.expire_all()
+    result = session.get(BackgroundJob, job_id)
+    assert result is not None
+    return result
+
+
+def finish_index_build(session: Session, job_id: UUID) -> BackgroundJob:
+    """Закончить сбор сейчас и оставить кандидат пригодным как частичный индекс."""
+    job = session.get(BackgroundJob, job_id)
+    if job is None or job.kind != BackgroundJobKind.RETRIEVAL_INDEX:
+        raise ProjectNotFoundError("Задача сборки индекса не найдена")
+    if job.checkpoint.get("mode") == "incremental":
+        raise ProjectConflictError(
+            "Завершение сейчас доступно только для полной сборки кандидата",
+            code="retrieval_index_incremental_control_unsupported",
+        )
+    state, checkpoint = job.state, dict(job.checkpoint)
+    if state not in {
+        BackgroundJobState.QUEUED,
+        BackgroundJobState.RUNNING,
+        BackgroundJobState.PAUSED,
+    }:
+        raise ProjectConflictError("Сбор уже завершён", code="retrieval_index_not_running")
+    session.rollback()
+    index_id = UUID(str(checkpoint["index_id"]))
+    if state == BackgroundJobState.RUNNING:
+        # Внешний embedding-вызов нельзя оборвать надёжно. Воркер увидит флаг
+        # перед следующей пачкой и завершит сразу после уже идущей операции.
+        def request_finish(_inner: Session, current: BackgroundJob) -> None:
+            current.checkpoint = {**current.checkpoint, "finish_requested": True}
+            current.pause_requested = True
+            current.updated_at = utc_now()
+
+        write_job(session, job_id, request_finish)
+    else:
+        _stop_index_build(session, job_id, index_id, "finish")
+    session.expire_all()
+    result = session.get(BackgroundJob, job_id)
+    assert result is not None
+    return result
+
+
 def process_index_job(session: Session, detached_job: BackgroundJob) -> None:
     """Собрать candidate index пакетно, сохраняя прогресс между материалами."""
     job_id = detached_job.id
@@ -276,15 +380,29 @@ def process_index_job(session: Session, detached_job: BackgroundJob) -> None:
             index.chunk_overlap_tokens,
         )
         backend = backend_for_profile(session, profile)
-        write_job(
-            session,
-            job_id,
-            lambda inner, _: inner.execute(
-                delete(RetrievalChunk).where(RetrievalChunk.index_id == index_id)
-            ),
-        )
-        next_order = 0
+        action = _requested_stop(session, job_id)
+        if action:
+            _stop_index_build(session, job_id, index_id, action)
+            return
+        # При возобновлении уже записанные материалы не пересчитываются и не
+        # удаляются. Именно запись после каждого материала делает паузу
+        # безопасной для уже собранной части корпуса.
+        if job.done == 0:
+            write_job(
+                session,
+                job_id,
+                lambda inner, _: inner.execute(
+                    delete(RetrievalChunk).where(RetrievalChunk.index_id == index_id)
+                ),
+            )
+        next_order = _next_sort_order(session, index_id)
         for position, manifest_item in enumerate(manifest, start=1):
+            if position <= job.done:
+                continue
+            action = _requested_stop(session, job_id)
+            if action:
+                _stop_index_build(session, job_id, index_id, action)
+                return
             material = session.get(Material, UUID(manifest_item["material_id"]))
             if material is None or material.active_parse_revision != manifest_item["revision"]:
                 note = f"{manifest_item['name']}: ревизия изменилась, доступен только BM25"
@@ -300,6 +418,10 @@ def process_index_job(session: Session, detached_job: BackgroundJob) -> None:
             dimension: int | None = None
             batch_size = embedding_batch_size(profile)
             for start in range(0, len(drafts), batch_size):
+                action = _requested_stop(session, job_id)
+                if action:
+                    _stop_index_build(session, job_id, index_id, action)
+                    return
                 batch = drafts[start : start + batch_size]
                 vectors = asyncio.run(backend.embed_documents([draft.text for draft in batch]))
                 if dimension is None and vectors:
@@ -310,6 +432,7 @@ def process_index_job(session: Session, detached_job: BackgroundJob) -> None:
             _save_chunks(
                 session, job_id, index_id, rows, position,
                 profile_id=profile_id, dimension=dimension,
+                indexed=True,
             )
 
         def _complete(inner: Session, job: BackgroundJob) -> None:
@@ -429,6 +552,58 @@ def _chunk_count(session: Session, index_id: UUID) -> int:
     )
 
 
+def _next_sort_order(session: Session, index_id: UUID) -> int:
+    """Продолжить порядок кусков после возобновления, не создавая дублей."""
+    last = session.scalar(
+        select(func.max(RetrievalChunk.sort_order)).where(RetrievalChunk.index_id == index_id)
+    )
+    return (last if last is not None else -1) + 1
+
+
+def _requested_stop(session: Session, job_id: UUID) -> str | None:
+    """Прочитать команду из свежей короткой транзакции, а не старого снимка."""
+    return write_job(
+        session,
+        job_id,
+        lambda _inner, job: (
+            "finish"
+            if job.checkpoint.get("finish_requested")
+            else "pause"
+            if job.pause_requested
+            else None
+        ),
+    )
+
+
+def _stop_index_build(session: Session, job_id: UUID, index_id: UUID, action: str) -> None:
+    """Освободить воркер и сохранить уже записанную часть candidate-индекса."""
+    def apply(inner: Session, job: BackgroundJob) -> None:
+        index = inner.get(RetrievalIndex, index_id)
+        if index is None:
+            return
+        index.chunk_count = _chunk_count(inner, index_id)
+        job.lease_owner = None
+        job.lease_expires_at = None
+        job.updated_at = utc_now()
+        if action == "pause":
+            job.state = BackgroundJobState.PAUSED
+            return
+        index.state = RetrievalIndexState.READY
+        index.completed_at = utc_now()
+        index.diagnostics = [
+            *index.diagnostics,
+            "Сбор остановлен пользователем: "
+            f"проиндексировано {index.indexed_material_count} из "
+            f"{index.material_count} материалов.",
+        ]
+        job.state = BackgroundJobState.COMPLETED
+        job.completed_at = utc_now()
+        job.pause_requested = False
+        job.updated_at = utc_now()
+
+    write_job(session, job_id, apply)
+
+
 def _chunk_row(
     index_id: UUID, sort_order: int, draft: ChunkDraft, vector: list[float]
 ) -> dict[str, object]:
@@ -462,6 +637,7 @@ def _save_chunks(
     profile_id: UUID | None = None,
     dimension: int | None = None,
     diagnostic: str | None = None,
+    indexed: bool = False,
 ) -> None:
     """Записать куски одного материала и прогресс одной транзакцией.
 
@@ -476,6 +652,10 @@ def _save_chunks(
             index = inner.get(RetrievalIndex, index_id)
             if index is not None:
                 index.diagnostics = [*index.diagnostics, diagnostic]
+        if indexed:
+            index = inner.get(RetrievalIndex, index_id)
+            if index is not None:
+                index.indexed_material_count += 1
         if profile_id is not None and dimension is not None:
             profile = inner.get(EmbeddingProfile, profile_id)
             if profile is not None and profile.dimension is None:

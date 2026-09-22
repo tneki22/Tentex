@@ -7,6 +7,7 @@ import {
   Globe,
   Play,
   Plus,
+  Pause,
   Search,
   Trash2,
   Video,
@@ -28,11 +29,14 @@ import {
 } from "../api/materials";
 import {
   buildRetrievalIndex,
+  pauseRetrievalIndexBuild,
+  resumeRetrievalIndexBuild,
   searchLibraryContent,
   getRetrievalSettings,
   type RetrievalHitRead,
   type SearchStrategy,
 } from "../api/retrieval";
+import { cancelBackgroundJob, listBackgroundJobs, type BackgroundJobRead } from "../api/backgroundJobs";
 import { ProjectApiError } from "../api/projects";
 import { QualityBadge } from "../components/domain";
 import { PageNumberInput } from "../components/domain/material-viewer";
@@ -191,6 +195,7 @@ export function Library() {
   const [contentProfileId, setContentProfileId] = useState<string | null>(null);
   const [indexBuildOpen, setIndexBuildOpen] = useState(false);
   const [indexBuilding, setIndexBuilding] = useState(false);
+  const [indexJob, setIndexJob] = useState<BackgroundJobRead | null>(null);
   const [preview, setPreview] = useState<{ hit: RetrievalHitRead; material: Awaited<ReturnType<typeof getLibraryMaterial>> | null; page: Awaited<ReturnType<typeof getLibraryPage>> | null; error: string | null } | null>(null);
   const [previewPageLoading, setPreviewPageLoading] = useState(false);
   const [contentSearching, setContentSearching] = useState(false);
@@ -237,6 +242,17 @@ export function Library() {
       setRetrievalSettings(next);
       setContentProfileId(next.default_profile_id ?? next.active_index?.profile_id ?? null);
     }).catch(() => setRetrievalSettings(null));
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadIndexJob = () => void listBackgroundJobs({ activeOnly: true }).then((jobs) => {
+      if (!active) return;
+      setIndexJob(jobs.find((job) => job.kind === "retrieval_index" && !job.material_id) ?? null);
+    }).catch(() => undefined);
+    loadIndexJob();
+    const timer = window.setInterval(loadIndexJob, 2000);
+    return () => { active = false; window.clearInterval(timer); };
   }, []);
 
   useEffect(() => {
@@ -529,6 +545,9 @@ export function Library() {
         });
       }
       setNotice(`Сбор индекса запущен: ${contentMaterialIds.length} материалов · ${profile.label} · задача ${started.job_id.slice(0, 8)}`);
+      void listBackgroundJobs({ activeOnly: true }).then((jobs) => {
+        setIndexJob(jobs.find((job) => job.id === started.job_id) ?? null);
+      });
       setIndexBuildOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Не удалось запустить сбор индекса");
@@ -576,7 +595,7 @@ export function Library() {
                 <div role="status">
                   <strong>Активный индекс</strong>
                   <span>{retrievalSettings?.active_index
-                    ? `${retrievalSettings.profiles.find((profile) => profile.id === retrievalSettings.active_index?.profile_id)?.label ?? "Embedding-модель"} · ${retrievalSettings.active_index.material_count} ${plural(retrievalSettings.active_index.material_count, "материал", "материала", "материалов")}`
+                    ? `${retrievalSettings.profiles.find((profile) => profile.id === retrievalSettings.active_index?.profile_id)?.label ?? "Embedding-модель"} · ${retrievalSettings.active_index.indexed_material_count} из ${retrievalSettings.active_index.material_count} ${plural(retrievalSettings.active_index.material_count, "материал", "материала", "материалов")}${retrievalSettings.active_index.indexed_material_count < retrievalSettings.active_index.material_count ? " · неполный" : ""}`
                     : "Индекс не собран"}</span>
                 </div>
                 <Button
@@ -587,6 +606,18 @@ export function Library() {
                   Собрать индекс по выбранным
                 </Button>
               </div>
+              {indexJob && (
+                <div className="retrieval-download-progress" role="status">
+                  <strong>{indexJob.state === "paused" ? "Сбор индекса на паузе" : indexJob.control_action === "finish" ? "Завершаем сбор индекса…" : indexJob.control_action === "pause" ? "Ставим сбор на паузу…" : "Собираем индекс для поиска по содержимому"}</strong>
+                  <span>{indexJob.done} из {indexJob.total} материалов</span>
+                  <div className="retrieval-progress-track"><span style={{ width: indexJob.total ? `${Math.round((indexJob.done / indexJob.total) * 100)}%` : "0%" }} /></div>
+                  <div className="lib-content-source-actions">
+                    {indexJob.state === "running" && <Button variant="ghost" onClick={() => void pauseRetrievalIndexBuild(indexJob.id).then(setIndexJob).catch((caught) => setError(caught instanceof Error ? caught.message : "Не удалось поставить сбор на паузу"))}><Pause size={14} /> Пауза</Button>}
+                    {indexJob.state === "paused" && <Button variant="ghost" onClick={() => void resumeRetrievalIndexBuild(indexJob.id).then(setIndexJob).catch((caught) => setError(caught instanceof Error ? caught.message : "Не удалось возобновить сбор"))}><Play size={14} /> Продолжить</Button>}
+                    <Button variant="ghost" onClick={() => void cancelBackgroundJob(indexJob.id).then(setIndexJob).catch((caught) => setError(caught instanceof Error ? caught.message : "Не удалось завершить сбор"))}><X size={14} /> Завершить сейчас</Button>
+                  </div>
+                </div>
+              )}
               <div className="lib-content-search-form">
                 <Search size={16} aria-hidden="true" />
                 <input

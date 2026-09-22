@@ -154,6 +154,7 @@ class RetrievalIndexRead(ApiModel):
     chunk_max_tokens: int
     chunk_overlap_tokens: int
     chunk_count: int
+    indexed_material_count: int
     material_count: int
     corpus_manifest: list[dict]
     diagnostics: list[str]

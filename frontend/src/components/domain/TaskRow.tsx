@@ -39,6 +39,8 @@ export interface BackgroundTask {
   state: "queued" | "running" | "paused" | "failed" | "review";
   /** Причина падения. Показывается как есть: обтекаемое «что-то пошло не так» бесполезно. */
   error?: string;
+  /** У candidate-индекса отмена означает сохранение частичного результата. */
+  finishable?: boolean;
 }
 
 const KIND_LABEL: Record<TaskKind, string> = {
@@ -139,7 +141,10 @@ export function TaskRow({ task, onPause, onResume, onRetry, onCancel, onDismiss 
             </IconButton>
           )}
           {cancellable && onCancel && (
-            <IconButton label="Отменить задачу" onClick={() => onCancel(task.id)}>
+            <IconButton
+              label={task.finishable ? "Завершить сейчас" : "Отменить задачу"}
+              onClick={() => onCancel(task.id)}
+            >
               <X size={14} />
             </IconButton>
           )}

@@ -1,4 +1,4 @@
-import { Check, Cpu, Database, Download, Gauge, Play, RefreshCw } from "lucide-react";
+import { Check, Cpu, Database, Download, Gauge, Pause, Play, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getAiSettings, type AiSettingsRead } from "../api/ai";
 import { ProjectApiError } from "../api/projects";
@@ -9,6 +9,8 @@ import {
   deleteLocalEmbeddingModel,
   deleteRetrievalIndex,
   getRetrievalSettings,
+  pauseRetrievalIndexBuild,
+  resumeRetrievalIndexBuild,
   installLocalEmbeddingModel,
   listLocalEmbeddingModels,
   listRetrievalBenchmarks,
@@ -32,7 +34,7 @@ import {
 } from "../components/ui";
 import type { SearchSettingsSubsection } from "./Setup";
 import { useBackgroundJob } from "../hooks/useBackgroundJob";
-import { ACTIVE_JOB_STATES } from "../api/backgroundJobs";
+import { ACTIVE_JOB_STATES, cancelBackgroundJob, listBackgroundJobs } from "../api/backgroundJobs";
 
 const INDEX_STATUS: Record<RetrievalIndexRead["state"], { label: string; tone: "info" | "success" | "neutral" | "danger" }> = {
   building: { label: "Собирается", tone: "info" },
@@ -106,6 +108,17 @@ export function SearchSettingsSection({
     void load(controller.signal);
     return () => controller.abort();
   }, [load]);
+
+  useEffect(() => {
+    let active = true;
+    const restoreIndexJob = () => void listBackgroundJobs({ activeOnly: true }).then((jobs) => {
+      const job = jobs.find((item) => item.kind === "retrieval_index" && !item.material_id);
+      if (active && job) setWatchedJobId(job.id);
+    }).catch(() => undefined);
+    restoreIndexJob();
+    const timer = window.setInterval(restoreIndexJob, 2000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
 
   useEffect(() => {
     onActiveSubsection(subsection);
@@ -328,6 +341,18 @@ export function SearchSettingsSection({
               {settings.degraded ? "Частично готов" : "Готов"}
             </StatusBadge>
           </header>
+          {watchedJob.job?.kind === "retrieval_index" && watchedJobActive && (
+            <div className="retrieval-download-progress" role="status">
+              <strong>{watchedJob.job.state === "paused" ? "Сбор индекса на паузе" : watchedJob.job.control_action === "finish" ? "Завершаем сбор индекса…" : watchedJob.job.control_action === "pause" ? "Ставим сбор на паузу…" : "Собираем индекс для поиска по содержимому"}</strong>
+              <span>{watchedJob.job.done} из {watchedJob.job.total || "?"} материалов</span>
+              <div className="retrieval-progress-track"><span style={{ width: watchedJob.job.total ? `${Math.round((watchedJob.job.done / watchedJob.job.total) * 100)}%` : "0%" }} /></div>
+              <div className="lib-content-source-actions">
+                {watchedJob.job.state === "running" && <Button variant="ghost" onClick={() => void pauseRetrievalIndexBuild(watchedJob.job!.id).catch((caught) => setError(errorText(caught)))}><Pause size={14} /> Пауза</Button>}
+                {watchedJob.job.state === "paused" && <Button variant="ghost" onClick={() => void resumeRetrievalIndexBuild(watchedJob.job!.id).catch((caught) => setError(errorText(caught)))}><Play size={14} /> Продолжить</Button>}
+                <Button variant="ghost" onClick={() => void cancelBackgroundJob(watchedJob.job!.id).catch((caught) => setError(errorText(caught)))}><X size={14} /> Завершить сейчас</Button>
+              </div>
+            </div>
+          )}
           <div className="retrieval-overview-grid">
             <article>
               <Cpu size={18} aria-hidden="true" />
@@ -503,6 +528,7 @@ export function SearchSettingsSection({
                 </span>
                 <small>
                   {index.material_count} {plural(index.material_count, "материал", "материала", "материалов")}
+                  {index.indexed_material_count < index.material_count && ` · проиндексировано ${index.indexed_material_count} из ${index.material_count}`}
                   {" · "}{index.chunk_count} {plural(index.chunk_count, "кусок", "куска", "кусков")}
                   {" · "}{index.preset}
                 </small>

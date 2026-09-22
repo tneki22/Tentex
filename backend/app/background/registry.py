@@ -71,7 +71,10 @@ def _needs_review(job: BackgroundJob) -> bool:
 
 def _subject(session: Session, job: BackgroundJob) -> str:
     """Над чем идёт работа — именем файла или проекта, а не идентификатором."""
-    if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
+    if (
+        job.kind == BackgroundJobKind.RETRIEVAL_INDEX
+        and job.checkpoint.get("mode") != "incremental"
+    ):
         from app.models import EmbeddingProfile, RetrievalIndex
 
         profile = None
@@ -151,6 +154,14 @@ def _read(session: Session, job: BackgroundJob) -> BackgroundJobRead:
             "model_label": _model_label(session, job),
             "progress_unit": _progress_unit(session, job),
             "needs_review": _needs_review(job),
+            "control_action": (
+                "finish"
+                if job.kind == BackgroundJobKind.RETRIEVAL_INDEX
+                and job.checkpoint.get("finish_requested")
+                else "pause"
+                if job.kind == BackgroundJobKind.RETRIEVAL_INDEX and job.pause_requested
+                else None
+            ),
         }
     )
 
@@ -237,6 +248,10 @@ def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:
     `completed` (см. `app.ai.jobs`).
     """
     job = _job_or_404(session, job_id)
+    if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
+        from app.retrieval.indexing import finish_index_build
+
+        return finish_index_build(session, job_id)
     # У прохода 2 отмена обязана пройти через control_run: он один снимает
     # `paused`, освобождает lease и закрывает поколение, которого общий путь ниже
     # не знает.

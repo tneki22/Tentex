@@ -41,7 +41,10 @@ from app.retrieval.exhaustive import start_run
 from app.retrieval.indexing import (
     activate_index,
     embedding_batch_size,
+    finish_index_build,
+    pause_index_build,
     queue_incremental_reindex,
+    resume_index_build,
     start_index_build,
 )
 from app.retrieval.schemas import ExhaustiveRunWrite, RetrievalIndexBuildWrite, RetrievalScope
@@ -277,6 +280,55 @@ def test_revision_change_queues_one_local_incremental_job(session: Session) -> N
     )
     assert len(jobs) == 1
     assert jobs[0].checkpoint["mode"] == "incremental"
+
+
+def test_index_build_can_pause_resume_and_finish_as_partial_candidate(session: Session) -> None:
+    """Управление сбором не выбрасывает candidate и не выдаёт его за полный."""
+    profile = _profile(session)
+    index = _index(session, profile)
+    index.state = RetrievalIndexState.BUILDING
+    index.material_count = 5
+    index.indexed_material_count = 2
+    job = BackgroundJob(
+        id=uuid4(),
+        kind=BackgroundJobKind.RETRIEVAL_INDEX,
+        state=BackgroundJobState.QUEUED,
+        total=5,
+        done=2,
+        checkpoint={"index_id": str(index.id), "profile_id": str(profile.id)},
+    )
+    session.add(job)
+    session.commit()
+
+    assert pause_index_build(session, job.id).state == BackgroundJobState.PAUSED
+    assert resume_index_build(session, job.id).state == BackgroundJobState.QUEUED
+    assert finish_index_build(session, job.id).state == BackgroundJobState.COMPLETED
+
+    session.expire_all()
+    saved = session.get(RetrievalIndex, index.id)
+    assert saved is not None
+    assert saved.state == RetrievalIndexState.READY
+    assert saved.indexed_material_count == 2
+    assert "проиндексировано 2 из 5" in saved.diagnostics[-1]
+
+
+def test_partial_index_controls_reject_incremental_reindex(session: Session) -> None:
+    """Остановка одного обновления не должна переводить активный индекс в candidate."""
+    profile = _profile(session)
+    index = _index(session, profile)
+    job = BackgroundJob(
+        id=uuid4(),
+        kind=BackgroundJobKind.RETRIEVAL_INDEX,
+        state=BackgroundJobState.QUEUED,
+        checkpoint={"index_id": str(index.id), "mode": "incremental"},
+    )
+    session.add(job)
+    session.commit()
+
+    with pytest.raises(ProjectConflictError) as excinfo:
+        finish_index_build(session, job.id)
+
+    assert excinfo.value.code == "retrieval_index_incremental_control_unsupported"
 
 
 def test_model_install_survives_another_writer_during_download(

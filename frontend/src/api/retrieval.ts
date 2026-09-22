@@ -1,4 +1,4 @@
-import type { BackgroundJobStartRead } from "./backgroundJobs";
+import type { BackgroundJobRead, BackgroundJobStartRead } from "./backgroundJobs";
 import { request } from "./projects";
 
 export type EmbeddingBackendKind = "local_hf" | "openai_compatible";
@@ -36,6 +36,7 @@ export interface RetrievalIndexRead {
   chunk_max_tokens: number;
   chunk_overlap_tokens: number;
   chunk_count: number;
+  indexed_material_count: number;
   material_count: number;
   corpus_manifest: Array<{ material_id: string; name: string; revision: number; size_bytes: number }>;
   diagnostics: string[];
@@ -180,6 +181,14 @@ export const buildRetrievalIndex = (command: {
     material_ids: command.material_ids ?? [],
   }),
 });
+
+export const pauseRetrievalIndexBuild = (jobId: string): Promise<BackgroundJobRead> => request(
+  `/api/retrieval/indexes/jobs/${encodeURIComponent(jobId)}/pause`, { method: "POST" },
+);
+
+export const resumeRetrievalIndexBuild = (jobId: string): Promise<BackgroundJobRead> => request(
+  `/api/retrieval/indexes/jobs/${encodeURIComponent(jobId)}/resume`, { method: "POST" },
+);
 
 export const indexLibraryMaterial = (materialId: string): Promise<BackgroundJobStartRead> => request(
   `/api/retrieval/indexes/materials/${encodeURIComponent(materialId)}`,

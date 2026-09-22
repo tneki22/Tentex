@@ -29,6 +29,7 @@ import {
   resolveBackgroundJob,
   type BackgroundJobRead,
 } from "../api/backgroundJobs";
+import { pauseRetrievalIndexBuild, resumeRetrievalIndexBuild } from "../api/retrieval";
 import { TaskRow, type BackgroundTask, type TaskKind } from "../components/domain";
 import { estimateEtaSeconds } from "../hooks/backgroundTaskEta";
 
@@ -96,6 +97,7 @@ function toBackgroundTask(job: BackgroundJobRead): BackgroundTask {
     etaSeconds: estimateEtaSeconds(job.id, job.done, job.total, job.updated_at),
     state: job.needs_review ? "review" : (job.state as BackgroundTask["state"]),
     error: job.error ?? undefined,
+    finishable: job.kind === "retrieval_index" && job.material_id === null,
   };
 }
 
@@ -103,6 +105,8 @@ interface BackgroundJobGroupProps {
   jobs: BackgroundJobRead[];
   navigate: (path: string) => void;
   onCancel?: (jobId: string) => void;
+  onPause?: (jobId: string) => void;
+  onResume?: (jobId: string) => void;
   onDismiss?: (jobId: string) => void;
 }
 
@@ -114,7 +118,7 @@ interface BackgroundJobGroupProps {
  * («Отменить», «Убрать») не должен ещё и переключать экран — клики,
  * начавшиеся на вложенной кнопке, отсекаются.
  */
-function BackgroundJobGroup({ jobs, navigate, onCancel, onDismiss }: BackgroundJobGroupProps) {
+function BackgroundJobGroup({ jobs, navigate, onCancel, onPause, onResume, onDismiss }: BackgroundJobGroupProps) {
   return (
     <div className="popover-task-list">
       {jobs.map((job) => {
@@ -136,7 +140,13 @@ function BackgroundJobGroup({ jobs, navigate, onCancel, onDismiss }: BackgroundJ
               navigate(path);
             } : undefined}
           >
-            <TaskRow task={toBackgroundTask(job)} onCancel={onCancel} onDismiss={onDismiss} />
+            <TaskRow
+              task={toBackgroundTask(job)}
+              onCancel={onCancel}
+              onPause={job.kind === "retrieval_index" && !job.material_id ? onPause : undefined}
+              onResume={job.kind === "retrieval_index" && !job.material_id ? onResume : undefined}
+              onDismiss={onDismiss}
+            />
           </div>
         );
       })}
@@ -152,6 +162,8 @@ interface BackgroundJobsWidgetProps {
   navigate: (path: string) => void;
   onDismiss: (jobId: string) => void;
   onCancel: (jobId: string) => void;
+  onPause: (jobId: string) => void;
+  onResume: (jobId: string) => void;
 }
 
 /** Кнопка и всплывашка «Фоновые задачи» в панели слева. Отдельным компонентом —
@@ -164,6 +176,8 @@ function BackgroundJobsWidget({
   navigate,
   onDismiss,
   onCancel,
+  onPause,
+  onResume,
 }: BackgroundJobsWidgetProps) {
   return (
     <Popover
@@ -200,7 +214,7 @@ function BackgroundJobsWidget({
           {runningJobs.length > 0 && (
             <section className="popover-task-group">
               <h4 className="popover-task-group-title">Идут сейчас</h4>
-              <BackgroundJobGroup jobs={runningJobs} navigate={navigate} onCancel={onCancel} />
+              <BackgroundJobGroup jobs={runningJobs} navigate={navigate} onCancel={onCancel} onPause={onPause} onResume={onResume} />
             </section>
           )}
         </>
@@ -261,6 +275,19 @@ export function AppLayout() {
       .then((updated) => setBackgroundJobs((current) => current.map((job) => job.id === updated.id ? updated : job)
         .filter((job) => ACTIVE_JOB_STATES.has(job.state) || job.needs_review)))
       .catch(() => undefined);
+  }
+
+  function updateJob(job: BackgroundJobRead) {
+    setBackgroundJobs((current) => current.map((item) => item.id === job.id ? job : item)
+      .filter((item) => ACTIVE_JOB_STATES.has(item.state) || item.needs_review));
+  }
+
+  function pauseJob(jobId: string) {
+    void pauseRetrievalIndexBuild(jobId).then(updateJob).catch(() => undefined);
+  }
+
+  function resumeJob(jobId: string) {
+    void resumeRetrievalIndexBuild(jobId).then(updateJob).catch(() => undefined);
   }
 
   // Две корзины из одного списка: что считается и что уже посчитано, но ждёт
@@ -417,6 +444,8 @@ export function AppLayout() {
               navigate={navigate}
               onDismiss={dismissJob}
               onCancel={cancelJob}
+              onPause={pauseJob}
+              onResume={resumeJob}
             />
 
             <Popover
