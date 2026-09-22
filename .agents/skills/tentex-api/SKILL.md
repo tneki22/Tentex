@@ -38,6 +38,8 @@ description: Правила бэкенда Tentex — слои, доменные
 
 Долгая работа живёт в общей модели `BackgroundJob`, а не в HTTP-запросе или старом `ProcessingTask`; виды, состояния, review/result и маршруты описаны в `docs/architecture/background-jobs.md`. Один worker-процесс исполняет независимые полосы `local`, `cloud` и `ai` с настраиваемым числом слотов. `claim_job` безопасен для параллельных потоков и процессов благодаря предварительной резервации SQLite-writer; отдельные процессы обычно не нужны, потому что умножают пределы всех полос.
 
+Заводишь новый `BackgroundJobKind` — читай там же раздел «Добавляя новый вид задачи»: подпись в панели («undefined · …») и текст ошибки — не мелочи на потом, а часть контракта, которую легко забыть в одном из четырёх мест (бэкенд-перечисление, `registry._subject`/`_model_label`, фронтенд-тип, `TaskRow.KIND_LABEL`).
+
 ## Логирование
 
 Настройка одна на процесс: `app/logging_config.py:configure_logging()`, зовётся из `create_app()` и `worker.main()`. Логгер бери по имени области: `logging.getLogger("tentex.http" | "tentex.worker" | ...)`. Уровень — `TENTEX_LOG_LEVEL` (дефолт `INFO`).

@@ -641,6 +641,17 @@
 .task-row-error {
   color: var(--tone-danger);
 }
+
+.task-row-spinner {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 6px;
+  color: var(--muted);
+  animation: task-row-spin 1s linear infinite;
+}
+
+@keyframes task-row-spin { to { transform: rotate(360deg); } }
 /* ── Выбор общего материала для проекта ── */
 .material-entry-actions {
   display: flex;

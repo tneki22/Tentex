@@ -262,10 +262,16 @@ Typst ставится в ту же очередь отдельными material
   `TaskRow`. Маршрут определяется `kind` вместе с `project_id`/`material_id`;
   `typst_compile` на текущем commit не имеет перехода из строки, а `ai_preparation`
   всегда ведёт в мастер и не различает `checkpoint.subtype=preparation_plan`.
-  «Отменить» дёргает `/cancel`, «Убрать» — `/resolve`. Счётчик у виджета становится
-  акцентным, пока что-то ждёт человека:
-  знак постоянный, а не всплывающий, — всплывашку пропускает ровно тот, кто ушёл
-  с экрана и не вернулся, то есть тот, кому она и нужна;
+  «Отменить» дёргает `/cancel`, «Убрать» — `/resolve`. Пока ответ не пришёл, строка
+  показывает «Завершаем…» и прячет кнопки (`BackgroundTask.pending`,
+  22.09.2026) — раньше клик не давал вообще никакой обратной связи до
+  следующего 4-секундного опроса. Отмена бегущей задачи не обнуляет `pending`
+  сразу после ответа: он остаётся `true`, пока сервер отдаёт
+  `pause_requested=true` — воркер сам ещё не заметил флаг, а кнопки заново
+  кликабельными быть не должны. Счётчик у виджета становится акцентным, пока
+  что-то ждёт человека: знак постоянный, а не всплывающий, — всплывашку
+  пропускает ровно тот, кто ушёл с экрана и не вернулся, то есть тот, кому она
+  и нужна;
 - строка из «ждут проверки» ведёт на `<экран вызова>?job=<id>`. Это одна
   договорённость на все роли ИИ вместо вкладки завершённых задач в каждом
   разделе: `usePendingReviewJob` инициирует открытие диалога. Однако сам диалог
@@ -291,6 +297,42 @@ Typst ставится в ту же очередь отдельными material
 `ProgramImportRepairRunRead` через `/result` и показывает редактируемые `items` и
 `dropped`. Wire-формат модели преобразуется только на сервере; фронтенд не дублирует
 `_wire_to_suggestion`.
+
+## Добавляя новый вид задачи
+
+22.09.2026: у `backup_create`/`storage_verify`/`storage_cleanup` в панели полгода
+показывалось «undefined · Вся установка» — виды задач заводили в
+`BackgroundJobKind` (бэкенд) и в одноимённый тип во `frontend/src/api/backgroundJobs.ts`,
+но третий, отдельно живущий словарь подписей в `frontend/src/components/domain/TaskRow.tsx`
+(`TaskKind`/`KIND_LABEL`) не обновляли — а `job.kind as TaskKind` в
+`AppLayout.toBackgroundTask` пропускал несовпадение мимо компилятора. Новый вид
+задачи трогает:
+
+1. `BackgroundJobKind` в `backend/app/models.py`;
+2. `registry._subject`/`registry._model_label` (`backend/app/background/registry.py`) —
+   без записи здесь строка задачи в панели просто пустая, не ошибка;
+3. `BackgroundJobKind` в `frontend/src/api/backgroundJobs.ts` — держать в синхроне с (1);
+4. `KIND_LABEL` в `frontend/src/components/domain/TaskRow.tsx`. Начиная с
+   22.09.2026 `TaskKind` — это сам `BackgroundJobKind` (плюс несколько локальных фаз
+   разбора без своей задачи в очереди), а `KIND_LABEL` — `Record<TaskKind, string>`:
+   пропущенный вид теперь не даёт собраться typecheck, а не превращается в
+   `undefined` на экране. Не заводи `TaskKind` заново отдельным списком литералов —
+   это и был первоначальный баг.
+
+Отдельно про `job.error`: `tentex-api` SKILL.md фиксирует для HTTP-ошибок правило
+«наружу текст исключения не утекает» (необработанные исключения превращаются в
+`code: internal_error`), но для `BackgroundJob.error` это правило не соблюдается —
+почти везде в кодовой базе (`worker.py`, `storage/service.py`,
+`storage/project_transfer.py`, `ocr/downloads.py`) в него пишут `str(error)` как
+есть, и панель показывает эту техническую строку пользователю без перевода.
+У `backup_create`/`project_export`/`project_import`/`storage_verify`/`storage_cleanup`
+это точечно закрыто во `frontend/src/app/AppLayout.tsx`
+(`STORAGE_JOB_FAILURE`/`backgroundJobError`) и отдельно в `StorageSettingsSection.tsx`
+(`WATCHED_ACTION_FAILURE`) — фронтенд подменяет технический текст понятным по виду
+задачи. Для остальных видов раскрытие сырого исключения остаётся как есть: заводя
+новый вид с собственной обработкой ошибок, определи для него дружелюбный текст сразу
+(по образцу `BackupArchive.error`, который бэкенд всегда пишет отдельно от
+`job.error`), а не полагайся на `str(error)`.
 
 ## Проверка
 

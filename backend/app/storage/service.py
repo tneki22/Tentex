@@ -250,8 +250,13 @@ def process_backup_job(session: Session, detached_job: BackgroundJob) -> None:
                 row.state = BackupArchiveState.CREATING
 
         retry_on_locked(_mark_creating)
+        # Ждать покоя вне maintenance-лока: сама выдержка ничего не пишет и не
+        # трогает файлы, а другие AI-задачи (сборка индекса) могут идти минутами
+        # из-за троттлинга внешнего провайдера — 22.09.2026 это держало
+        # глобальную блокировку записи (см. `main.py`) на всю установку без
+        # необходимости. Лок берётся только на сам снимок и упаковку.
+        _wait_for_other_jobs(job_id)
         with maintenance.lock("backup", backup_id):
-            _wait_for_other_jobs(job_id)
             with SessionLocal() as read_session:
                 row = backup_or_404(read_session, backup_id)
                 directory = backup_directory(_policy(read_session))
