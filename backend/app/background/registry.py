@@ -266,7 +266,10 @@ def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:
     `completed` (см. `app.ai.jobs`).
     """
     job = _job_or_404(session, job_id)
-    if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
+    if (
+        job.kind == BackgroundJobKind.RETRIEVAL_INDEX
+        and job.checkpoint.get("mode") != "incremental"
+    ):
         from app.retrieval.indexing import finish_index_build
 
         return finish_index_build(session, job_id)

@@ -112,7 +112,7 @@ export function SearchSettingsSection({
   useEffect(() => {
     let active = true;
     const restoreIndexJob = () => void listBackgroundJobs({ activeOnly: true }).then((jobs) => {
-      const job = jobs.find((item) => item.kind === "retrieval_index" && !item.material_id);
+      const job = jobs.find((item) => item.kind === "retrieval_index");
       if (active && job) setWatchedJobId(job.id);
     }).catch(() => undefined);
     restoreIndexJob();
@@ -247,6 +247,8 @@ export function SearchSettingsSection({
   // нельзя предлагать в профиле, который вызывает /embeddings.
   const externalEmbeddingModels = embeddingModels;
   const watchedJobActive = watchedJob.job !== null && ACTIVE_JOB_STATES.has(watchedJob.job.state);
+  const watchedIncrementalIndex = watchedJob.job?.kind === "retrieval_index"
+    && watchedJob.job.material_id !== null;
 
   async function addExternalProfile() {
     if (!externalProvider || !externalModel) return;
@@ -343,13 +345,15 @@ export function SearchSettingsSection({
           </header>
           {watchedJob.job?.kind === "retrieval_index" && watchedJobActive && (
             <div className="retrieval-download-progress" role="status">
-              <strong>{watchedJob.job.state === "paused" ? "Сбор индекса на паузе" : watchedJob.job.control_action === "finish" ? "Завершаем сбор индекса…" : watchedJob.job.control_action === "pause" ? "Ставим сбор на паузу…" : "Собираем индекс для поиска по содержимому"}</strong>
+              <strong>{watchedIncrementalIndex
+                ? watchedJob.job.pause_requested ? "Отменяем обновление индекса…" : `Обновляем индекс · ${watchedJob.job.subject}`
+                : watchedJob.job.state === "paused" ? "Сбор индекса на паузе" : watchedJob.job.control_action === "finish" ? "Завершаем сбор индекса…" : watchedJob.job.control_action === "pause" ? "Ставим сбор на паузу…" : "Собираем индекс для поиска по содержимому"}</strong>
               <span>{watchedJob.job.done} из {watchedJob.job.total || "?"} материалов</span>
               <div className="retrieval-progress-track"><span style={{ width: watchedJob.job.total ? `${Math.round((watchedJob.job.done / watchedJob.job.total) * 100)}%` : "0%" }} /></div>
               <div className="lib-content-source-actions">
-                {watchedJob.job.state === "running" && <Button variant="ghost" onClick={() => void pauseRetrievalIndexBuild(watchedJob.job!.id).catch((caught) => setError(errorText(caught)))}><Pause size={14} /> Пауза</Button>}
-                {watchedJob.job.state === "paused" && <Button variant="ghost" onClick={() => void resumeRetrievalIndexBuild(watchedJob.job!.id).catch((caught) => setError(errorText(caught)))}><Play size={14} /> Продолжить</Button>}
-                <Button variant="ghost" onClick={() => void cancelBackgroundJob(watchedJob.job!.id).catch((caught) => setError(errorText(caught)))}><X size={14} /> Завершить сейчас</Button>
+                {!watchedIncrementalIndex && watchedJob.job.state === "running" && <Button variant="ghost" onClick={() => void pauseRetrievalIndexBuild(watchedJob.job!.id).catch((caught) => setError(errorText(caught)))}><Pause size={14} /> Пауза</Button>}
+                {!watchedIncrementalIndex && watchedJob.job.state === "paused" && <Button variant="ghost" onClick={() => void resumeRetrievalIndexBuild(watchedJob.job!.id).catch((caught) => setError(errorText(caught)))}><Play size={14} /> Продолжить</Button>}
+                <Button variant="ghost" disabled={watchedJob.job.pause_requested} onClick={() => void cancelBackgroundJob(watchedJob.job!.id).catch((caught) => setError(errorText(caught)))}><X size={14} /> {watchedIncrementalIndex ? "Отменить" : "Завершить сейчас"}</Button>
               </div>
             </div>
           )}

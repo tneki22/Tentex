@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.provider import FakeTransport, ProviderEmbeddings, ProviderError, ProviderUsage
+from app.background.registry import cancel_job
 from app.config import settings
 from app.exam import chat as chat_service
 from app.exam.router import _citation_error
@@ -43,6 +44,7 @@ from app.retrieval.indexing import (
     embedding_batch_size,
     finish_index_build,
     pause_index_build,
+    process_index_job,
     queue_incremental_reindex,
     resume_index_build,
     start_index_build,
@@ -329,6 +331,46 @@ def test_partial_index_controls_reject_incremental_reindex(session: Session) -> 
         finish_index_build(session, job.id)
 
     assert excinfo.value.code == "retrieval_index_incremental_control_unsupported"
+
+
+def test_incremental_reindex_cancels_without_changing_active_index(session: Session) -> None:
+    """Крестик в общем фоне отменяет один материал, а не partial candidate."""
+    material = make_material(session, "96")
+    add_page_with_fragments(
+        session, material, page_number=1, revision=1, fragments=["Текст для вектора"]
+    )
+    profile = _profile(session)
+    index = _index(session, profile)
+    index.state = RetrievalIndexState.ACTIVE
+    session.add(RetrievalSettings(id=1, active_index_id=index.id, default_profile_id=profile.id))
+    session.commit()
+
+    queue_incremental_reindex(session, material.id)
+    session.commit()
+    job = session.scalar(
+        select(BackgroundJob).where(
+            BackgroundJob.kind == BackgroundJobKind.RETRIEVAL_INDEX,
+            BackgroundJob.material_id == material.id,
+        )
+    )
+    assert job is not None
+    job.state = BackgroundJobState.RUNNING
+    session.commit()
+
+    cancelled = cancel_job(session, job.id)
+    assert cancelled.state == BackgroundJobState.RUNNING
+    assert cancelled.pause_requested is True
+
+    detached = session.get(BackgroundJob, job.id)
+    assert detached is not None
+    process_index_job(session, detached)
+
+    session.expire_all()
+    saved_job = session.get(BackgroundJob, job.id)
+    saved_index = session.get(RetrievalIndex, index.id)
+    assert saved_job is not None and saved_job.state == BackgroundJobState.CANCELLED
+    assert saved_index is not None and saved_index.state == RetrievalIndexState.ACTIVE
+    assert saved_index.chunk_count == 0
 
 
 def test_model_install_survives_another_writer_during_download(

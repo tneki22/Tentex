@@ -248,7 +248,7 @@ export function Library() {
     let active = true;
     const loadIndexJob = () => void listBackgroundJobs({ activeOnly: true }).then((jobs) => {
       if (!active) return;
-      setIndexJob(jobs.find((job) => job.kind === "retrieval_index" && !job.material_id) ?? null);
+      setIndexJob(jobs.find((job) => job.kind === "retrieval_index") ?? null);
     }).catch(() => undefined);
     loadIndexJob();
     const timer = window.setInterval(loadIndexJob, 2000);
@@ -608,13 +608,15 @@ export function Library() {
               </div>
               {indexJob && (
                 <div className="retrieval-download-progress" role="status">
-                  <strong>{indexJob.state === "paused" ? "Сбор индекса на паузе" : indexJob.control_action === "finish" ? "Завершаем сбор индекса…" : indexJob.control_action === "pause" ? "Ставим сбор на паузу…" : "Собираем индекс для поиска по содержимому"}</strong>
+                  <strong>{indexJob.material_id
+                    ? indexJob.pause_requested ? "Отменяем обновление индекса…" : `Обновляем индекс · ${indexJob.subject}`
+                    : indexJob.state === "paused" ? "Сбор индекса на паузе" : indexJob.control_action === "finish" ? "Завершаем сбор индекса…" : indexJob.control_action === "pause" ? "Ставим сбор на паузу…" : "Собираем индекс для поиска по содержимому"}</strong>
                   <span>{indexJob.done} из {indexJob.total} материалов</span>
                   <div className="retrieval-progress-track"><span style={{ width: indexJob.total ? `${Math.round((indexJob.done / indexJob.total) * 100)}%` : "0%" }} /></div>
                   <div className="lib-content-source-actions">
-                    {indexJob.state === "running" && <Button variant="ghost" onClick={() => void pauseRetrievalIndexBuild(indexJob.id).then(setIndexJob).catch((caught) => setError(caught instanceof Error ? caught.message : "Не удалось поставить сбор на паузу"))}><Pause size={14} /> Пауза</Button>}
-                    {indexJob.state === "paused" && <Button variant="ghost" onClick={() => void resumeRetrievalIndexBuild(indexJob.id).then(setIndexJob).catch((caught) => setError(caught instanceof Error ? caught.message : "Не удалось возобновить сбор"))}><Play size={14} /> Продолжить</Button>}
-                    <Button variant="ghost" onClick={() => void cancelBackgroundJob(indexJob.id).then(setIndexJob).catch((caught) => setError(caught instanceof Error ? caught.message : "Не удалось завершить сбор"))}><X size={14} /> Завершить сейчас</Button>
+                    {!indexJob.material_id && indexJob.state === "running" && <Button variant="ghost" onClick={() => void pauseRetrievalIndexBuild(indexJob.id).then(setIndexJob).catch((caught) => setError(caught instanceof Error ? caught.message : "Не удалось поставить сбор на паузу"))}><Pause size={14} /> Пауза</Button>}
+                    {!indexJob.material_id && indexJob.state === "paused" && <Button variant="ghost" onClick={() => void resumeRetrievalIndexBuild(indexJob.id).then(setIndexJob).catch((caught) => setError(caught instanceof Error ? caught.message : "Не удалось возобновить сбор"))}><Play size={14} /> Продолжить</Button>}
+                    <Button variant="ghost" disabled={indexJob.pause_requested} onClick={() => void cancelBackgroundJob(indexJob.id).then(setIndexJob).catch((caught) => setError(caught instanceof Error ? caught.message : "Не удалось отменить обновление индекса"))}><X size={14} /> {indexJob.material_id ? "Отменить" : "Завершить сейчас"}</Button>
                   </div>
                 </div>
               )}

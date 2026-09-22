@@ -466,6 +466,9 @@ def _process_incremental(
     index: RetrievalIndex,
     profile: EmbeddingProfile,
 ) -> None:
+    if _requested_stop(session, job.id):
+        _cancel_incremental_reindex(session, job.id)
+        return
     material_id = UUID(job.checkpoint["material_id"])
     material = session.get(Material, material_id)
     if material is None:
@@ -487,11 +490,24 @@ def _process_incremental(
     embedded: list[tuple[ChunkDraft, list[float]]] = []
     batch_size = embedding_batch_size(profile)
     for start in range(0, len(drafts), batch_size):
+        # Общая отмена помечает running-задачу через `pause_requested`.
+        # Для candidate-индекса это просьба остановиться и сохранить часть
+        # корпуса, а для инкрементального обновления — отмена: его результат
+        # ещё не записан, поэтому активный индекс остаётся нетронутым.
+        if _requested_stop(session, job_id):
+            _cancel_incremental_reindex(session, job_id)
+            return
         batch = drafts[start : start + batch_size]
         vectors = asyncio.run(backend.embed_documents([draft.text for draft in batch]))
         embedded.extend(zip(batch, vectors, strict=True))
 
     def apply(inner: Session, job: BackgroundJob) -> None:
+        # Команда могла прийти после последней пачки, пока в памяти уже лежат
+        # векторы. Проверяем её внутри той же транзакции, которая иначе меняла
+        # бы active index: отмена никогда не публикует готовый результат.
+        if job.pause_requested:
+            finish(job, BackgroundJobState.CANCELLED)
+            return
         index = inner.get(RetrievalIndex, index_id)
         assert index is not None
         inner.execute(
@@ -539,6 +555,15 @@ def _process_incremental(
         )
 
     write_job(session, job_id, apply)
+
+
+def _cancel_incremental_reindex(session: Session, job_id: UUID) -> None:
+    """Закрыть отменённое обновление до записи в активный индекс."""
+
+    def cancel(_inner: Session, current: BackgroundJob) -> None:
+        finish(current, BackgroundJobState.CANCELLED)
+
+    write_job(session, job_id, cancel)
 
 
 def _chunk_count(session: Session, index_id: UUID) -> int:
