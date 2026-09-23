@@ -15,6 +15,8 @@ interface StubOptions {
   listDraft?: boolean;
   /** Внешние модели включены — чат программы можно вызвать. */
   aiEnabled?: boolean;
+  /** Активный свободный проект уже с программой — для раздела «Программа». */
+  initialNodes?: Array<Record<string, unknown>>;
 }
 
 const PROVIDER = "66666666-6666-4666-8666-666666666666";
@@ -175,7 +177,7 @@ async function installStub(page: Page, options: StubOptions = {}) {
   const outline = options.outline ?? [{ level: 1, title: "Основы экономики", page: 5 }];
   let revision = 0;
   let programRevision = 0;
-  let programNodes: Array<Record<string, unknown>> = [];
+  let programNodes: Array<Record<string, unknown>> = [...(options.initialNodes ?? [])];
   let modelRequests = 0;
   let chatMessages: Array<Record<string, unknown>> = [];
   let chatCreated = false;
@@ -232,6 +234,31 @@ async function installStub(page: Page, options: StubOptions = {}) {
     });
 
     if (path === "/api/settings/ai") return json(aiSettings(options.aiEnabled ?? false));
+    if (path === `/api/projects/${PROJECT}/material-suggestions` && method === "POST") {
+      const body = request.postDataJSON();
+      const candidate = library[0];
+      const suggestion = candidate && !materials.some((item) => item.id === candidate.id) ? {
+        items: [{
+          material_id: candidate.id,
+          display_name: candidate.display_name,
+          subject: candidate.subject ?? null,
+          page_count: candidate.page_count ?? null,
+          has_outline: candidate.has_outline ?? false,
+          subject_match: true,
+          hit_count: 3,
+          signals: ["lexical", "semantic"],
+          block_title: "Основы экономики",
+          page_from: 5,
+          page_to: 7,
+          excerpt: "Экономика изучает, как общество распределяет ограниченные ресурсы.",
+        }],
+      } : { items: [] };
+      if (body.query) return json({ by_query: { query: body.query, words_only: false, ...suggestion }, by_node: {} });
+      return json({
+        by_query: null,
+        by_node: Object.fromEntries((body.node_ids as string[]).map((id) => [id, { query: id, words_only: true, ...suggestion }])),
+      });
+    }
     const chatBase = `/api/projects/${PROJECT}/program-chat`;
     const chatDetail = () => ({
       id: CHAT_SESSION, project_id: PROJECT, section_scope_node_id: null, title: "Программа",
@@ -424,7 +451,9 @@ test("цель без предмета и материалов создаёт п
   await openFreeWizard(page);
   await enterGoal(page);
   await expect(page.getByText("В Библиотеке пока ничего нет.")).toBeVisible();
-  await page.getByRole("button", { name: "К проверке" }).click();
+  await page.getByRole("button", { name: "К программе" }).click();
+  await expect(page.getByRole("heading", { name: "Соберите программу" })).toBeVisible();
+  await page.getByRole("button", { name: "Продолжить без программы" }).click();
   await expect(page.getByText("Пока без материалов — для свободного изучения это нормально.")).toBeVisible();
   await expect(page.getByText("Программа пока пуста.")).toBeVisible();
   await page.getByRole("button", { name: "Создать проект" }).click();
@@ -433,7 +462,7 @@ test("цель без предмета и материалов создаёт п
   await expect(page.getByRole("heading", { name: "Программа" })).toBeVisible();
 });
 
-test("подходящее оглавление импортируется, правится и попадает в сводку", async ({ page }) => {
+test("подбор под цель подключает материал, его оглавление импортируется и попадает в сводку", async ({ page }) => {
   await installStub(page, {
     library: [libraryMaterial()],
     outline: [
@@ -443,12 +472,14 @@ test("подходящее оглавление импортируется, пр
   });
   await openFreeWizard(page);
   await enterGoal(page, "Экономика");
-  await expect(page.getByText("В Библиотеке есть материалы по предмету «Экономика». Выберите один как основу программы или продолжайте без него.")).toBeVisible();
-  await page.getByRole("button", { name: "Из Библиотеки" }).click();
-  await page.getByRole("button", { name: /Экономика — глобальное имя/ }).click();
-  await expect(page.getByText("Совпадает предмет · есть оглавление · текст готов")).toBeVisible();
-  await page.getByRole("button", { name: "Подключить", exact: true }).click();
+  const suggestions = page.getByRole("region", { name: "Подходит к вашей цели" });
+  await expect(suggestions.getByText("Экономика — глобальное имя")).toBeVisible();
+  await expect(suggestions.getByText("предмет совпадает")).toBeVisible();
+  await expect(suggestions.getByText("ограниченные ресурсы")).toBeVisible();
+  await suggestions.getByRole("button", { name: "Подключить" }).click();
+  await expect(page.getByText("Основа программы")).toBeVisible();
   await expect(page.getByText("Оглавление найдено.")).toBeVisible();
+  await page.getByRole("button", { name: "К программе" }).click();
   await page.getByRole("button", { name: "Импортировать оглавление", exact: true }).first().click();
   await page.getByRole("button", { name: "Импортировать 2 пункта" }).click();
   await page.getByRole("treeitem").filter({ hasText: "Основы экономики" }).dblclick();
@@ -457,7 +488,7 @@ test("подходящее оглавление импортируется, пр
   await title.press("Enter");
   await page.getByRole("button", { name: "К проверке" }).click();
   await expect(page.getByText("Введение в экономику")).toBeVisible();
-  await expect(page.getByText("Начальная программа собрана из оглавления «Экономика — глобальное имя».")).toBeVisible();
+  await expect(page.getByText("По оглавлению — 1")).toBeVisible();
 });
 
 test("обрабатываемый материал без оглавления не блокирует мастер", async ({ page }) => {
@@ -467,11 +498,12 @@ test("обрабатываемый материал без оглавления 
   });
   await openFreeWizard(page);
   await enterGoal(page, "Экономика");
-  await page.getByRole("button", { name: "Из Библиотеки" }).click();
+  await page.getByRole("button", { name: "Вся Библиотека" }).click();
   await page.getByRole("button", { name: /Экономика — глобальное имя/ }).click();
   await page.getByRole("button", { name: "Подключить", exact: true }).click();
   await expect(page.getByText("Материал добавлен, но оглавление пока недоступно.")).toBeVisible();
-  await page.getByRole("button", { name: "К проверке" }).click();
+  await page.getByRole("button", { name: "К программе" }).click();
+  await page.getByRole("button", { name: "Продолжить без программы" }).click();
   await expect(page.getByRole("button", { name: "Создать проект" })).toBeEnabled();
 });
 
@@ -509,8 +541,8 @@ test("в Библиотеке видно глобальное имя, а в пр
   });
   await openFreeWizard(page);
   await enterGoal(page, "Экономика");
-  await page.getByRole("button", { name: "Из Библиотеки" }).click();
-  await expect(page.getByText("Экономика — глобальное имя", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Вся Библиотека" }).click();
+  await expect(page.getByRole("dialog").getByText("Экономика — глобальное имя", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /Экономика — глобальное имя/ }).click();
   await page.getByRole("button", { name: "Подключить", exact: true }).click();
   await expect(page.getByText("Экономика — имя в проекте", { exact: true })).toBeVisible();
@@ -531,4 +563,39 @@ test("шаг назад и сохранённый черновик возвра�
   await page.getByRole("button", { name: "Продолжить" }).click();
   await expect(page.getByRole("textbox", { name: "Цель", exact: true })).toHaveValue("Разобраться в основах экономики");
   await expect(page.getByRole("combobox", { name: "Предмет или область" })).toHaveValue("Экономика");
+});
+
+test("с моделью шаг программы мастера открывается чатом с быстрым стартом", async ({ page }) => {
+  await installStub(page, { aiEnabled: true });
+  await openFreeWizard(page);
+  await enterGoal(page);
+  await page.getByRole("button", { name: "К программе" }).click();
+  await expect(page.getByRole("tab", { name: "С ИИ" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("button", { name: "Составь программу по моей цели" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Что нужно знать заранее, чтобы достичь цели?" })).toBeVisible();
+});
+
+test("темы без материала: «Без материала» открывает подбор из Библиотеки по теме", async ({ page }) => {
+  await installStub(page, {
+    library: [libraryMaterial()],
+    initialNodes: [{
+      ...programNode("99999999-9999-4999-8999-999999999999", "Рынок и цены", "topic", null),
+      origin_kind: "model",
+      basis_kind: "custom",
+      needs_material: true,
+      origin_material_id: null,
+      source_page_ranges: [],
+      material_search_queries: ["спрос и предложение"],
+      material_kind: "textbook",
+    }],
+  });
+  await page.goto(`${BASE}/projects/${PROJECT}/program`);
+  await page.getByRole("button", { name: "Без материала: 1" }).click();
+  const dialog = page.getByRole("dialog", { name: "Материалы к темам" });
+  await dialog.getByRole("button", { name: /Рынок и цены/ }).click();
+  await expect(dialog.getByText("глава учебника")).toBeVisible();
+  await expect(dialog.getByText("Экономика — глобальное имя")).toBeVisible();
+  await dialog.getByRole("button", { name: "Подключить" }).click();
+  await expect(dialog.getByText("Материал в проекте.")).toBeVisible();
+  await expect(dialog.getByRole("link", { name: "соберите урок из найденного" })).toHaveAttribute("href", /lessons\?topic=/);
 });

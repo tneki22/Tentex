@@ -14,7 +14,7 @@ type Track = "exam" | "textbook" | "free";
 
 const EXAM_STEP_LABELS = ["Формат", "Материалы", "Загрузка", "Паспорт", "Проверка"];
 const TEXTBOOK_STEP_LABELS = ["Источники", "Профиль", "Проверка", "Программы", "Итог"];
-const FREE_STEP_LABELS = ["Цель", "Материалы", "Проверка"];
+const FREE_STEP_LABELS = ["Цель", "Материалы", "Программа", "Проверка"];
 
 const TRACKS = [
   {

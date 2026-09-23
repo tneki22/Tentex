@@ -38,8 +38,15 @@ Retrieval-кусок не равен фрагменту или блоку. Ма�
 - benchmark: сохранённые контрольные запросы и воспроизводимые метрики.
 
 Публичные перечисления: `SearchStrategy = lexical | semantic | hybrid`,
-`RetrievalScope = linked_topic | topic_project | project | selected_materials`,
+`RetrievalScope = linked_topic | topic_project | project | selected_materials | library`,
 `RetrievalDepth = fast | exhaustive`, `KnowledgePolicy = sources_only | allow_model`.
+
+`library` (23.09.2026) — вся готовая (`status=ready`) Библиотека без клиентского
+списка id и его предела в 100; с `project_id` из неё исключаются уже подключённые к
+проекту материалы. Потребитель — подбор материалов свободного изучения
+(`app/projects/material_suggestions.py`, `POST /api/projects/{id}/material-suggestions`):
+места выдачи сводятся к материалам, совпадение предмета паспорта поднимает материал,
+отсутствие активного индекса возвращается флагом `words_only`, а не ошибкой.
 
 Пресеты: «Быстро» — 30+30 кандидатов, 8 результатов; «Сбалансированно» — 50+50 и 10;
 «Точно» — 80+80, local reranker top-30 и 12. RRF по умолчанию имеет `k=60` и равные

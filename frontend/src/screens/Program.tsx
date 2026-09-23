@@ -16,6 +16,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  SearchCheck,
   Sparkles,
   Target,
   Trash2,
@@ -77,6 +78,7 @@ import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { usePendingReviewJob } from "../hooks/usePendingReviewJob";
 import { AiGroupingDialog } from "./AiGroupingDialog";
 import { AiImportRepairDialog } from "./AiImportRepairDialog";
+import { TopicMaterialsDialog } from "./program/TopicMaterialsDialog";
 import { lastPendingDiff, ProgramChatWorkspace } from "./workspace/chat/ProgramChatWorkspace";
 
 type AddKind = "section" | "ticket" | "question" | "task" | "topic" | "subpoint";
@@ -178,7 +180,11 @@ export function Program() {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const materials = useProjectMaterials(projectId);
-  const bindings = useBindings(detail?.project.workspace_variant === "exam" ? projectId : undefined);
+  // Свободному проекту сводка привязок нужна, чтобы найти темы без материала.
+  const bindings = useBindings(
+    detail?.project.workspace_variant === "exam" || detail?.project.template_key === "free" ? projectId : undefined,
+  );
+  const [topicMaterialsOpen, setTopicMaterialsOpen] = useState(false);
   const bindingsSummaryByNode = useMemo(
     () => new Map(bindings.summary.map((item) => [item.program_node_id, item])),
     [bindings.summary],
@@ -237,6 +243,12 @@ export function Program() {
     }
   }, [detail?.program.nodes]);
   const flat = useMemo(() => flattenProgramTree(treeResult.tree), [treeResult.tree]);
+  const topicsWithoutMaterial = useMemo(() => (
+    detail?.project.template_key === "free" && !bindings.loading
+      ? flat.filter((node) => node.is_in_current_program && !node.is_archived && node.node_type !== "section"
+        && !bindingsSummaryByNode.get(node.id)?.content_fragment_count)
+      : []
+  ), [bindings.loading, bindingsSummaryByNode, detail?.project.template_key, flat]);
   const selected = detail?.program.nodes.find((node) => node.id === selectedId) ?? null;
   const textbook = detail?.project.workspace_variant === "textbook";
   const recentTextbookNodes = useMemo(() => recentProgramNodes(detail?.program.nodes ?? []), [detail?.program.nodes]);
@@ -605,12 +617,21 @@ export function Program() {
             actions={<>
               <Button variant="ghost" disabled={!actions.canUndo || actions.busy} onClick={() => void actions.undo()}><Undo2 size={15} />Отменить</Button>
               <SegmentedTabs label="Режим составления программы" value={textbookMode} onChange={setTextbookMode} tabs={[{ value: "manual", label: "Вручную" }, { value: "ai", label: "С ИИ" }]} />
+              {topicsWithoutMaterial.length > 0 && <Button variant="secondary" className="program-materials-chip" onClick={() => setTopicMaterialsOpen(true)}><SearchCheck size={15} />Без материала: {topicsWithoutMaterial.length}</Button>}
               <Button variant="secondary" disabled={actions.busy} onClick={actions.openImport}><Files size={15} />Импортировать оглавление</Button>
               <Button variant="ghost" disabled={actions.busy || !actions.hasNodes} onClick={actions.openRemoveAll}><Trash2 size={15} />Удалить все</Button>
             </>}
           />}
         />
       </main>
+      <TopicMaterialsDialog
+        open={topicMaterialsOpen}
+        onOpenChange={setTopicMaterialsOpen}
+        projectId={projectId}
+        topics={topicsWithoutMaterial}
+        hasProjectMaterials={materials.materials.length > 0}
+        onAttached={() => void materials.refresh()}
+      />
     </div>
   );
 

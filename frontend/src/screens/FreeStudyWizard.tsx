@@ -1,20 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, Globe, LibraryBig, Trash2, Undo2, UploadCloud } from "lucide-react";
-import { listLibraryMaterials, type MaterialRead } from "../api/materials";
-import type { GoalPassportWrite, ModuleKey, ProjectDetail } from "../api/projects";
+import type { ChatMessageRead } from "../api/chat";
+import { attachLibraryMaterial, listLibraryMaterials, type MaterialRead } from "../api/materials";
+import { suggestMaterialsForQuery, type MaterialSuggestion, type MaterialSuggestions } from "../api/materialSuggestions";
+import type { GoalPassportWrite, ModuleKey, ProjectDetail, StartingLevel } from "../api/projects";
 import type { WizardDraftController } from "../hooks/useWizardDraft";
+import { useAiRoleAvailability } from "../hooks/useAiRoleAvailability";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
-import { LibraryMaterialPickerDialog, TextbookProgramEditor } from "../components/domain";
+import {
+  LibraryMaterialPickerDialog,
+  MaterialSuggestionList,
+  ProgramTreePreview,
+  TextbookProgramEditor,
+} from "../components/domain";
 import type { TextbookProgramView } from "../components/domain";
-import { Button, Card, Field, IconButton, LoadingState, PageHead, StatusBadge } from "../components/ui";
+import { Button, Card, Field, IconButton, LoadingState, PageHead, SegmentedTabs, StatusBadge } from "../components/ui";
 import { TextbookOutlineReview } from "./TextbookOutlineReview";
 import { TextbookSourceCard } from "./TextbookSourceCard";
 import { buildProgramTree, flattenProgramTree } from "./programTree";
+import { lastPendingDiff, ProgramChatWorkspace } from "./workspace/chat/ProgramChatWorkspace";
 import {
   outlineItemsWithKeys,
   type OutlineDraftState,
   type OutlinesByMaterialId,
 } from "../components/domain/program-editor/outlineState";
+
+type ProgramMode = "manual" | "ai";
 
 interface FreeStudyForm {
   goal: string;
@@ -23,6 +34,7 @@ interface FreeStudyForm {
   important: string;
   excluded: string;
   deadline: string;
+  startingLevel: StartingLevel;
 }
 
 const EMPTY_FORM: FreeStudyForm = {
@@ -32,13 +44,18 @@ const EMPTY_FORM: FreeStudyForm = {
   important: "",
   excluded: "",
   deadline: "",
+  startingLevel: "familiar",
 };
 
-const nullable = (value: string): string | null => value.trim() || null;
+const STARTING_LEVELS: Array<{ value: StartingLevel; label: string }> = [
+  { value: "beginner", label: "С нуля" },
+  { value: "familiar", label: "Что-то знаю" },
+  { value: "refreshing", label: "Повторяю забытое" },
+];
 
-function normalized(value: string): string {
-  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("ru");
-}
+const STEP_TITLES = ["Какая у вас цель?", "Подберите материалы", "Соберите программу", "Проверьте проект"];
+
+const nullable = (value: string): string | null => value.trim() || null;
 
 function suggestedProjectName(goal: string, subject: string): string {
   if (subject.trim()) return subject.trim().slice(0, 80);
@@ -79,15 +96,24 @@ export function FreeStudyWizard({
   const [basisMaterialId, setBasisMaterialId] = useState<string | null>(null);
   const [outlinesByMaterialId, setOutlinesByMaterialId] = useState<OutlinesByMaterialId>({});
   const [view, setView] = useState<TextbookProgramView>("tree");
+  const [programMode, setProgramMode] = useState<ProgramMode | null>(null);
+  const [aiChatMessages, setAiChatMessages] = useState<ChatMessageRead[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
   const [actionError, setActionError] = useState("");
   const [librarySubjects, setLibrarySubjects] = useState<string[]>([]);
   const [libraryMaterialCount, setLibraryMaterialCount] = useState<number | null>(null);
+  const [suggestions, setSuggestions] = useState<MaterialSuggestions | null>(null);
+  const [suggestionsError, setSuggestionsError] = useState("");
+  const [suggestionsKey, setSuggestionsKey] = useState(0);
+  const [attachingId, setAttachingId] = useState<string | null>(null);
   const initializedKey = useRef<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const materials = useProjectMaterials(controller.detail?.project.id);
+  const projectId = controller.detail?.project.id;
+  const availability = useAiRoleAvailability("study_program_assistant");
+  const lastPendingDiffValue = lastPendingDiff(aiChatMessages);
 
   useEffect(() => {
     if (controller.detail || controller.status !== "idle") return;
@@ -117,8 +143,9 @@ export function FreeStudyWizard({
       materialId,
       { ...outline, items: outlineItemsWithKeys(materialId, outline.source, outline.items) },
     ])));
-    setStep(Math.min(detail.draft.current_step, 3));
+    setStep(Math.min(detail.draft.current_step, 4));
     setView((state.program_view as TextbookProgramView | undefined) ?? "tree");
+    setProgramMode(state.program_mode === "ai" || state.program_mode === "manual" ? state.program_mode : null);
     setBasisMaterialId(typeof state.basis_material_id === "string" ? state.basis_material_id : null);
     setNameManual(state.name_manual === true);
     setForm({
@@ -128,6 +155,7 @@ export function FreeStudyWizard({
       important: detail.goal_passport?.important ?? "",
       excluded: detail.goal_passport?.excluded ?? "",
       deadline: detail.project.deadline ?? "",
+      startingLevel: detail.goal_passport?.starting_level ?? "familiar",
     });
   }, [controller.detail, controller.hydrationVersion]);
 
@@ -143,6 +171,14 @@ export function FreeStudyWizard({
     }));
   }, [form.goal, form.subject, nameManual]);
 
+  /* Режим программы выбирается один раз, когда станет известна доступность
+     модели: с моделью пустая программа начинается с чата, без неё — вручную. */
+  useEffect(() => {
+    if (programMode !== null || availability.state === "loading" || !controller.detail) return;
+    const hasNodes = controller.detail.program.nodes.some((node) => node.is_in_current_program && !node.is_archived);
+    setProgramMode(availability.state === "ready" && !hasNodes ? "ai" : "manual");
+  }, [availability.state, controller.detail, programMode]);
+
   /* Роль «Основной» в карточке источника и основа программы — один и тот же
      факт. Основа выводится из роли, иначе смена роли вручную оставляла бейдж
      и импорт оглавления на прежнем материале. */
@@ -156,12 +192,37 @@ export function FreeStudyWizard({
     if (derived !== basisMaterialId) setBasisMaterialId(derived);
   }, [basis, basisMaterialId, materials.loading]);
 
+  const suggestionQuery = [form.goal, form.subject, form.important]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(". ");
+
+  /* Подбор под цель: Библиотека ищет по смыслу цели без модели, уже
+     подключённое исключается сервером, поэтому после подключения список
+     перечитывается. */
+  useEffect(() => {
+    if (step !== 2 || !projectId || !suggestionQuery || libraryMaterialCount === 0) return;
+    const abort = new AbortController();
+    setSuggestionsError("");
+    const timer = window.setTimeout(() => {
+      suggestMaterialsForQuery(projectId, suggestionQuery, abort.signal)
+        .then((result) => setSuggestions(result.by_query))
+        .catch((caught) => {
+          if (!abort.signal.aborted) setSuggestionsError(caught instanceof Error ? caught.message : "Подбор не удался");
+        });
+    }, 600);
+    return () => {
+      window.clearTimeout(timer);
+      abort.abort();
+    };
+  }, [step, projectId, suggestionQuery, libraryMaterialCount, materials.materials.length, suggestionsKey]);
+
   function passport(): GoalPassportWrite {
     return {
       subject: nullable(form.subject),
       purpose: "interest",
       scope: "goal",
-      starting_level: "familiar",
+      starting_level: form.startingLevel,
       current_knowledge: null,
       target_outcome: "understanding",
       goal: nullable(form.goal),
@@ -198,6 +259,7 @@ export function FreeStudyWizard({
         basis_material_id: basisMaterialId,
         name_manual: nameManual,
         program_view: view,
+        program_mode: programMode,
         outlines_by_material_id: outlinesByMaterialId,
       },
     };
@@ -209,7 +271,7 @@ export function FreeStudyWizard({
       void controller.queueSave(command(step)).catch(() => undefined);
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [form, step, nameManual, basisMaterialId, view, outlinesByMaterialId]);
+  }, [form, step, nameManual, basisMaterialId, view, programMode, outlinesByMaterialId]);
 
   function changeStep(nextStep: number) {
     setStep(nextStep);
@@ -229,7 +291,7 @@ export function FreeStudyWizard({
   async function activate() {
     setActionError("");
     try {
-      await controller.queueSave(command(3));
+      await controller.queueSave(command(4));
       onActivated?.(await controller.activate());
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Не удалось создать проект");
@@ -264,6 +326,25 @@ export function FreeStudyWizard({
     }
   }
 
+  async function attachSuggestion(item: MaterialSuggestion) {
+    if (!projectId) return;
+    setAttachingId(item.material_id);
+    setActionError("");
+    try {
+      await attachLibraryMaterial(item.material_id, {
+        project_id: projectId,
+        source_role: basisMaterialId ? "additional" : "main",
+        purposes: ["study_source"],
+      });
+      if (!basisMaterialId) setBasisMaterialId(item.material_id);
+      await materials.refresh();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Не удалось подключить материал");
+    } finally {
+      setAttachingId(null);
+    }
+  }
+
   async function chooseBasis(materialId: string) {
     setBasisMaterialId(materialId);
     const demoted = materials.materials.filter((item) => item.id !== materialId && item.source_role === "main");
@@ -286,6 +367,12 @@ export function FreeStudyWizard({
   }
 
   const basisMaterials = basis ? [basis] : [];
+  /* Импорт принимает оглавления всех источников: основа первой, остальные по
+     приоритету. Проверку оглавления на шаге материалов проходит только основа. */
+  const outlineMaterials = useMemo(() => {
+    const withOutline = materials.materials.filter((item) => item.outline.length > 0 || outlinesByMaterialId[item.id]?.items.length);
+    return [...withOutline].sort((a, b) => Number(b.id === basis?.id) - Number(a.id === basis?.id) || a.priority - b.priority);
+  }, [basis?.id, materials.materials, outlinesByMaterialId]);
   const currentNodes = useMemo(
     () => (controller.detail?.program.nodes ?? []).filter((node) => node.is_in_current_program && !node.is_archived),
     [controller.detail?.program.nodes],
@@ -295,13 +382,13 @@ export function FreeStudyWizard({
     topics: currentNodes.filter((node) => node.node_type === "topic").length,
     subpoints: currentNodes.filter((node) => node.node_type === "subpoint").length,
   };
+  const studyNodes = currentNodes.filter((node) => node.node_type !== "section");
+  const outlineStudyCount = studyNodes.filter((node) => node.basis_kind === "outline").length;
+  const withoutSourceCount = studyNodes.length - outlineStudyCount;
   const flat = useMemo(() => {
     try { return flattenProgramTree(buildProgramTree(currentNodes)); }
     catch { return []; }
   }, [currentNodes]);
-  const subjectMatches = form.subject.trim()
-    ? librarySubjects.some((subject) => normalized(subject) === normalized(form.subject))
-    : false;
   const basisOutline = basis ? outlinesByMaterialId[basis.id] : undefined;
   const basisHasOutline = Boolean(basis?.outline.length || basisOutline?.items.length);
   const basisHasNoOutline = Boolean(
@@ -311,14 +398,15 @@ export function FreeStudyWizard({
   );
   const busy = controller.status === "saving" || materials.busy;
   const errorBanner = actionError || controller.error?.message || materials.error;
+  const mode: ProgramMode = programMode ?? "manual";
 
   if (controller.status === "loading" || (controller.status === "saving" && !controller.detail)) {
     return <LoadingState label="Загружаем черновик свободного изучения" placement="page" />;
   }
 
   return (
-    <div className={`wizard-flow free-study-wizard${step === 2 ? " is-program-editor" : ""}${step === 1 ? " is-goal" : ""}`}>
-      <PageHead title={step === 1 ? "Какая у вас цель?" : step === 2 ? "Подберите материалы" : "Проверьте проект"} />
+    <div className={`wizard-flow free-study-wizard${step === 3 ? " is-program-editor" : ""}${step === 1 ? " is-goal" : ""}`}>
+      <PageHead title={STEP_TITLES[step - 1] ?? STEP_TITLES[0]} />
       {controller.conflict && <Card><h2>Черновик изменился в другой вкладке</h2><Button onClick={() => void controller.reload()}>Загрузить серверную версию</Button></Card>}
 
       {step === 1 && (
@@ -335,6 +423,9 @@ export function FreeStudyWizard({
               <input aria-label="Предмет или область" list="free-study-subjects" value={form.subject} onChange={(event) => setForm((current) => ({ ...current, subject: event.target.value }))} />
               <datalist id="free-study-subjects">{librarySubjects.map((subject) => <option key={subject} value={subject} />)}</datalist>
             </Field>
+            <Field label="С чего начинаете" hint="ИИ учтёт это, когда предложит программу: с нуля — больше основ, повторение — меньше.">
+              <SegmentedTabs label="С чего начинаете" value={form.startingLevel} onChange={(value) => setForm((current) => ({ ...current, startingLevel: value }))} tabs={STARTING_LEVELS} />
+            </Field>
             <Field label="Что особенно важно" hint="Необязательно"><textarea rows={3} value={form.important} onChange={(event) => setForm((current) => ({ ...current, important: event.target.value }))} /></Field>
             <Field label="Что можно не изучать" hint="Необязательно"><textarea rows={3} value={form.excluded} onChange={(event) => setForm((current) => ({ ...current, excluded: event.target.value }))} /></Field>
             <Field label="Желаемый срок" hint="Необязательный ориентир: календарь и прогноз пока не создаются."><input type="date" value={form.deadline} onChange={(event) => setForm((current) => ({ ...current, deadline: event.target.value }))} /></Field>
@@ -346,23 +437,31 @@ export function FreeStudyWizard({
 
       {step === 2 && (
         <section className="free-study-step is-materials">
-          <p className="wizard-step-intro">
-            {libraryMaterialCount === 0
-              ? "В Библиотеке пока ничего нет. Загрузите файл, добавьте ссылку или создайте проект без материалов."
-              : !form.subject.trim()
-                ? "Выберите материал из Библиотеки или добавьте новый. Если подходящего пока нет, продолжайте без него."
-                : subjectMatches
-                  ? `В Библиотеке есть материалы по предмету «${form.subject.trim()}». Выберите один как основу программы или продолжайте без него.`
-                  : "Всё обязательно найдётся — нужно только немного поискать. Создайте проект и добавьте материалы, которые показались вам интересными. Программу уже можно собрать вручную; помощь ИИ появится в этом же разделе позже."}
-          </p>
+          <p className="wizard-step-intro">Материалы необязательны: без них ИИ составит программу по цели и подскажет, что искать. С материалами программа опирается на их оглавления.</p>
+
+          <section className="free-study-suggestions" aria-label="Подходит к вашей цели">
+            <h2>Подходит к вашей цели</h2>
+            {libraryMaterialCount === 0 && <p className="free-study-suggestions-note">В Библиотеке пока ничего нет. Загрузите файл, добавьте ссылку — или продолжайте без материалов.</p>}
+            {libraryMaterialCount !== 0 && !suggestions && !suggestionsError && <p className="free-study-suggestions-note" role="status">Ищем в Библиотеке материалы под вашу цель…</p>}
+            {suggestionsError && <p className="free-study-suggestions-note is-error" role="alert">{suggestionsError} <Button variant="ghost" onClick={() => setSuggestionsKey((key) => key + 1)}>Повторить</Button></p>}
+            {suggestions && suggestions.items.length === 0 && libraryMaterialCount !== 0 && (
+              <p className="free-study-suggestions-note">В Библиотеке не нашлось подходящего под цель. Загрузите своё или добавьте ссылку — а можно продолжить без материалов.</p>
+            )}
+            {suggestions && suggestions.items.length > 0 && (
+              <MaterialSuggestionList items={suggestions.items} busyId={attachingId} onAttach={(item) => void attachSuggestion(item)} />
+            )}
+            {suggestions?.words_only && suggestions.items.length > 0 && <p className="free-study-suggestions-note">Подбор шёл по словам: активного поискового индекса нет.</p>}
+          </section>
+
           <input ref={fileInput} className="materials-file-input" type="file" tabIndex={-1} aria-hidden="true" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.mp3,.wav,.m4a,.ogg,.flac" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void addFile(file); }} />
           <div className="free-study-material-actions">
-            <Button variant="secondary" onClick={() => setLibraryOpen(true)}><LibraryBig size={15} />Из Библиотеки</Button>
+            <Button variant="secondary" onClick={() => setLibraryOpen(true)}><LibraryBig size={15} />Вся Библиотека</Button>
             <Button variant="secondary" onClick={() => fileInput.current?.click()}><UploadCloud size={15} />Загрузить файл</Button>
             <Button variant="secondary" onClick={() => setLinkOpen((open) => !open)}><Globe size={15} />Добавить ссылку</Button>
           </div>
           {linkOpen && <Card className="free-study-link-card"><Field label="Веб-страница или YouTube" hint="Прямая ссылка на PDF пока не поддерживается"><input type="url" value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)} placeholder="https://example.org/article" /></Field><Button disabled={busy || !linkUrl.trim()} onClick={() => void addLink()}>Добавить</Button></Card>}
 
+          {materials.materials.length > 0 && <h2 className="free-study-section-title">В проекте</h2>}
           <div className="textbook-source-list">
             {materials.loading && <LoadingState label="Загружаем материалы" />}
             {materials.materials.map((material) => (
@@ -378,18 +477,26 @@ export function FreeStudyWizard({
             ))}
           </div>
 
-          {basisHasNoOutline && <Card className="free-study-material-note">Материал добавлен, но оглавление пока недоступно. Можно продолжить: программа останется пустой, а материал будет ждать в проекте.</Card>}
+          {basisHasNoOutline && <Card className="free-study-material-note">Материал добавлен, но оглавление пока недоступно. Можно продолжить: ИИ составит программу по цели, а материал будет ждать в проекте.</Card>}
           {basis && (basis.outline.length > 0 || basis.status === "ready") && controller.detail && <>
-            {basisHasOutline && <p className="free-study-outline-lead">Оглавление найдено. Возьмите его за основу и оставьте только нужные темы.</p>}
+            {basisHasOutline && <p className="free-study-outline-lead">Оглавление найдено. Проверьте его — на следующем шаге из него можно собрать программу.</p>}
             <TextbookOutlineReview projectId={controller.detail.project.id} materials={basisMaterials} values={outlinesByMaterialId} onChange={updateOutline} allowModel={false} />
           </>}
 
+          {errorBanner && <p className="inline-error" role="alert">{errorBanner}</p>}
+          <div className="wizard-actions"><Button variant="ghost" onClick={() => void go(1)}>Назад</Button><span className="wizard-actions-spacer" /><Button disabled={busy} onClick={() => void go(3)}>К программе</Button></div>
+        </section>
+      )}
+
+      {step === 3 && (
+        <section className="textbook-builder">
+          {errorBanner && <p className="inline-error" role="alert">{errorBanner}</p>}
           {controller.detail && <TextbookProgramEditor
             projectId={controller.detail.project.id}
             projectName={form.name || "Программа"}
             program={controller.detail.program}
             latestUndoableAction={controller.detail.latest_undoable_action}
-            materials={basisMaterials}
+            materials={outlineMaterials}
             outlinesByMaterialId={outlinesByMaterialId}
             wizard
             busy={busy}
@@ -397,34 +504,59 @@ export function FreeStudyWizard({
             onViewChange={setView}
             execute={executeProgramCommand}
             onUndo={async () => { await controller.undo(); }}
-            renderHeader={(actions) => <header className="textbook-builder-head free-study-editor-head">
+            mode={mode}
+            aiContent={<div className="textbook-program-ai-layout">
+              <ProgramChatWorkspace
+                projectId={controller.detail.project.id}
+                program={controller.detail.program}
+                execute={executeProgramCommand}
+                onMessagesChange={setAiChatMessages}
+                variant="free"
+                outlineSourceName={outlineMaterials[0]?.display_name}
+                onSwitchToManual={() => setProgramMode("manual")}
+              />
+              <ProgramTreePreview
+                program={controller.detail.program}
+                pendingOperations={lastPendingDiffValue?.operations}
+                pendingStates={lastPendingDiffValue?.operation_states}
+              />
+            </div>}
+            renderHeader={(actions) => <header className="textbook-builder-head">
               <Button variant="ghost" disabled={!actions.canUndo || actions.busy} onClick={() => void actions.undo()}><Undo2 size={15} />Отменить</Button>
-              <Button variant="secondary" disabled={actions.busy || !basis} onClick={actions.openImport}>Импортировать оглавление</Button>
+              <SegmentedTabs label="Режим составления программы" value={mode} onChange={setProgramMode} tabs={[{ value: "manual", label: "Вручную" }, { value: "ai", label: "С ИИ" }]} />
+              <Button variant="secondary" disabled={actions.busy || outlineMaterials.length === 0} onClick={actions.openImport}>Импортировать оглавление</Button>
               <Button variant="ghost" disabled={actions.busy || !actions.hasNodes} onClick={actions.openRemoveAll}><Trash2 size={15} />Удалить все</Button>
+              <Button className="textbook-builder-confirm" disabled={actions.busy} onClick={() => void go(4)}>{actions.hasNodes ? "К проверке" : "Продолжить без программы"}</Button>
             </header>}
           />}
-          {errorBanner && <p className="inline-error" role="alert">{errorBanner}</p>}
-          <div className="wizard-actions"><Button variant="ghost" onClick={() => void go(1)}>Назад</Button><span className="wizard-actions-spacer" /><Button disabled={busy} onClick={() => void go(3)}>К проверке</Button></div>
         </section>
       )}
 
-      {step === 3 && (
+      {step === 4 && (
         <section className="free-study-step">
           <p className="wizard-step-intro">Проверьте данные перед созданием проекта.</p>
           <section className="wizard-review-summary">
             <div className="wizard-review-hero"><h2><span>Свободное изучение</span><strong>{form.name}</strong></h2><p className="wizard-review-lead">{form.goal}</p></div>
             <dl className="wizard-review-facts">
               <div><dt>Предмет</dt><dd>{form.subject.trim() || "Предмет не указан"}</dd></div>
+              <div><dt>С чего начинаете</dt><dd>{STARTING_LEVELS.find((item) => item.value === form.startingLevel)?.label}</dd></div>
               {form.important.trim() && <div><dt>Что особенно важно</dt><dd>{form.important}</dd></div>}
               {form.excluded.trim() && <div><dt>Что можно не изучать</dt><dd>{form.excluded}</dd></div>}
               <div><dt>Срок</dt><dd>{form.deadline ? new Date(`${form.deadline}T00:00:00`).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" }) : "Без срока"}</dd></div>
             </dl>
           </section>
           <Card className="textbook-summary-card"><h3>Материалы</h3>{materials.materials.map((material) => <div key={material.id}><span>{basisMaterialId === material.id ? "Основа" : "Доп."}</span><b>{material.display_name}</b><small>{materialStatus(material)}</small></div>)}{materials.materials.length === 0 && <p>Пока без материалов — для свободного изучения это нормально. Их можно добавить в любой момент.</p>}</Card>
-          <Card className="textbook-summary-card"><h3>Программа</h3><dl className="textbook-summary-metrics"><div className="is-sections"><dt>Разделы</dt><dd>{counts.sections}</dd></div><div className="is-topics"><dt>Темы</dt><dd>{counts.topics}</dd></div><div className="is-outside"><dt>Подпункты</dt><dd>{counts.subpoints}</dd></div></dl>{flat.map((node) => <div key={node.id}><span>{node.number}</span><b>{node.title}</b><small>{node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}</small></div>)}{flat.length === 0 ? <p>Программа пока пуста. После создания добавьте первую тему вручную; помощь ИИ появится в этом же разделе позже.</p> : <p>Начальная программа собрана{basis ? ` из оглавления «${basis.display_name}»` : " вручную"}. После создания её можно продолжить редактировать.</p>}</Card>
-          <Card className="textbook-summary-card"><h3>После создания</h3><p>После создания откроется раздел «Программа». Цель, срок и материалы можно изменить позже.</p></Card>
+          <Card className="textbook-summary-card"><h3>Программа</h3><dl className="textbook-summary-metrics"><div className="is-sections"><dt>Разделы</dt><dd>{counts.sections}</dd></div><div className="is-topics"><dt>Темы</dt><dd>{counts.topics}</dd></div><div className="is-outside"><dt>Подпункты</dt><dd>{counts.subpoints}</dd></div></dl>{flat.map((node) => <div key={node.id}><span>{node.number}</span><b>{node.title}</b><small>{node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}</small></div>)}{flat.length === 0 && <p>Программа пока пуста. После создания её можно составить в разделе «Программа» — вручную или с ИИ.</p>}</Card>
+          {studyNodes.length > 0 && (
+            <Card className="textbook-summary-card free-study-material-plan">
+              <h3>Материал к темам</h3>
+              {outlineStudyCount > 0 && <p>По оглавлению — {outlineStudyCount}: для них сразу можно собрать урок из страниц источника.</p>}
+              {withoutSourceCount > 0 && <p>Без источника — {withoutSourceCount}. Это нормально: после создания раздел «Программа» подскажет, что для них есть в Библиотеке и что искать.</p>}
+            </Card>
+          )}
+          <Card className="textbook-summary-card"><h3>После создания</h3><p>Откроется раздел «Программа». Цель, срок и материалы можно изменить позже.</p></Card>
           {errorBanner && <p className="inline-error" role="alert">{errorBanner}</p>}
-          <div className="wizard-actions"><Button variant="ghost" onClick={() => void go(2)}>Назад</Button><span className="wizard-actions-spacer" /><Button disabled={busy || !form.goal.trim() || !form.name.trim()} onClick={() => void activate()}>Создать проект</Button></div>
+          <div className="wizard-actions"><Button variant="ghost" onClick={() => void go(3)}>Назад</Button><span className="wizard-actions-spacer" /><Button disabled={busy || !form.goal.trim() || !form.name.trim()} onClick={() => void activate()}>Создать проект</Button></div>
         </section>
       )}
 

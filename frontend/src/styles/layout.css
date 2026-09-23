@@ -5876,9 +5876,14 @@ button.wizard-back-projects {
 .free-study-source.is-basis { border-color: var(--accent-edge); box-shadow: 0 0 0 1px var(--accent-edge); }
 .free-study-material-note,
 .free-study-outline-lead { margin: 0; color: var(--ink-soft); }
-.free-study-editor-head { justify-content: flex-end; }
-/* Заглушка не растягивается на всю полосу вкладки: пустой экран высотой в окно
-   читался бы как не загрузившийся чат, а не как честное «этого пока нет». */
+.free-study-section-title { margin: 0; font-size: var(--text-md); }
+/* Подбор под цель стоит первым на шаге материалов: это ответ на вопрос
+   «что у меня уже есть», до кнопок загрузки нового. */
+.free-study-suggestions { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper-strong); }
+.free-study-suggestions h2 { margin: 0; font-size: var(--text-md); }
+.free-study-suggestions-note { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; color: var(--ink-soft); font-size: var(--text-sm); }
+.free-study-suggestions-note.is-error { color: var(--tone-danger); }
+.free-study-material-plan p { margin: 0; color: var(--ink-soft); }
 .library-picker-reason { color: var(--accent); }
 .inspector-metadata-form { display: grid; gap: var(--space-3); margin-bottom: var(--space-5); }
 
@@ -7740,6 +7745,13 @@ button.wizard-back-projects {
 .textbook-program-source small { max-width: 100%; overflow: hidden; color: var(--muted); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
 .textbook-program-source b { color: var(--ink-soft); font-size: var(--text-xs); }
 .textbook-program-source .text-button { min-height: 0; padding: 0; font-size: var(--text-xs); }
+/* «Материалы к темам» свободного проекта: список тем без материала с подбором внутри. */
+.dialog.topic-materials-dialog { width: min(760px, calc(100vw - var(--space-8))); }
+.topic-materials-list { display: grid; gap: var(--space-1); margin-block: var(--space-4); }
+.topic-materials-row { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); }
+.topic-materials-row .disclosure-trigger { width: 100%; padding: var(--space-3) var(--space-4); color: var(--ink-soft); text-align: left; }
+.topic-materials-row .disclosure-inner { padding: 0 var(--space-4) var(--space-4); }
+.program-materials-chip { font-variant-numeric: tabular-nums; }
 .textbook-program-basis { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-soft); font-size: var(--text-xs); }
 .textbook-program-basis i { width: var(--space-2); height: var(--space-2); flex: none; border-radius: var(--radius-pill); background: var(--muted); box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 16%, transparent); }
 .textbook-program-basis.is-outline i { background: var(--tone-info); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone-info) 18%, transparent); }
