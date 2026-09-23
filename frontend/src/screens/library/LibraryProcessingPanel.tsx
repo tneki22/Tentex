@@ -391,7 +391,7 @@ export function LibraryProcessingPanel({
         <h3>{presentation.processingTitle}</h3>
       </header>
 
-      {!isAudio && material.parser_mode === "fast" && prepared && (
+      {!isAudio && material.presentation_kind !== "youtube" && material.parser_mode === "fast" && prepared && (
         <p className="inspector-note">
           «Быстро» распознаёт обычный текст. Формулы он не читает — сохраняет вырезом,
           чтобы они не потерялись; сверяйтесь с изображением.
@@ -531,8 +531,9 @@ export function LibraryProcessingPanel({
             </>
           ) : (
             <p className="inspector-note">
-              {presentation.processingTitle} для этого источника выполняется целиком:
-              страницы здесь нет, и режимы распознавания к нему не относятся.
+              {material.presentation_kind === "youtube"
+                ? "Из видео получаем субтитры. Таймкоды можно убрать кнопкой ниже."
+                : `${presentation.processingTitle} для этого источника выполняется целиком: страницы здесь нет, и режимы распознавания к нему не относятся.`}
             </p>
           )}
 
