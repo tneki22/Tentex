@@ -13,7 +13,7 @@ export function StudyTimer({
   if (!dayState.day?.started) {
     return (
       <div className="workspace-timer-group is-not-started">
-        <span>{dayState.loading ? "Проверяем учебный день" : "Время не учитывается"}</span>
+        <span title={dayState.loading ? "Проверяем учебный день" : "Время не учитывается"}>{dayState.loading ? "Проверяем день" : "Без учёта"}</span>
         {!dayState.loading && (
           <Button
             variant="secondary"
