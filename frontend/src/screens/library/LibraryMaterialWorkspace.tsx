@@ -331,7 +331,9 @@ export function LibraryMaterialWorkspace() {
   function openTextEditor(draft?: string) {
     if (!page || !detail || store.pageLoading || page.page_number !== activePage || readOnly || isVersionComparison || store.busy || editOpen
       || (detail.task && ["running", "queued", "paused"].includes(detail.task.state))) return;
-    const initial = draft ?? editablePageText(page);
+    // Предложенный черновик (например, транскрипт без таймкодов) сравниваем
+    // с текстом страницы, а не с самим собой: он уже изменён до открытия.
+    const initial = editablePageText(page);
     const draftKey = `tentex-page-draft:${detail.id}:${primaryRevision}:${page.page_number}`;
     setEditSession({ page, revision: primaryRevision, initial, draftKey });
     setEditText(draft ?? sessionStorage.getItem(draftKey) ?? initial);
