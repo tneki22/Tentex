@@ -25,7 +25,10 @@
 - профиль проекта в контексте как недоверенные данные (`<profile_data>`);
 - context flags исключают профиль/ответ/фрагменты из вызова, manifest несёт
   `included/reason`, preview и фактический вызов проверяемо делят один
-  `fingerprint`;
+`fingerprint`;
+- в режиме `study` системный prompt не включает persona/strictness экзаменатора;
+  глубина объяснения зависит от `model_parameters.max_output_tokens` (700/1500/3000
+  в интерфейсе), а ответ по источникам по-прежнему требует проверяемых ссылок;
 - общий `ChatToolRun`-реестр и единственный настоящий Tool
   `search_project_materials` поверх FTS5/BM25, без обращения к модели;
 - `GET .../chat/capabilities` — режимы, навыки и Tools с `available` и

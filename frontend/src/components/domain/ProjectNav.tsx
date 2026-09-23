@@ -86,13 +86,13 @@ export function ProjectNav({ projectId, active, textbook = false, modules, count
         }
         if (entry.key === active) {
           return (
-            <span className={`workspace-project-link is-active${entry.key === "plan" && invite ? " is-inviting" : ""}`} key={entry.key}>
+              <span className={`workspace-project-link is-active${entry.key === "plan" && invite ? " is-inviting" : ""}`} key={entry.key} title={entry.label}>
               <Icon size={15} /><span>{entry.label}</span>{count !== undefined && <small>{count}</small>}
             </span>
           );
         }
         return (
-          <Link className={`workspace-project-link${entry.key === "plan" && invite ? " is-inviting" : ""}`} to={entry.to} key={entry.key}>
+          <Link className={`workspace-project-link${entry.key === "plan" && invite ? " is-inviting" : ""}`} to={entry.to} key={entry.key} aria-label={entry.label} title={entry.label}>
             <Icon size={15} /><span>{entry.label}</span>{count !== undefined && <small>{count}</small>}
           </Link>
         );

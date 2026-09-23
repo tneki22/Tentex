@@ -186,7 +186,10 @@ def _reply_request(
     messages = [
         AiMessage(
             role="system",
-            content=build_chat_reply_prompt(chat.persona, chat.strictness, chat.mode),
+            content=build_chat_reply_prompt(
+                chat.persona, chat.strictness, chat.mode,
+                chat.model_parameters.get("max_output_tokens") if chat.model_parameters else None,
+            ),
         ),
         AiMessage(role="user", content="\n\n".join(grounding)),
         *_history_messages(ctx.tail),

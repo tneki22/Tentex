@@ -221,6 +221,20 @@ def test_profile_included_in_context_and_persona_changes_prompt_not_reference(
     assert "Теория вероятностей" not in calm and "Теория вероятностей" not in strict
 
 
+def test_study_prompt_uses_depth_without_examiner_persona() -> None:
+    short = build_chat_reply_prompt(
+        ExaminerPersona.STRICT_REVIEWER, ExaminerStrictness.STRICT, ChatMode.STUDY, 700
+    )
+    long = build_chat_reply_prompt(
+        ExaminerPersona.CALM_TEACHER, ExaminerStrictness.SOFT, ChatMode.STUDY, 3000
+    )
+    assert "Ответь сжато" in short
+    assert "Разбери тему по шагам" in long
+    assert "придирчивый рецензент" not in short
+    assert "спокойный преподаватель" not in long
+    assert "[S1]" in short and "[S1]" in long
+
+
 def test_context_flag_off_excludes_profile(session: Session) -> None:
     project = make_exam_project(session)
     topic = make_topic_node(session, project, title="Профиль выключен")

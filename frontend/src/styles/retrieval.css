@@ -329,3 +329,26 @@
   .chat-retrieval-controls { grid-template-columns: 1fr; }
   .chat-retrieval-commands { grid-column: 1; }
 }
+
+.chat-retrieval-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-top: 0;
+  min-width: 0;
+  overflow-x: auto;
+}
+.chat-retrieval-label { flex: none; color: var(--muted); font-size: var(--text-xs); white-space: nowrap; }
+.chat-retrieval-controls > .select-root { flex: none; }
+.chat-retrieval-controls .select-trigger { flex: none; width: max-content; min-height: 30px; white-space: nowrap; }
+.chat-retrieval-controls .switch-row { flex: none; white-space: nowrap; }
+.chat-retrieval-controls .switch-row small { display: none; }
+.chat-retrieval-controls .switch-text { white-space: nowrap; }
+.chat-retrieval-commands { flex: none; grid-column: auto; overflow: visible; }
+.chat-retrieval-commands button { display: inline-flex; align-items: center; gap: var(--space-1); white-space: nowrap; }
+.chat-retrieval-commands button:nth-child(1) { border-color: var(--accent-edge); background: var(--accent-wash); color: var(--accent); }
+.chat-retrieval-commands button:nth-child(2) { border-color: color-mix(in srgb, var(--tone-info) 30%, var(--line)); background: color-mix(in srgb, var(--tone-info) 9%, var(--paper)); color: var(--tone-info); }
+.chat-retrieval-commands button:nth-child(3) { border-color: color-mix(in srgb, var(--tone-success) 30%, var(--line)); background: color-mix(in srgb, var(--tone-success) 9%, var(--paper)); color: var(--tone-success); }
+.chat-retrieval-commands button:nth-child(4) { border-color: color-mix(in srgb, var(--tone-warning) 30%, var(--line)); background: color-mix(in srgb, var(--tone-warning) 9%, var(--paper)); color: var(--tone-warning); }
+.chat-exhaustive-progress, .chat-retrieval-controls > .retrieval-error { flex: none; }

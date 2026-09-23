@@ -1,9 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { Plus, Send, Square } from "lucide-react";
+import { ArrowUp, Plus, Square } from "lucide-react";
 import type { ChatCapability, ChatMode } from "../../../api/chat";
 import { DictationButton } from "../../../components/domain";
-import { Button, IconButton, SegmentedTabs } from "../../../components/ui";
+import { IconButton } from "../../../components/ui";
 
 export interface ChatComposerHandle {
   focus: () => void;
@@ -97,29 +97,21 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               <Plus size={15} />
             </IconButton>
           )}
-          {showModeIndicator && (
-            <SegmentedTabs
-              label="Режим чата"
-              value={currentMode}
-              tabs={availableModes.map((mode) => ({ value: mode.key, label: mode.title }))}
-              onChange={(value) => onModeChange?.(value as ChatMode)}
-            />
-          )}
+          {showModeIndicator && <div className="chat-composer-modes" role="group" aria-label="Режим чата">
+            {availableModes.map((mode) => <button
+              type="button" key={mode.key} aria-label={mode.title} aria-pressed={currentMode === mode.key}
+              title={mode.title} onClick={() => onModeChange?.(mode.key as ChatMode)}
+            ><span className="chat-mode-full">{mode.title}</span><span className="chat-mode-short" aria-hidden="true">{mode.key === "exam" ? "Э" : "Раз"}</span></button>)}
+          </div>}
         </div>
         <div className="chat-composer-row-right">
           <DictationButton onText={appendDictation} disabled={disabled} />
           {sending && onStop ? (
-            <Button variant="secondary" className="chat-composer-send" onClick={onStop}>
-              <Square size={13} />Остановить
-            </Button>
+            <IconButton label="Остановить ответ" className="chat-composer-send" onClick={onStop}><Square size={14} /></IconButton>
           ) : sending ? (
-            <Button variant="secondary" className="chat-composer-send is-waiting" disabled aria-busy="true">
-              <span className="chat-send-spinner" aria-hidden="true" />Ждём ответ
-            </Button>
+            <IconButton label="Ожидаем ответ" className="chat-composer-send is-waiting" disabled><span className="chat-send-spinner" aria-hidden="true" /></IconButton>
           ) : (
-            <Button className="chat-composer-send" onClick={onSend} disabled={disabled || !value.trim()}>
-              <Send size={14} />Отправить
-            </Button>
+            <IconButton label="Отправить" className="chat-composer-send" onClick={onSend} disabled={disabled || !value.trim()}><ArrowUp size={17} strokeWidth={2.2} /></IconButton>
           )}
         </div>
       </div>

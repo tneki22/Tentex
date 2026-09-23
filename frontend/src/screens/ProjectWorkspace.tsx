@@ -17,6 +17,8 @@ import {
   ListTree,
   MessageSquare,
   NotebookPen,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelRightClose,
   PanelsTopLeft,
   Plus,
@@ -274,6 +276,15 @@ export function ProjectWorkspace() {
   const [coverage, setCoverage] = useState<CoverageMapRead | null>(null);
   const [query, setQuery] = useState("");
   const [activeGroupId, setActiveGroupId] = useState(DEFAULT_LAYOUT.groups[0].id);
+  const [treeCollapsed, setTreeCollapsed] = useState(() => window.localStorage.getItem(`tentex:workspace-tree-collapsed:${projectId}`) === "1");
+  const [headingHeight, setHeadingHeight] = useState(() => {
+    const saved = window.localStorage.getItem(`tentex:workspace-heading-height:${projectId}`);
+    if (saved === null) return 72;
+    const stored = Number(saved);
+    return Number.isFinite(stored) && stored >= 0 && stored <= 180 ? stored : 72;
+  });
+  const [headingDragging, setHeadingDragging] = useState(false);
+  const headingDrag = useRef<{ y: number; height: number } | null>(null);
   const { marks, setMark } = usePersonalMarks(projectId);
   const { mode: answerViewMode, setMode: setAnswerViewMode } = useAnswerViewMode(projectId);
   const bindings = useBindings(projectId);
@@ -299,6 +310,23 @@ export function ProjectWorkspace() {
   const editorGridRef = useRef<HTMLDivElement>(null);
   const conspectHandleRef = useRef<ConspectEditorHandle | null>(null);
   const [conspectRefreshKey, setConspectRefreshKey] = useState(0);
+
+  function setCollapsed(next: boolean) {
+    setTreeCollapsed(next);
+    window.localStorage.setItem(`tentex:workspace-tree-collapsed:${projectId}`, next ? "1" : "0");
+  }
+
+  function saveHeadingHeight(height: number) {
+    const next = height < 32 ? 0 : Math.min(180, Math.max(56, height));
+    setHeadingHeight(next);
+    window.localStorage.setItem(`tentex:workspace-heading-height:${projectId}`, String(next));
+  }
+
+  function moveHeading(clientY: number) {
+    if (!headingDrag.current) return;
+    const next = headingDrag.current.height + clientY - headingDrag.current.y;
+    setHeadingHeight(next < 32 ? 0 : Math.min(180, Math.max(56, next)));
+  }
 
   async function load(signal?: AbortSignal) {
     setLoading(true);
@@ -1122,15 +1150,15 @@ export function ProjectWorkspace() {
       .join(" ");
 
   return (
-    <div className={`project-workspace ${textbook ? "is-textbook" : "is-exam"}`} style={{ "--workspace-tree-width": `${layout.tree_width}px` } as CSSProperties}>
+    <div className={`project-workspace ${textbook ? "is-textbook" : "is-exam"} ${treeCollapsed ? "is-tree-collapsed" : ""} ${headingDragging ? "is-heading-dragging" : ""} ${headingHeight === 0 ? "is-heading-collapsed" : ""}`} style={{ "--workspace-tree-width": treeCollapsed ? "56px" : `${layout.tree_width}px`, "--workspace-heading-height": `${headingHeight}px` } as CSSProperties}>
       <aside className="workspace-tree-panel">
-        <header className="workspace-tree-head"><div className={`workspace-tree-title ${textbook ? "is-textbook" : ""}`}><Link className="workspace-back-button" to="/projects" aria-label="К проектам"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong>{deadline !== null && <span className={`workspace-project-deadline is-${deadlineTone(deadline)}`} aria-label={deadline >= 0 ? `${deadline} дней до дедлайна` : `Дедлайн прошёл ${Math.abs(deadline)} дней назад`}><b>{deadline >= 0 ? deadline : Math.abs(deadline)}</b><small>{deadline >= 0 ? "дней" : "прошло"}</small></span>}</div></header>
+        <header className="workspace-tree-head"><div className="workspace-tree-title"><Link className="workspace-back-button" to="/projects" aria-label="К проектам" title="К проектам"><ArrowLeft size={15} /></Link><strong title={detail.project.name ?? undefined}>{detail.project.name}</strong>{deadline !== null && <span className={`workspace-project-deadline is-${deadlineTone(deadline)}`} aria-label={deadline >= 0 ? `${deadline} дней до дедлайна` : `Дедлайн прошёл ${Math.abs(deadline)} дней назад`}><b>{deadline >= 0 ? deadline : Math.abs(deadline)}</b><small>{deadline >= 0 ? "дней" : "прошло"}</small></span>}<IconButton label={treeCollapsed ? "Развернуть левую панель" : "Свернуть левую панель"} onClick={() => setCollapsed(!treeCollapsed)}>{treeCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</IconButton></div></header>
         <div className="workspace-tree-tools"><label className="workspace-tree-search"><Search size={15} /><span className="sr-only">{textbook ? "Поиск по темам" : "Поиск по вопросам"}</span><input type="search" placeholder={textbook ? "Найти тему" : "Найти вопрос"} value={query} onChange={(event) => setQuery(event.target.value)} />{query && <button type="button" onClick={() => setQuery("")} aria-label="Очистить поиск"><X size={14} /></button>}</label><Tooltip label="Фильтры появятся вместе с разбором материалов"><span><IconButton label="Фильтры" disabled><Filter size={15} /></IconButton></span></Tooltip></div>
         <nav className="workspace-question-tree" aria-label={textbook ? "Программа" : "Вопросы экзамена"}>{filteredTree.length > 0 ? renderTree(filteredTree) : <p className="workspace-tree-empty">По запросу ничего не найдено.</p>}</nav>
         <ProjectNav projectId={projectId} textbook={textbook} modules={detail.project.enabled_modules} />
       </aside>
 
-      <PanelResizeHandle
+      {!treeCollapsed && <PanelResizeHandle
         className="workspace-tree-resize"
         label={`Изменить ширину дерева ${textbook ? "тем" : "вопросов"}`}
         value={layout.tree_width}
@@ -1138,7 +1166,7 @@ export function ProjectWorkspace() {
         max={460}
         onDelta={(delta) => updateLayout((current) => ({ ...current, tree_width: Math.round(Math.min(460, Math.max(260, current.tree_width + delta))) }))}
         onReset={() => updateLayout((current) => ({ ...current, tree_width: 320 }))}
-      />
+      />}
 
       <main className="workspace-main">
         {!selectedNode && freeProject ? (
@@ -1173,6 +1201,14 @@ export function ProjectWorkspace() {
           </div>
         ) : selected ? (<>
         <header className="workspace-question-bar"><div className="workspace-question-heading"><h1>{selected.title}</h1></div><div className="workspace-question-actions">{!sourceBindingsLoading && sourceBindings.length === 0 && <div className={`workspace-material-notice ${textbook ? "is-textbook" : ""}`}><BookOpen size={15} /><span>{textbook ? "Материал ещё не привязан" : "Ответы ещё не добавлены"}</span></div>}{!textbook && <StudyTimer study={study} />}<div className="workspace-question-nav" aria-label="Переход между темами"><IconButton label="Предыдущая тема" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><ChevronLeft size={15} /></IconButton><span>{selectedIndex + 1} из {studyNodes.length}</span><IconButton label="Следующая тема" disabled={selectedIndex >= studyNodes.length - 1} onClick={() => selectRelative(1)}><ChevronRight size={15} /></IconButton></div><IconButton label="Разделить рабочую область" disabled={editorGroups.length >= 3} onClick={addPanel}><PanelsTopLeft size={15} /></IconButton></div></header>
+        <div className="workspace-heading-resize" role="separator" tabIndex={0} aria-label="Изменить высоту верхней панели" aria-orientation="horizontal" aria-valuenow={headingHeight} aria-valuemin={0} aria-valuemax={180} title={headingHeight === 0 ? "Потяните вниз, чтобы открыть верхнюю панель" : "Потяните вверх, чтобы свернуть верхнюю панель"}
+          onPointerDown={(event) => { headingDrag.current = { y: event.clientY, height: headingHeight }; setHeadingDragging(true); event.currentTarget.setPointerCapture(event.pointerId); }}
+          onPointerMove={(event) => moveHeading(event.clientY)}
+          onPointerUp={(event) => { const drag = headingDrag.current; headingDrag.current = null; setHeadingDragging(false); if (drag) saveHeadingHeight(drag.height + event.clientY - drag.y); }}
+          onPointerCancel={() => { headingDrag.current = null; setHeadingDragging(false); saveHeadingHeight(headingHeight); }}
+          onDoubleClick={() => saveHeadingHeight(headingHeight === 0 ? 72 : 0)}
+          onKeyDown={(event) => { if (event.key === "ArrowUp") { event.preventDefault(); saveHeadingHeight(headingHeight - 16); } else if (event.key === "ArrowDown") { event.preventDefault(); saveHeadingHeight(headingHeight === 0 ? 72 : headingHeight + 16); } else if (event.key === "Home") { event.preventDefault(); saveHeadingHeight(0); } else if (event.key === "End") { event.preventDefault(); saveHeadingHeight(72); } }}
+        ><span /></div>
         <div className="workspace-save-status">        {!textbook && <StudyQueue projectId={projectId} nodeId={selected.id} onSelect={id => void selectNode(id)} />}
 <div aria-live="polite">{saveError && <p className="inline-error" role="alert">{saveError}</p>}</div></div>
         <div className="workspace-editor-grid" ref={editorGridRef} style={{ gridTemplateColumns: editorColumns }}>
