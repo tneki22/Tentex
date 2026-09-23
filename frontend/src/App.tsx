@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router";
 import { AppLayout } from "./app/AppLayout";
 import { screenById } from "./app/screens";
 import { SCREEN_VIEWS } from "./app/views";
+import { ProjectWorkspace } from "./screens/ProjectWorkspace";
 
 /** Первый экран, который видит пользователь. */
 const HOME = screenById("projects").path;
@@ -9,6 +10,7 @@ const HOME = screenById("projects").path;
 export function App() {
   return (
     <Routes>
+      <Route path="/projects/:projectId/detached/:detachedId" element={<ProjectWorkspace detached />} />
       <Route element={<AppLayout />}>
         <Route path="/" element={<Navigate to={HOME} replace />} />
         {Object.entries(SCREEN_VIEWS).map(([id, View]) => (
