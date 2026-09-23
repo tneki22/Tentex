@@ -13,6 +13,65 @@ interface StubOptions {
   attachedDisplayName?: string;
   /** Черновик виден на посадочной странице мастера: проверяем «Продолжить». */
   listDraft?: boolean;
+  /** Внешние модели включены — чат программы можно вызвать. */
+  aiEnabled?: boolean;
+}
+
+const PROVIDER = "66666666-6666-4666-8666-666666666666";
+
+function aiSettings(enabled: boolean) {
+  return {
+    external_models_enabled: enabled,
+    daily_limit_usd: null,
+    operation_limit_usd: null,
+    confirm_cost_usd: null,
+    confirm_input_tokens: 100000,
+    usd_rub_rate: null,
+    usd_rub_rate_date: null,
+    default_text: { provider_id: PROVIDER, model_id: "test/model" },
+    default_speech: null,
+    chat_preset: null,
+    providers: [{
+      id: PROVIDER, label: "OpenRouter", catalog_profile: "openrouter", base_url: "https://openrouter.ai/api/v1",
+      has_api_key: true, is_favorite: true, model_count: 1, last_test_status: null, last_tested_at: null,
+      last_catalog_refresh_at: null, updated_at: NOW,
+    }],
+    roles: [{
+      role: "study_program_assistant", title: "Составление программы", description: "", modality: "text",
+      enabled: true, provider_override_id: null, model_override: null, resolved_provider_id: PROVIDER,
+      resolved_model: "test/model", model_source: "default", required_capabilities: ["structured_output"], parameters: {},
+    }],
+    models: [{
+      provider_id: PROVIDER, model_id: "test/model", display_name: "Test model", context_length: 128000,
+      max_completion_tokens: 8000, supported_parameters: ["response_format"], input_modalities: ["text"],
+      output_modalities: ["text"], reasoning: {}, default_parameters: {}, manual_overrides: {},
+      prompt_price_usd: "0.000001", completion_price_usd: "0.000002", knowledge_cutoff: null, expiration_date: null,
+      pricing_snapshot_at: NOW, catalog_snapshot_at: NOW, is_manually_added: false, favorite_order: 1, is_available: true,
+    }],
+    today_usage: { input_tokens: 0, output_tokens: 0, actual_cost_usd: "0", actual_cost_rub: "0", cache_hits: 0 },
+  };
+}
+
+const CHAT_SESSION = "77777777-7777-4777-8777-777777777777";
+
+function chatMessage(sequence: number, role: "user" | "assistant", text: string, payload: Record<string, unknown> = {}) {
+  return {
+    id: `88888888-8888-4888-8888-88888888888${sequence}`,
+    session_id: CHAT_SESSION,
+    sequence,
+    role,
+    text,
+    stream_state: "complete",
+    payload_kind: Object.keys(payload).length ? "program_diff" : "none",
+    payload,
+    context_snapshot: {},
+    skill: null,
+    ai_run_id: null,
+    attempt_id: null,
+    grade_attempt_id: null,
+    created_at: NOW,
+    updated_at: NOW,
+  };
 }
 
 function libraryMaterial(overrides: Record<string, unknown> = {}) {
@@ -96,6 +155,8 @@ function programNode(id: string, title: string, nodeType: "section" | "topic", p
     basis_kind: "outline",
     origin_note: null,
     origin_material_id: MATERIAL,
+    material_search_queries: [],
+    material_kind: null,
     source_page_ranges: [{
       material_id: MATERIAL,
       source_name_snapshot: "Экономика — глобальное имя",
@@ -116,6 +177,8 @@ async function installStub(page: Page, options: StubOptions = {}) {
   let programRevision = 0;
   let programNodes: Array<Record<string, unknown>> = [];
   let modelRequests = 0;
+  let chatMessages: Array<Record<string, unknown>> = [];
+  let chatCreated = false;
   let project = {
     id: PROJECT,
     template_key: "free",
@@ -168,6 +231,71 @@ async function installStub(page: Page, options: StubOptions = {}) {
       body: JSON.stringify(value),
     });
 
+    if (path === "/api/settings/ai") return json(aiSettings(options.aiEnabled ?? false));
+    const chatBase = `/api/projects/${PROJECT}/program-chat`;
+    const chatDetail = () => ({
+      id: CHAT_SESSION, project_id: PROJECT, section_scope_node_id: null, title: "Программа",
+      model_override: null, model_parameters: {},
+      context_flags: { profile: true, primary_sources: true, secondary_sources: true, reference_sources: false },
+      draft_text: "", created_at: NOW, updated_at: NOW, messages: chatMessages,
+    });
+    if (path === `${chatBase}/sessions` && method === "GET") {
+      return json(chatCreated
+        ? [{ id: CHAT_SESSION, project_id: PROJECT, title: "Программа", updated_at: NOW, message_count: chatMessages.length }]
+        : []);
+    }
+    if (path === `${chatBase}/sessions` && method === "POST") {
+      chatCreated = true;
+      return json(chatDetail(), 201);
+    }
+    if (path === `${chatBase}/sessions/${CHAT_SESSION}` && method === "GET") return json(chatDetail());
+    if (path === `${chatBase}/sessions/${CHAT_SESSION}/context`) {
+      return json({ session_id: CHAT_SESSION, manifest: [], fingerprint: "f", total_bytes: 0 });
+    }
+    if (path === `${chatBase}/sessions/${CHAT_SESSION}/draft`) return json(chatDetail());
+    if (path === `${chatBase}/sessions/${CHAT_SESSION}/messages` && method === "POST") {
+      modelRequests += 1;
+      const body = request.postDataJSON();
+      chatMessages = [
+        chatMessage(1, "user", body.text),
+        chatMessage(2, "assistant", "Черновик программы от цели", {
+          summary: "Черновик программы от цели",
+          pros: [],
+          cons: [],
+          operations: [{
+            op: "add", parent_node_id: null, after_node_id: null, at_start: false, node_type: "topic",
+            title: "Операция свёртки", rationale: "Ядро цели", outline_ref: null, goal_role: "prerequisite",
+            search_queries: ["операция свёртки", "свёрточный слой"], material_kind: "lecture", children: [],
+          }],
+          operation_states: ["pending"],
+          rejected: false,
+        }),
+      ];
+      return json(chatMessages[1]);
+    }
+    if (path.startsWith(`${chatBase}/proposals/`) && path.endsWith("/apply") && method === "POST") {
+      programNodes = [{
+        ...programNode("99999999-9999-4999-8999-999999999999", "Операция свёртки", "topic", null),
+        goal_role: "prerequisite",
+        needs_material: true,
+        origin_kind: "model",
+        basis_kind: "custom",
+        origin_material_id: null,
+        source_page_ranges: [],
+        material_search_queries: ["операция свёртки", "свёрточный слой"],
+        material_kind: "lecture",
+      }];
+      programRevision += 1;
+      chatMessages = chatMessages.map((message) => message.payload_kind === "program_diff"
+        ? { ...message, payload: { ...(message.payload as Record<string, unknown>), operation_states: ["applied"] } }
+        : message);
+      return json({
+        changed_node: null,
+        program: { revision: programRevision, nodes: programNodes },
+        latest_undoable_action: null,
+        draft_revision: null,
+      });
+    }
     if (path.includes("/program/chat") || path.includes("/program/ai-")) {
       modelRequests += 1;
       return json([]);
@@ -347,11 +475,30 @@ test("обрабатываемый материал без оглавления 
   await expect(page.getByRole("button", { name: "Создать проект" })).toBeEnabled();
 });
 
-test("вкладка С ИИ у свободного проекта показывает заглушку без модельного запроса", async ({ page }) => {
-  const state = await installStub(page);
+test("вкладка С ИИ составляет программу по цели и подсказывает, где искать материал", async ({ page }) => {
+  const state = await installStub(page, { aiEnabled: true });
   await page.goto(`${BASE}/projects/${PROJECT}/program`);
   await page.getByRole("tab", { name: "С ИИ" }).click();
-  await expect(page.getByRole("heading", { name: "Составление по цели появится здесь" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Составьте программу вместе с ИИ" })).toBeVisible();
+  await page.getByRole("button", { name: "Составь программу по моей цели" }).click();
+  await expect(page.getByText("необходимая основа")).toBeVisible();
+  await expect(page.getByText("знания модели")).toBeVisible();
+  await expect(page.getByText("лекция или конспект")).toBeVisible();
+  await page.getByRole("button", { name: /Принять выбранное/ }).click();
+  await expect(page.getByText("Применено")).toBeVisible();
+  await page.getByRole("tab", { name: "Вручную" }).click();
+  await expect(page.getByRole("treeitem").filter({ hasText: "Операция свёртки" })).toContainText("Предложено ИИ");
+  await expect.poll(state.modelRequests).toBe(1);
+});
+
+test("без внешних моделей вкладка С ИИ объясняет причину и ведёт в ручной режим", async ({ page }) => {
+  const state = await installStub(page, { aiEnabled: false });
+  await page.goto(`${BASE}/projects/${PROJECT}/program`);
+  await page.getByRole("tab", { name: "С ИИ" }).click();
+  await expect(page.getByText("Внешние модели выключены")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Составь программу по моей цели" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Собрать вручную" }).click();
+  await expect(page.getByRole("tab", { name: "Вручную" })).toHaveAttribute("aria-selected", "true");
   await expect.poll(state.modelRequests).toBe(0);
 });
 

@@ -391,9 +391,15 @@ interface TreeRowActions {
 }
 
 function renderTreeRow(node: ProgramTreeNode, actions: TreeRowActions): ReactNode {
+  const fromModel = node.basis_kind === "custom" && node.origin_kind === "model";
+  const hint = node.material_search_queries.length
+    ? `Где искать: ${node.material_search_queries.map((query) => `«${query}»`).join(", ")}`
+    : null;
   const sourceTitle = node.source_page_ranges.length
     ? node.source_page_ranges.map((range) => `${range.source_name_snapshot}: с. ${range.page_from}–${range.page_to}`).join("; ")
-    : "Узел создан вне оглавления";
+    : fromModel
+      ? [`Тема из знаний модели: в источниках её нет`, hint].filter(Boolean).join(". ")
+      : "Узел создан вне оглавления";
   return (
     <div
       className={`textbook-program-row ${actions.selected ? "is-selected" : ""}`.trim()}
@@ -419,9 +425,9 @@ function renderTreeRow(node: ProgramTreeNode, actions: TreeRowActions): ReactNod
           : <b>{node.title}</b>}
         <small>{node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}</small>
       </span>
-      <span className={`textbook-program-basis is-${node.basis_kind}`} title={sourceTitle}>
+      <span className={`textbook-program-basis is-${fromModel ? "model" : node.basis_kind}`} title={sourceTitle}>
         <i aria-hidden="true" />
-        {node.basis_kind === "outline" ? "По оглавлению" : "Вне оглавления"}
+        {node.basis_kind === "outline" ? "По оглавлению" : fromModel ? "Предложено ИИ" : "Вне оглавления"}
       </span>
     </div>
   );

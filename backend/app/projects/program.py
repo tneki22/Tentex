@@ -347,6 +347,8 @@ def _node_snapshot(node: ProgramNode) -> dict[str, Any]:
         "basis_kind": node.basis_kind.value,
         "origin_note": node.origin_note,
         "origin_material_id": str(node.origin_material_id) if node.origin_material_id else None,
+        "material_search_queries": list(node.material_search_queries or []),
+        "material_kind": node.material_kind,
         "created_at": node.created_at.isoformat(),
         "updated_at": node.updated_at.isoformat(),
     }
@@ -887,6 +889,9 @@ def _restore_snapshot(session: Session, project_id: UUID, snapshots: list[dict[s
                     if snapshot.get("origin_material_id")
                     else None
                 ),
+                # Снимки до 0059 этих полей не содержат.
+                material_search_queries=list(snapshot.get("material_search_queries") or []),
+                material_kind=snapshot.get("material_kind"),
                 created_at=datetime.fromisoformat(snapshot["created_at"]),
                 updated_at=datetime.fromisoformat(snapshot["updated_at"]),
             )
@@ -1084,10 +1089,14 @@ def undo_last_project_action(
                         if snapshot.get("origin_material_id")
                         else None
                     )
-                for created_id in data.get("created_node_ids", []):
+                # `created_node_ids` записаны родитель-первым (обход add с children),
+                # а связь с родителем — RESTRICT: удаляем с листьев и по одному,
+                # иначе пакетный DELETE снимет раздел раньше его тем.
+                for created_id in reversed(data.get("created_node_ids", [])):
                     node = nodes_by_id.get(UUID(created_id))
                     if node is not None:
                         session.delete(node)
+                        session.flush()
                 for move in data.get("page_range_moves", []):
                     range_row = session.get(ProgramNodeSourcePageRange, UUID(move["range_id"]))
                     if range_row is not None:

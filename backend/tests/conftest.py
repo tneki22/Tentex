@@ -230,6 +230,22 @@ def make_textbook_project(db_session: Session) -> Project:
     return project
 
 
+def make_free_project(db_session: Session) -> Project:
+    """Свободное изучение: `template_key=free` поверх учебниковой среды."""
+    project = Project(
+        id=uuid4(),
+        template_key=TemplateKey.FREE,
+        workspace_variant=WorkspaceVariant.TEXTBOOK,
+        status=ProjectStatus.ACTIVE,
+        name="Нейросети",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    db_session.add(project)
+    db_session.commit()
+    return project
+
+
 def make_topic_node(db_session: Session, project: Project, *, title: str) -> ProgramNode:
     node = ProgramNode(
         id=uuid4(),

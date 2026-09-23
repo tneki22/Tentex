@@ -302,6 +302,8 @@ class ProgramNodeRead(ApiModel):
     basis_kind: ProgramBasisKind
     origin_note: str | None
     origin_material_id: UUID | None
+    material_search_queries: list[str] = Field(default_factory=list)
+    material_kind: str | None = None
     source_page_ranges: list[ProgramNodeSourcePageRangeRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

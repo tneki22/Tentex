@@ -7,7 +7,9 @@ import {
   type ProgramChatManifestEntry,
 } from "../../../api/programChat";
 import type { ProgramChangeResult, ProgramState } from "../../../api/projects";
+import { OfflineNotice } from "../../../components/domain";
 import { Button, ErrorState, LoadingState } from "../../../components/ui";
+import { useAiRoleAvailability } from "../../../hooks/useAiRoleAvailability";
 import { useProgramChat } from "../../../hooks/useProgramChat";
 import { ChatComposer } from "./ChatComposer";
 import { ChatHeader } from "./ChatHeader";
@@ -59,6 +61,21 @@ interface ProgramChatWorkspaceProps {
   /** Сообщения активной сессии — вызывающая сторона строит по ним
    * `ProgramTreePreview` рядом (последний непринятый диф), не дублируя хук. */
   onMessagesChange?: (messages: ChatMessageRead[]) => void;
+  /** Свободный проект: программа строится от цели, источников может не быть. */
+  variant?: "textbook" | "free";
+  /** Материал с оглавлением — для быстрого старта «Составь по оглавлению». */
+  outlineSourceName?: string | null;
+  /** Переход в ручной режим редактора, когда модель недоступна. */
+  onSwitchToManual?: () => void;
+}
+
+function quickStarts(variant: "textbook" | "free", outlineSourceName: string | null | undefined): string[] {
+  if (variant === "textbook") return [];
+  return [
+    "Составь программу по моей цели",
+    "Что нужно знать заранее, чтобы достичь цели?",
+    ...(outlineSourceName ? [`Составь программу по оглавлению «${outlineSourceName}», оставь только нужное для цели`] : []),
+  ];
 }
 
 /** Режим «С ИИ» шага 4 мастера и раздела «Программа»: чат построения программы
@@ -66,9 +83,12 @@ interface ProgramChatWorkspaceProps {
  * с дифами. Дерево-предпросмотр справа рисует вызывающая сторона
  * (`TextbookProgramEditor` в режиме `ai`) — этот компонент только чат.
  */
-export function ProgramChatWorkspace({ projectId, program, execute, onMessagesChange }: ProgramChatWorkspaceProps) {
+export function ProgramChatWorkspace({
+  projectId, program, execute, onMessagesChange, variant = "textbook", outlineSourceName, onSwitchToManual,
+}: ProgramChatWorkspaceProps) {
   const chat = useProgramChat({ projectId });
   const [proposalBusy, setProposalBusy] = useState<string | null>(null);
+  const availability = useAiRoleAvailability("study_program_assistant", chat.session?.model_override);
 
   useEffect(() => {
     onMessagesChange?.(chat.messages);
@@ -132,15 +152,43 @@ export function ProgramChatWorkspace({ projectId, program, execute, onMessagesCh
           {isEmpty ? (
             <div className="chat-empty-invite">
               <h2>Составьте программу вместе с ИИ</h2>
-              <p>
-                Опишите, какие разделы вам интересны, или просто скажите:
-                «Составь программу по моей цели». Здесь же можно попросить добавить,
-                уточнить или убрать темы. ИИ сначала покажет изменения — вы сами
-                решите, какие из них принять.
-              </p>
+              {variant === "free" ? (
+                <p>
+                  Опишите, что хотите уметь, или начните с готового запроса. ИИ предложит
+                  темы от вашей цели: сначала основы, потом главное. Для тем, которых нет
+                  в ваших материалах, он подскажет, что и где искать. Изменения
+                  применяются только после вашего согласия.
+                </p>
+              ) : (
+                <p>
+                  Опишите, какие разделы вам интересны, или просто скажите:
+                  «Составь программу по моей цели». Здесь же можно попросить добавить,
+                  уточнить или убрать темы. ИИ сначала покажет изменения — вы сами
+                  решите, какие из них принять.
+                </p>
+              )}
+              {availability.state === "disabled" && (
+                <OfflineNotice reason="disabled" alternative="Программу можно собрать вручную." />
+              )}
+              {availability.state === "unavailable" && (
+                <p className="program-chat-unavailable" role="status">{availability.reason}</p>
+              )}
+              {(availability.state === "disabled" || availability.state === "unavailable") && onSwitchToManual && (
+                <Button variant="secondary" onClick={onSwitchToManual}>Собрать вручную</Button>
+              )}
+              {availability.state === "ready" && quickStarts(variant, outlineSourceName).length > 0 && (
+                <div className="program-chat-quick-starts" aria-label="Быстрый старт">
+                  {quickStarts(variant, outlineSourceName).map((text) => (
+                    <Button key={text} variant="secondary" disabled={chat.sending} onClick={() => void chat.sendMessage(text)}>
+                      {text}
+                    </Button>
+                  ))}
+                </div>
+              )}
               <p className="chat-empty-context-note">
-                По умолчанию в контекст входят паспорт цели, оглавления подключённых
-                источников и текущее дерево программы. Полный текст учебников не передаётся.
+                {variant === "free"
+                  ? "В контекст входят цель, оглавления подключённых материалов, если они есть, и текущее дерево программы. Полный текст материалов не передаётся."
+                  : "По умолчанию в контекст входят паспорт цели, оглавления подключённых источников и текущее дерево программы. Полный текст учебников не передаётся."}
               </p>
             </div>
           ) : (

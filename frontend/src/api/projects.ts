@@ -13,6 +13,8 @@ export type ExamFormat = "questions" | "questions_tasks" | "tickets" | "unknown"
 export type NodeType = "section" | "topic" | "subpoint";
 export type ExamKind = "question" | "task" | "ticket";
 export type GoalRole = "target" | "prerequisite" | "related";
+/** Вид источника, который ИИ советует искать для темы без материала. */
+export type MaterialKindHint = "textbook" | "lecture" | "article" | "video" | "problems";
 export type ProjectIconName =
   | "graduation-cap"
   | "book-open"
@@ -115,6 +117,9 @@ export interface ProgramNodeRead {
   basis_kind: "outline" | "custom";
   origin_note: string | null;
   origin_material_id: string | null;
+  /** Подсказка ИИ, где искать материал темы без опоры в источниках. */
+  material_search_queries: string[];
+  material_kind: MaterialKindHint | null;
   source_page_ranges: Array<{
     material_id: string;
     source_name_snapshot: string;

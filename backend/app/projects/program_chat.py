@@ -57,6 +57,7 @@ from app.models import (
     ProjectStatus,
     SourceRole,
     TargetOutcome,
+    TemplateKey,
     WorkspaceVariant,
     utc_now,
 )
@@ -113,6 +114,9 @@ class OutlineRef(ChatApiModel):
     outline_item_key: NonBlank
 
 
+MaterialKindHint = Literal["textbook", "lecture", "article", "video", "problems"]
+
+
 class ProgramChatAddOperation(ChatApiModel):
     op: Literal["add"] = "add"
     parent_node_id: UUID | None = None
@@ -124,6 +128,11 @@ class ProgramChatAddOperation(ChatApiModel):
     title: NonBlank = Field(max_length=300)
     rationale: str = Field(default="", max_length=1000)
     outline_ref: OutlineRef | None = None
+    goal_role: GoalRole = GoalRole.TARGET
+    # Где искать материал, если темы нет в оглавлениях: запросы и вид источника.
+    # Для темы с подтверждённым outline_ref сервер их не сохраняет.
+    search_queries: list[NonBlank] = Field(default_factory=list, max_length=3)
+    material_kind: MaterialKindHint | None = None
     children: list[ProgramChatAddOperation] = Field(default_factory=list, max_length=20)
 
 
@@ -325,11 +334,55 @@ operations и ответь в summary.
   пользователь рядом с чекбоксом."""
 
 
-def _build_reply_prompt() -> str:
-    return "\n\n".join([CHAT_BASE_PROMPT, PROGRAM_CHAT_MODE_PROMPT])
+FREE_PROGRAM_MODE_PROMPT = """Ты помогаешь составить программу свободного
+изучения — дерево из разделов, тем и подпунктов — под цель пользователя из
+паспорта. Источников может не быть вовсе или они покрывают цель частично.
+Тебе доступны паспорт цели, оглавления подключённых источников (если есть) и
+текущее дерево программы. Отвечай одной структурой: summary — короткое резюме,
+pros/cons — плюсы и минусы предложения, operations — типизированные изменения
+дерева (add/rename/move/change_type/set_goal/set_visibility/merge). Если
+правок не требуется или пользователь просто задал вопрос — верни пустой
+operations и ответь в summary.
+
+Правила:
+- Программа строится от цели: сначала предпосылки, без которых цель не
+  достигается (goal_role=prerequisite), затем целевые темы (goal_role=target),
+  затем связанные темы, полезные, но не обязательные (goal_role=related).
+  Учитывай стартовый уровень, важное и исключённое из паспорта.
+- Если программа пуста и пользователь просит составить её по цели — предложи
+  10-40 тем, сгруппированных в разделы, глубиной не больше трёх уровней.
+- Если подходящий пункт есть в переданном оглавлении, опирайся на него и
+  заполни add.outline_ref: material_id и outline_item_key дословно, как они
+  даны в контексте. Не изобретай ключи.
+- Если темы нет в оглавлениях или источников нет, составь её из общих знаний
+  предметной области и помоги найти материал: для каждой темы и подпункта
+  заполни search_queries — 1-3 поисковых запроса по-русски, 2-6 слов, по
+  которым в библиотеке или интернете найдётся объяснение именно этой темы, —
+  и material_kind: textbook (глава учебника), lecture (лекция или конспект),
+  article (статья), video (видеолекция) или problems (задачник). Для разделов
+  search_queries оставляй пустыми.
+- Если программа уже есть, сохраняй не затронутые запросом ветви. Для отказа
+  от темы верни set_visibility с is_in_current_program=false; видимость
+  меняется для всего поддерева.
+- Ссылайся только на node_id, которые реально есть в переданном дереве.
+  Новые узлы создаёт только операция add (через children для целого
+  поддерева).
+- Место узла среди соседей: after_node_id — после указанного соседа,
+  at_start=true — первым в своём родителе, иначе — в конец.
+- merge объединяет несколько существующих узлов: первый в списке — выживает.
+- rationale — короткое объяснение по-русски для каждой операции: его увидит
+  пользователь рядом с чекбоксом. Не выдавай общие знания за содержание
+  источника."""
 
 
-SEARCH_QUERIES_PROMPT = """Пользователь строит программу учебника по своей
+def _build_reply_prompt(template_key: TemplateKey) -> str:
+    mode_prompt = (
+        FREE_PROGRAM_MODE_PROMPT if template_key == TemplateKey.FREE else PROGRAM_CHAT_MODE_PROMPT
+    )
+    return "\n\n".join([CHAT_BASE_PROMPT, mode_prompt])
+
+
+SEARCH_QUERIES_PROMPT = """Пользователь строит программу обучения по своей
 цели, которая может не совпадать со структурой источников. Предложи от 1 до
 5 коротких поисковых запросов (по-русски, 2-6 слов каждый) по переданной
 цели и паспорту проекта — так, чтобы найти в материалах проекта фрагменты,
@@ -577,6 +630,7 @@ class ProgramChatContext:
     manifest: list[dict[str, Any]]
     snapshot: dict[str, Any]
     fingerprint: str
+    template_key: TemplateKey = TemplateKey.TEXTBOOK
 
 
 TARGET_OUTCOME_VALUES = {item: item.value for item in TargetOutcome}
@@ -590,6 +644,8 @@ def _profile_card(passport: GoalPassport | None, project: Project) -> dict[str, 
         card["subject"] = passport.subject
     if passport.scope is not None:
         card["scope"] = passport.scope.value
+    if passport.starting_level is not None:
+        card["starting_level"] = passport.starting_level.value
     if passport.goal:
         card["goal"] = passport.goal
     if passport.target_outcome is not None:
@@ -744,6 +800,7 @@ def build_program_context(session: Session, chat: ChatSession) -> ProgramChatCon
         manifest=manifest,
         snapshot=snapshot,
         fingerprint=fingerprint,
+        template_key=project.template_key,
     )
 
 
@@ -799,7 +856,7 @@ def _profile_block(profile: dict[str, str]) -> str:
 def _reply_messages(
     ctx: ProgramChatContext, tail: list[ChatMessage], user_text: str | None
 ) -> list[AiMessage]:
-    messages = [AiMessage(role="system", content=_build_reply_prompt())]
+    messages = [AiMessage(role="system", content=_build_reply_prompt(ctx.template_key))]
     context_text = (
         f"<profile_data>\n{_profile_block(ctx.profile)}\n</profile_data>\n"
         f"<source_outlines>\n{_sources_block(ctx.sources)}\n</source_outlines>\n"
@@ -927,6 +984,7 @@ async def _run_build_call(
     job_id: UUID,
     model_override: AiModelSelection | None,
     parameters: dict[str, object],
+    template_key: TemplateKey,
 ) -> ProgramChatReply:
     ctx = ProgramChatContext(
         profile=profile,
@@ -935,6 +993,7 @@ async def _run_build_call(
         manifest=manifest,
         snapshot={},
         fingerprint=fingerprint,
+        template_key=template_key,
     )
     messages = _reply_messages(ctx, [], extra_user_text)
     request = AiTextRequest(
@@ -1097,6 +1156,7 @@ async def run_build(
             job_id,
             _request_model_override(chat),
             dict(chat.model_parameters or {}),
+            ctx.template_key,
         )
         packet_results[key] = reply.model_dump(mode="json")
         job = _set_job_checkpoint(session, job_id, packets=packet_results)
@@ -1362,7 +1422,7 @@ def _create_add_node(
         exam_kind=None,
         sort_order=0,
         title=op.title,
-        goal_role=GoalRole.TARGET,
+        goal_role=op.goal_role,
         target_level=target_level,
         is_in_current_program=True,
         needs_material=needs_material,
@@ -1371,6 +1431,9 @@ def _create_add_node(
         basis_kind=basis_kind,
         origin_note=op.rationale[:500] if op.rationale else None,
         origin_material_id=material_id,
+        # Подсказка нужна только теме, которой не нашлось места в источниках.
+        material_search_queries=list(op.search_queries) if needs_material else [],
+        material_kind=op.material_kind if needs_material else None,
     )
     nodes.append(node)
     position = _position_after(nodes, op.parent_node_id, op.after_node_id, node.id, op.at_start)

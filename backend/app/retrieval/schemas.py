@@ -28,6 +28,9 @@ class RetrievalScope(StrEnum):
     TOPIC_PROJECT = "topic_project"
     PROJECT = "project"
     SELECTED_MATERIALS = "selected_materials"
+    # Вся готовая Библиотека; с project_id — кроме уже подключённых к проекту:
+    # так подбираются материалы, которых в проекте ещё нет.
+    LIBRARY = "library"
 
 
 class RetrievalDepth(StrEnum):
@@ -53,7 +56,10 @@ class RetrievalSearchWrite(ApiModel):
     def validate_scope(self):
         if self.scope == RetrievalScope.SELECTED_MATERIALS and not self.material_ids:
             raise ValueError("Для выбранных материалов нужен хотя бы один material_id")
-        if self.scope != RetrievalScope.SELECTED_MATERIALS and self.project_id is None:
+        if (
+            self.scope not in {RetrievalScope.SELECTED_MATERIALS, RetrievalScope.LIBRARY}
+            and self.project_id is None
+        ):
             raise ValueError("Для этой области нужен project_id")
         if (
             self.scope in {RetrievalScope.LINKED_TOPIC, RetrievalScope.TOPIC_PROJECT}

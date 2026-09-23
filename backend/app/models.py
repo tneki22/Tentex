@@ -1321,6 +1321,13 @@ class ProgramNode(Base):
     )
     origin_note: Mapped[str | None] = mapped_column(String, nullable=True)
     origin_material_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    # Подсказка ИИ, где искать материал для темы без опоры в источниках:
+    # поисковые запросы и вид источника. Живёт отдельно от origin_note, потому
+    # что переименование узла перезаписывает объяснение.
+    material_search_queries: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    material_kind: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 

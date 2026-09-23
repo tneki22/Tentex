@@ -12,6 +12,7 @@ from app.db import get_session
 from app.projects import (
     answers,
     import_repair,
+    material_suggestions,
     preparation_ai,
     program,
     program_ai,
@@ -340,6 +341,19 @@ def apply_program_grouping(
     session: SessionDependency,
 ) -> ProgramChangeResult:
     return program_ai.apply(session, project_id, command)
+
+
+@projects.post(
+    "/{project_id}/material-suggestions",
+    response_model=material_suggestions.MaterialSuggestionsResult,
+)
+async def suggest_library_materials(
+    project_id: UUID,
+    command: material_suggestions.MaterialSuggestionsWrite,
+    session: SessionDependency,
+) -> material_suggestions.MaterialSuggestionsResult:
+    """Материалы Библиотеки под цель или темы проекта: поиск без модели."""
+    return await material_suggestions.suggest_materials(session, project_id, command)
 
 
 @projects.get(

@@ -5879,9 +5879,6 @@ button.wizard-back-projects {
 .free-study-editor-head { justify-content: flex-end; }
 /* Заглушка не растягивается на всю полосу вкладки: пустой экран высотой в окно
    читался бы как не загрузившийся чат, а не как честное «этого пока нет». */
-.free-study-ai-placeholder { align-self: start; justify-self: center; max-width: 680px; margin: var(--space-8) auto; padding: var(--space-8); text-align: center; }
-.free-study-ai-placeholder h2 { margin: 0 0 var(--space-3); }
-.free-study-ai-placeholder p { margin: 0; color: var(--ink-soft); line-height: var(--leading-relaxed); }
 .library-picker-reason { color: var(--accent); }
 .inspector-metadata-form { display: grid; gap: var(--space-3); margin-bottom: var(--space-5); }
 
@@ -7747,6 +7744,8 @@ button.wizard-back-projects {
 .textbook-program-basis i { width: var(--space-2); height: var(--space-2); flex: none; border-radius: var(--radius-pill); background: var(--muted); box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 16%, transparent); }
 .textbook-program-basis.is-outline i { background: var(--tone-info); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone-info) 18%, transparent); }
 .textbook-program-basis.is-custom i { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+/* Тема из знаний модели не подтверждена источником — тот же тон, что у «источника нет». */
+.textbook-program-basis.is-model i { background: var(--tone-warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone-warning) 18%, transparent); }
 .textbook-editor-empty { min-height: 100%; display: grid; place-content: center; justify-items: center; gap: var(--space-3); padding: var(--space-8); color: var(--muted); text-align: center; }
 .textbook-editor-empty > svg { color: var(--accent); }
 .textbook-editor-empty h2 { margin: 0; color: var(--ink); font-size: var(--text-lg); }

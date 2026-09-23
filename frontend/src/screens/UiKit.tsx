@@ -36,6 +36,7 @@ import {
   LibraryMaterialPickerDialog,
   LessonEvidenceDialog,
   MachineMark,
+  MaterialHint,
   MetricList,
   OfflineNotice,
   PAGE_QUALITIES,
@@ -754,7 +755,11 @@ export function UiKit() {
           <SourceChip source={{ kind: "catalog", layer: 1 }} />
           <SourceChip source={{ kind: "import" }} />
           <SourceChip source={{ kind: "manual" }} />
+          <SourceChip source={{ kind: "model" }} />
           <SourceChip source={{ kind: "none" }} />
+        </div>
+        <div className="kit-row" style={{ marginTop: "var(--space-3)" }}>
+          <MaterialHint queries={["градиентный спуск", "обратное распространение ошибки"]} kind="lecture" />
         </div>
         <div className="kit-row" style={{ marginTop: "var(--space-3)" }}>
           <MachineMark origin="проход 2" onUndo={() => undefined} undoLabel="Снять привязку" />

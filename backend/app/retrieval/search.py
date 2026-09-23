@@ -17,6 +17,7 @@ from app.models import (
     Material,
     MaterialFragment,
     MaterialPage,
+    MaterialState,
     ProgramNode,
     Project,
     ProjectMaterial,
@@ -287,6 +288,17 @@ def resolve_scope(session: Session, command: RetrievalSearchWrite) -> ScopeFilte
         if len(existing) != len(set(command.material_ids)):
             raise ProjectNotFoundError("Один из выбранных материалов не найден")
         return ScopeFilter(command.material_ids, None, command.query)
+    if command.scope == RetrievalScope.LIBRARY:
+        query = select(Material.id).where(Material.status == MaterialState.READY)
+        if command.project_id is not None:
+            query = query.where(
+                Material.id.not_in(
+                    select(ProjectMaterial.material_id).where(
+                        ProjectMaterial.project_id == command.project_id
+                    )
+                )
+            )
+        return ScopeFilter(list(session.scalars(query)), None, command.query)
     assert command.project_id is not None
     if session.get(Project, command.project_id) is None:
         raise ProjectNotFoundError()

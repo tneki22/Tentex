@@ -50,7 +50,6 @@ import { GOAL_LEVELS, GoalLevelPicker, LibraryMaterialPickerDialog, ProgramTreeP
 import type { GoalLevelValue, TextbookProgramView } from "../components/domain";
 import {
   Button,
-  Card,
   ContextMenu,
   Dialog,
   Disclosure,
@@ -585,14 +584,15 @@ export function Program() {
           mode={textbookMode}
           selectedNodeId={selectedId}
           onSelectedNodeChange={setSelectedId}
-          aiContent={detail.project.template_key === "free"
-            ? <Card className="free-study-ai-placeholder"><h2>Составление по цели появится здесь</h2><p>ИИ предложит темы по вашей цели и, если вы попросите, учтёт выбранный учебник. Пока программу можно собрать вручную или импортировать из оглавления.</p></Card>
-            : <div className="textbook-program-ai-layout">
+          aiContent={<div className="textbook-program-ai-layout">
               <ProgramChatWorkspace
                 projectId={projectId}
                 program={detail.program}
                 execute={runTextbookCommand}
                 onMessagesChange={setAiChatMessages}
+                variant={detail.project.template_key === "free" ? "free" : "textbook"}
+                outlineSourceName={materials.materials.find((material) => material.outline.length > 0)?.display_name}
+                onSwitchToManual={() => setTextbookMode("manual")}
               />
               <ProgramTreePreview
                 program={detail.program}

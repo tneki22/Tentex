@@ -1,6 +1,6 @@
 import type { Schema } from "./preparation";
 import type { PageQuality } from "./materials";
-import { ProjectApiError, request } from "./projects";
+import { ProjectApiError, request, type MaterialKindHint } from "./projects";
 
 export type ChatMessageRole = "user" | "examiner" | "system" | "assistant";
 export type ChatStreamState = "complete" | "stopped" | "failed";
@@ -82,6 +82,9 @@ export interface ProgramChatOperationView {
   goal_role?: string | null;
   target_level?: string | null;
   outline_ref?: { material_id: string; outline_item_key: string } | null;
+  /** Подсказка поиска материала для темы без пункта оглавления (свободный проект). */
+  search_queries?: string[];
+  material_kind?: MaterialKindHint | null;
   children?: ProgramChatOperationView[];
 }
 

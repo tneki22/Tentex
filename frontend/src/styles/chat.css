@@ -91,6 +91,19 @@
   line-height: var(--leading-relaxed);
 }
 
+.program-chat-quick-starts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  max-width: 64ch;
+}
+
+.program-chat-unavailable {
+  color: var(--tone-warning);
+  font-size: var(--text-sm);
+}
+
 .chat-empty-context-note {
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--line);
@@ -1181,6 +1194,19 @@
   margin: var(--space-1) 0 0 26px;
   font-size: var(--text-xs);
   color: var(--muted);
+}
+
+.program-diff-op-details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  margin: var(--space-1) 0 0 26px;
+}
+
+.program-diff-op-role {
+  font-size: var(--text-xs);
+  color: var(--tone-info);
 }
 
 .program-diff-op-status {

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Ban, Check, ThumbsDown, ThumbsUp } from "lucide-react";
 import type { ProgramChatDiffPayload, ProgramChatOperationView } from "../../../api/chat";
+import { MaterialHint, SourceChip } from "../../../components/domain";
 import { Button, Checkbox } from "../../../components/ui";
 
 const NODE_TYPE_LABELS: Record<string, string> = {
@@ -77,6 +78,23 @@ function describeOperation(op: ProgramChatOperationView, titles: Record<string, 
   }
 }
 
+/** Роль темы и подсказка поиска у добавляемого узла: видно до принятия, что
+ * тема взята из знаний модели и где потом искать для неё материал. */
+function AddDetails({ op }: { op: ProgramChatOperationView }) {
+  if (op.op !== "add") return null;
+  const role = op.goal_role && op.goal_role !== "target" ? GOAL_ROLE_LABELS[op.goal_role] : null;
+  const fromModel = !op.outline_ref && op.node_type !== "section";
+  const hint = op.search_queries ?? [];
+  if (!role && !fromModel && hint.length === 0) return null;
+  return (
+    <div className="program-diff-op-details">
+      {role && <span className="program-diff-op-role">{role}</span>}
+      {fromModel && <SourceChip source={{ kind: "model" }} />}
+      <MaterialHint queries={hint} kind={op.material_kind} />
+    </div>
+  );
+}
+
 interface OperationRowProps {
   op: ProgramChatOperationView;
   index: number;
@@ -97,6 +115,7 @@ function OperationRow({ op, index, state, checked, onToggle, titles, depth }: Op
         label={describeOperation(op, titles)}
       />
       {op.rationale && <p className="program-diff-op-rationale">{op.rationale}</p>}
+      <AddDetails op={op} />
       {state === "applied" && <span className="program-diff-op-status">Применено</span>}
       {state === "conflicted" && (
         <span className="program-diff-op-status is-conflicted">Устарело — нужен новый диф</span>
@@ -107,6 +126,7 @@ function OperationRow({ op, index, state, checked, onToggle, titles, depth }: Op
             <li key={childIndex} className="program-diff-op is-nested" style={{ marginInlineStart: (depth + 1) * 16 }}>
               <span className="program-diff-op-nested-label">{describeOperation(child, titles)}</span>
               {child.rationale && <p className="program-diff-op-rationale">{child.rationale}</p>}
+              <AddDetails op={child} />
             </li>
           ))}
         </ul>
