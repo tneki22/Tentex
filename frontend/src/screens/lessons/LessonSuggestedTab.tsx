@@ -73,12 +73,13 @@ export function LessonSuggestedTab({
     });
   }
 
-  if (!lessonId) return <EmptyState title="Сначала создайте урок"><p>Предложения можно просмотреть сейчас, а вставить — после создания черновика.</p></EmptyState>;
   if (!evidence.loading && items.length === 0) return <EmptyState title="Для темы нет предложений"><p>Проход 2 ещё не нашёл актуального содержания для этой темы.</p></EmptyState>;
 
   return <div className="lesson-suggested">
     <div className="lesson-suggested-list">
-      <p>Тема куска: <strong>{topic.title}</strong></p>
+      {lessonId
+        ? <p>Тема куска: <strong>{topic.title}</strong></p>
+        : <p>Предложения можно просмотреть сейчас, а вставить — после создания урока.</p>}
       {items.map((item) => {
         const state = inclusion(item, blocks);
         return <div className="lesson-suggested-item" key={item.id}>
@@ -93,7 +94,7 @@ export function LessonSuggestedTab({
       error={evidence.error}
       busy={busy || decisionBusy}
       onDecision={(action, role) => void decide(action, role)}
-      onAddToLesson={evidence.evidence && inclusion(evidence.evidence, blocks) !== "exact"
+      onAddToLesson={lessonId && evidence.evidence && inclusion(evidence.evidence, blocks) !== "exact"
         ? addSelected
         : undefined}
     />

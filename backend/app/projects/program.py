@@ -25,6 +25,7 @@ from app.models import (
     ProgramNodeSourcePageRange,
     Project,
     ProjectActionLog,
+    ProjectMaterial,
     ProjectStatus,
     TargetOutcome,
     WizardDraft,
@@ -114,8 +115,15 @@ def read_program(session: Session, project_id: UUID) -> ProgramState:
     project = _require_project(session, project_id)
     nodes = _nodes(session, project_id)
     ranges_by_node: dict[UUID, list[ProgramNodeSourcePageRange]] = defaultdict(list)
+    # Диапазоны отключённого материала хранятся ради повторного подключения, но
+    # наружу не отдаются: «Быстрый урок» по ним получил бы 409 `lesson_no_ranges`.
     for source_range in session.scalars(
         select(ProgramNodeSourcePageRange)
+        .join(
+            ProjectMaterial,
+            (ProjectMaterial.project_id == ProgramNodeSourcePageRange.project_id)
+            & (ProjectMaterial.material_id == ProgramNodeSourcePageRange.material_id),
+        )
         .where(ProgramNodeSourcePageRange.project_id == project_id)
         .order_by(ProgramNodeSourcePageRange.page_from, ProgramNodeSourcePageRange.id)
     ):

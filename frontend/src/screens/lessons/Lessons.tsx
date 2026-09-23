@@ -211,7 +211,7 @@ export function Lessons() {
   else if (!active) {
     center = (
       <EmptyState title="Программа пока пуста" icon={<GraduationCap size={28} />}>
-        <p>Уроки собираются по темам программы. Сначала постройте программу из оглавления учебника.</p>
+        <p>Уроки собираются по темам программы. Составьте её в разделе «Программа»: из оглавления, вручную или с ИИ.</p>
         <Link className="primary-button" to={`/projects/${projectId}/program`}>Открыть программу</Link>
       </EmptyState>
     );

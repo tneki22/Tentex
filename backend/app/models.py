@@ -429,8 +429,7 @@ class ChatPayloadKind(StrEnum):
 
 class ChatMode(StrEnum):
     EXAM = "exam"
-    # Зарегистрирован в capabilities, но сервис отвечает chat_mode_unavailable
-    # до итерации 2 (AI-CHATS.md §21.4).
+    # Учебниковый и свободный RAG-чат по теме или проекту (docs/architecture/retrieval.md).
     STUDY = "study"
     # Чат построения программы учебника — TEXTBOOK_MODE.md §3, режим «С ИИ».
     # Сессия проектная (program_node_id может быть NULL), а не по одному вопросу.

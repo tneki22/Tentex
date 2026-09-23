@@ -105,7 +105,13 @@ def list_sessions(session: Session, project_id: UUID, node_id: UUID | None) -> l
     return list(
         session.scalars(
             select(ChatSession)
-            .where(ChatSession.project_id == project_id, ChatSession.program_node_id == node_id)
+            .where(
+                ChatSession.project_id == project_id,
+                ChatSession.program_node_id == node_id,
+                # Чат построения программы тоже живёт без темы, но это другой
+                # режим со своим списком — в ленту чата проекта он не попадает.
+                ChatSession.mode != ChatMode.PROGRAM,
+            )
             .order_by(ChatSession.updated_at.desc())
         )
     )
