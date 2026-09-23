@@ -10,9 +10,9 @@ const HOME = screenById("projects").path;
 export function App() {
   return (
     <Routes>
-      <Route path="/projects/:projectId/detached/:detachedId" element={<ProjectWorkspace detached />} />
       <Route element={<AppLayout />}>
         <Route path="/" element={<Navigate to={HOME} replace />} />
+        <Route path="/projects/:projectId/detached/:detachedId" element={<ProjectWorkspace detached />} />
         {Object.entries(SCREEN_VIEWS).map(([id, View]) => (
           <Route key={id} path={screenById(id).path} element={<View />} />
         ))}
