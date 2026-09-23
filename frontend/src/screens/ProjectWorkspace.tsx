@@ -61,6 +61,7 @@ import {
   QualityBadge,
   ReferenceAnswerBadge,
   referenceAnswerStatusLabel,
+  TopicMaterialFinder,
 } from "../components/domain";
 import {
   Button,
@@ -922,8 +923,10 @@ export function ProjectWorkspace() {
         ) : (
           <div className="workspace-empty-copy">
             <FileText size={26} />
-            <h2>Для этой темы материал ещё не привязан</h2>
-            <p>Подходящие места найдены ниже — привяжите нужное. Или откройте Материалы, чтобы выбрать фрагмент вручную.</p>
+            <h2>{freeProject ? "Нужно найти материал по теме" : "Для этой темы материал ещё не привязан"}</h2>
+            <p>{freeProject
+              ? "Для свободного изучения это обычное состояние. Привяжите подходящее из материалов проекта ниже — или подберите новый материал в Библиотеке."
+              : "Подходящие места найдены ниже — привяжите нужное. Или откройте Материалы, чтобы выбрать фрагмент вручную."}</p>
             <div className="workspace-source-tab-empty-actions">
               <Button
                 disabled={sourceSearching || !sourceQuery.trim()}
@@ -1001,6 +1004,16 @@ export function ProjectWorkspace() {
             </ul>
             </>
           ) : <p className="workspace-list-empty">Ничего не найдено.</p>
+        )}
+        {freeProject && !sourceBindingsLoading && topicSourceBindings.length === 0 && (
+          <section className="workspace-source-finder" aria-label="Где ещё искать материал">
+            <h3>Где ещё искать</h3>
+            <TopicMaterialFinder
+              projectId={projectId}
+              topic={selected}
+              onAttached={() => void runSourceSearch(selected.id, sourceQuery || selected.title)}
+            />
+          </section>
         )}
         {previewPlace && selected && (
           <SourcePreviewDialog
@@ -1172,7 +1185,7 @@ export function ProjectWorkspace() {
             </section>
           </div>
         ) : selected ? (<>
-        <header className="workspace-question-bar"><div className="workspace-question-heading"><h1>{selected.title}</h1></div><div className="workspace-question-actions">{!sourceBindingsLoading && sourceBindings.length === 0 && <div className={`workspace-material-notice ${textbook ? "is-textbook" : ""}`}><BookOpen size={15} /><span>{textbook ? "Материал ещё не привязан" : "Ответы ещё не добавлены"}</span></div>}{!textbook && <StudyTimer study={study} />}<div className="workspace-question-nav" aria-label="Переход между темами"><IconButton label="Предыдущая тема" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><ChevronLeft size={15} /></IconButton><span>{selectedIndex + 1} из {studyNodes.length}</span><IconButton label="Следующая тема" disabled={selectedIndex >= studyNodes.length - 1} onClick={() => selectRelative(1)}><ChevronRight size={15} /></IconButton></div><IconButton label="Разделить рабочую область" disabled={editorGroups.length >= 3} onClick={addPanel}><PanelsTopLeft size={15} /></IconButton></div></header>
+        <header className="workspace-question-bar"><div className="workspace-question-heading"><h1>{selected.title}</h1></div><div className="workspace-question-actions">{!sourceBindingsLoading && sourceBindings.length === 0 && <div className={`workspace-material-notice ${textbook ? "is-textbook" : ""}`}><BookOpen size={15} /><span>{freeProject ? "Нужно найти материал" : textbook ? "Материал ещё не привязан" : "Ответы ещё не добавлены"}</span></div>}{!textbook && <StudyTimer study={study} />}<div className="workspace-question-nav" aria-label="Переход между темами"><IconButton label="Предыдущая тема" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><ChevronLeft size={15} /></IconButton><span>{selectedIndex + 1} из {studyNodes.length}</span><IconButton label="Следующая тема" disabled={selectedIndex >= studyNodes.length - 1} onClick={() => selectRelative(1)}><ChevronRight size={15} /></IconButton></div><IconButton label="Разделить рабочую область" disabled={editorGroups.length >= 3} onClick={addPanel}><PanelsTopLeft size={15} /></IconButton></div></header>
         <div className="workspace-save-status">        {!textbook && <StudyQueue projectId={projectId} nodeId={selected.id} onSelect={id => void selectNode(id)} />}
 <div aria-live="polite">{saveError && <p className="inline-error" role="alert">{saveError}</p>}</div></div>
         <div className="workspace-editor-grid" ref={editorGridRef} style={{ gridTemplateColumns: editorColumns }}>

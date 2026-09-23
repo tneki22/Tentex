@@ -36,6 +36,7 @@ export { MachineMark } from "./MachineMark";
 export { MaterialHint, MATERIAL_KIND_LABELS } from "./MaterialHint";
 export { MaterialSuggestionList } from "./MaterialSuggestionList";
 export { TopicMaterialFinder } from "./TopicMaterialFinder";
+export { TopicMaterialFinderDialog } from "./TopicMaterialFinderDialog";
 export type { FinderTopic } from "./TopicMaterialFinder";
 export { LibraryMaterialPickerDialog } from "./LibraryMaterialPickerDialog";
 export { MetricList } from "./MetricList";

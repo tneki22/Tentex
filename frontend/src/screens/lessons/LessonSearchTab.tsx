@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Plus, Search } from "lucide-react";
-import type { LessonBlockCommand } from "../../api/lessons";
+import type { FoundPage, LessonBlockCommand } from "../../api/lessons";
 import { searchProjectMaterials } from "../../api/search";
 import { QualityBadge } from "../../components/domain";
-import { Button, ErrorState, LoadingState, StatusBadge } from "../../components/ui";
+import { Button, Checkbox, ErrorState, LoadingState, StatusBadge } from "../../components/ui";
 import { renderSearchHighlights } from "../workspace/searchHighlights";
 import { toSourcePlaces, type SourcePlace } from "../workspace/sourcePlaces";
 import { errorText } from "./lessonTree";
@@ -81,16 +81,37 @@ interface LessonSearchTabProps {
   lessonPages: Set<string>;
   onOpenPlace(target: LessonPickerTarget): void;
   onAdd(command: Omit<LessonBlockCommand, "expected_revision">): void;
+  /** Отмеченные страницы — новым уроком темы или в конец открытого урока. */
+  onUseFound?(pages: FoundPage[]): Promise<boolean>;
 }
 
 /**
  * Найденные места темы. Строка ведёт не к привязке, а на свою страницу в
  * диалоге выбора: по одному абзацу выдачи нельзя решить, тот ли это кусок.
  */
-export function LessonSearchTab({ search, busy, lessonId, lessonPages, onOpenPlace, onAdd }: LessonSearchTabProps) {
+export function LessonSearchTab({ search, busy, lessonId, lessonPages, onOpenPlace, onAdd, onUseFound }: LessonSearchTabProps) {
+  const [marked, setMarked] = useState<string[]>([]);
+
+  /* Новая выдача — новый выбор: отметки старых мест к ней не относятся. */
+  useEffect(() => { setMarked([]); }, [search.places]);
+
   function submit(event: FormEvent) {
     event.preventDefault();
     search.run(search.query);
+  }
+
+  function toggle(key: string, checked: boolean) {
+    setMarked((current) => checked ? [...current, key] : current.filter((item) => item !== key));
+  }
+
+  async function applyMarked() {
+    if (!onUseFound) return;
+    const byKey = new Map(search.places.map((place) => [place.key, place]));
+    const pages = marked.flatMap((key) => {
+      const place = byKey.get(key);
+      return place ? [{ material_id: place.materialId, page: place.pageNumber }] : [];
+    });
+    if (await onUseFound(pages)) setMarked([]);
   }
 
   return (
@@ -116,6 +137,9 @@ export function LessonSearchTab({ search, busy, lessonId, lessonPages, onOpenPla
       {search.searched && search.places.length === 0 && !search.loading && (
         <p className="lessons-panel-hint">Ничего не найдено.</p>
       )}
+      {search.places.length > 0 && onUseFound && !lessonId && (
+        <p className="lessons-panel-hint">Отметьте подходящие страницы — из них соберётся урок темы.</p>
+      )}
       {search.places.length > 0 && (
         <ul className="lessons-search-results">
           {search.places.map((place) => (
@@ -129,6 +153,14 @@ export function LessonSearchTab({ search, busy, lessonId, lessonPages, onOpenPla
                 <small>{place.materialName} · стр. {place.pageNumber} · {place.fragmentIds.length} совпад.</small>
               </button>
               <div className="lessons-search-result-actions">
+                {onUseFound && (
+                  <Checkbox
+                    label="Отметить"
+                    checked={marked.includes(place.key)}
+                    disabled={busy}
+                    onCheckedChange={(checked) => toggle(place.key, checked)}
+                  />
+                )}
                 <QualityBadge quality={place.quality} />
                 {lessonPages.has(`${place.materialId}#${place.pageNumber}`) && <StatusBadge tone="info">в уроке</StatusBadge>}
                 <Button
@@ -148,6 +180,14 @@ export function LessonSearchTab({ search, busy, lessonId, lessonPages, onOpenPla
             </li>
           ))}
         </ul>
+      )}
+      {marked.length > 0 && onUseFound && (
+        <div className="lessons-search-selection" role="region" aria-label="Отмеченные страницы">
+          <span>Отмечено страниц: {marked.length}</span>
+          <Button disabled={busy} onClick={() => void applyMarked()}>
+            {lessonId ? "Добавить отмеченное в урок" : "Создать урок из отмеченного"}
+          </Button>
+        </div>
       )}
     </div>
   );

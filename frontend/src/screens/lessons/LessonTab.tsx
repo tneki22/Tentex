@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import { CheckCircle2, GraduationCap, PencilLine, RotateCcw, Zap } from "lucide-react";
+import { CheckCircle2, GraduationCap, PencilLine, RotateCcw, Search, Zap } from "lucide-react";
 import {
   createQuickLesson,
   LESSON_STATUS_LABELS,
@@ -11,7 +11,7 @@ import {
 } from "../../api/lessons";
 import type { ProgramNodeRead } from "../../api/projects";
 import { LessonDocument } from "../../components/domain";
-import { Button, EmptyState, ErrorState, LoadingState, SegmentedTabs, Select, StatusBadge, Tooltip } from "../../components/ui";
+import { Button, EmptyState, ErrorState, LoadingState, SegmentedTabs, Select, StatusBadge } from "../../components/ui";
 import { useLesson, useLessonsOverview } from "../../hooks/useLessons";
 import { useLessonViewMode, type LessonViewMode } from "../../hooks/useLessonViewMode";
 
@@ -95,11 +95,13 @@ export function LessonTab({ projectId, node, preferredLessonId }: LessonTabProps
     return (
       <div className="lesson-tab is-empty">
         <EmptyState title="Для этой темы ещё нет урока" icon={<GraduationCap size={28} />}>
-          <p>Быстрый урок соберёт страницы темы из оглавления без модели. Потом его можно дополнить.</p>
+          <p>{hasRange
+            ? "Быстрый урок соберёт страницы темы из оглавления без модели. Потом его можно дополнить."
+            : "У темы нет страниц из оглавления. Найдите её в материалах проекта и отметьте подходящие страницы — из них соберётся урок."}</p>
           <div className="lesson-tab-empty-actions">
             {hasRange
               ? <Button onClick={() => void quickLesson()} disabled={creating}><Zap size={15} />{creating ? "Создаём…" : "Быстрый урок"}</Button>
-              : <Tooltip label="У темы нет страниц из оглавления — соберите урок вручную"><span><Button disabled><Zap size={15} />Быстрый урок</Button></span></Tooltip>}
+              : <Link className="primary-button" to={`${sectionLink}&panel=search`}><Search size={15} />Найти в материалах</Link>}
             <Link className="secondary-button" to={sectionLink}>Собрать вручную</Link>
           </div>
           {createError && <p className="inline-error" role="alert">{createError}</p>}

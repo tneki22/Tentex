@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { ArrowLeft, GraduationCap, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
-import { createManualLesson, createQuickLesson, editLessonBlocks, getLesson, type LessonBlockCommand } from "../../api/lessons";
+import { createLessonFromSearch, createManualLesson, createQuickLesson, editLessonBlocks, getLesson, type FoundPage, type LessonBlockCommand } from "../../api/lessons";
 import { getProject, ProjectApiError, type ProjectDetail } from "../../api/projects";
 import { ProjectNav } from "../../components/domain";
 import { Button, EmptyState, ErrorState, IconButton, LoadingState, PanelResizeHandle } from "../../components/ui";
@@ -9,7 +9,7 @@ import { useLesson, useLessonsOverview } from "../../hooks/useLessons";
 import { buildProgramTree, flattenProgramTree } from "../programTree";
 import { LessonBulkTable } from "./LessonBulkTable";
 import { insertPlacement, INSERT_AT_END, type LessonInsertPoint } from "./lessonBlocks";
-import { LessonMaterialPanel } from "./LessonMaterialPanel";
+import { LessonMaterialPanel, type PanelTab } from "./LessonMaterialPanel";
 import { LessonSectionOverview } from "./LessonSectionOverview";
 import { LessonSourcesDialog } from "./LessonSourcesDialog";
 import { LessonsTree } from "./LessonsTree";
@@ -73,6 +73,8 @@ export function Lessons() {
 
   const topicParam = searchParams.get("topic");
   const lessonParam = searchParams.get("lesson");
+  const panelParam = searchParams.get("panel") === "search" ? "search" : undefined;
+  const [panelTabRequest, setPanelTabRequest] = useState<{ tab: PanelTab; nonce: number } | null>(null);
   const active = flat.find((node) => node.id === topicParam) ?? flat.find((node) => STUDY_TYPES.has(node.node_type)) ?? flat[0] ?? null;
   const activeLessonId = lessonParam ?? lessons.find((item) => item.program_node_ids.includes(active?.id ?? "") && item.status !== "archived")?.id ?? null;
   const panelLesson = useLesson(projectId, activeLessonId);
@@ -89,6 +91,12 @@ export function Lessons() {
   }, [panelLesson.data]);
 
   useEffect(() => { panelLesson.refresh(); }, [rangesKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Ссылка «Искать в материалах проекта» ведёт в поиск панели — скрытую панель
+     она открывает, но сохранённую раскладку не трогает. */
+  useEffect(() => {
+    if (panelParam) setLayout((current) => (current.panelOpen ? current : { ...current, panelOpen: true }));
+  }, [panelParam]);
 
   const updateLayout = useCallback((change: (current: LessonsLayout) => LessonsLayout) => {
     setLayout((current) => {
@@ -159,6 +167,28 @@ export function Lessons() {
       return true;
     } catch (caught) {
       setActionError(errorText(caught, "Не удалось добавить источник"));
+      return false;
+    } finally { setBusy(false); }
+  }
+
+  /** «Урок из найденного»: отмеченные в поиске страницы — новым черновиком или в конец урока. */
+  async function addFound(pages: FoundPage[]): Promise<boolean> {
+    if (!active || pages.length === 0) return false;
+    setBusy(true);
+    setActionError("");
+    try {
+      const current = activeLessonId ? await getLesson(projectId, activeLessonId) : null;
+      const result = await createLessonFromSearch(projectId, {
+        program_node_id: active.id,
+        pages,
+        ...(current ? { lesson_id: current.id, expected_revision: current.revision } : {}),
+      });
+      overview.refresh();
+      setRangesKey((value) => value + 1);
+      navigateTo(active.id, result.lesson.id);
+      return true;
+    } catch (caught) {
+      setActionError(errorText(caught, "Не удалось собрать урок из найденного"));
       return false;
     } finally { setBusy(false); }
   }
@@ -251,6 +281,10 @@ export function Lessons() {
         onSelectBlock={chooseBlock}
         panelToggle={panelToggle}
         actionError={actionError}
+        onFindInMaterials={() => {
+          updateLayout((current) => (current.panelOpen ? current : { ...current, panelOpen: true }));
+          setPanelTabRequest((current) => ({ tab: "search", nonce: (current?.nonce ?? 0) + 1 }));
+        }}
       />
     );
     isTopicPane = true;
@@ -322,6 +356,9 @@ export function Lessons() {
               insertPoint={insertPoint}
               onInsertPointChange={chooseInsertPoint}
               onAdd={addFromPanel}
+              onUseFound={addFound}
+              initialTab={panelParam}
+              tabRequest={panelTabRequest}
             />
           </aside>
         </>

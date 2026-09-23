@@ -7752,6 +7752,9 @@ button.wizard-back-projects {
 .topic-materials-row .disclosure-trigger { width: 100%; padding: var(--space-3) var(--space-4); color: var(--ink-soft); text-align: left; }
 .topic-materials-row .disclosure-inner { padding: 0 var(--space-4) var(--space-4); }
 .program-materials-chip { font-variant-numeric: tabular-nums; }
+/* Свободный проект: под поиском в «Источнике» — где ещё взять материал темы. */
+.workspace-source-finder { display: grid; gap: var(--space-3); margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--line); }
+.workspace-source-finder h3 { margin: 0; font-size: var(--text-md); }
 .textbook-program-basis { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-soft); font-size: var(--text-xs); }
 .textbook-program-basis i { width: var(--space-2); height: var(--space-2); flex: none; border-radius: var(--radius-pill); background: var(--muted); box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 16%, transparent); }
 .textbook-program-basis.is-outline i { background: var(--tone-info); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone-info) 18%, transparent); }

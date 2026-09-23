@@ -156,6 +156,21 @@ export const createManualLesson = (projectId: string, nodeId: string): Promise<L
     method: "POST", body: JSON.stringify({ program_node_id: nodeId }),
   });
 
+/** Страница, отмеченная в поиске, — кусок «Урока из найденного». */
+export interface FoundPage {
+  material_id: string;
+  page: number;
+}
+
+/** Отмеченные страницы — новым черновиком или в конец открытого урока. */
+export const createLessonFromSearch = (
+  projectId: string,
+  command: { program_node_id: string; pages: FoundPage[]; lesson_id?: string; expected_revision?: number },
+): Promise<LessonChangeResult> => request(`${lessonsPath(projectId)}/from-search`, {
+  method: "POST",
+  body: JSON.stringify(command),
+});
+
 export type LessonBlockOperation =
   | "add_note" | "add_page" | "add_outline" | "add_fragments" | "add_block" | "add_link"
   | "add_region"

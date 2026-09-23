@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from app import db
 from app.config import BACKEND_ROOT, settings
-from app.lessons import editing, service
+from app.lessons import editing, from_search, service
+from app.lessons.from_search import FoundPage, LessonFromSearchWrite
 from app.lessons.schemas import (
     LessonBlockWrite,
     LessonManualWrite,
@@ -41,7 +42,7 @@ from app.models import (
     SourceRole,
     utc_now,
 )
-from app.projects.errors import ProjectConflictError
+from app.projects.errors import ProjectConflictError, ProjectDomainError
 from app.projects.program import undo_last_project_action
 from tests.conftest import make_exam_project, make_textbook_project
 
@@ -542,3 +543,72 @@ def test_alembic_check_is_clean_on_fresh_database(tmp_path, monkeypatch):
     command.upgrade(config, "head")
     command.check(config)
     engine.dispose()
+
+
+def test_lesson_from_search_creates_draft_with_pages_in_order_and_one_undo(session, project):
+    book = Book(session, project, "Статья")
+    book.page(3, "h:Свёртка", "p:ядро скользит по изображению")
+    book.page(7, "h:Пулинг", "p:уменьшает карту признаков")
+    topic = add_node(session, project, "Операция свёртки", 0)
+
+    result = from_search.create_lesson_from_search(session, project.id, LessonFromSearchWrite(
+        program_node_id=topic.id,
+        pages=[
+            FoundPage(material_id=book.material.id, page=7),
+            FoundPage(material_id=book.material.id, page=3),
+            FoundPage(material_id=book.material.id, page=7),
+        ],
+    ))
+
+    lesson = result.lesson
+    assert lesson.status == LessonStatus.DRAFT
+    assert [block.refs[0].page_from for block in lesson.blocks] == [7, 3]
+    bindings = list(session.scalars(select(Binding).where(Binding.program_node_id == topic.id)))
+    assert bindings and {item.status for item in bindings} == {BindingStatus.MANUAL}
+
+    assert result.latest_undoable_action is not None
+    project_id, lesson_id = project.id, lesson.id
+    sequence = result.latest_undoable_action.sequence
+    session.rollback()
+    undo_last_project_action(session, project_id, sequence)
+    assert session.get(Lesson, lesson_id) is None
+    assert list(session.scalars(select(Binding).where(Binding.project_id == project_id))) == []
+
+
+def test_lesson_from_search_appends_to_existing_lesson(session, project):
+    book = Book(session, project, "Статья")
+    book.page(2, "h:Введение", "p:о чём урок")
+    topic = add_node(session, project, "Тема", 0)
+    lesson = service.create_manual_lesson(
+        session, project.id, LessonManualWrite(program_node_id=topic.id)
+    ).lesson
+    note = editing.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
+        expected_revision=1, operation="add_note",
+    )).lesson
+
+    appended = from_search.create_lesson_from_search(session, project.id, LessonFromSearchWrite(
+        program_node_id=topic.id, lesson_id=lesson.id, expected_revision=note.revision,
+        pages=[FoundPage(material_id=book.material.id, page=2)],
+    )).lesson
+
+    kinds = [block.kind for block in appended.blocks]
+    assert kinds == [LessonBlockKind.NOTE, LessonBlockKind.SOURCE]
+    assert appended.revision == note.revision + 1
+    with pytest.raises(ProjectConflictError):
+        from_search.create_lesson_from_search(session, project.id, LessonFromSearchWrite(
+            program_node_id=topic.id, lesson_id=lesson.id, expected_revision=note.revision,
+            pages=[FoundPage(material_id=book.material.id, page=2)],
+        ))
+
+
+def test_lesson_from_search_rejects_material_outside_project(session, project):
+    topic = add_node(session, project, "Тема", 0)
+    other = make_lessons_project(session)
+    stranger = Book(session, other, "Чужая книга")
+    stranger.page(1, "h:Глава", "p:текст")
+
+    with pytest.raises(ProjectDomainError):
+        from_search.create_lesson_from_search(session, project.id, LessonFromSearchWrite(
+            program_node_id=topic.id, pages=[FoundPage(material_id=stranger.material.id, page=1)],
+        ))
+    assert list(session.scalars(select(Lesson).where(Lesson.project_id == project.id))) == []

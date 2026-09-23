@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.lessons import bulk, editing, progress, service
+from app.lessons import bulk, editing, from_search, progress, service
 from app.lessons.schemas import (
     LessonBlockWrite,
     LessonBulkResult,
@@ -53,6 +53,14 @@ def create_manual_lesson(
     project_id: UUID, command: LessonManualWrite, session: SessionDependency
 ) -> LessonChangeResult:
     return service.create_manual_lesson(session, project_id, command)
+
+
+@router.post("/from-search", response_model=LessonChangeResult, status_code=201)
+def create_lesson_from_search(
+    project_id: UUID, command: from_search.LessonFromSearchWrite, session: SessionDependency
+) -> LessonChangeResult:
+    """Страницы, отмеченные в поиске, — новым черновиком или в конец урока."""
+    return from_search.create_lesson_from_search(session, project_id, command)
 
 
 @router.post("/bulk", response_model=LessonBulkResult, status_code=201)

@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "rea
 import { Link } from "react-router";
 import {
   AlertTriangle, Archive, ArrowDown, ArrowRightLeft, ArrowUp, CheckCircle2, ChevronDown, Combine, Dumbbell, ExternalLink,
-  FilePlus2, Image, Link2, Pencil, Plus, RotateCcw, Scissors, Sparkles, SquareDashed, Trash2, Undo2, X,
+  FilePlus2, Image, LibraryBig, Link2, Pencil, Plus, RotateCcw, Scissors, Search, Sparkles, SquareDashed, Trash2, Undo2, X,
 } from "lucide-react";
 import {
   confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, unbindLessonBindings,
@@ -10,7 +10,7 @@ import {
   type LessonChangeResult, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
 } from "../../api/lessons";
 import { undoProjectAction } from "../../api/projects";
-import { LessonDocument } from "../../components/domain";
+import { LessonDocument, TopicMaterialFinderDialog } from "../../components/domain";
 import type { LessonSplitPoint } from "../../components/domain/lesson/LessonDocument";
 import {
   Button, ConfirmDialog, Dialog, EmptyState, ErrorState, IconButton, LoadingState, Menu, SegmentedTabs, Select,
@@ -45,6 +45,8 @@ interface LessonTopicPaneProps {
   /** Кнопка свёртки правой панели — встраивается в тулбар урока, а не висит отдельной пустой строкой. */
   panelToggle: ReactNode;
   actionError: string;
+  /** Открыть вкладку «Поиск» правой панели: найденные страницы становятся уроком. */
+  onFindInMaterials(): void;
 }
 
 const STATUS_TONE: Record<LessonStatus, "warning" | "success" | "neutral"> = {
@@ -92,7 +94,7 @@ function ToolButton({ icon, label, hint, variant = "ghost", disabled, destructiv
 }
 
 /** Центр для одной темы: формулировка, уроки темы и открытый урок (записка §2, бриф §12). */
-export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onChanged, refreshKey, selectedBlockId, onSelectBlock, panelToggle, actionError }: LessonTopicPaneProps) {
+export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onChanged, refreshKey, selectedBlockId, onSelectBlock, panelToggle, actionError, onFindInMaterials }: LessonTopicPaneProps) {
   const topicLessons = lessons.filter((lesson) => lesson.program_node_ids.includes(topic.id));
   const defaultLesson = topicLessons.find((lesson) => lesson.status !== "archived") ?? topicLessons[0];
   const openId = topicLessons.some((lesson) => lesson.id === lessonId) ? lessonId : defaultLesson?.id ?? null;
@@ -112,6 +114,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
   const revisionRef = useRef(1);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const hasRange = topic.source_page_ranges.length > 0;
+  const [finderOpen, setFinderOpen] = useState(false);
   const data = lesson.data && lesson.data.id === openId ? lesson.data : null;
   const selected = data?.blocks.find((block) => block.id === selectedBlockId) ?? null;
   const selectedIndex = selected ? data!.blocks.indexOf(selected) : -1;
@@ -313,6 +316,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
       items={[
         { label: hasRange ? "Быстрый урок" : "Быстрый урок — у темы нет страниц из оглавления", icon: <FilePlus2 size={14} />, disabled: !hasRange, onSelect: onQuickLesson },
         { label: "Из источников…", icon: <ArrowRightLeft size={14} />, disabled: !hasRange, onSelect: onFromSources },
+        { label: "Из найденного в материалах…", icon: <Search size={14} />, onSelect: onFindInMaterials },
         { label: "Вручную", icon: <Pencil size={14} />, onSelect: onManual },
         { label: "Собрать с ИИ — этап 7", icon: <Sparkles size={14} />, disabled: true, onSelect: () => undefined },
       ]}
@@ -361,13 +365,29 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
         </ul>
       )}
 
-      {topicLessons.length === 0 && (
+      {topicLessons.length === 0 && (hasRange ? (
         <EmptyState title="У темы ещё нет урока">
-          <p>{hasRange ? "Быстрый урок соберёт страницы темы из оглавления без модели." : "У темы нет страниц из оглавления — соберите урок вручную."}</p>
+          <p>Быстрый урок соберёт страницы темы из оглавления без модели.</p>
           <Button variant="secondary" disabled={busy} onClick={onManual}><Pencil size={15} />Собрать вручную</Button>
-          {hasRange && <div className="lessons-topic-actions"><Button onClick={onQuickLesson} disabled={busy}><FilePlus2 size={15} />Быстрый урок</Button></div>}
+          <div className="lessons-topic-actions"><Button onClick={onQuickLesson} disabled={busy}><FilePlus2 size={15} />Быстрый урок</Button></div>
         </EmptyState>
-      )}
+      ) : (
+        <EmptyState title="У темы пока нет материала из оглавления">
+          <p>Найдите тему в материалах проекта и отметьте подходящие страницы — из них соберётся урок. Если в проекте нужного нет, подберите материал в Библиотеке.</p>
+          <div className="lessons-topic-actions">
+            <Button disabled={busy} onClick={onFindInMaterials}><Search size={15} />Найти в материалах проекта</Button>
+            <Button variant="secondary" disabled={busy} onClick={() => setFinderOpen(true)}><LibraryBig size={15} />Подобрать материал</Button>
+            <Button variant="ghost" disabled={busy} onClick={onManual}><Pencil size={15} />Собрать вручную</Button>
+          </div>
+        </EmptyState>
+      ))}
+      <TopicMaterialFinderDialog
+        open={finderOpen}
+        onOpenChange={setFinderOpen}
+        projectId={projectId}
+        topic={topic}
+        onAttached={onChanged}
+      />
 
       {openId && (
         <section className="lessons-lesson" aria-label="Открытый урок">

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Globe, GraduationCap, UploadCloud } from "lucide-react";
 import { Link } from "react-router";
-import { attachLibraryMaterial } from "../../api/materials";
+import { attachLibraryMaterial, listMaterials } from "../../api/materials";
 import { suggestMaterialsForNodes, type MaterialSuggestion, type MaterialSuggestions } from "../../api/materialSuggestions";
 import type { MaterialKindHint } from "../../api/projects";
 import { Button } from "../ui";
@@ -18,8 +18,8 @@ export interface FinderTopic {
 interface TopicMaterialFinderProps {
   projectId: string;
   topic: FinderTopic;
-  /** Первый подключённый материал проекта становится основным. */
-  hasProjectMaterials: boolean;
+  /** Первый подключённый материал проекта становится основным; не известно — спросим сервер. */
+  hasProjectMaterials?: boolean;
   onAttached?: (materialId: string) => void;
   /** Поиск в интернете по явной кнопке; не передан — кнопки нет. */
   onFindOnline?: () => void;
@@ -57,9 +57,10 @@ export function TopicMaterialFinder({
     setBusyId(item.material_id);
     setAttachError("");
     try {
+      const hasMaterials = hasProjectMaterials ?? (await listMaterials(projectId)).length > 0;
       await attachLibraryMaterial(item.material_id, {
         project_id: projectId,
-        source_role: hasProjectMaterials || attached.size > 0 ? "additional" : "main",
+        source_role: hasMaterials || attached.size > 0 ? "additional" : "main",
         purposes: ["study_source"],
       });
       setAttached((current) => new Set(current).add(item.material_id));
@@ -71,7 +72,7 @@ export function TopicMaterialFinder({
     }
   }
 
-  const lessonsLink = `/projects/${projectId}/lessons?topic=${encodeURIComponent(topic.id)}`;
+  const lessonsLink = `/projects/${projectId}/lessons?topic=${encodeURIComponent(topic.id)}&panel=search`;
 
   return (
     <div className="topic-material-finder">

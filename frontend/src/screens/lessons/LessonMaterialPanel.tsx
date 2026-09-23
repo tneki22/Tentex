@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getTopicSources, type LessonBlockCommand, type LessonBlockRead, type LessonSourceRangeRead } from "../../api/lessons";
+import { getTopicSources, type FoundPage, type LessonBlockCommand, type LessonBlockRead, type LessonSourceRangeRead } from "../../api/lessons";
 import { listMaterials, type MaterialRead } from "../../api/materials";
 import { EmptyState, ErrorState, LoadingState, SegmentedTabs, Select } from "../../components/ui";
 import type { ProgramTreeNode } from "../programTree";
@@ -11,7 +11,7 @@ import { LessonSourcePicker, type LessonPickerTarget } from "./LessonSourcePicke
 import { LessonSuggestedTab } from "./LessonSuggestedTab";
 import { errorText } from "./lessonTree";
 
-type PanelTab = "outline" | "pages" | "search" | "suggested";
+export type PanelTab = "outline" | "pages" | "search" | "suggested";
 
 const PANEL_TABS: Array<{ value: PanelTab; label: string }> = [
   { value: "search", label: "Поиск" },
@@ -34,14 +34,23 @@ interface LessonMaterialPanelProps {
   insertPoint: LessonInsertPoint;
   onInsertPointChange(point: LessonInsertPoint): void;
   onAdd(command: Omit<LessonBlockCommand, "expected_revision">): Promise<boolean>;
+  onUseFound(pages: FoundPage[]): Promise<boolean>;
+  /** Вкладка при открытии: ссылка «Искать в материалах проекта» ведёт сразу в поиск. */
+  initialTab?: PanelTab;
+  /** Запрос вкладки из центральной панели; новое значение `nonce` переключает её снова. */
+  tabRequest?: { tab: PanelTab; nonce: number } | null;
 }
 
 /** Правая панель «Материал для урока»: четыре вкладки (записка §2). */
 export function LessonMaterialPanel({
   projectId, topic, busy, refreshKey, onCreateFromRange, lessonId, lessonPages,
-  blocks, insertPoint, onInsertPointChange, onAdd,
+  blocks, insertPoint, onInsertPointChange, onAdd, onUseFound, initialTab = "suggested", tabRequest,
 }: LessonMaterialPanelProps) {
-  const [tab, setTab] = useState<PanelTab>("suggested");
+  const [tab, setTab] = useState<PanelTab>(initialTab);
+
+  useEffect(() => {
+    if (tabRequest) setTab(tabRequest.tab);
+  }, [tabRequest]);
   const [picker, setPicker] = useState<LessonPickerTarget | null>(null);
   const materials = useProjectMaterials(projectId);
   const studyTopic = topic && topic.node_type !== "section" ? topic : null;
@@ -77,6 +86,7 @@ export function LessonMaterialPanel({
                 lessonPages={lessonPages}
                 onOpenPlace={setPicker}
                 onAdd={(command) => void onAdd(command)}
+                onUseFound={studyTopic ? onUseFound : undefined}
               />
             )}
             {tab === "pages" && (
