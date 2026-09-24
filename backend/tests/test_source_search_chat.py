@@ -430,3 +430,11 @@ def test_stopped_search_leaves_a_mark_in_the_feed(
     assert (message.role, message.text, message.stream_state.value) == (
         ChatMessageRole.ASSISTANT, "Поиск остановлен.", "stopped",
     )
+
+
+def test_topic_numbers_accept_titles_from_the_model() -> None:
+    choice = source_search_chat.PickedSource.model_validate({
+        "id": 1, "kind": "lecture", "why": "", "gist": "",
+        "topics": ["4.1 Виртуальные адреса", " 3 ", "без номера", 7],
+    })
+    assert choice.topics == ["4.1", "3", "7"]
