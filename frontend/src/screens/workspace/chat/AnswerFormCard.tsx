@@ -102,10 +102,11 @@ export function AnswerFormCard(props: AnswerFormCardProps) {
           }}
         />
         <Button variant="ghost" onClick={onCancel} disabled={busy}>Отменить</Button>
-        <Button onClick={onSubmit} disabled={busy || !value.trim()}>
-          <Send size={14} />{busy ? "Отправляем…" : "Сдать ответ"}
+        <Button onClick={onSubmit} disabled={busy || !value.trim()} aria-busy={busy}>
+          {busy ? <span className="chat-send-spinner" aria-hidden="true" /> : <Send size={14} />}{busy ? "Проверяем ответ…" : "Сдать ответ"}
         </Button>
       </div>
+      {busy && <p className="chat-answer-progress" role="status">Сохраняем ответ и ждём разбор модели. Это может занять некоторое время.</p>}
     </article>
   );
 }

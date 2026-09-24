@@ -48,7 +48,7 @@ export function ExaminerControl({ session, error, onChange }: ExaminerControlPro
       title="Экзаменатор"
       className="chat-examiner-popover"
       trigger={
-        <button type="button" className="chat-examiner-control-trigger">
+        <button type="button" className="chat-examiner-control-trigger" aria-label="Настройки экзаменатора">
           <GraduationCap size={14} aria-hidden="true" />
           <span className="chat-examiner-control-trigger-full">
             {personaLabel(session.persona)} · {strictnessLabel(session.strictness).toLowerCase()}

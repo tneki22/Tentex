@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Disclosure, Popover, Switch } from "../../../components/ui";
 
 const CONTEXT_OPEN_KEY = "tentex:chat-context-open";
@@ -35,17 +35,19 @@ interface ContextChipsProps {
   chips: ChipDef[] | null;
   contextFlags: Record<string, boolean>;
   onToggleFlag: (key: string, value: boolean) => void;
+  controls?: ReactNode;
+  label?: string;
 }
 
 /** Тихая строка чипов над композером — заменяет прежнюю текстовую «В запрос уходит: ...». */
-export function ContextChips({ chips, contextFlags, onToggleFlag }: ContextChipsProps) {
+export function ContextChips({ chips, contextFlags, onToggleFlag, controls, label = "Контекст" }: ContextChipsProps) {
   const [open, setOpen] = useState(() => window.localStorage.getItem(CONTEXT_OPEN_KEY) === "1");
   if (!chips) return null;
   const includedCount = chips.filter((chip) => chip.included).length;
 
   return (
     <Disclosure
-      summary={`Контекст · ${includedCount}`}
+      summary={`${label} · ${includedCount}`}
       className="chat-context-disclosure"
       open={open}
       onOpenChange={(next) => {
@@ -53,6 +55,7 @@ export function ContextChips({ chips, contextFlags, onToggleFlag }: ContextChips
         window.localStorage.setItem(CONTEXT_OPEN_KEY, next ? "1" : "0");
       }}
     >
+      {controls}
       <div className="chat-context-chips" role="list" aria-label="Состав запроса">
         {chips.map((chip) => (
           <Popover

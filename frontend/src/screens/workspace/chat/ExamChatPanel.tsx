@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { BookOpenCheck, FileQuestion, History, ListChecks, MessageSquare, MessageSquareText, ScrollText, Search } from "lucide-react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { BookOpenCheck, FileQuestion, History, ListChecks, MessageSquare, MessageSquareText, ScrollText, Search, Sparkles } from "lucide-react";
 import { cancelBackgroundJob } from "../../../api/backgroundJobs";
 import type {
   ChatContextFlags,
@@ -132,6 +132,10 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
     projectChat ? "project" : studyOnly ? "topic_project" : "linked_topic",
   );
   const [knowledgePolicy, setKnowledgePolicy] = useState<ChatKnowledgePolicy>("sources_only");
+  const [chatZoom, setChatZoom] = useState(() => {
+    const saved = Number(window.localStorage.getItem("tentex:chat-zoom"));
+    return Number.isFinite(saved) && saved >= 0.8 && saved <= 1.2 ? saved : 1;
+  });
   const [exhaustiveJobId, setExhaustiveJobId] = useState<string | null>(null);
   const [exhaustiveError, setExhaustiveError] = useState("");
   const completedExhaustiveJob = useRef<string | null>(null);
@@ -237,7 +241,7 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
   const isEmpty = chat.messages.length === 0 && !chat.preparing && !answering && !searching;
 
   return (
-    <div className="exam-chat-panel">
+    <div className="exam-chat-panel" style={{ "--chat-reading-zoom": chatZoom } as CSSProperties}>
       <ChatHeader
         sessions={chat.sessions}
         activeSessionId={chat.activeSessionId}
@@ -246,7 +250,9 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
         onSelectSession={chat.setActiveSessionId}
         onNewChat={() => void chat.startNewChat()}
         onSettingsChange={chat.updateSettings}
-        showModelControl={!studyOnly}
+        showResponseControl
+        zoom={chatZoom}
+        onZoomChange={(zoom) => { setChatZoom(zoom); window.localStorage.setItem("tentex:chat-zoom", String(zoom)); }}
       />
 
       {chat.detailLoading && <LoadingState label="Загружаем переписку" />}
@@ -288,8 +294,15 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
             />
           )}
 
-          {chat.session.mode === "study" && (
-            <div className="chat-retrieval-controls">
+          <ContextChips
+            label="Контекст и поиск"
+            chips={buildExamContextChips(chat.contextPreview)}
+            contextFlags={chat.session.context_flags}
+            onToggleFlag={(key, value) => void chat.updateSettings({
+              context_flags: { [key]: value } as Partial<ChatContextFlags>,
+            })}
+            controls={chat.session.mode === "study" ? <div className="chat-retrieval-controls">
+              <span className="chat-retrieval-label">Где искать</span>
               <Select
                 ariaLabel="Область поиска"
                 value={retrievalScope}
@@ -306,7 +319,7 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
                 checked={knowledgePolicy === "allow_model"}
                 onCheckedChange={(checked) => setKnowledgePolicy(checked ? "allow_model" : "sources_only")}
                 label="Знания модели"
-                hint="Дополнение будет отделено от источников"
+                hint="Отделяются от источников"
               />
               <div className="chat-retrieval-commands" aria-label="Команды тьютора">
                 {["Объяснить", "Найти подтверждения", "Сравнить источники", "Найти расхождения"].map((label) => (
@@ -316,7 +329,7 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
                   type="button"
                   onClick={() => void startExhaustive()}
                   disabled={Boolean(exhaustive.job && ["queued", "running", "paused"].includes(exhaustive.job.state))}
-                >По всем источникам</button>
+                ><Sparkles size={13} />По всем источникам</button>
               </div>
               {exhaustive.job && ["queued", "running", "paused"].includes(exhaustive.job.state) && (
                 <div className="chat-exhaustive-progress" role="status">
@@ -329,15 +342,7 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
               {(exhaustiveError || exhaustive.error || exhaustive.job?.error) && (
                 <p className="retrieval-error">{exhaustiveError || exhaustive.error || exhaustive.job?.error}</p>
               )}
-            </div>
-          )}
-
-          <ContextChips
-            chips={buildExamContextChips(chat.contextPreview)}
-            contextFlags={chat.session.context_flags}
-            onToggleFlag={(key, value) => void chat.updateSettings({
-              context_flags: { [key]: value } as Partial<ChatContextFlags>,
-            })}
+            </div> : undefined}
           />
 
           {answering ? (
@@ -349,7 +354,7 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
               answerMode={answerMode}
               onAnswerModeChange={setAnswerMode}
               onChange={setAnswerDraft}
-              onSubmit={() => { void chat.submitAnswer(answerDraft, { answer_mode: answerMode, active_seconds: takeAnswerSeconds?.() ?? null }); setAnswering(false); }}
+              onSubmit={() => { void chat.submitAnswer(answerDraft, { answer_mode: answerMode, active_seconds: takeAnswerSeconds?.() ?? null }).then((saved) => { if (saved) setAnswering(false); }); }}
               onCancel={() => setAnswering(false)}
               busy={chat.submittingAnswer}
             />

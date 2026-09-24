@@ -50,10 +50,11 @@ interface LessonTabProps {
   projectId: string;
   node: ProgramNodeRead;
   preferredLessonId: string | null;
+  onLessonsChanged?: () => void;
 }
 
 /** Вкладка «Урок» Рабочей области: чтение урока темы (записка «Уроки» §4.6). */
-export function LessonTab({ projectId, node, preferredLessonId }: LessonTabProps) {
+export function LessonTab({ projectId, node, preferredLessonId, onLessonsChanged }: LessonTabProps) {
   const overview = useLessonsOverview(projectId);
   const { mode, setMode } = useLessonViewMode(projectId);
   const lessons = useMemo(() => readableLessons(overview.data?.lessons ?? [], node.id), [overview.data, node.id]);
@@ -68,7 +69,10 @@ export function LessonTab({ projectId, node, preferredLessonId }: LessonTabProps
   const selectedId = lessons.find((lesson) => lesson.id === choice)?.id ?? lessons[0]?.id ?? null;
   const lesson = useLesson(projectId, selectedId);
   const sectionLink = `/projects/${projectId}/lessons?topic=${node.id}`;
-  const progress = useLessonProgress(projectId, lesson.data);
+  const progress = useLessonProgress(projectId, lesson.data, () => {
+    overview.refresh();
+    onLessonsChanged?.();
+  });
 
   async function quickLesson() {
     setCreating(true);
@@ -78,6 +82,7 @@ export function LessonTab({ projectId, node, preferredLessonId }: LessonTabProps
       saveChoice(projectId, node.id, result.lesson.id);
       setChoice(result.lesson.id);
       overview.refresh();
+      onLessonsChanged?.();
     } catch (caught) {
       setCreateError(caught instanceof Error ? caught.message : "Не удалось создать урок");
     } finally {
@@ -171,7 +176,7 @@ export function LessonTab({ projectId, node, preferredLessonId }: LessonTabProps
  * Позиция сохраняется не чаще раза в пять секунд и только при смене блока —
  * прокрутка не должна бить в сервер на каждый кадр.
  */
-function useLessonProgress(projectId: string, lesson: LessonRead | null) {
+function useLessonProgress(projectId: string, lesson: LessonRead | null, onCompletedChanged: () => void) {
   const [completedAt, setCompletedAt] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -203,6 +208,7 @@ function useLessonProgress(projectId: string, lesson: LessonRead | null) {
     try {
       const result = await setLessonCompleted(projectId, lessonId, completed);
       setCompletedAt(result.lesson.completed_at);
+      onCompletedChanged();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Не удалось отметить урок");
     } finally {

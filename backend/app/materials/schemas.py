@@ -81,6 +81,7 @@ class LibraryTextMaterialCreate(ApiModel):
     name: NonBlank = "Вставленный текст.txt"
     text: NonBlank
     subject: NonBlank | None = None
+    display_name: NonBlank | None = None
 
 
 class TextMaterialCreate(LibraryTextMaterialCreate):
@@ -93,6 +94,7 @@ class LibraryExternalMaterialCreate(ApiModel):
     kind: Literal["url", "youtube"]
     url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8, max_length=2048)]
     subject: NonBlank | None = None
+    display_name: NonBlank | None = None
 
 
 class LibraryMaterialMetadataUpdate(ApiModel):

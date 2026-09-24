@@ -160,7 +160,7 @@ export function ChatModelPicker({
         title="Модель чата"
         className="chat-model-popover"
         trigger={
-          <button type="button" className="chat-model-trigger" disabled={disabled}>
+          <button type="button" className="chat-model-trigger" aria-label={`Модель: ${current?.display_name ?? "Auto"}`} disabled={disabled}>
             <Sparkles size={14} aria-hidden="true" />
             <span className="chat-model-trigger-name">{current?.display_name ?? "Auto"}</span>
           </button>

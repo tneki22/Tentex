@@ -26,7 +26,7 @@ from app.ai.gateway import ModelGateway
 from app.bindings import answers_ai
 from app.db import job_write_transaction
 from app.materials import ai_cleanup
-from app.models import BackgroundJob, BackgroundJobKind, BackgroundJobState, utc_now
+from app.models import AiRun, BackgroundJob, BackgroundJobKind, BackgroundJobState, utc_now
 from app.projects import import_repair, preparation_ai, program_ai, program_chat, source_search
 from app.projects.errors import ProjectDomainError
 
@@ -39,7 +39,7 @@ DEADLINE_SECONDS: dict[BackgroundJobKind, int] = {
     BackgroundJobKind.AI_GROUPING: 600,
     BackgroundJobKind.AI_IMPORT_REPAIR: 900,
     BackgroundJobKind.AI_PREPARATION: 300,
-    BackgroundJobKind.AI_CLEANUP: 300,
+    BackgroundJobKind.AI_CLEANUP: 120,
     BackgroundJobKind.AI_ANSWER_SECTIONS: 900,
     # Может делать до двух пакетных вызовов + один объединяющий — запас как у
     # починки списка вопросов.
@@ -139,8 +139,15 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
 async def _run_with_deadline(
     session: Session, job: BackgroundJob, gateway: ModelGateway, deadline: int
 ) -> BaseModel:
+    # У cleanup один повтор (две попытки всего), чтобы пустой ответ не съедал
+    # пять минут. Другие роли сохраняют общий профиль повтора шлюза.
+    role_gateway = (
+        ModelGateway(session, transport=gateway.transport, retry_backoff=(2.0,))
+        if job.kind == BackgroundJobKind.AI_CLEANUP
+        else gateway
+    )
     async with asyncio.timeout(deadline):
-        return await _dispatch(session, job, gateway)
+        return await _dispatch(session, job, role_gateway)
 
 
 def _mark_finished(session: Session, job_id: UUID, result: BaseModel) -> None:
@@ -174,7 +181,9 @@ def _mark_finished(session: Session, job_id: UUID, result: BaseModel) -> None:
         job.updated_at = utc_now()
 
 
-def _mark_failed(session: Session, job_id: UUID, message: str) -> None:
+def _mark_failed(
+    session: Session, job_id: UUID, message: str, *, error_code: str | None = None
+) -> None:
     session.rollback()
     with job_write_transaction(session, job_id):
         job = session.get(BackgroundJob, job_id)
@@ -185,6 +194,14 @@ def _mark_failed(session: Session, job_id: UUID, message: str) -> None:
         job.lease_owner = None
         job.lease_expires_at = None
         job.updated_at = utc_now()
+        if error_code:
+            run = session.query(AiRun).filter(
+                AiRun.job_id == job_id, AiRun.status == "running"
+            ).one_or_none()
+            if run is not None:
+                run.status = "failed"
+                run.error_code = error_code
+                run.completed_at = utc_now()
 
 
 def process_ai_job(
@@ -205,7 +222,12 @@ def process_ai_job(
         _mark_finished(session, job_id, result)
     except TimeoutError:
         _mark_failed(
-            session, job_id, f"Задача не уложилась в отведённые {deadline} с и была прервана"
+            session,
+            job_id,
+            "Модель не ответила за 120 секунд. Попробуйте другую модель или повторите."
+            if job.kind == BackgroundJobKind.AI_CLEANUP
+            else f"Задача не уложилась в отведённые {deadline} с и была прервана",
+            error_code="ai_timeout",
         )
     except ProjectDomainError as error:
         _mark_failed(session, job_id, error.detail)

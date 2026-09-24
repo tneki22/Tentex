@@ -168,7 +168,8 @@ export function MaterialProcessingPanels({
         onTypstBuild={buildTypst}
         onTypstAddFile={addTypstFile}
         onEditPage={onEditPage}
-        onCleanupPage={onCleanupPage}
+      onCleanupPage={onCleanupPage}
+      onRemoveTimestamps={() => undefined}
         onFindHeaderFooter={() => setHeaderFooterOpen(true)}
         onConfirmPageReview={confirmReview}
         onIndexMaterial={() => void run(() => indexLibraryMaterial(materialId))}

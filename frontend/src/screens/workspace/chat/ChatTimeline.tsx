@@ -153,7 +153,7 @@ export function ChatTimeline({
       <div className="chat-timeline" ref={scrollRef} onScroll={handleScroll}>
         <div className="chat-timeline-rail">
           {messages.map((message) => (
-            <div className="chat-timeline-item" key={message.id}>
+            <div className={`chat-timeline-item ${message.id.startsWith("pending-user-") ? "is-sending" : ""}`} key={message.id}>
               <TypedMessage
                 projectId={projectId}
                 message={message}

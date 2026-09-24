@@ -41,6 +41,7 @@ interface LibraryMaterialInspectorProps {
   onTypstAddFile: (file: File, targetPath: string) => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
+  onRemoveTimestamps: () => void;
   onFindHeaderFooter: () => void;
   onConfirmPageReview: () => void;
   onIndexMaterial: () => void;
@@ -74,6 +75,7 @@ export function LibraryMaterialInspector({
   onTypstAddFile,
   onEditPage,
   onCleanupPage,
+  onRemoveTimestamps,
   onFindHeaderFooter,
   onConfirmPageReview,
   onIndexMaterial,
@@ -114,6 +116,7 @@ export function LibraryMaterialInspector({
               onTypstAddFile={onTypstAddFile}
               onEditPage={onEditPage}
               onCleanupPage={onCleanupPage}
+              onRemoveTimestamps={onRemoveTimestamps}
               onFindHeaderFooter={onFindHeaderFooter}
               onConfirmPageReview={onConfirmPageReview}
               onIndexMaterial={onIndexMaterial}

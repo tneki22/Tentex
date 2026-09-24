@@ -177,13 +177,15 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft, activeSessionId]);
 
-  async function refreshDetail() {
-    if (!activeSessionId) return;
+  async function refreshDetail(): Promise<ChatSessionDetail | null> {
+    if (!activeSessionId) return null;
     try {
       const value = await getChatSession(projectId, activeSessionId);
       applySessionDetail(value);
+      return value;
     } catch {
       // Лента останется прежней; следующее действие пользователя попробует снова.
+      return null;
     }
   }
 
@@ -339,7 +341,8 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
   }
 
   async function submitAnswer(text: string, tracking?: Parameters<typeof submitChatAnswer>[3]) {
-    if (!activeSessionId || !text.trim() || submittingAnswer) return;
+    if (!activeSessionId || !text.trim() || submittingAnswer) return false;
+    const knownMessageIds = new Set(messageOrder);
     setSubmittingAnswer(true);
     try {
       const result = await submitChatAnswer(projectId, activeSessionId, text.trim(), tracking);
@@ -347,15 +350,20 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
       await saveChatDraft(projectId, activeSessionId, "");
       setDraft("");
       onAttemptsChanged?.();
+      return true;
     } catch (error) {
+      // Дорогая ступень может упасть уже после фиксации Attempt. Перечитываем
+      // ленту, чтобы сохранённая форма сразу предложила «Проверить ещё раз».
+      const latest = await refreshDetail();
+      const saved = latest?.messages.some((message) =>
+        message.payload_kind === "answer_form" && !knownMessageIds.has(message.id),
+      ) ?? false;
       setFailure({
         code: error instanceof ProjectApiError ? error.code ?? "unknown" : "unknown",
         detail: error instanceof Error ? error.message : "Ответ не сохранён",
       });
-      // Дорогая ступень может упасть уже после фиксации Attempt. Перечитываем
-      // ленту, чтобы сохранённая форма сразу предложила «Проверить ещё раз».
-      await refreshDetail();
       onAttemptsChanged?.();
+      return saved;
     } finally {
       setSubmittingAnswer(false);
     }

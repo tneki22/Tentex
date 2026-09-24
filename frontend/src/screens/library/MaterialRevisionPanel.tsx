@@ -33,6 +33,9 @@ function originText(revision: MaterialRevisionRead): string {
   if (revision.origin === "manual_edit" && typeof scope.page === "number") {
     return `${base} ${scope.page}`;
   }
+  if (revision.origin === "ai_cleanup" && typeof scope.page === "number") {
+    return `Уборка текста страницы ${scope.page}`;
+  }
   if (revision.origin === "restore" && typeof scope.restored_from === "number") {
     return `${base} ${scope.restored_from}`;
   }

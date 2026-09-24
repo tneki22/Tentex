@@ -135,7 +135,7 @@ export function ProgramChatWorkspace({
         activeSessionId={chat.activeSessionId}
         onSelectSession={chat.setActiveSessionId}
         onNewChat={() => void chat.startNewChat()}
-        showModelControl={false}
+        showResponseControl={false}
         historyTitle="Чаты программы"
       />
 

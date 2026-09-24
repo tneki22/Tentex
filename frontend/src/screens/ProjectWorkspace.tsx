@@ -17,10 +17,13 @@ import {
   ListTree,
   MessageSquare,
   NotebookPen,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelRightClose,
   PanelsTopLeft,
   Plus,
   Search,
+  SquareArrowOutUpRight,
   Tag,
   Target,
   X,
@@ -78,6 +81,8 @@ import {
 import type { ContextMenuItem } from "../components/ui";
 import { LessonHistoryTab } from "./lessons/LessonHistoryTab";
 import { LessonTab } from "./lessons/LessonTab";
+import { useLessonsOverview } from "../hooks/useLessons";
+import { readDetachedPane, removeDetachedPane, writeDetachedPane } from "./workspace/detachedPane";
 import { useBindings } from "../hooks/useBindings";
 import {
   buildProgramTree,
@@ -252,8 +257,8 @@ function sanitizeLayout(
   };
 }
 
-export function ProjectWorkspace() {
-  const { projectId = "" } = useParams();
+export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
+  const { projectId = "", detachedId = "" } = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const preferredTopic = searchParams.get("topic");
@@ -275,6 +280,17 @@ export function ProjectWorkspace() {
   const [coverage, setCoverage] = useState<CoverageMapRead | null>(null);
   const [query, setQuery] = useState("");
   const [activeGroupId, setActiveGroupId] = useState(DEFAULT_LAYOUT.groups[0].id);
+  const [paneDetached, setPaneDetached] = useState(false);
+  const paneTransitionTimer = useRef<number | null>(null);
+  const [treeCollapsed, setTreeCollapsed] = useState(() => window.localStorage.getItem(`tentex:workspace-tree-collapsed:${projectId}`) === "1");
+  const [headingHeight, setHeadingHeight] = useState(() => {
+    const saved = window.localStorage.getItem(`tentex:workspace-heading-height:${projectId}`);
+    if (saved === null) return 60;
+    const stored = Number(saved);
+    return Number.isFinite(stored) && stored >= 0 && stored <= 180 ? stored : 60;
+  });
+  const [headingDragging, setHeadingDragging] = useState(false);
+  const headingDrag = useRef<{ y: number; height: number } | null>(null);
   const { marks, setMark } = usePersonalMarks(projectId);
   const { mode: answerViewMode, setMode: setAnswerViewMode } = useAnswerViewMode(projectId);
   const bindings = useBindings(projectId);
@@ -301,17 +317,36 @@ export function ProjectWorkspace() {
   const conspectHandleRef = useRef<ConspectEditorHandle | null>(null);
   const [conspectRefreshKey, setConspectRefreshKey] = useState(0);
 
+  function setCollapsed(next: boolean) {
+    setTreeCollapsed(next);
+    window.localStorage.setItem(`tentex:workspace-tree-collapsed:${projectId}`, next ? "1" : "0");
+  }
+
+  function saveHeadingHeight(height: number) {
+    const next = height < 24 ? 0 : Math.min(180, Math.max(48, height));
+    setHeadingHeight(next);
+    window.localStorage.setItem(`tentex:workspace-heading-height:${projectId}`, String(next));
+  }
+
+  function moveHeading(clientY: number) {
+    if (!headingDrag.current) return;
+    const next = headingDrag.current.height + clientY - headingDrag.current.y;
+    setHeadingHeight(next < 24 ? 0 : Math.min(180, Math.max(48, next)));
+  }
+
   async function load(signal?: AbortSignal) {
     setLoading(true);
     setLoadError(null);
     try {
       const next = await getProject(projectId, signal);
-      const sanitized = sanitizeLayout(next.workspace_state?.layout, next.program.nodes, preferredTopic, allowedTabs(next.project), preferredTab);
+      const detachedSource = detached ? readDetachedPane(detachedId, projectId) : null;
+      if (detached && !detachedSource) throw new Error("Отделённая рабочая зона не найдена. Откройте её снова из проекта.");
+      const sanitized = sanitizeLayout(detached ? detachedSource ?? undefined : next.workspace_state?.layout, next.program.nodes, detached ? null : preferredTopic, allowedTabs(next.project), detached ? null : preferredTab);
       setDetail(next);
       layoutRef.current = sanitized;
       setLayout(sanitized);
       resizeReadyRef.current = false;
-      if (JSON.stringify(sanitized) !== JSON.stringify(next.workspace_state?.layout)) {
+      if (!detached && JSON.stringify(sanitized) !== JSON.stringify(next.workspace_state?.layout)) {
         enqueueSave(sanitized);
       }
       if (next.project.workspace_variant === "exam") {
@@ -331,7 +366,7 @@ export function ProjectWorkspace() {
     void load(controller.signal);
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, preferredTopic, preferredTab]);
+  }, [projectId, preferredTopic, preferredTab, detached, detachedId]);
 
   function updateLayout(nextOrUpdater: WorkspaceLayout | ((current: WorkspaceLayout) => WorkspaceLayout)) {
     const next = typeof nextOrUpdater === "function" ? nextOrUpdater(layoutRef.current) : nextOrUpdater;
@@ -342,6 +377,11 @@ export function ProjectWorkspace() {
 
   function enqueueSave(next: WorkspaceLayout) {
     setSaveError("");
+    if (detached) {
+      try { writeDetachedPane(detachedId, projectId, next); }
+      catch { setSaveError("Не удалось сохранить отделённую зону в браузере."); }
+      return;
+    }
     queueRef.current = queueRef.current
       .then(async () => { await saveWorkspaceState(projectId, next); })
       .catch(() => { setSaveError("Не удалось сохранить рабочую область. Попробуйте ещё раз."); });
@@ -371,6 +411,10 @@ export function ProjectWorkspace() {
     }
   }, [activeGroupId, layout.groups]);
 
+  useEffect(() => () => {
+    if (paneTransitionTimer.current !== null) window.clearTimeout(paneTransitionTimer.current);
+  }, []);
+
   const treeResult = useMemo(() => {
     try { return { tree: buildProgramTree(detail?.program.nodes ?? []), error: "" }; }
     catch (error) { return { tree: [], error: error instanceof Error ? error.message : "Некорректное дерево" }; }
@@ -382,10 +426,12 @@ export function ProjectWorkspace() {
   const [answeringForTracking, setAnsweringForTracking] = useState(false);
   const focusedTab = layout.groups.find(group => group.id === activeGroupId)?.active_tab;
   const trackingKind = focusedTab === "chat" ? (answeringForTracking ? "answer" : "chat") : focusedTab === "conspect" ? "conspect" : focusedTab === "source" ? "material" : "reading";
-  const study = useWorkspaceStudyTracking(projectId, selected?.id ?? null, trackingKind, Boolean(selected) && detail?.project.workspace_variant === "exam" && (detail?.project.status === "active" || detail?.project.status === "draft"));
+  const study = useWorkspaceStudyTracking(projectId, selected?.id ?? null, trackingKind, !detached && Boolean(selected) && detail?.project.workspace_variant === "exam" && (detail?.project.status === "active" || detail?.project.status === "draft"));
   const tracking = study.tracking;
   const selectedIndex = selected ? studyNodes.findIndex((node) => node.id === selected.id) : -1;
   const textbook = detail?.project.workspace_variant === "textbook";
+  const lessonsEnabled = Boolean(textbook && detail?.project.enabled_modules.includes("lessons"));
+  const lessonsOverview = useLessonsOverview(projectId, lessonsEnabled);
   const freeProject = detail?.project.template_key === "free";
   const availableTabs = allowedTabs(detail?.project ?? null);
   const filteredTree = useMemo(() => filterProgramTree(treeResult.tree, query), [treeResult.tree, query]);
@@ -393,6 +439,12 @@ export function ProjectWorkspace() {
     () => new Map(bindings.summary.map((item) => [item.program_node_id, item])),
     [bindings.summary],
   );
+
+  useEffect(() => {
+    if (!detached || !selected || !detail) return;
+    document.title = `${selected.title} · ${detail.project.name} — Tentex`;
+    return () => { document.title = "Tentex"; };
+  }, [detached, selected?.id, selected?.title, detail?.project.name]);
 
   useEffect(() => {
     if (loading || !selectedNode) return;
@@ -408,6 +460,17 @@ export function ProjectWorkspace() {
     }
     return map;
   }, [coverage]);
+
+  useEffect(() => {
+    const refreshVisibleStatuses = () => {
+      if (textbook === undefined) return;
+      void bindings.refreshSummary();
+      if (textbook) lessonsOverview.refresh();
+      else void getCoverageMap(projectId).then(setCoverage).catch(() => undefined);
+    };
+    window.addEventListener("focus", refreshVisibleStatuses);
+    return () => window.removeEventListener("focus", refreshVisibleStatuses);
+  }, [projectId, textbook, bindings.refreshSummary, lessonsOverview.refresh]);
 
   useEffect(() => {
     if (!selected || textbook !== false) {
@@ -653,7 +716,7 @@ export function ProjectWorkspace() {
   }
 
   function addPanel() {
-    if (layoutRef.current.groups.length >= 3) return;
+    if (detached || layoutRef.current.groups.length >= 3) return;
     const id = `panel-${Date.now()}`;
     persist((current) => ({
       ...current,
@@ -661,6 +724,51 @@ export function ProjectWorkspace() {
       group_weights: [...current.group_weights, 1],
     }));
     setActiveGroupId(id);
+  }
+
+  function detachPanel(groupId: string) {
+    const current = layoutRef.current;
+    const index = current.groups.findIndex((group) => group.id === groupId);
+    if (detached || index < 0 || current.groups[index].tabs.length === 0) return;
+
+    const id = window.crypto.randomUUID();
+    const detachedLayout: WorkspaceLayout = {
+      ...current,
+      groups: [{ ...current.groups[index], tabs: [...current.groups[index].tabs] }],
+      group_weights: [1],
+    };
+    try {
+      writeDetachedPane(id, projectId, detachedLayout);
+      const url = `/projects/${encodeURIComponent(projectId)}/detached/${id}`;
+      const opened = window.open("", "_blank");
+      if (!opened) {
+        removeDetachedPane(id);
+        setSaveError("Браузер заблокировал новую вкладку. Разрешите всплывающие окна и попробуйте ещё раз.");
+        return;
+      }
+      opened.opener = null;
+      opened.location.href = url;
+    } catch {
+      removeDetachedPane(id);
+      setSaveError("Не удалось открыть отделённую рабочую зону.");
+      return;
+    }
+
+    const remaining = current.groups.filter((group) => group.id !== groupId);
+    const groups = remaining.length > 0
+      ? remaining
+      : [{ id: `panel-${id}`, tabs: [], active_tab: null }];
+    persist({
+      ...current,
+      groups,
+      group_weights: remaining.length > 0
+        ? current.group_weights.filter((_, itemIndex) => itemIndex !== index)
+        : [1],
+    });
+    setActiveGroupId(groups[Math.min(index, groups.length - 1)].id);
+    setPaneDetached(true);
+    if (paneTransitionTimer.current !== null) window.clearTimeout(paneTransitionTimer.current);
+    paneTransitionTimer.current = window.setTimeout(() => setPaneDetached(false), 320);
   }
 
   function closePanel(groupId: string) {
@@ -742,7 +850,7 @@ export function ProjectWorkspace() {
       );
     }
     if (tab === "lesson" && textbook && selected) {
-      return <LessonTab projectId={projectId} node={selected} preferredLessonId={preferredLesson} />;
+      return <LessonTab projectId={projectId} node={selected} preferredLessonId={preferredLesson} onLessonsChanged={lessonsOverview.refresh} />;
     }
     if (tab === "history" && textbook && selected) {
       return <LessonHistoryTab projectId={projectId} node={selected} />;
@@ -1133,17 +1241,53 @@ export function ProjectWorkspace() {
     : editorGroups
       .map((_, index) => `minmax(0, ${editorWeights[index] ?? 1}fr)${index < editorGroups.length - 1 ? " 10px" : ""}`)
       .join(" ");
+  const chips: Array<{ label: string; tone: "success" | "warning" | "muted" | "info" }> = [];
+  if (selected) {
+    const hasSource = (bindingSummaryByNode.get(selected.id)?.content_fragment_count ?? 0) > 0
+      || sourceBindings.some((binding) => binding.program_node_id === selected.id);
+    if (!textbook) {
+      const answerStatus = answerStatusByNode.get(selected.id)
+        ?? (answerSlot?.node_id === selected.id ? answerSlot.status : null)
+        ?? (coverage ? "missing" : null);
+      if (answerStatus) chips.push(answerStatus === "missing"
+        ? { label: "Нет ответа", tone: "muted" }
+        : answerStatus === "needs_review"
+          ? { label: "Проверить ответ", tone: "warning" }
+          : answerStatus === "auto_matched"
+            ? { label: "Ответ найден", tone: "info" }
+            : { label: "Есть ответ", tone: "success" });
+    }
+    if (!bindings.loading && !bindings.error) chips.push(hasSource
+      ? { label: "Есть источник", tone: "info" }
+      : { label: freeProject ? "Нужно найти материал" : "Нет источника", tone: "muted" });
+    if (lessonsEnabled && lessonsOverview.data) {
+      const lessons = lessonsOverview.data.lessons.filter((lesson) => lesson.status !== "archived" && lesson.program_node_ids.includes(selected.id));
+      chips.push(lessons.some((lesson) => lesson.completed_at)
+        ? { label: "Урок пройден", tone: "success" }
+        : lessons.some((lesson) => lesson.status === "ready")
+          ? { label: "Урок готов", tone: "success" }
+          : lessons.length > 0
+            ? { label: "Черновик урока", tone: "warning" }
+            : { label: "Нет урока", tone: "muted" });
+    }
+    const mark = marks[selected.id];
+    if (mark) chips.push(mark === "review"
+      ? { label: "Повторить", tone: "warning" }
+      : mark === "today"
+        ? { label: "На сегодня", tone: "info" }
+        : { label: "Пройдено", tone: "success" });
+  }
 
   return (
-    <div className={`project-workspace ${textbook ? "is-textbook" : "is-exam"}`} style={{ "--workspace-tree-width": `${layout.tree_width}px` } as CSSProperties}>
-      <aside className="workspace-tree-panel">
-        <header className="workspace-tree-head"><div className={`workspace-tree-title ${textbook ? "is-textbook" : ""}`}><Link className="workspace-back-button" to="/projects" aria-label="К проектам"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong>{deadline !== null && <span className={`workspace-project-deadline is-${deadlineTone(deadline)}`} aria-label={deadline >= 0 ? `${deadline} дней до дедлайна` : `Дедлайн прошёл ${Math.abs(deadline)} дней назад`}><b>{deadline >= 0 ? deadline : Math.abs(deadline)}</b><small>{deadline >= 0 ? "дней" : "прошло"}</small></span>}</div></header>
+    <div className={`project-workspace ${textbook ? "is-textbook" : "is-exam"} ${detached ? "is-detached" : ""} ${paneDetached ? "is-pane-detached" : ""} ${treeCollapsed ? "is-tree-collapsed" : ""} ${headingDragging ? "is-heading-dragging" : ""} ${headingHeight === 0 ? "is-heading-collapsed" : ""}`} style={{ "--workspace-tree-width": treeCollapsed ? "56px" : `${layout.tree_width}px`, "--workspace-heading-height": `${headingHeight}px` } as CSSProperties}>
+      {!detached && <aside className="workspace-tree-panel">
+        <header className="workspace-tree-head"><div className="workspace-tree-title"><Link className="workspace-back-button" to="/projects" aria-label="К проектам" title="К проектам"><ArrowLeft size={15} /></Link><strong title={detail.project.name ?? undefined}>{detail.project.name}</strong>{deadline !== null && <span className={`workspace-project-deadline is-${deadlineTone(deadline)}`} aria-label={deadline >= 0 ? `${deadline} дней до дедлайна` : `Дедлайн прошёл ${Math.abs(deadline)} дней назад`}><b>{deadline >= 0 ? deadline : Math.abs(deadline)}</b><small>{deadline >= 0 ? "дней" : "прошло"}</small></span>}<IconButton label={treeCollapsed ? "Развернуть левую панель" : "Свернуть левую панель"} onClick={() => setCollapsed(!treeCollapsed)}>{treeCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</IconButton></div></header>
         <div className="workspace-tree-tools"><label className="workspace-tree-search"><Search size={15} /><span className="sr-only">{textbook ? "Поиск по темам" : "Поиск по вопросам"}</span><input type="search" placeholder={textbook ? "Найти тему" : "Найти вопрос"} value={query} onChange={(event) => setQuery(event.target.value)} />{query && <button type="button" onClick={() => setQuery("")} aria-label="Очистить поиск"><X size={14} /></button>}</label><Tooltip label="Фильтры появятся вместе с разбором материалов"><span><IconButton label="Фильтры" disabled><Filter size={15} /></IconButton></span></Tooltip></div>
         <nav className="workspace-question-tree" aria-label={textbook ? "Программа" : "Вопросы экзамена"}>{filteredTree.length > 0 ? renderTree(filteredTree) : <p className="workspace-tree-empty">По запросу ничего не найдено.</p>}</nav>
         <ProjectNav projectId={projectId} textbook={textbook} modules={detail.project.enabled_modules} />
-      </aside>
+      </aside>}
 
-      <PanelResizeHandle
+      {!detached && !treeCollapsed && <PanelResizeHandle
         className="workspace-tree-resize"
         label={`Изменить ширину дерева ${textbook ? "тем" : "вопросов"}`}
         value={layout.tree_width}
@@ -1151,7 +1295,7 @@ export function ProjectWorkspace() {
         max={460}
         onDelta={(delta) => updateLayout((current) => ({ ...current, tree_width: Math.round(Math.min(460, Math.max(260, current.tree_width + delta))) }))}
         onReset={() => updateLayout((current) => ({ ...current, tree_width: 320 }))}
-      />
+      />}
 
       <main className="workspace-main">
         {!selectedNode && freeProject ? (
@@ -1185,7 +1329,36 @@ export function ProjectWorkspace() {
             </section>
           </div>
         ) : selected ? (<>
-        <header className="workspace-question-bar"><div className="workspace-question-heading"><h1>{selected.title}</h1></div><div className="workspace-question-actions">{!sourceBindingsLoading && sourceBindings.length === 0 && <div className={`workspace-material-notice ${textbook ? "is-textbook" : ""}`}><BookOpen size={15} /><span>{freeProject ? "Нужно найти материал" : textbook ? "Материал ещё не привязан" : "Ответы ещё не добавлены"}</span></div>}{!textbook && <StudyTimer study={study} />}<div className="workspace-question-nav" aria-label="Переход между темами"><IconButton label="Предыдущая тема" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><ChevronLeft size={15} /></IconButton><span>{selectedIndex + 1} из {studyNodes.length}</span><IconButton label="Следующая тема" disabled={selectedIndex >= studyNodes.length - 1} onClick={() => selectRelative(1)}><ChevronRight size={15} /></IconButton></div><IconButton label="Разделить рабочую область" disabled={editorGroups.length >= 3} onClick={addPanel}><PanelsTopLeft size={15} /></IconButton></div></header>
+        <header className="workspace-question-bar">
+          <div className="workspace-question-heading">
+            {detached && <Link className="workspace-detached-back" to={`/projects/${projectId}`} title="Открыть проект" aria-label="Открыть проект"><ArrowLeft size={15} /></Link>}
+            <h1 title={selected.title}>{selected.title}</h1>
+            <div className="workspace-status-chips" aria-label="Состояние темы">
+              {chips.map((chip) => <span className={`workspace-status-chip is-${chip.tone}`} key={chip.label}>{chip.label}</span>)}
+            </div>
+          </div>
+          <div className="workspace-question-actions">
+            {!textbook && !detached && <StudyTimer study={study} />}
+            <div className="workspace-question-nav" aria-label="Переход между темами"><IconButton label="Предыдущая тема" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><ChevronLeft size={15} /></IconButton><span>{selectedIndex + 1} из {studyNodes.length}</span><IconButton label="Следующая тема" disabled={selectedIndex >= studyNodes.length - 1} onClick={() => selectRelative(1)}><ChevronRight size={15} /></IconButton></div>
+            {!detached && <>
+              <IconButton label="Разделить рабочую область" disabled={editorGroups.length >= 3} onClick={addPanel}><PanelsTopLeft size={15} /></IconButton>
+              <Menu label="Отделить рабочую зону" tooltip="Открыть рабочую зону в новой вкладке" trigger={<IconButton label="Отделить рабочую зону"><SquareArrowOutUpRight size={15} /></IconButton>} items={editorGroups.map((group, index) => ({
+                label: `Зона ${index + 1} · ${group.tabs.map((tab) => tabLabel(tab, Boolean(textbook))).join(", ") || "пустая"}`,
+                icon: <SquareArrowOutUpRight size={14} />,
+                disabled: group.tabs.length === 0,
+                onSelect: () => detachPanel(group.id),
+              }))} />
+            </>}
+          </div>
+        </header>
+        <div className="workspace-heading-resize" role="separator" tabIndex={0} aria-label="Изменить высоту верхней панели" aria-orientation="horizontal" aria-valuenow={headingHeight} aria-valuemin={0} aria-valuemax={180} title={headingHeight === 0 ? "Потяните вниз, чтобы открыть верхнюю панель" : "Потяните вверх, чтобы свернуть верхнюю панель"}
+          onPointerDown={(event) => { headingDrag.current = { y: event.clientY, height: headingHeight }; setHeadingDragging(true); event.currentTarget.setPointerCapture(event.pointerId); }}
+          onPointerMove={(event) => moveHeading(event.clientY)}
+          onPointerUp={(event) => { const drag = headingDrag.current; headingDrag.current = null; setHeadingDragging(false); if (drag) saveHeadingHeight(drag.height + event.clientY - drag.y); }}
+          onPointerCancel={() => { headingDrag.current = null; setHeadingDragging(false); saveHeadingHeight(headingHeight); }}
+          onDoubleClick={() => saveHeadingHeight(headingHeight === 0 ? 60 : 0)}
+          onKeyDown={(event) => { if (event.key === "ArrowUp") { event.preventDefault(); saveHeadingHeight(headingHeight - 16); } else if (event.key === "ArrowDown") { event.preventDefault(); saveHeadingHeight(headingHeight === 0 ? 60 : headingHeight + 16); } else if (event.key === "Home") { event.preventDefault(); saveHeadingHeight(0); } else if (event.key === "End") { event.preventDefault(); saveHeadingHeight(60); } }}
+        ><span /></div>
         <div className="workspace-save-status">        {!textbook && <StudyQueue projectId={projectId} nodeId={selected.id} onSelect={id => void selectNode(id)} />}
 <div aria-live="polite">{saveError && <p className="inline-error" role="alert">{saveError}</p>}</div></div>
         <div className="workspace-editor-grid" ref={editorGridRef} style={{ gridTemplateColumns: editorColumns }}>

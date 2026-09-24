@@ -269,14 +269,24 @@ async def start(
     """
     snapshot = _snapshot(session, project_id, material_id, page_number)
     _check_snapshot(snapshot, command.expected_revision, command.expected_source_hash)
-    await gateway.preflight_confirmed(_request(snapshot, command.instruction, command.confirmed))
+    preflight = await gateway.preflight_confirmed(
+        _request(snapshot, command.instruction, command.confirmed)
+    )
     session.rollback()
     with session.begin():
         job = BackgroundJob(
             kind=BackgroundJobKind.AI_CLEANUP,
             project_id=project_id,
             material_id=material_id,
-            checkpoint={"command": command.model_dump(mode="json"), "page_number": page_number},
+            checkpoint={
+                "command": command.model_dump(mode="json"),
+                "page_number": page_number,
+                # Снимок нужен до старта AiRun: панель сразу честно показывает,
+                # какую модель и сколько максимум будет ждать.
+                "model_label": preflight.model_id,
+                "deadline_seconds": 120,
+                "max_attempts": 2,
+            },
         )
         session.add(job)
         session.flush()
