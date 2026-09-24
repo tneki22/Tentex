@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Literal, get_args
@@ -117,8 +118,10 @@ PLAN_PROMPT = """Ты помогаешь найти в интернете уче
 - Если пользователь не ограничил поиск одной темой, добавь один-два общих запроса по
   предмету проекта целиком — чтобы найти курсы, учебники и обзорные источники,
   которые покрывают много тем сразу.
-- Если пользователь называет вуз, кафедру, автора или сайт, вставь это имя в каждый
-  запрос; если уверен в домене сайта, можно добавить «site:домен».
+- Если пользователь в этой просьбе называет вуз, кафедру, автора или сайт, вставь это
+  имя в каждый запрос; если уверен в домене сайта, можно добавить «site:домен». Прошлые
+  просьбы из истории — только контекст: вуз, кафедру или вид материала из них в новую
+  просьбу не переноси.
 - Запрос — 2-8 слов, как его набирают в поисковике. Вид материала пиши словами:
   «учебник pdf», «лекция», «конспект», «курс», «задачи с решениями», «видеолекция».
   Не повторяй почти одинаковые запросы: каждый должен искать другое.
@@ -126,9 +129,9 @@ PLAN_PROMPT = """Ты помогаешь найти в интернете уче
   general.
 - language: ru по умолчанию; en — только если англоязычные источники разрешены
   настройкой или пользователь прямо об этом просит; all — если язык неважен.
-- topics — номера тем, которым помогает именно этот запрос (например "3.3"), не
-  больше четырёх. У общего запроса по предмету — пустой список: не перечисляй всю
-  программу.
+- topics — номера тем, которым помогает именно этот запрос: только номер, без
+  названия ("3.3"), не больше четырёх. У общего запроса по предмету — пустой список:
+  не перечисляй всю программу.
 - Если пользователь задаёт вопрос или просит совет, а не поиск, верни searches пустым
   и ответь в reply."""
 
@@ -157,8 +160,9 @@ PICK_PROMPT = """Ты отбираешь учебные материалы из 
 - gist — одно-два предложения о содержании: только то, что видно из фрагмента и начала
   текста. Не выдумывай; если данных мало, так и скажи коротко.
 - level — beginner, intermediate или advanced, если это видно, иначе null.
-- topics — номера тем программы, которые источник действительно разбирает, не больше
-  четырёх. Учебник или курс по всему предмету — пустой список, а не вся программа.
+- topics — номера тем программы, которые источник действительно разбирает: только
+  номер, без названия ("4.1"), не больше четырёх. Учебник или курс по всему предмету —
+  пустой список, а не вся программа.
 - summary — одна-три фразы для пользователя: что нашлось и чего не хватает. Номера тем
   пиши вместе с названием («3.2 Потоки»), не голыми цифрами.
 - follow_ups — до трёх коротких следующих просьб в этот чат без точки в конце, например
@@ -183,6 +187,24 @@ def _one_of[T](options: tuple[T, ...], fallback: T | None) -> BeforeValidator:
     return BeforeValidator(lambda value: value if value in options else fallback)
 
 
+_TOPIC_NUMBER = re.compile(r"\s*(\d+(?:\.\d+)*)")
+
+
+def _topic_numbers(values: object) -> list[str]:
+    """«4.1 Виртуальные адреса» → «4.1»: модель порой пишет тему вместе с названием."""
+    if not isinstance(values, list):
+        return []
+    numbers = []
+    for value in values:
+        match = _TOPIC_NUMBER.match(str(value))
+        if match:
+            numbers.append(match.group(1))
+    return numbers
+
+
+TopicNumbers = Annotated[list[str], BeforeValidator(_topic_numbers)]
+
+
 # Ответы принимаются терпимо: незнакомое значение перечисления заменяется, лишние поля
 # отбрасываются. Повтор хода из-за одной неточности модели стоит дороже, чем эта мягкость.
 class _Wire(BaseModel):
@@ -193,7 +215,7 @@ class PlannedSearch(_Wire):
     query: str
     category: Annotated[SearchCategory, _one_of(get_args(SearchCategory), "general")]
     language: Annotated[SearchLanguage, _one_of(get_args(SearchLanguage), "ru")]
-    topics: list[str] = []
+    topics: TopicNumbers = []
 
 
 class SearchPlan(_Wire):
@@ -207,7 +229,7 @@ class PickedSource(_Wire):
     why: str
     gist: str
     level: Annotated[SourceLevel | None, _one_of(get_args(SourceLevel), None)] = None
-    topics: list[str] = []
+    topics: TopicNumbers = []
 
 
 class SearchPick(_Wire):
@@ -725,7 +747,7 @@ def _payload(
         node_ids = list(dict.fromkeys(
             by_number[number].node_id for number in choice.topics if number in by_number
         ))
-        if not choice.topics:
+        if not node_ids:
             node_ids = list(candidate.node_ids)
         if len(node_ids) > MAX_TOPICS:
             node_ids = []

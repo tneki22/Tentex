@@ -88,12 +88,15 @@ function SearchProcessBody({ stage, reply, queries, candidates, opening, opened 
           </ul>
         )}
       </Step>
-      <Step
-        state={openingState}
-        label={openingState === "done"
-          ? `Открыто страниц: ${openedCount}`
-          : `Открываю ${opening ?? "лучшие"} страниц, чтобы узнать объём и суть`}
-      />
+      {/* Видео не открываются: объём у них из выдачи, и этапа нет. */}
+      {opening !== 0 && !(openingState === "done" && openedCount === 0) && (
+        <Step
+          state={openingState}
+          label={openingState === "done"
+            ? `Открыто страниц: ${openedCount}`
+            : `Открываю ${opening ?? "лучшие"} ${plural(opening ?? 5, "страницу", "страницы", "страниц")}, чтобы узнать объём и суть`}
+        />
+      )}
       <Step state={stepState(stage, "picking")} label="Отбираю лучшее" />
     </ol>
   );
