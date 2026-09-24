@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Check, Copy, ExternalLink, Search } from "lucide-react";
+import { Check, Copy, ExternalLink } from "lucide-react";
 import type { SourceSearchResult, WebSourceItem, WebSourceKind } from "../../../api/chat";
 import { Button, StatusBadge } from "../../../components/ui";
+import { SearchProcessSummary } from "./SearchProcess";
 
 const KIND_LABELS: Record<WebSourceKind, string> = {
   textbook: "Учебник",
@@ -48,23 +49,24 @@ export function SourceSearchResults({ result, topicLabels = {}, onFollowUp }: So
   const hidden = result.hidden_attached + result.hidden_seen;
   return (
     <div className="web-search-result">
-      {result.summary && <p className="web-search-summary">{result.summary}</p>}
       {result.searches.length > 0 && (
-        <ul className="web-search-queries" aria-label="Запросы к поисковику">
-          {result.searches.map((search) => {
+        <SearchProcessSummary
+          reply={result.plan_reply}
+          queries={result.searches.map((search) => {
             const topics = search.node_ids.map((id) => topicLabels[id]?.split(" ", 1)[0]).filter(Boolean);
-            return (
-              <li key={search.query}>
-                <Search size={12} aria-hidden="true" />
-                <span>«{search.query}»</span>
-                {CATEGORY_LABELS[search.category] && <small>{CATEGORY_LABELS[search.category]}</small>}
-                {topics.length > 0 && <small>темы {topics.join(", ")}</small>}
-                <small>найдено {search.found}</small>
-              </li>
-            );
+            return {
+              query: search.query,
+              found: search.found,
+              notes: [
+                CATEGORY_LABELS[search.category],
+                topics.length > 0 ? `темы ${topics.join(", ")}` : undefined,
+              ].filter((note): note is string => Boolean(note)),
+            };
           })}
-        </ul>
+          candidates={result.candidates ?? []}
+        />
       )}
+      {result.summary && <p className="web-search-summary">{result.summary}</p>}
       {result.items.length > 0 && (
         <ul className="external-sources web-sources">
           {result.items.map((item) => <SourceRow key={item.url} item={item} topicLabels={topicLabels} />)}

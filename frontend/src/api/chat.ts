@@ -301,10 +301,22 @@ export interface WebSearchRun {
 }
 
 /** Ход чата «Поиск в интернете» (`app/projects/source_search_chat.py`). */
+/** Страница из выдачи поиска — для блока «Процесс поиска». */
+export interface WebCandidateLink {
+  url: string;
+  title: string;
+  host: string;
+  /** Страницу открыли, чтобы узнать объём и начало текста. */
+  opened: boolean;
+}
+
 export interface SourceSearchResult {
   summary: string;
+  /** Что модель решила искать; у ходов до потока этапов поля нет. */
+  plan_reply?: string;
   searches: WebSearchRun[];
   items: WebSourceItem[];
+  candidates?: WebCandidateLink[];
   candidate_count: number;
   hidden_attached: number;
   hidden_seen: number;

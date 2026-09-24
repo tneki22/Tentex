@@ -13,12 +13,20 @@ const DRAFT_DEBOUNCE_MS = 800;
 interface UseProjectChatOptions {
   projectId: string;
   channel: ProjectChatChannel;
+  /** Ход потоком: этапы видны в ленте, ход можно остановить (поиск в интернете). */
+  streaming?: boolean;
 }
 
-/** Сетевое состояние проектного ИИ-чата (построение программы, поиск в интернете) —
- * без стрима: каждый ход модели приходит одним структурированным ответом.
+/** Данные этапов текущего хода, слитые по мере прихода кадров `progress`. */
+export type ProjectChatProgress = { stage: string } & Record<string, unknown>;
+
+const STOPPED_TEXT = "Поиск остановлен.";
+
+/** Сетевое состояние проектного ИИ-чата (построение программы, поиск в интернете).
+ * Ответ модели — один структурированный результат; поиск дополнительно присылает
+ * этапы хода потоком.
  */
-export function useProjectChat({ projectId, channel }: UseProjectChatOptions) {
+export function useProjectChat({ projectId, channel, streaming = false }: UseProjectChatOptions) {
   const api = useMemo(() => projectChatApi(projectId, channel), [projectId, channel]);
   const [sessions, setSessions] = useState<ProjectChatSessionSummary[] | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -30,6 +38,8 @@ export function useProjectChat({ projectId, channel }: UseProjectChatOptions) {
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<PendingSend | null>(null);
   const [sendError, setSendError] = useState("");
+  const [progress, setProgress] = useState<ProjectChatProgress | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [sessionsReloadKey, setSessionsReloadKey] = useState(0);
   const [detailReloadKey, setDetailReloadKey] = useState(0);
 
@@ -107,7 +117,7 @@ export function useProjectChat({ projectId, channel }: UseProjectChatOptions) {
       .then(setContextPreview)
       .catch(() => undefined);
     return () => controller.abort();
-  }, [api, activeSessionId, session?.context_flags, session?.section_scope_node_id]);
+  }, [api, activeSessionId, session?.context_flags]);
 
   useEffect(() => {
     if (!activeSessionId) return;
@@ -153,24 +163,40 @@ export function useProjectChat({ projectId, channel }: UseProjectChatOptions) {
 
     // Сообщение появляется в ленте, а поле очищается до похода на сервер:
     // ответ модели идёт десятки секунд, ждать его ради этого нельзя.
-    const message = optimisticUserMessage(sessionId, clean, session?.messages ?? []);
+    const message = localMessage(sessionId, "user", clean, session?.messages ?? []);
     setSendError("");
     setDraft("");
     setPending({ sessionId, message });
 
+    setProgress(null);
+
     let failure = "";
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      await api.send(sessionId, clean);
+      if (streaming) failure = await streamTurn(sessionId, clean, controller.signal);
+      else await api.send(sessionId, clean);
     } catch (error) {
-      failure = error instanceof Error ? error.message : "Сообщение не отправилось";
+      if (!controller.signal.aborted) {
+        failure = error instanceof Error ? error.message : "Сообщение не отправилось";
+      }
+    } finally {
+      abortRef.current = null;
     }
+    const stopped = controller.signal.aborted;
 
     // Пользовательская реплика на сервере сохраняется до вызова модели, поэтому
     // перечитать переписку нужно и после ошибки.
     const fresh = await fetchDetail(sessionId);
     if (activeSessionRef.current === sessionId) {
       if (fresh) {
-        setSession(fresh);
+        // Отметку об остановке сервер пишет, когда заметит обрыв соединения, —
+        // это может случиться чуть позже нашего чтения.
+        const last = fresh.messages.at(-1);
+        const needsMark = stopped && last?.role === "user";
+        setSession(needsMark
+          ? { ...fresh, messages: [...fresh.messages, localMessage(sessionId, "assistant", STOPPED_TEXT, fresh.messages)] }
+          : fresh);
       } else {
         setSession((current) => current
           ? { ...current, messages: [...current.messages, message] }
@@ -182,6 +208,28 @@ export function useProjectChat({ projectId, channel }: UseProjectChatOptions) {
       }
     }
     setPending((current) => (current?.message.id === message.id ? null : current));
+    setProgress(null);
+  }
+
+  /** Читает поток хода; возвращает текст ошибки или пустую строку. */
+  async function streamTurn(sessionId: string, text: string, signal: AbortSignal): Promise<string> {
+    for await (const event of api.stream(sessionId, text, signal)) {
+      if (event.type === "progress") {
+        if (activeSessionRef.current === sessionId) {
+          setProgress((current) => ({ ...current, ...event.data }));
+        }
+      } else if (event.type === "error") {
+        return event.detail || "Поиск не удался";
+      } else {
+        return "";
+      }
+    }
+    return "Соединение закрылось до ответа. Повторите запрос.";
+  }
+
+  /** Остановить ход: обрыв соединения отменяет его на сервере, в том числе вызов модели. */
+  function stopMessage() {
+    abortRef.current?.abort();
   }
 
   function updateContextFlag(key: string, value: boolean) {
@@ -191,17 +239,6 @@ export function useProjectChat({ projectId, channel }: UseProjectChatOptions) {
       : current);
     void api.updateContext(activeSessionId, { context_flags: { [key]: value } })
       .catch(() => void reloadDetail());
-  }
-
-  /** Область чата: вся программа (`null`), раздел или тема. */
-  async function updateScope(nodeId: string | null) {
-    if (!activeSessionId) return;
-    setSession((current) => current ? { ...current, section_scope_node_id: nodeId } : current);
-    try {
-      setSession(await api.updateContext(activeSessionId, { section_scope_node_id: nodeId }));
-    } catch {
-      await reloadDetail();
-    }
   }
 
   /** Смена модели дописывает в ленту системную отметку, поэтому перечитываем деталь. */
@@ -227,10 +264,10 @@ export function useProjectChat({ projectId, channel }: UseProjectChatOptions) {
     sessions, loadError, activeSessionId, setActiveSessionId,
     session, messages, detailLoading, detailError, reloadDetail, retryDetail,
     contextPreview, draft, setDraft,
-    sending, sendError, sendMessage,
+    sending, sendError, sendMessage, stopMessage,
+    progress: sending ? progress : null,
     startNewChat,
     updateContextFlag,
-    updateScope,
     updateModel,
     reloadSessions: () => setSessionsReloadKey((key) => key + 1),
   };
@@ -241,8 +278,10 @@ interface PendingSend {
   message: ChatMessageRead;
 }
 
-function optimisticUserMessage(
+/** Сообщение, которого на сервере ещё нет: своя реплика до ответа или отметка об остановке. */
+function localMessage(
   sessionId: string,
+  role: "user" | "assistant",
   text: string,
   saved: ChatMessageRead[],
 ): ChatMessageRead {
@@ -251,9 +290,9 @@ function optimisticUserMessage(
     id: `pending-${crypto.randomUUID()}`,
     session_id: sessionId,
     sequence: saved.reduce((max, item) => Math.max(max, item.sequence), 0) + 1,
-    role: "user",
+    role,
     text,
-    stream_state: "complete",
+    stream_state: role === "user" ? "complete" : "stopped",
     payload_kind: "none",
     payload: {},
     context_snapshot: {},
