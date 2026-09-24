@@ -77,7 +77,6 @@ AI_JOB_KINDS = frozenset(
         BackgroundJobKind.AI_CLEANUP,
         BackgroundJobKind.AI_ANSWER_SECTIONS,
         BackgroundJobKind.AI_PROGRAM_BUILD,
-        BackgroundJobKind.AI_SOURCE_SEARCH,
         BackgroundJobKind.COVERAGE_RESEARCH,
         BackgroundJobKind.RETRIEVAL_INDEX,
         BackgroundJobKind.RETRIEVAL_EXHAUSTIVE,

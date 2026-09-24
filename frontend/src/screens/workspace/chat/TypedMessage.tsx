@@ -28,6 +28,8 @@ interface TypedMessageProps {
   onRejectProposal?: (messageId: string) => Promise<void>;
   proposalBusy?: boolean;
   nodeTitles?: Record<string, string>;
+  /** Чат поиска — кнопки «что ещё поискать» под результатом. */
+  onFollowUp?: (text: string) => void;
   headingRef: (node: HTMLHeadingElement | null) => void;
 }
 
@@ -39,7 +41,7 @@ interface TypedMessageProps {
 export function TypedMessage({
   projectId, message, answerText, needsCheck, isStreaming,
   onAnswerAgain, onCheckAgain, onSelfAssessment,
-  onApplyProposal, onRejectProposal, proposalBusy = false, nodeTitles,
+  onApplyProposal, onRejectProposal, proposalBusy = false, nodeTitles, onFollowUp,
   headingRef,
 }: TypedMessageProps) {
   const payload = parsePayload(message);
@@ -82,7 +84,15 @@ export function TypedMessage({
   }
 
   if (payload.kind === "tool_result") {
-    return <ToolRunCard projectId={projectId} payload={payload.data} headingRef={headingRef} />;
+    return (
+      <ToolRunCard
+        projectId={projectId}
+        payload={payload.data}
+        headingRef={headingRef}
+        nodeTitles={nodeTitles}
+        onFollowUp={onFollowUp}
+      />
+    );
   }
 
   if (payload.kind === "program_diff") {

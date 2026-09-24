@@ -8,7 +8,7 @@ export type ChatPayloadKind =
   | "none" | "answer_form" | "verdict" | "task" | "interactive" | "tool_result" | "program_diff";
 export type ExaminerPersona = "calm_teacher" | "neutral_examiner" | "strict_reviewer";
 export type ExaminerStrictness = "soft" | "normal" | "strict";
-export type ChatMode = "exam" | "study" | "program";
+export type ChatMode = "exam" | "study" | "program" | "source_search";
 export type ChatRetrievalScope = "linked_topic" | "topic_project" | "project" | "selected_materials";
 export type ChatKnowledgePolicy = "sources_only" | "allow_model";
 export type ChatToolRunState = "queued" | "running" | "succeeded" | "failed";
@@ -265,6 +265,53 @@ export interface MaterialSearchResultItem {
   already_bound: boolean;
 }
 
+export type WebSourceKind =
+  | "textbook" | "lecture" | "article" | "video" | "course" | "problems" | "catalog" | "other";
+
+/** Объём найденного источника — из прочитанной страницы или выдачи, не от модели. */
+export interface WebSourceVolume {
+  kind: "html" | "pdf" | "text" | "video" | null;
+  words?: number | null;
+  minutes?: number | null;
+  pages?: number | null;
+  size_bytes?: number | null;
+  file_links?: number;
+  duration?: string | null;
+}
+
+export interface WebSourceItem {
+  url: string;
+  title: string;
+  host: string;
+  kind: WebSourceKind;
+  why: string;
+  gist: string;
+  level: "beginner" | "intermediate" | "advanced" | null;
+  volume: WebSourceVolume;
+  author: string | null;
+  node_ids: string[];
+}
+
+export interface WebSearchRun {
+  query: string;
+  category: "general" | "videos" | "science";
+  language: "ru" | "en" | "all";
+  node_ids: string[];
+  found: number;
+}
+
+/** Ход чата «Поиск в интернете» (`app/projects/source_search_chat.py`). */
+export interface SourceSearchResult {
+  summary: string;
+  searches: WebSearchRun[];
+  items: WebSourceItem[];
+  candidate_count: number;
+  hidden_attached: number;
+  hidden_seen: number;
+  unresponsive_engines: string[];
+  follow_ups: string[];
+}
+
 export type ToolResultPayload =
   | {
       tool_key: string;
@@ -272,6 +319,13 @@ export type ToolResultPayload =
       state: "succeeded" | "failed";
       query: string;
       result: { items: MaterialSearchResultItem[] };
+    }
+  | {
+      tool_key: string;
+      output_kind: "source_search_results";
+      state: "succeeded" | "failed";
+      query: string;
+      result: SourceSearchResult;
     }
   | {
       tool_key: string;

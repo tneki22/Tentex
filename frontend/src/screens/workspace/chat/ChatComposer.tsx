@@ -25,6 +25,7 @@ interface ChatComposerProps {
   showModeIndicator?: boolean;
   sending: boolean;
   disabled?: boolean;
+  placeholder?: string;
 }
 
 /**
@@ -35,7 +36,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   {
     value, onChange, onSend, onStop, onOpenPalette, modelPicker, modes = [], currentMode = "exam",
     onModeChange,
-    showModeIndicator = true, sending, disabled,
+    showModeIndicator = true, sending, disabled, placeholder,
   },
   forwardedRef,
 ) {
@@ -85,7 +86,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={onOpenPalette ? "Спросите или введите / для команд" : "Спросите или предложите правку"}
+        placeholder={placeholder ?? (onOpenPalette ? "Спросите или введите / для команд" : "Спросите или предложите правку")}
         disabled={disabled}
         rows={1}
       />

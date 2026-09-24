@@ -9,8 +9,13 @@ import type {
   ProgramChatOperationState,
   ProgramChatOperationView,
   RubricPointRead,
+  SourceSearchResult,
   ToolResultPayload,
   VerdictPayload,
+  WebSearchRun,
+  WebSourceItem,
+  WebSourceKind,
+  WebSourceVolume,
 } from "../../../api/chat";
 
 export type ParsedPayload =
@@ -133,6 +138,55 @@ function toolQuery(value: unknown): string {
   return typeof record?.query === "string" ? record.query : "";
 }
 
+const strings = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+const count = (value: unknown): number => (typeof value === "number" ? value : 0);
+
+/** Ход чата поиска: карточка без адреса и названия — не карточка, остальное терпимо. */
+function sourceSearchResult(value: unknown): SourceSearchResult | null {
+  const record = value as Record<string, unknown> | undefined;
+  if (!record || !Array.isArray(record.items) || !Array.isArray(record.searches)) return null;
+  const items: WebSourceItem[] = [];
+  for (const raw of record.items) {
+    const item = raw as Record<string, unknown>;
+    if (!item || typeof item.url !== "string" || typeof item.title !== "string") continue;
+    items.push({
+      url: item.url,
+      title: item.title,
+      host: typeof item.host === "string" ? item.host : "",
+      kind: (typeof item.kind === "string" ? item.kind : "other") as WebSourceKind,
+      why: typeof item.why === "string" ? item.why : "",
+      gist: typeof item.gist === "string" ? item.gist : "",
+      level: (typeof item.level === "string" ? item.level : null) as WebSourceItem["level"],
+      volume: (item.volume ?? { kind: null }) as WebSourceVolume,
+      author: typeof item.author === "string" ? item.author : null,
+      node_ids: strings(item.node_ids),
+    });
+  }
+  const searches: WebSearchRun[] = [];
+  for (const raw of record.searches) {
+    const search = raw as Record<string, unknown>;
+    if (!search || typeof search.query !== "string") continue;
+    searches.push({
+      query: search.query,
+      category: (search.category ?? "general") as WebSearchRun["category"],
+      language: (search.language ?? "ru") as WebSearchRun["language"],
+      node_ids: strings(search.node_ids),
+      found: count(search.found),
+    });
+  }
+  return {
+    summary: typeof record.summary === "string" ? record.summary : "",
+    searches,
+    items,
+    candidate_count: count(record.candidate_count),
+    hidden_attached: count(record.hidden_attached),
+    hidden_seen: count(record.hidden_seen),
+    unresponsive_engines: strings(record.unresponsive_engines),
+    follow_ups: strings(record.follow_ups),
+  };
+}
+
 function toolResultPayload(value: unknown): ToolResultPayload | null {
   const record = value as Record<string, unknown>;
   if (
@@ -153,8 +207,17 @@ function toolResultPayload(value: unknown): ToolResultPayload | null {
       result: { items },
     };
   }
-  // Будущие output_kind (source_search_results и т.п.) распознаются позже —
-  // сейчас такие Tools вообще не запускаются (недоступны в registry).
+  if (record.output_kind === "source_search_results") {
+    const result = sourceSearchResult(record.result);
+    if (!result) return null;
+    return {
+      tool_key: record.tool_key,
+      output_kind: record.output_kind,
+      state: record.state,
+      query,
+      result,
+    };
+  }
   return {
     tool_key: record.tool_key,
     output_kind: record.output_kind,

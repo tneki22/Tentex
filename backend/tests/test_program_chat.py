@@ -12,6 +12,7 @@ from app.ai.jobs import process_ai_job
 from app.ai.provider import FakeTransport, ProviderCompletion, ProviderUsage
 from app.background.registry import get_job
 from app.chat import common as chat_common
+from app.chat import project_sessions
 from app.models import (
     BackgroundJob,
     BackgroundJobState,
@@ -131,20 +132,20 @@ def test_create_session_requires_textbook_project_but_allows_draft(
     session.add(exam_project)
     session.commit()
     with pytest.raises(ProjectDomainError):
-        program_chat.create_session(session, exam_project.id)
+        project_sessions.create_session(session, exam_project.id, program_chat.CHANNEL)
 
     draft_project = _project(session, status=ProjectStatus.DRAFT)
-    chat = program_chat.create_session(session, draft_project.id)
+    chat = project_sessions.create_session(session, draft_project.id, program_chat.CHANNEL)
     assert chat.program_node_id is None
     assert chat.mode == ChatMode.PROGRAM
-    assert chat.context_flags == program_chat.default_context_flags()
+    assert chat.context_flags == program_chat.CHANNEL.fresh_flags()
 
 
 @pytest.mark.asyncio
 async def test_send_message_creates_program_diff_message(session: Session, ai_config: str) -> None:
     del ai_config
     project = _project(session)
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     chat.draft_text = "Составь программу"
     session.commit()
     fake = FakeTransport(completions=[
@@ -176,7 +177,7 @@ def test_outline_build_runs_as_background_job_and_appends_message(
 ) -> None:
     del ai_config
     project = _project(session)
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     fake = FakeTransport(completions=[
         _reply_completion("Программа по оглавлению", [
             {"op": "add", "parent_node_id": None, "after_node_id": None, "node_type": "section",
@@ -194,7 +195,7 @@ def test_outline_build_runs_as_background_job_and_appends_message(
     refreshed = get_job(session, start.job_id)
     assert refreshed.state == BackgroundJobState.COMPLETED
 
-    detail = program_chat.get_session_detail(session, project.id, chat.id)
+    detail = project_sessions.get_session_detail(session, project.id, chat.id, program_chat.CHANNEL)
     assert len(detail.messages) == 1
     assert detail.messages[0].payload_kind == ChatPayloadKind.PROGRAM_DIFF
 
@@ -202,7 +203,7 @@ def test_outline_build_runs_as_background_job_and_appends_message(
 def test_goal_build_records_tool_run(session: Session, ai_config: str) -> None:
     del ai_config
     project = _project(session)
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     fake = FakeTransport(completions=[
         ProviderCompletion(
             content=json.dumps({"queries": ["транспортный уровень"]}),
@@ -248,7 +249,7 @@ def _diff_message(
 def test_apply_partial_then_conflict_then_reapply(session: Session, ai_config: str) -> None:
     del ai_config
     project = _project(session)
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     existing = _node(session, project, "Старое название")
     message = _diff_message(session, chat, [
         {"op": "rename", "node_id": str(existing.id), "title": "Новое название", "rationale": "r"},
@@ -264,7 +265,7 @@ def test_apply_partial_then_conflict_then_reapply(session: Session, ai_config: s
     renamed = next(node for node in result.program.nodes if node.id == existing.id)
     assert renamed.title == "Новое название"
 
-    detail = program_chat.get_session_detail(session, project.id, chat.id)
+    detail = project_sessions.get_session_detail(session, project.id, chat.id, program_chat.CHANNEL)
     payload = detail.messages[0].payload
     assert payload["operation_states"] == ["applied", "pending"]
 
@@ -285,7 +286,7 @@ def test_add_at_start_places_first_and_default_goes_last(
 ) -> None:
     del ai_config
     project = _project(session)
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     _node(session, project, "Первый", sort_order=0)
     _node(session, project, "Второй", sort_order=1)
     message = _diff_message(session, chat, [
@@ -312,7 +313,7 @@ def test_set_visibility_applies_to_subtree_and_undo_restores_it(
 ) -> None:
     del ai_config
     project = _project(session)
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     parent = _node(session, project, "DNS")
     child = _node(session, project, "Протокол DNS", parent_id=parent.id)
     message = _diff_message(session, chat, [{
@@ -341,7 +342,7 @@ def test_set_visibility_applies_to_subtree_and_undo_restores_it(
 def test_apply_rejects_stale_revision(session: Session, ai_config: str) -> None:
     del ai_config
     project = _project(session)
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     existing = _node(session, project, "Тема")
     message = _diff_message(session, chat, [
         {"op": "rename", "node_id": str(existing.id), "title": "Иначе", "rationale": "r"},
@@ -357,7 +358,7 @@ def test_apply_rejects_stale_revision(session: Session, ai_config: str) -> None:
 def test_reject_proposal_blocks_later_apply(session: Session, ai_config: str) -> None:
     del ai_config
     project = _project(session)
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     existing = _node(session, project, "Тема")
     message = _diff_message(session, chat, [
         {"op": "rename", "node_id": str(existing.id), "title": "Иначе", "rationale": "r"},
@@ -377,7 +378,7 @@ def test_apply_add_with_outline_ref_sets_basis_kind_and_invalid_ref_falls_back(
 ) -> None:
     del ai_config
     project = _project(session)
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     material = _material(
         session, project, "Учебник",
         outline=[
@@ -412,7 +413,7 @@ def test_merge_survivor_gets_unioned_ranges_and_others_hide(
 ) -> None:
     del ai_config
     project = _project(session)
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     material = _material(session, project, "Учебник")
     survivor = _node(session, project, "Сети", basis_kind=ProgramBasisKind.OUTLINE)
     other = _node(session, project, "Компьютерные сети", basis_kind=ProgramBasisKind.OUTLINE)
@@ -448,7 +449,7 @@ def test_merge_survivor_gets_unioned_ranges_and_others_hide(
 def test_undo_after_apply_restores_everything(session: Session, ai_config: str) -> None:
     del ai_config
     project = _project(session)
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     existing = _node(session, project, "Старое")
     message = _diff_message(session, chat, [
         {"op": "rename", "node_id": str(existing.id), "title": "Новое", "rationale": "r"},
@@ -467,5 +468,5 @@ def test_undo_after_apply_restores_everything(session: Session, ai_config: str) 
     assert "Старое" in titles
     assert "Добавлено" not in titles
 
-    detail = program_chat.get_session_detail(session, project.id, chat.id)
+    detail = project_sessions.get_session_detail(session, project.id, chat.id, program_chat.CHANNEL)
     assert detail.messages[0].payload["operation_states"] == ["pending", "pending"]

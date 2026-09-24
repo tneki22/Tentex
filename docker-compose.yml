@@ -1,4 +1,4 @@
-# API, worker, model service retrieval и Vite работают отдельными процессами.
+# API, worker, model service retrieval, SearXNG и Vite работают отдельными процессами.
 # Данные (SQLite и файловое хранилище) лежат в ./data на хосте — контейнер их не уносит.
 
 services:
@@ -12,6 +12,7 @@ services:
     environment:
       TENTEX_DATA_DIR: /data
       TENTEX_RETRIEVAL_MODEL_URL: http://retrieval-model:8010
+      TENTEX_SEARXNG_URL: http://searxng:8080
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
       interval: 10s
@@ -54,6 +55,17 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+
+  # Метапоиск для чата «Поиск в интернете». От него api не зависит при старте:
+  # без поиска приложение работает, а чат прямо пишет, что сервис не отвечает.
+  # Порт открыт только на localhost — для `npm run dev` с бэкендом на хосте.
+  searxng:
+    image: searxng/searxng:2026.9.23-3cd69d30e
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./searxng:/etc/searxng
     restart: unless-stopped
 
   web:

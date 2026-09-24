@@ -46,14 +46,12 @@ ACTIVE_JOB_STATES = {
 # Остальные виды сюда не входят по существу, а не по недосмотру:
 # `parse` и `link_answers` применяют результат сами и подтверждения не просят;
 # `ai_preparation` живёт внутри мастера, который подставляет оценку в форму сам,
-# как только шаг открыт заново. `ai_source_search` сюда входит: найденные в сети
-# ссылки — такое же предложение, и за повторный поиск снова платить незачем.
+# как только шаг открыт заново.
 REVIEW_REQUIRED_KINDS = {
     BackgroundJobKind.AI_GROUPING,
     BackgroundJobKind.AI_IMPORT_REPAIR,
     BackgroundJobKind.AI_ANSWER_SECTIONS,
     BackgroundJobKind.AI_CLEANUP,
-    BackgroundJobKind.AI_SOURCE_SEARCH,
 }
 
 

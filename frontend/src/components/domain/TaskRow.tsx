@@ -54,7 +54,6 @@ const KIND_LABEL: Record<TaskKind, string> = {
   link_answers: "Автопривязка ответов",
   ai_answer_sections: "Разметка ответов моделью",
   ai_program_build: "Составление программы",
-  ai_source_search: "Поиск материалов в интернете",
   coverage_research: "Исследование покрытия",
   retrieval_index: "Сбор индекса",
   retrieval_model_install: "Установка embedding-модели",

@@ -1,38 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessageRead, ChatModelOverride } from "../api/chat";
 import {
-  createProgramChatSession,
-  getProgramChatContext,
-  getProgramChatSession,
-  listProgramChatSessions,
-  saveProgramChatDraft,
-  sendProgramChatMessage,
-  updateProgramChatContext,
-  updateProgramChatSettings,
-  type ProgramChatContextPreview,
-  type ProgramChatSessionDetail,
-  type ProgramChatSessionSummary,
-} from "../api/programChat";
+  projectChatApi,
+  type ProjectChatChannel,
+  type ProjectChatContextPreview,
+  type ProjectChatSessionDetail,
+  type ProjectChatSessionSummary,
+} from "../api/projectChat";
 
 const DRAFT_DEBOUNCE_MS = 800;
 
-interface UseProgramChatOptions {
+interface UseProjectChatOptions {
   projectId: string;
+  channel: ProjectChatChannel;
 }
 
-/** Сетевое состояние ИИ-чата построения программы — без стрима: каждый ход
-
- * модели приходит одним структурированным ответом (`send_message`), а первая
- * тяжёлая сборка идёт фоновой задачей (`useBackgroundJob`).
+/** Сетевое состояние проектного ИИ-чата (построение программы, поиск в интернете) —
+ * без стрима: каждый ход модели приходит одним структурированным ответом.
  */
-export function useProgramChat({ projectId }: UseProgramChatOptions) {
-  const [sessions, setSessions] = useState<ProgramChatSessionSummary[] | null>(null);
+export function useProjectChat({ projectId, channel }: UseProjectChatOptions) {
+  const api = useMemo(() => projectChatApi(projectId, channel), [projectId, channel]);
+  const [sessions, setSessions] = useState<ProjectChatSessionSummary[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [session, setSession] = useState<ProgramChatSessionDetail | null>(null);
+  const [session, setSession] = useState<ProjectChatSessionDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
-  const [contextPreview, setContextPreview] = useState<ProgramChatContextPreview | null>(null);
+  const [contextPreview, setContextPreview] = useState<ProjectChatContextPreview | null>(null);
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<PendingSend | null>(null);
   const [sendError, setSendError] = useState("");
@@ -52,10 +46,10 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
     setSessions(null);
     (async () => {
       try {
-        const list = await listProgramChatSessions(projectId, controller.signal);
+        const list = await api.list(controller.signal);
         if (loadToken.current !== token) return;
         if (list.length === 0) {
-          const created = await createProgramChatSession(projectId);
+          const created = await api.create();
           if (loadToken.current !== token) return;
           setSessions([{
             id: created.id,
@@ -75,9 +69,9 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
       }
     })();
     return () => controller.abort();
-  }, [projectId, sessionsReloadKey]);
+  }, [api, sessionsReloadKey]);
 
-  function applySessionDetail(value: ProgramChatSessionDetail) {
+  function applySessionDetail(value: ProjectChatSessionDetail) {
     setSession(value);
     setDraft(value.draft_text);
   }
@@ -90,7 +84,7 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
     const controller = new AbortController();
     setDetailLoading(true);
     setDetailError("");
-    getProgramChatSession(projectId, activeSessionId, controller.signal)
+    api.get(activeSessionId, controller.signal)
       .then(applySessionDetail)
       .catch((error) => {
         if (controller.signal.aborted) return;
@@ -101,7 +95,7 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
       });
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, activeSessionId, detailReloadKey]);
+  }, [api, activeSessionId, detailReloadKey]);
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -109,16 +103,16 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
       return;
     }
     const controller = new AbortController();
-    getProgramChatContext(projectId, activeSessionId, controller.signal)
+    api.getContext(activeSessionId, controller.signal)
       .then(setContextPreview)
       .catch(() => undefined);
     return () => controller.abort();
-  }, [projectId, activeSessionId, session?.context_flags]);
+  }, [api, activeSessionId, session?.context_flags, session?.section_scope_node_id]);
 
   useEffect(() => {
     if (!activeSessionId) return;
     const timer = window.setTimeout(() => {
-      void saveProgramChatDraft(projectId, activeSessionId, draft).catch(() => undefined);
+      void api.saveDraft(activeSessionId, draft).catch(() => undefined);
     }, DRAFT_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -131,9 +125,9 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
 
   /** Тихо перечитать переписку: без `detailLoading`, чтобы поле ввода и лента не
    * пропадали, и без перезаписи черновика — пользователь мог уже печатать следующее. */
-  async function fetchDetail(sessionId: string): Promise<ProgramChatSessionDetail | null> {
+  async function fetchDetail(sessionId: string): Promise<ProjectChatSessionDetail | null> {
     try {
-      return await getProgramChatSession(projectId, sessionId);
+      return await api.get(sessionId);
     } catch {
       return null;
     }
@@ -147,7 +141,7 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
   }
 
   async function startNewChat() {
-    const created = await createProgramChatSession(projectId);
+    const created = await api.create();
     setSessionsReloadKey((key) => key + 1);
     setActiveSessionId(created.id);
   }
@@ -166,7 +160,7 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
 
     let failure = "";
     try {
-      await sendProgramChatMessage(projectId, sessionId, clean);
+      await api.send(sessionId, clean);
     } catch (error) {
       failure = error instanceof Error ? error.message : "Сообщение не отправилось";
     }
@@ -195,8 +189,19 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
     setSession((current) => current
       ? { ...current, context_flags: { ...current.context_flags, [key]: value } }
       : current);
-    void updateProgramChatContext(projectId, activeSessionId, { context_flags: { [key]: value } })
+    void api.updateContext(activeSessionId, { context_flags: { [key]: value } })
       .catch(() => void reloadDetail());
+  }
+
+  /** Область чата: вся программа (`null`), раздел или тема. */
+  async function updateScope(nodeId: string | null) {
+    if (!activeSessionId) return;
+    setSession((current) => current ? { ...current, section_scope_node_id: nodeId } : current);
+    try {
+      setSession(await api.updateContext(activeSessionId, { section_scope_node_id: nodeId }));
+    } catch {
+      await reloadDetail();
+    }
   }
 
   /** Смена модели дописывает в ленту системную отметку, поэтому перечитываем деталь. */
@@ -205,7 +210,7 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
     parameters: Record<string, unknown>,
   ) {
     if (!activeSessionId) return;
-    const detail = await updateProgramChatSettings(projectId, activeSessionId, {
+    const detail = await api.updateSettings(activeSessionId, {
       model_override: value,
       model_parameters: value ? parameters : null,
     });
@@ -225,6 +230,7 @@ export function useProgramChat({ projectId }: UseProgramChatOptions) {
     sending, sendError, sendMessage,
     startNewChat,
     updateContextFlag,
+    updateScope,
     updateModel,
     reloadSessions: () => setSessionsReloadKey((key) => key + 1),
   };
@@ -260,5 +266,5 @@ function optimisticUserMessage(
   };
 }
 
-export type UseProgramChatResult = ReturnType<typeof useProgramChat>;
+export type UseProjectChatResult = ReturnType<typeof useProjectChat>;
 export type { ChatMessageRead };

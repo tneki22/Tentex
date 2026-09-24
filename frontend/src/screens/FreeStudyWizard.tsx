@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Globe, LibraryBig, Link2, Trash2, Undo2, UploadCloud } from "lucide-react";
+import { BookOpen, LibraryBig, Link2, Trash2, Undo2, UploadCloud } from "lucide-react";
 import type { ChatMessageRead } from "../api/chat";
 import { attachLibraryMaterial, listLibraryMaterials, type MaterialRead } from "../api/materials";
 import { suggestMaterialsForQuery, type MaterialSuggestion, type MaterialSuggestions } from "../api/materialSuggestions";
@@ -8,7 +8,6 @@ import type { WizardDraftController } from "../hooks/useWizardDraft";
 import { useAiRoleAvailability } from "../hooks/useAiRoleAvailability";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import {
-  ExternalSourceSearchDialog,
   LibraryMaterialPickerDialog,
   MaterialSuggestionList,
   ProgramTreePreview,
@@ -19,6 +18,7 @@ import { Button, Card, Field, IconButton, LoadingState, PageHead, SegmentedTabs,
 import { TextbookOutlineReview } from "./TextbookOutlineReview";
 import { TextbookSourceCard } from "./TextbookSourceCard";
 import { buildProgramTree, flattenProgramTree } from "./programTree";
+import { ProgramReviewList } from "./ProgramReviewList";
 import { lastPendingDiff, ProgramChatWorkspace } from "./workspace/chat/ProgramChatWorkspace";
 import {
   outlineItemsWithKeys,
@@ -101,7 +101,6 @@ export function FreeStudyWizard({
   const [aiChatMessages, setAiChatMessages] = useState<ChatMessageRead[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
-  const [onlineOpen, setOnlineOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
   const [actionError, setActionError] = useState("");
   const [librarySubjects, setLibrarySubjects] = useState<string[]>([]);
@@ -440,6 +439,7 @@ export function FreeStudyWizard({
       {step === 2 && (
         <section className="free-study-step is-materials">
           <p className="wizard-step-intro">Материалы необязательны: без них ИИ составит программу по цели и подскажет, что искать. С материалами программа опирается на их оглавления.</p>
+          <p className="wizard-step-intro">Пока вы можете добавить материалы из Библиотеки. Если их нет, то после создания проекта вы сможете найти материалы в интернете в соответствующем разделе.</p>
 
           <section className="free-study-suggestions" aria-label="Подходит к вашей цели">
             <h2>Подходит к вашей цели</h2>
@@ -447,7 +447,7 @@ export function FreeStudyWizard({
             {libraryMaterialCount !== 0 && !suggestions && !suggestionsError && <p className="free-study-suggestions-note" role="status">Ищем в Библиотеке материалы под вашу цель…</p>}
             {suggestionsError && <p className="free-study-suggestions-note is-error" role="alert">{suggestionsError} <Button variant="ghost" onClick={() => setSuggestionsKey((key) => key + 1)}>Повторить</Button></p>}
             {suggestions && suggestions.items.length === 0 && libraryMaterialCount !== 0 && (
-              <p className="free-study-suggestions-note">В Библиотеке не нашлось подходящего под цель. Найдите в интернете, загрузите своё — или продолжайте без материалов.</p>
+              <p className="free-study-suggestions-note">В Библиотеке не нашлось подходящего под цель. Загрузите своё или продолжайте без материалов.</p>
             )}
             {suggestions && suggestions.items.length > 0 && (
               <MaterialSuggestionList items={suggestions.items} busyId={attachingId} onAttach={(item) => void attachSuggestion(item)} />
@@ -460,25 +460,11 @@ export function FreeStudyWizard({
             <Button variant="secondary" onClick={() => setLibraryOpen(true)}><LibraryBig size={15} />Вся Библиотека</Button>
             <Button variant="secondary" onClick={() => fileInput.current?.click()}><UploadCloud size={15} />Загрузить файл</Button>
             <Button variant="secondary" onClick={() => setLinkOpen((open) => !open)}><Link2 size={15} />Добавить ссылку</Button>
-            <Button variant="secondary" disabled={!projectId} onClick={() => setOnlineOpen(true)}><Globe size={15} />Найти в интернете</Button>
           </div>
-          {projectId && (
-            <ExternalSourceSearchDialog
-              open={onlineOpen}
-              onOpenChange={setOnlineOpen}
-              projectId={projectId}
-              initialQuery={[form.subject.trim(), form.goal.trim()].filter(Boolean).join(" — ").slice(0, 200)}
-              hasProjectMaterials={materials.materials.length > 0}
-              onAdded={(ids) => {
-                void materials.refresh();
-                if (!basisMaterialId && ids[0]) setBasisMaterialId(ids[0]);
-              }}
-            />
-          )}
           {linkOpen && <Card className="free-study-link-card"><Field label="Веб-страница или YouTube" hint="Прямая ссылка на PDF пока не поддерживается"><input type="url" value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)} placeholder="https://example.org/article" /></Field><Button disabled={busy || !linkUrl.trim()} onClick={() => void addLink()}>Добавить</Button></Card>}
 
           {materials.materials.length > 0 && <h2 className="free-study-section-title">В проекте</h2>}
-          <div className="textbook-source-list">
+          {(materials.loading || materials.materials.length > 0) && <div className="textbook-source-list">
             {materials.loading && <LoadingState label="Загружаем материалы" />}
             {materials.materials.map((material) => (
               <Card className={`textbook-source-card free-study-source${basisMaterialId === material.id ? " is-basis" : ""}`} key={material.id}>
@@ -491,7 +477,7 @@ export function FreeStudyWizard({
                 <TextbookSourceCard material={material} busy={busy} onSave={materials.update} />
               </Card>
             ))}
-          </div>
+          </div>}
 
           {basisHasNoOutline && <Card className="free-study-material-note">Материал добавлен, но оглавление пока недоступно. Можно продолжить: ИИ составит программу по цели, а материал будет ждать в проекте.</Card>}
           {basis && (basis.outline.length > 0 || basis.status === "ready") && controller.detail && <>
@@ -562,7 +548,7 @@ export function FreeStudyWizard({
             </dl>
           </section>
           <Card className="textbook-summary-card"><h3>Материалы</h3>{materials.materials.map((material) => <div key={material.id}><span>{basisMaterialId === material.id ? "Основа" : "Доп."}</span><b>{material.display_name}</b><small>{materialStatus(material)}</small></div>)}{materials.materials.length === 0 && <p>Пока без материалов — для свободного изучения это нормально. Их можно добавить в любой момент.</p>}</Card>
-          <Card className="textbook-summary-card"><h3>Программа</h3><dl className="textbook-summary-metrics"><div className="is-sections"><dt>Разделы</dt><dd>{counts.sections}</dd></div><div className="is-topics"><dt>Темы</dt><dd>{counts.topics}</dd></div><div className="is-outside"><dt>Подпункты</dt><dd>{counts.subpoints}</dd></div></dl>{flat.map((node) => <div key={node.id}><span>{node.number}</span><b>{node.title}</b><small>{node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}</small></div>)}{flat.length === 0 && <p>Программа пока пуста. После создания её можно составить в разделе «Программа» — вручную или с ИИ.</p>}</Card>
+          <Card className="textbook-summary-card"><h3>Программа</h3><dl className="textbook-summary-metrics"><div className="is-sections"><dt>Разделы</dt><dd>{counts.sections}</dd></div><div className="is-topics"><dt>Темы</dt><dd>{counts.topics}</dd></div><div className="is-outside"><dt>Подпункты</dt><dd>{counts.subpoints}</dd></div></dl><ProgramReviewList nodes={flat} />{flat.length === 0 && <p>Программа пока пуста. После создания её можно составить в разделе «Программа» — вручную или с ИИ.</p>}</Card>
           {studyNodes.length > 0 && (
             <Card className="textbook-summary-card free-study-material-plan">
               <h3>Материал к темам</h3>

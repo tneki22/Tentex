@@ -13,7 +13,6 @@ export type BackgroundJobKind =
   | "link_answers"
   | "ai_answer_sections"
   | "ai_program_build"
-  | "ai_source_search"
   | "coverage_research"
   | "retrieval_index"
   | "retrieval_model_install"

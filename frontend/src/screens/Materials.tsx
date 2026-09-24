@@ -29,7 +29,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import type { BindingFragmentRead, HeadingSuggestion, NodeBindingSummary } from "../api/bindings";
 import { listBindings, resolveAnswersHeading } from "../api/bindings";
@@ -54,7 +54,6 @@ import { getProject, undoProjectAction, type LatestUndoableAction, type ProjectD
 import {
   AnswerMatchStatus,
   AutoMatchDialog,
-  ExternalSourceSearchDialog,
   LibraryMaterialPickerDialog,
   ProjectNav,
   QualityBadge,
@@ -92,6 +91,7 @@ import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTr
 import { AiCleanupPanel } from "./AiCleanupPanel";
 import { MaterialFileTab } from "./materials/MaterialFileTab";
 import { MaterialProcessingPanels } from "./materials/MaterialProcessingPanels";
+import { MaterialsWebSearch, type MaterialsWebSearchHandle } from "./materials/MaterialsWebSearch";
 import { DocumentSearchField, PageNumberInput, StructuredPage } from "../components/domain/material-viewer";
 
 const EMPTY_STRING_SET: Set<string> = new Set();
@@ -253,15 +253,18 @@ function MaterialOverview({
   onChooseLibrary,
   onFindOnline,
   onResearch,
+  webSearch,
 }: {
   materials: MaterialRead[];
   textbook: boolean;
   onOpen: (id: string) => void;
   onAdd: () => void;
   onChooseLibrary: () => void;
-  /** Поиск материалов в интернете; есть только у учебникового и свободного проекта. */
+  /** Раскрыть чат поиска в интернете; есть только у учебникового и свободного проекта. */
   onFindOnline?: () => void;
   onResearch: (id: string) => void;
+  /** Блок «Поиск в интернете» под списком материалов. */
+  webSearch?: ReactNode;
 }) {
   return (
     <div className="materials-document-stage is-standalone">
@@ -311,6 +314,7 @@ function MaterialOverview({
               ))}
             </div>
           )}
+          {webSearch}
         </div>
       </div>
     </div>
@@ -1219,9 +1223,7 @@ function MaterialSurface() {
   const [removeOpen, setRemoveOpen] = useState(false);
   const [autoMatchOpen, setAutoMatchOpen] = useState(false);
   const [aiPlanOpen, setAiPlanOpen] = useState(false);
-  const [onlineOpen, setOnlineOpen] = useState(false);
-  // Найденные в сети ссылки ждут разбора — панель фоновых задач ведёт сюда.
-  const sourceReviewJob = usePendingReviewJob("ai_source_search", { projectId }, !materialId);
+  const webSearch = useRef<MaterialsWebSearchHandle>(null);
   // Разметка ответов моделью досчиталась в фоне и ждёт человека — открываем
   // диалог с готовым планом сразу, без поиска нужной кнопки на экране.
   const answersReviewJob = usePendingReviewJob(
@@ -1284,7 +1286,13 @@ function MaterialSurface() {
   }, [hasOriginal, material?.id]);
 
   useEffect(() => { if (answersReviewJob) setAiPlanOpen(true); }, [answersReviewJob]);
-  useEffect(() => { if (sourceReviewJob) setOnlineOpen(true); }, [sourceReviewJob]);
+  // «Найти в интернете» у темы ведёт сюда с `?search=1&topic=…`: блок раскрывается
+  // и встаёт по центру, даже если экран уже был открыт.
+  const searchRequested = searchParams.get("search") === "1";
+  const searchTopicId = searchParams.get("topic");
+  useEffect(() => {
+    if (searchRequested && textbook) webSearch.current?.reveal();
+  }, [searchRequested, searchTopicId, textbook]);
 
   const treeResult = useMemo(() => {
     try { return buildProgramTree(project?.program.nodes ?? []); }
@@ -1906,8 +1914,17 @@ function MaterialSurface() {
             onOpen={(id) => navigate(`/projects/${projectId}/materials/${id}`)}
             onAdd={() => setAddOpen(true)}
             onChooseLibrary={() => setLibraryOpen(true)}
-            onFindOnline={textbook ? () => setOnlineOpen(true) : undefined}
+            onFindOnline={textbook ? () => webSearch.current?.reveal() : undefined}
             onResearch={(id) => { setResearchMaterialIds([id]); setResearchOpen(true); }}
+            webSearch={textbook && project ? (
+              <MaterialsWebSearch
+                ref={webSearch}
+                projectId={projectId}
+                nodes={project.program.nodes}
+                initiallyOpen={searchRequested}
+                initialTopicId={searchTopicId}
+              />
+            ) : null}
           />
         ) : (
           <>
@@ -2153,17 +2170,6 @@ function MaterialSurface() {
         onExternal={(kind, url) => void addExternal(kind, url)}
         onReplaceAnswers={releaseAnswersMaterial}
       />
-      {textbook && (
-        <ExternalSourceSearchDialog
-          open={onlineOpen}
-          onOpenChange={setOnlineOpen}
-          projectId={projectId}
-          initialQuery={[project?.goal_passport?.subject, project?.goal_passport?.goal].filter(Boolean).join(" — ").slice(0, 200)}
-          hasProjectMaterials={store.materials.length > 0}
-          jobId={sourceReviewJob}
-          onAdded={() => void store.refresh()}
-        />
-      )}
       <LibraryMaterialPickerDialog
         open={libraryOpen}
         projectId={projectId}

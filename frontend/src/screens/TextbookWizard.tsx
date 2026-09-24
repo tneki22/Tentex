@@ -22,6 +22,7 @@ import {
 } from "../components/domain";
 import type { TextbookProgramView } from "../components/domain";
 import { buildProgramTree, flattenProgramTree } from "./programTree";
+import { ProgramReviewList } from "./ProgramReviewList";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { TextbookSourceCard } from "./TextbookSourceCard";
 import {
@@ -510,7 +511,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
               <div className="is-outside"><dt>Подпункты</dt><dd>{subpointCount}</dd></div>
               <div className="is-missing"><dt>Всего узлов</dt><dd>{nodes.length}</dd></div>
             </dl>
-            {flat.map((node) => <div key={node.id}><span>{node.number}</span><b>{node.title}</b><small>{node.node_type === "section" ? "раздел" : node.node_type === "topic" ? "тема" : "подпункт"}</small></div>)}
+            <ProgramReviewList nodes={flat} />
             {flat.length === 0 && <p>Программа пока пуста.</p>}
           </Card>
 

@@ -5866,6 +5866,10 @@ button.wizard-back-projects {
 }
 
 .free-study-step { display: grid; gap: var(--space-5); }
+/* Ритм шага держит grid-gap: собственный отступ панели кнопок оставлял под
+   кнопками материалов пустую полосу. */
+.free-study-step > .wizard-actions { margin-top: var(--space-2); }
+.free-study-step > .wizard-step-intro + .wizard-step-intro { margin-top: calc(var(--space-3) * -1); }
 /* Шаг «Цель» — одна узкая колонка: заголовок, поля и кнопка выровнены по
    одной ширине и центрированы на странице. */
 .wizard-flow.is-goal { width: min(720px, 100%); }
@@ -7820,7 +7824,7 @@ button.wizard-back-projects {
 .textbook-summary-card > div > b { font-size: var(--text-sm); }
 .textbook-summary-card > div > small { color: var(--muted); font-size: var(--text-xs); }
 .textbook-summary-card > div.is-missing small { color: var(--tone-warning); }
-.textbook-summary-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); margin: 0; padding: var(--space-5); border-bottom: 1px solid var(--line); }
+.textbook-summary-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-3); margin: 0; padding: var(--space-5); border-bottom: 1px solid var(--line); }
 .textbook-summary-metrics > div { display: grid; gap: var(--space-2); padding: var(--space-4); border-radius: var(--radius-md); }
 .textbook-summary-metrics dt { color: var(--ink-soft); font-size: var(--text-xs); }
 .textbook-summary-metrics dd { margin: 0; color: var(--ink); font-size: var(--text-xl); font-weight: var(--weight-semibold); }
@@ -7828,6 +7832,10 @@ button.wizard-back-projects {
 .textbook-summary-metrics .is-topics { background: color-mix(in srgb, var(--tone-info) 12%, transparent); }
 .textbook-summary-metrics .is-missing { background: color-mix(in srgb, var(--tone-warning) 13%, transparent); }
 .textbook-summary-metrics .is-outside { background: var(--surface-sunken); }
+/* Программа на проверке — дерево: отступ по глубине, раздел читается заголовком группы. */
+.textbook-summary-card > .program-review-row { padding-left: calc(var(--space-5) + var(--depth, 0) * var(--space-6)); }
+.textbook-summary-card > .program-review-row.is-section { background: var(--surface-sunken); }
+.textbook-summary-card > .program-review-row:not(.is-section) > b { font-weight: var(--weight-normal); }
 
 .textbook-active-program { height: 100vh; min-width: 760px; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: var(--canvas); }
 .textbook-active-head { min-height: 64px; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); background: var(--paper); }
@@ -10177,6 +10185,15 @@ button.wizard-back-projects {
   justify-content: space-between;
   gap: var(--space-6);
   margin-bottom: var(--space-8);
+}
+
+/* Текст шапки уступает место кнопкам: три действия всегда в одну строку. */
+.materials-overview > header > div:first-child { flex: 1 1 320px; min-width: 0; }
+.materials-overview > header > .material-entry-actions { flex: none; flex-wrap: nowrap; }
+
+@media (max-width: 900px) {
+  .materials-overview > header { flex-direction: column; }
+  .materials-overview > header > .material-entry-actions { flex-wrap: wrap; justify-content: flex-start; }
 }
 
 .materials-kicker {
