@@ -24,7 +24,7 @@
 | Typst-материалы | `typst-materials.md` | `check_typst_material.py` |
 | Оглавление источника (мастер учебника) | `textbook-outline.md` | pytest (`test_material_outline.py`) |
 | Ручная программа учебника и импорт оглавлений | `textbook-program.md` | pytest (`test_textbook_program.py`) |
-| Свободное изучение и метаданные материалов | `free-study-wizard.md` | pytest, `frontend/free-study-wizard.spec.ts` |
+| Свободное изучение: мастер, программа по цели, подбор материалов Библиотеки, темы без материала, поиск в интернете; метаданные материалов | `free-study-wizard.md` | pytest (`test_free_study.py`, `test_material_suggestions.py`, `test_source_search.py`), `frontend/free-study-wizard.spec.ts`, `frontend/free-study-lessons.spec.ts` |
 | Конспекты | `conspects.md` | pytest |
 | Уроки: быстрый урок, чтение, ручной редактор, массовая подготовка и прохождение | `lessons.md` | pytest (`test_lessons.py`, `test_lesson_editing.py`, `test_lesson_progress.py`), typecheck/build |
 | Карточки и сохраняемый сеанс | `cards.md` | pytest, миграции, typecheck/build |
