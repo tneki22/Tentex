@@ -1322,7 +1322,6 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
             <h1 title={selected.title}>{selected.title}</h1>
             <div className="workspace-status-chips" aria-label="Состояние темы">
               {chips.map((chip) => <span className={`workspace-status-chip is-${chip.tone}`} key={chip.label}>{chip.label}</span>)}
-              {chips.length > 1 && <Tooltip label={chips.slice(1).map((chip) => chip.label).join(" · ")}><span className="workspace-status-more" tabIndex={0} aria-label={`Другие состояния: ${chips.slice(1).map((chip) => chip.label).join(", ")}`}>+{chips.length - 1}</span></Tooltip>}
             </div>
           </div>
           <div className="workspace-question-actions">
