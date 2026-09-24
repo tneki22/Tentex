@@ -427,9 +427,7 @@ def test_stopped_search_leaves_a_mark_in_the_feed(
     del ai_config
     chat = project_sessions.create_session(session, project.id, CHANNEL)
     message = source_search_chat.save_stopped(session, project.id, chat.id)
-    assert (message.role, message.text, message.stream_state.value) == (
-        ChatMessageRole.ASSISTANT, "Поиск остановлен.", "stopped",
-    )
+    assert (message.role, message.text) == (ChatMessageRole.ASSISTANT, "Поиск остановлен.")
 
 
 def test_topic_numbers_accept_titles_from_the_model() -> None:

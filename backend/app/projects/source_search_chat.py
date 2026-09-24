@@ -46,7 +46,6 @@ from app.models import (
     ChatMode,
     ChatPayloadKind,
     ChatSession,
-    ChatStreamState,
     ChatToolRun,
     ChatToolRunState,
     GoalPassport,
@@ -996,12 +995,14 @@ async def send_message(
 
 
 def save_stopped(session: Session, project_id: UUID, session_id: UUID) -> ChatMessage:
-    """Пользователь остановил поиск: отметка в ленте, чтобы его реплика не висела без ответа."""
+    """Пользователь остановил поиск: отметка в ленте, чтобы его реплика не висела без ответа.
+
+    Сама отметка — законченная реплика: флаг «Ответ остановлен» продублировал бы её.
+    """
     with project_write_transaction(session, project_id):
         chat = project_sessions.require_session(session, project_id, session_id, CHANNEL)
         return chat_common.append_message_row(
             session, chat, role=ChatMessageRole.ASSISTANT, text=STOPPED_TEXT,
-            stream_state=ChatStreamState.STOPPED,
         )
 
 

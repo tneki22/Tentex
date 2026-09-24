@@ -466,7 +466,7 @@ async function installStub(page: Page, options: StubOptions = {}) {
       if ("section_scope_node_id" in body) searchScope = body.section_scope_node_id;
       return json(searchDetail());
     }
-    if (path === `${searchBase}/${SEARCH_SESSION}/messages` && method === "POST") {
+    if (path === `${searchBase}/${SEARCH_SESSION}/messages/stream` && method === "POST") {
       const text = request.postDataJSON().text;
       searchSent.push(text);
       const sequence = searchMessages.length + 1;
@@ -478,7 +478,12 @@ async function installStub(page: Page, options: StubOptions = {}) {
           query: "", input: { searches: SEARCH_RESULT.searches }, result: SEARCH_RESULT,
         }),
       ];
-      return json(searchMessages.at(-1));
+      const frame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: frame("progress", { stage: "planning" }) + frame("completed", { message: searchMessages.at(-1) }),
+      });
     }
     if (path === `/api/projects/${PROJECT}/materials/external` && method === "POST") {
       const body = request.postDataJSON();
@@ -780,9 +785,12 @@ test("Материалы: поиск в интернете свёрнут, кн�
   await expect(block.getByRole("heading", { name: "Найдём материалы в интернете" })).toBeInViewport();
   await expect(block.getByRole("textbox")).toBeFocused();
 
+  // Быстрая просьба только подставляется в поле — отправляет пользователь.
   await block.getByRole("button", { name: "Видеолекции" }).click();
+  await expect(block.getByRole("textbox")).toHaveValue("Найди видеолекции по темам программы");
+  expect(state.searchSent).toEqual([]);
+  await block.getByRole("textbox").press("Enter");
   await expect(block.getByText("Нашлась лекция по рынку, каталог файлов и видео.")).toBeVisible();
-  await expect(block.getByText("«рынок и цены лекция»")).toBeVisible();
   const lecture = block.getByRole("link", { name: "Лекция: рынок и цены" });
   await expect(lecture).toHaveAttribute("href", "https://lectures.example/market");
   await expect(block.getByText("Объясняет равновесие спроса и предложения")).toBeVisible();
@@ -806,7 +814,7 @@ test("Материалы: поиск в интернете свёрнут, кн�
   await expect.poll(() => state.searchContextPatches).toContainEqual({ context_flags: { english_sources: true } });
 });
 
-test("«Найти в интернете» у темы открывает чат с областью этой темы и готовой просьбой", async ({ page }) => {
+test("«Найти в интернете» у темы открывает чат с готовой просьбой по этой теме", async ({ page }) => {
   const state = await installStub(page, {
     aiEnabled: true,
     initialNodes: [{
@@ -823,7 +831,6 @@ test("«Найти в интернете» у темы открывает чат
 
   await expect(page).toHaveURL(`${BASE}/projects/${PROJECT}/materials?search=1&topic=${TOPIC}`);
   const block = page.getByRole("region", { name: "Поиск в интернете" });
-  await expect(block.getByRole("textbox")).toHaveValue("Найди материалы по теме «Рынок и цены»");
-  await expect.poll(() => state.searchContextPatches).toContainEqual({ section_scope_node_id: TOPIC });
+  await expect(block.getByRole("textbox")).toHaveValue("Найди материалы по теме 1 «Рынок и цены»");
   expect(state.searchSent).toEqual([]);
 });

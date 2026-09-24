@@ -13,6 +13,7 @@ import type {
   ToolResultPayload,
   VerdictPayload,
   WebSearchRun,
+  WebCandidateLink,
   WebSourceItem,
   WebSourceKind,
   WebSourceVolume,
@@ -175,10 +176,23 @@ function sourceSearchResult(value: unknown): SourceSearchResult | null {
       found: count(search.found),
     });
   }
+  const candidates: WebCandidateLink[] = [];
+  for (const raw of Array.isArray(record.candidates) ? record.candidates : []) {
+    const link = raw as Record<string, unknown>;
+    if (!link || typeof link.url !== "string") continue;
+    candidates.push({
+      url: link.url,
+      title: typeof link.title === "string" ? link.title : link.url,
+      host: typeof link.host === "string" ? link.host : "",
+      opened: Boolean(link.opened),
+    });
+  }
   return {
     summary: typeof record.summary === "string" ? record.summary : "",
+    plan_reply: typeof record.plan_reply === "string" ? record.plan_reply : undefined,
     searches,
     items,
+    candidates,
     candidate_count: count(record.candidate_count),
     hidden_attached: count(record.hidden_attached),
     hidden_seen: count(record.hidden_seen),
