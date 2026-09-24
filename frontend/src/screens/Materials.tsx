@@ -54,6 +54,7 @@ import { getProject, undoProjectAction, type LatestUndoableAction, type ProjectD
 import {
   AnswerMatchStatus,
   AutoMatchDialog,
+  ExternalSourceSearchDialog,
   LibraryMaterialPickerDialog,
   ProjectNav,
   QualityBadge,
@@ -250,6 +251,7 @@ function MaterialOverview({
   onOpen,
   onAdd,
   onChooseLibrary,
+  onFindOnline,
   onResearch,
 }: {
   materials: MaterialRead[];
@@ -257,6 +259,8 @@ function MaterialOverview({
   onOpen: (id: string) => void;
   onAdd: () => void;
   onChooseLibrary: () => void;
+  /** Поиск материалов в интернете; есть только у учебникового и свободного проекта. */
+  onFindOnline?: () => void;
   onResearch: (id: string) => void;
 }) {
   return (
@@ -272,6 +276,7 @@ function MaterialOverview({
             <div className="material-entry-actions is-end">
               <Button onClick={onAdd}><Upload size={15} /> Добавить материал</Button>
               <Button variant="secondary" onClick={onChooseLibrary}><LibraryBig size={15} /> Из Библиотеки</Button>
+              {onFindOnline && <Button variant="secondary" onClick={onFindOnline}><Globe size={15} /> Найти в интернете</Button>}
             </div>
           </header>
           {materials.length === 0 ? (
@@ -282,6 +287,7 @@ function MaterialOverview({
               <div className="material-entry-actions">
                 <Button onClick={onAdd}>Выбрать файл</Button>
                 <Button variant="secondary" onClick={onChooseLibrary}><LibraryBig size={15} /> Из Библиотеки</Button>
+                {onFindOnline && <Button variant="secondary" onClick={onFindOnline}><Globe size={15} /> Найти в интернете</Button>}
               </div>
             </section>
           ) : (
@@ -1213,6 +1219,9 @@ function MaterialSurface() {
   const [removeOpen, setRemoveOpen] = useState(false);
   const [autoMatchOpen, setAutoMatchOpen] = useState(false);
   const [aiPlanOpen, setAiPlanOpen] = useState(false);
+  const [onlineOpen, setOnlineOpen] = useState(false);
+  // Найденные в сети ссылки ждут разбора — панель фоновых задач ведёт сюда.
+  const sourceReviewJob = usePendingReviewJob("ai_source_search", { projectId }, !materialId);
   // Разметка ответов моделью досчиталась в фоне и ждёт человека — открываем
   // диалог с готовым планом сразу, без поиска нужной кнопки на экране.
   const answersReviewJob = usePendingReviewJob(
@@ -1275,6 +1284,7 @@ function MaterialSurface() {
   }, [hasOriginal, material?.id]);
 
   useEffect(() => { if (answersReviewJob) setAiPlanOpen(true); }, [answersReviewJob]);
+  useEffect(() => { if (sourceReviewJob) setOnlineOpen(true); }, [sourceReviewJob]);
 
   const treeResult = useMemo(() => {
     try { return buildProgramTree(project?.program.nodes ?? []); }
@@ -1896,6 +1906,7 @@ function MaterialSurface() {
             onOpen={(id) => navigate(`/projects/${projectId}/materials/${id}`)}
             onAdd={() => setAddOpen(true)}
             onChooseLibrary={() => setLibraryOpen(true)}
+            onFindOnline={textbook ? () => setOnlineOpen(true) : undefined}
             onResearch={(id) => { setResearchMaterialIds([id]); setResearchOpen(true); }}
           />
         ) : (
@@ -2142,6 +2153,17 @@ function MaterialSurface() {
         onExternal={(kind, url) => void addExternal(kind, url)}
         onReplaceAnswers={releaseAnswersMaterial}
       />
+      {textbook && (
+        <ExternalSourceSearchDialog
+          open={onlineOpen}
+          onOpenChange={setOnlineOpen}
+          projectId={projectId}
+          initialQuery={[project?.goal_passport?.subject, project?.goal_passport?.goal].filter(Boolean).join(" — ").slice(0, 200)}
+          hasProjectMaterials={store.materials.length > 0}
+          jobId={sourceReviewJob}
+          onAdded={() => void store.refresh()}
+        />
+      )}
       <LibraryMaterialPickerDialog
         open={libraryOpen}
         projectId={projectId}

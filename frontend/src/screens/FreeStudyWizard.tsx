@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Globe, LibraryBig, Trash2, Undo2, UploadCloud } from "lucide-react";
+import { BookOpen, Globe, LibraryBig, Link2, Trash2, Undo2, UploadCloud } from "lucide-react";
 import type { ChatMessageRead } from "../api/chat";
 import { attachLibraryMaterial, listLibraryMaterials, type MaterialRead } from "../api/materials";
 import { suggestMaterialsForQuery, type MaterialSuggestion, type MaterialSuggestions } from "../api/materialSuggestions";
@@ -8,6 +8,7 @@ import type { WizardDraftController } from "../hooks/useWizardDraft";
 import { useAiRoleAvailability } from "../hooks/useAiRoleAvailability";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import {
+  ExternalSourceSearchDialog,
   LibraryMaterialPickerDialog,
   MaterialSuggestionList,
   ProgramTreePreview,
@@ -100,6 +101,7 @@ export function FreeStudyWizard({
   const [aiChatMessages, setAiChatMessages] = useState<ChatMessageRead[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
+  const [onlineOpen, setOnlineOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
   const [actionError, setActionError] = useState("");
   const [librarySubjects, setLibrarySubjects] = useState<string[]>([]);
@@ -445,7 +447,7 @@ export function FreeStudyWizard({
             {libraryMaterialCount !== 0 && !suggestions && !suggestionsError && <p className="free-study-suggestions-note" role="status">Ищем в Библиотеке материалы под вашу цель…</p>}
             {suggestionsError && <p className="free-study-suggestions-note is-error" role="alert">{suggestionsError} <Button variant="ghost" onClick={() => setSuggestionsKey((key) => key + 1)}>Повторить</Button></p>}
             {suggestions && suggestions.items.length === 0 && libraryMaterialCount !== 0 && (
-              <p className="free-study-suggestions-note">В Библиотеке не нашлось подходящего под цель. Загрузите своё или добавьте ссылку — а можно продолжить без материалов.</p>
+              <p className="free-study-suggestions-note">В Библиотеке не нашлось подходящего под цель. Найдите в интернете, загрузите своё — или продолжайте без материалов.</p>
             )}
             {suggestions && suggestions.items.length > 0 && (
               <MaterialSuggestionList items={suggestions.items} busyId={attachingId} onAttach={(item) => void attachSuggestion(item)} />
@@ -457,8 +459,22 @@ export function FreeStudyWizard({
           <div className="free-study-material-actions">
             <Button variant="secondary" onClick={() => setLibraryOpen(true)}><LibraryBig size={15} />Вся Библиотека</Button>
             <Button variant="secondary" onClick={() => fileInput.current?.click()}><UploadCloud size={15} />Загрузить файл</Button>
-            <Button variant="secondary" onClick={() => setLinkOpen((open) => !open)}><Globe size={15} />Добавить ссылку</Button>
+            <Button variant="secondary" onClick={() => setLinkOpen((open) => !open)}><Link2 size={15} />Добавить ссылку</Button>
+            <Button variant="secondary" disabled={!projectId} onClick={() => setOnlineOpen(true)}><Globe size={15} />Найти в интернете</Button>
           </div>
+          {projectId && (
+            <ExternalSourceSearchDialog
+              open={onlineOpen}
+              onOpenChange={setOnlineOpen}
+              projectId={projectId}
+              initialQuery={[form.subject.trim(), form.goal.trim()].filter(Boolean).join(" — ").slice(0, 200)}
+              hasProjectMaterials={materials.materials.length > 0}
+              onAdded={(ids) => {
+                void materials.refresh();
+                if (!basisMaterialId && ids[0]) setBasisMaterialId(ids[0]);
+              }}
+            />
+          )}
           {linkOpen && <Card className="free-study-link-card"><Field label="Веб-страница или YouTube" hint="Прямая ссылка на PDF пока не поддерживается"><input type="url" value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)} placeholder="https://example.org/article" /></Field><Button disabled={busy || !linkUrl.trim()} onClick={() => void addLink()}>Добавить</Button></Card>}
 
           {materials.materials.length > 0 && <h2 className="free-study-section-title">В проекте</h2>}

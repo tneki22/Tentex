@@ -42,6 +42,7 @@ export { LibraryMaterialPickerDialog } from "./LibraryMaterialPickerDialog";
 export { MetricList } from "./MetricList";
 export type { Metric } from "./MetricList";
 export { OfflineNotice } from "./OfflineNotice";
+export { ExternalSourceSearchDialog } from "./ExternalSourceSearchDialog";
 export { PersonalMarkIcon, PERSONAL_MARK_OPTIONS } from "./PersonalMarkIcon";
 export { ProviderModelPicker } from "./ProviderModelPicker";
 export { ProjectChip, PROJECT_ICONS } from "./ProjectChip";

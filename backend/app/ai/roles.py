@@ -269,6 +269,17 @@ ROLE_SPECS = {
             True,
         ),
         AiRoleSpec(
+            "source_web_search",
+            "Поиск материалов в интернете",
+            "По явной кнопке ищет в сети статьи, лекции и видео к цели или теме "
+            "проекта. Адреса сверяются с выдачей поиска; работает через OpenRouter.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "source-web-search-v1",
+            {"max_output_tokens": 4000},
+        ),
+        AiRoleSpec(
             "settings_model_test",
             "Проверка модели",
             "Проверяет, отвечает ли явно выбранная модель.",

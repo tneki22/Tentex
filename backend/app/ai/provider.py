@@ -75,11 +75,23 @@ class ProviderUsage:
 
 
 @dataclass(frozen=True)
+class UrlCitation:
+    """Страница, которую поиск в сети действительно вернул модели."""
+
+    url: str
+    title: str = ""
+    content: str = ""
+
+
+@dataclass(frozen=True)
 class ProviderCompletion:
     content: str
     actual_model_id: str
     usage: ProviderUsage
     request_id: str | None = None
+    # Заполняется только при поиске в сети (плагин `web` OpenRouter): по этому
+    # списку сервер отсекает адреса, которые модель могла выдумать.
+    citations: tuple[UrlCitation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -159,6 +171,29 @@ class OpenAICompatibleTransport(Protocol):
         via_chat: bool = False,
         timestamps: bool = False,
     ) -> ProviderTranscription: ...
+
+
+def _citations(message: object) -> tuple[UrlCitation, ...]:
+    """`message.annotations[].url_citation` — формат OpenRouter и OpenAI.
+
+    Читается из словаря, а не из типизированной модели SDK: OpenRouter кладёт
+    в цитату ещё и `content`, которого в типах SDK нет.
+    """
+    dump = getattr(message, "model_dump", None)
+    raw = dump().get("annotations") if callable(dump) else None
+    result: list[UrlCitation] = []
+    for item in raw or []:
+        if not isinstance(item, dict) or item.get("type") != "url_citation":
+            continue
+        citation = item.get("url_citation") or {}
+        url = citation.get("url")
+        if isinstance(url, str) and url:
+            result.append(UrlCitation(
+                url=url,
+                title=str(citation.get("title") or ""),
+                content=str(citation.get("content") or ""),
+            ))
+    return tuple(result)
 
 
 def _decimal(value: object) -> Decimal | None:
@@ -396,6 +431,7 @@ class OpenAITransport:
             actual_model_id=result.model,
             usage=_usage(result.usage),
             request_id=getattr(result, "id", None),
+            citations=_citations(choice.message),
         )
 
     async def stream(

@@ -19,6 +19,7 @@ from app.projects import (
     program_chat,
     program_outline,
     service,
+    source_search,
 )
 from app.projects.schemas import (
     ActionUndoResult,
@@ -354,6 +355,21 @@ async def suggest_library_materials(
 ) -> material_suggestions.MaterialSuggestionsResult:
     """Материалы Библиотеки под цель или темы проекта: поиск без модели."""
     return await material_suggestions.suggest_materials(session, project_id, command)
+
+
+@projects.post(
+    "/{project_id}/source-search",
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_source_search(
+    project_id: UUID,
+    command: source_search.SourceSearchWrite,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> BackgroundJobStartRead:
+    """Поиск материалов в интернете: 202 и задача, результат — `/background-jobs/{id}/result`."""
+    return await source_search.start(session, gateway, project_id, command)
 
 
 @projects.get(

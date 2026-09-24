@@ -5,6 +5,7 @@ import { attachLibraryMaterial, listMaterials } from "../../api/materials";
 import { suggestMaterialsForNodes, type MaterialSuggestion, type MaterialSuggestions } from "../../api/materialSuggestions";
 import type { MaterialKindHint } from "../../api/projects";
 import { Button } from "../ui";
+import { ExternalSourceSearchDialog } from "./ExternalSourceSearchDialog";
 import { MaterialHint } from "./MaterialHint";
 import { MaterialSuggestionList } from "./MaterialSuggestionList";
 
@@ -20,9 +21,8 @@ interface TopicMaterialFinderProps {
   topic: FinderTopic;
   /** Первый подключённый материал проекта становится основным; не известно — спросим сервер. */
   hasProjectMaterials?: boolean;
+  /** Подключён материал Библиотеки или добавлена найденная в сети страница. */
   onAttached?: (materialId: string) => void;
-  /** Поиск в интернете по явной кнопке; не передан — кнопки нет. */
-  onFindOnline?: () => void;
 }
 
 /**
@@ -32,8 +32,9 @@ interface TopicMaterialFinderProps {
  * это делает урок, собранный из найденного.
  */
 export function TopicMaterialFinder({
-  projectId, topic, hasProjectMaterials, onAttached, onFindOnline,
+  projectId, topic, hasProjectMaterials, onAttached,
 }: TopicMaterialFinderProps) {
+  const [onlineOpen, setOnlineOpen] = useState(false);
   const [result, setResult] = useState<MaterialSuggestions | null>(null);
   const [error, setError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
@@ -103,9 +104,18 @@ export function TopicMaterialFinder({
       </section>
       <div className="topic-material-finder-actions">
         <Link className="secondary-button" to={lessonsLink}><GraduationCap size={15} />Искать в материалах проекта</Link>
-        {onFindOnline && <Button variant="secondary" onClick={onFindOnline}><Globe size={15} />Найти в интернете</Button>}
+        <Button variant="secondary" onClick={() => setOnlineOpen(true)}><Globe size={15} />Найти в интернете</Button>
         <Link className="text-button" to={`/projects/${projectId}/materials`}><UploadCloud size={15} />Загрузить своё</Link>
       </div>
+      <ExternalSourceSearchDialog
+        open={onlineOpen}
+        onOpenChange={setOnlineOpen}
+        projectId={projectId}
+        initialQuery={topic.material_search_queries[0] ?? topic.title}
+        programNodeId={topic.id}
+        hasProjectMaterials={hasProjectMaterials || attached.size > 0 ? true : undefined}
+        onAdded={(ids) => ids.forEach((id) => onAttached?.(id))}
+      />
     </div>
   );
 }

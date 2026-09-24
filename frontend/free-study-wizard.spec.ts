@@ -20,6 +20,36 @@ interface StubOptions {
 }
 
 const PROVIDER = "66666666-6666-4666-8666-666666666666";
+const SOURCE_JOB = "88888888-8888-4888-8888-888888888888";
+const EXTERNAL_MATERIAL = "99999999-9999-4999-8999-999999999999";
+
+const SOURCE_RESULT = {
+  query: "Экономика — Разобраться в основах экономики",
+  program_node_id: null,
+  candidates: [
+    {
+      url: "https://habr.com/ru/articles/economics/", title: "Экономика простыми словами", kind: "article",
+      why: "Разбирает спрос и предложение на примерах", snippet: "Рынок уравновешивает спрос и предложение", import_kind: "url",
+    },
+    {
+      url: "https://example.org/micro.pdf", title: "Микроэкономика — конспект", kind: "pdf",
+      why: "Короткий конспект курса", snippet: "", import_kind: "pdf_manual",
+    },
+  ],
+  unverified_count: 1,
+  already_attached_count: 0,
+  run_id: "run-1",
+  actual_model_id: "test/model",
+};
+
+function sourceJob() {
+  return {
+    id: SOURCE_JOB, kind: "ai_source_search", state: "completed", material_id: null, project_id: PROJECT,
+    subject: "Экономика", model_label: "", progress_unit: "", needs_review: true, stage: null, parser_mode: null,
+    done: 1, total: 1, diagnostics: [], error: null, pause_requested: false, control_action: null,
+    created_at: NOW, updated_at: NOW,
+  };
+}
 
 function aiSettings(enabled: boolean) {
   return {
@@ -40,6 +70,10 @@ function aiSettings(enabled: boolean) {
     }],
     roles: [{
       role: "study_program_assistant", title: "Составление программы", description: "", modality: "text",
+      enabled: true, provider_override_id: null, model_override: null, resolved_provider_id: PROVIDER,
+      resolved_model: "test/model", model_source: "default", required_capabilities: ["structured_output"], parameters: {},
+    }, {
+      role: "source_web_search", title: "Поиск материалов в интернете", description: "", modality: "text",
       enabled: true, provider_override_id: null, model_override: null, resolved_provider_id: PROVIDER,
       resolved_model: "test/model", model_source: "default", required_capabilities: ["structured_output"], parameters: {},
     }],
@@ -180,6 +214,9 @@ async function installStub(page: Page, options: StubOptions = {}) {
   let programNodes: Array<Record<string, unknown>> = [...(options.initialNodes ?? [])];
   let modelRequests = 0;
   let chatMessages: Array<Record<string, unknown>> = [];
+  const sourceSearches: Array<Record<string, unknown>> = [];
+  const externalAdded: Array<Record<string, unknown>> = [];
+  let sourceResolved = false;
   let chatCreated = false;
   let project = {
     id: PROJECT,
@@ -361,6 +398,27 @@ async function installStub(page: Page, options: StubOptions = {}) {
     }
     if (path === `/api/projects/${PROJECT}` && method === "GET") return json(activeDetail());
     if (path === `/api/projects/${PROJECT}/materials` && method === "GET") return json(materials);
+    if (path === `/api/projects/${PROJECT}/source-search` && method === "POST") {
+      sourceSearches.push(request.postDataJSON());
+      return json({ job_id: SOURCE_JOB }, 202);
+    }
+    if (path === `/api/background-jobs/${SOURCE_JOB}`) return json(sourceJob());
+    if (path === `/api/background-jobs/${SOURCE_JOB}/result`) return json(SOURCE_RESULT);
+    if (path === `/api/background-jobs/${SOURCE_JOB}/resolve` && method === "POST") {
+      sourceResolved = true;
+      return json(sourceJob());
+    }
+    if (path === `/api/projects/${PROJECT}/materials/external` && method === "POST") {
+      const body = request.postDataJSON();
+      externalAdded.push(body);
+      const created = projectMaterial({
+        id: EXTERNAL_MATERIAL, display_name: "Свёртка простыми словами", original_name: body.url,
+        source_kind: body.kind, presentation_kind: "html", source_url: body.url, status: "processing",
+        source_role: body.source_role, outline: [],
+      });
+      materials.push(created);
+      return json(created, 201);
+    }
     if (path === "/api/materials" && method === "GET") return json(library);
     if (path === `/api/materials/${MATERIAL}/project-links` && method === "POST") {
       if (!materials.some((item) => item.id === MATERIAL)) {
@@ -431,7 +489,12 @@ async function installStub(page: Page, options: StubOptions = {}) {
     return json([]);
   });
 
-  return { modelRequests: () => modelRequests };
+  return {
+    modelRequests: () => modelRequests,
+    sourceSearches,
+    externalAdded,
+    sourceResolved: () => sourceResolved,
+  };
 }
 
 async function openFreeWizard(page: Page) {
@@ -598,4 +661,40 @@ test("темы без материала: «Без материала» откр
   await dialog.getByRole("button", { name: "Подключить" }).click();
   await expect(dialog.getByText("Материал в проекте.")).toBeVisible();
   await expect(dialog.getByRole("link", { name: "соберите урок из найденного" })).toHaveAttribute("href", /lessons\?topic=/);
+});
+
+test("«Найти в интернете» на шаге материалов: найденная страница добавляется, PDF остаётся ручным", async ({ page }) => {
+  const state = await installStub(page, { aiEnabled: true });
+  await openFreeWizard(page);
+  await enterGoal(page, "Экономика");
+  await page.getByRole("button", { name: "Найти в интернете" }).click();
+  const dialog = page.getByRole("dialog", { name: "Найти материалы в интернете" });
+  await expect(dialog.getByRole("textbox", { name: "Что искать" })).toHaveValue("Экономика — Разобраться в основах экономики");
+  await expect(dialog.getByText("Запрос и цель проекта уйдут в OpenRouter.", { exact: false })).toBeVisible();
+  await dialog.getByRole("button", { name: "Найти" }).click();
+
+  await expect(dialog.getByText("Экономика простыми словами")).toBeVisible();
+  await expect(dialog.getByText("PDF по ссылке не загружается", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("Скрыто ссылок вне выдачи поиска: 1.", { exact: false })).toBeVisible();
+  await dialog.getByRole("button", { name: "Добавить выбранные (1)" }).click();
+  await expect(dialog.getByText("Добавлено: 1.", { exact: false })).toBeVisible();
+
+  expect(state.sourceSearches).toEqual([{ query: "Экономика — Разобраться в основах экономики", program_node_id: null, confirmed: true }]);
+  expect(state.externalAdded).toEqual([{
+    kind: "url", url: "https://habr.com/ru/articles/economics/", source_role: "main", purposes: ["study_source"],
+  }]);
+  expect(state.sourceResolved()).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("Свёртка простыми словами")).toBeVisible();
+});
+
+test("поиск в интернете без внешних моделей объясняет, как включить", async ({ page }) => {
+  const state = await installStub(page, { aiEnabled: false });
+  await openFreeWizard(page);
+  await enterGoal(page);
+  await page.getByRole("button", { name: "Найти в интернете" }).click();
+  const dialog = page.getByRole("dialog", { name: "Найти материалы в интернете" });
+  await expect(dialog.getByText("Внешние модели выключены", { exact: false })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Найти" })).toBeDisabled();
+  expect(state.sourceSearches).toEqual([]);
 });

@@ -48,7 +48,8 @@ cleanup и Typst.
 
 `parse`, `typst_compile`, `ai_grouping`, `ai_import_repair`, `ai_preparation`,
 `ai_cleanup`, `link_answers`, `ai_answer_sections` (разметка файла эталонных ответов
-моделью), `ai_program_build` (составление программы учебника), а также операции
+моделью), `ai_program_build` (составление программы учебника), `ai_source_search`
+(поиск материалов в интернете, миграция `20260924_0060`), а также операции
 хранилища `backup_create`, `project_export`, `project_import`, `storage_verify`,
 `storage_cleanup`.
 
@@ -105,6 +106,7 @@ cleanup и Typst.
 | `ai_cleanup` | 300 | уборка одной страницы |
 | `ai_answer_sections` | 900 | разметка большого файла ответов и объёмный структурированный результат |
 | `ai_program_build` | 900 | до двух пакетных вызовов и объединение результата |
+| `ai_source_search` | 300 | один вызов, но поиск в сети добавляет к нему десятки секунд |
 
 Истёк срок — `TimeoutError` ловится в `process_ai_job`, задача честно падает в
 `failed` с понятным текстом ошибки, а воркер идёт к следующей задаче в очереди, а не
@@ -164,7 +166,7 @@ cleanup и Typst.
 молчать.
 
 `REVIEW_REQUIRED_KINDS` — `ai_grouping`, `ai_import_repair`,
-`ai_answer_sections`. Остальные виды не входят по существу:
+`ai_answer_sections`, `ai_source_search`. Остальные виды не входят по существу:
 
 | Вид | Почему не ждёт проверки |
 | --- | --- |
@@ -233,6 +235,8 @@ Session`. Состояние снимается с задачи до откат�
   (материал в контексте проекта)
 - `POST /api/projects/{project_id}/materials/{material_id}/link-answers`
 - `POST /api/projects/{project_id}/materials/{material_id}/link-answers/ai`
+- `POST /api/projects/{project_id}/source-search` — поиск материалов в интернете;
+  результат `SourceSearchRead` (кандидаты только с адресами из выдачи поиска)
 
 `POST /api/projects/{project_id}/preparation/ai` также отвечает 202, но использует
 `AiStartRead`: при offline/fallback он может вернуть `job_id=null`, локальную

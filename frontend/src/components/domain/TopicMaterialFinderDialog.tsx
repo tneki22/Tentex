@@ -8,12 +8,11 @@ interface TopicMaterialFinderDialogProps {
   topic: FinderTopic;
   hasProjectMaterials?: boolean;
   onAttached?: (materialId: string) => void;
-  onFindOnline?: () => void;
 }
 
 /** Подбор материала для одной темы там, где нет места под встроенный блок: пустой урок. */
 export function TopicMaterialFinderDialog({
-  open, onOpenChange, projectId, topic, hasProjectMaterials, onAttached, onFindOnline,
+  open, onOpenChange, projectId, topic, hasProjectMaterials, onAttached,
 }: TopicMaterialFinderDialogProps) {
   return (
     <Dialog
@@ -29,7 +28,6 @@ export function TopicMaterialFinderDialog({
           topic={topic}
           hasProjectMaterials={hasProjectMaterials}
           onAttached={onAttached}
-          onFindOnline={onFindOnline}
         />
       )}
     </Dialog>

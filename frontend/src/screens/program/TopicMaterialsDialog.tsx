@@ -9,7 +9,6 @@ interface TopicMaterialsDialogProps {
   topics: Array<FinderTopic & { number: string }>;
   hasProjectMaterials: boolean;
   onAttached: () => void;
-  onFindOnline?: (topic: FinderTopic) => void;
 }
 
 /**
@@ -18,7 +17,7 @@ interface TopicMaterialsDialogProps {
  * запускается, только когда тему раскрыли, чтобы не гонять поиск по всем сразу.
  */
 export function TopicMaterialsDialog({
-  open, onOpenChange, projectId, topics, hasProjectMaterials, onAttached, onFindOnline,
+  open, onOpenChange, projectId, topics, hasProjectMaterials, onAttached,
 }: TopicMaterialsDialogProps) {
   return (
     <Dialog
@@ -38,7 +37,6 @@ export function TopicMaterialsDialog({
               topic={topic}
               hasProjectMaterials={hasProjectMaterials}
               onAttached={onAttached}
-              onFindOnline={onFindOnline ? () => onFindOnline(topic) : undefined}
             />
           </Disclosure>
         ))}

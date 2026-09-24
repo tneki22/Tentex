@@ -84,6 +84,7 @@ strict JSON Schema и затем независимо проверяет рез�
 | `exam_chat_memory` | text | structured output | none | позже |
 | `speech_transcription` | speech | audio transcription | нет | да |
 | `settings_speech_model_test` | speech (скрытая) | audio transcription | нет | да |
+| `source_web_search` | text | structured output | none | да, только OpenRouter |
 
 Порядок разрешения:
 
@@ -327,6 +328,25 @@ Apply сопоставляет каждый пункт ответа со ста�
 `ai_import_repair` пишет тот же снимок и `created_ids`, что `active_exam_import`, и
 отменяется тем же кодом undo.
 
+## Поиск в сети (24.09.2026)
+
+`AiTextRequest.web_search_results: int | None` — «перед ответом поищи в сети, столько
+страниц выдачи». Используется одной ролью, `source_web_search`
+(`app/projects/source_search.py`). Работает только у провайдера с `catalog_profile =
+"openrouter"`: шлюз добавляет в параметры `plugins: [{"id": "web", "max_results": n}]`,
+а `OpenAITransport._apply_parameters` уносит их в `extra_body`, как любой непрямой
+параметр. У других провайдеров `complete()` отказывает до запроса кодом
+`web_search_unsupported`. Цитаты читаются из `message.annotations[].url_citation`
+(`url`, `title` и расширение OpenRouter `content`) в `ProviderCompletion.citations`, а
+оттуда в `AiResult.citations`. По ним роль отбрасывает адреса, которых не было в
+выдаче. Стоимость поиска OpenRouter включает в `usage.cost`, поэтому она попадает в
+журнал запуска; preflight её не оценивает (движок Exa по умолчанию — около $0,007 за
+запрос до 10 результатов). Кэш у роли выключен: выдача меняется.
+
+Почему не отдельный поисковый сервис (например, morphic): это отдельное Next.js-приложение
+со своими ключами поисковиков, то есть новый сервис и стек. Плагин OpenRouter идёт
+через тот же ключ, учёт расхода и тумблеры ролей, без новой зависимости.
+
 ## Нормализованные ошибки
 
 | Код | HTTP | Смысл |
@@ -347,6 +367,7 @@ Apply сопоставляет каждый пункт ответа со ста�
 | `ai_audio_empty` | 422 | пустая запись |
 | `ai_audio_too_large` | 413 | запись больше 20 МБ |
 | `ai_audio_format_unsupported` | 415 | тип файла не аудио, которое мы принимаем |
+| `web_search_unsupported` | 422 | поиск в сети запрошен у провайдера не OpenRouter |
 
 Provider body и текст исключения наружу не передаются.
 

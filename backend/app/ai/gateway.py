@@ -30,6 +30,7 @@ from app.ai.provider import (
     ProviderError,
     ProviderUsage,
     TimedSegment,
+    UrlCitation,
 )
 from app.ai.schemas import (
     AiImagePart,
@@ -153,6 +154,9 @@ class AiTextRequest[T: BaseModel]:
     # чат) его не передают, и `AiRun.job_id` остаётся пустым.
     job_id: UUID | None = None
     budget_context: BudgetContext | None = None
+    # Поиск в сети перед ответом: число страниц выдачи. Только у OpenRouter —
+    # плагин `web`; у прочих провайдеров вызов отказывает до запроса.
+    web_search_results: int | None = None
 
 
 @dataclass(frozen=True)
@@ -163,6 +167,7 @@ class AiResult[T: BaseModel]:
     requested_model_id: str
     actual_model_id: str
     cached: bool
+    citations: tuple[UrlCitation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -314,6 +319,18 @@ class ModelGateway:
             )
         preflight = await self.preflight_confirmed(request)
         resolved = resolve_model(self.session, request.role, request.request_model_override)
+        web_parameters: dict[str, object] = {}
+        if request.web_search_results is not None:
+            if resolved.provider.catalog_profile != "openrouter":
+                raise AiGatewayError(
+                    "Поиск в интернете работает через OpenRouter: выберите для роли "
+                    "модель этого провайдера",
+                    code="web_search_unsupported",
+                )
+            # Попадает в `extra_body` запроса, как и прочие непрямые параметры.
+            web_parameters["plugins"] = [
+                {"id": "web", "max_results": request.web_search_results}
+            ]
         cache = self.session.get(AiCacheEntry, preflight.request_hash)
         if cache is not None and resolved.role.cache_policy != "none":
             return self._cached_result(request, resolved, preflight, cache)
@@ -325,6 +342,7 @@ class ModelGateway:
         assert response_schema is not None
         parameters = self._parameters(resolved, {
             **request.parameters,
+            **web_parameters,
             "max_output_tokens": preflight.estimated_output_tokens,
         })
         combined_usage = ProviderUsage()
@@ -406,6 +424,7 @@ class ModelGateway:
                 requested_model_id=resolved.model_id,
                 actual_model_id=result.actual_model_id,
                 cached=False,
+                citations=result.citations,
             )
         raise AssertionError("unreachable: loop always returns or raises")
 
