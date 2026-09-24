@@ -30,6 +30,9 @@ interface ChatTimelineProps {
   onRejectProposal?: (messageId: string) => Promise<void>;
   proposalBusy?: boolean;
   nodeTitles?: Record<string, string>;
+  onFollowUp?: (text: string) => void;
+  /** Строка ожидания ответа: поиск в интернете идёт дольше обычного ответа. */
+  preparingLabel?: string;
   onRetry: () => void;
   failure: StreamFailure | null;
 }
@@ -37,8 +40,8 @@ interface ChatTimelineProps {
 export function ChatTimeline({
   projectId, messages, streamingMessageId, preparing,
   onAnswerAgain, onCheckAgain, onSelfAssessment,
-  onApplyProposal, onRejectProposal, proposalBusy, nodeTitles,
-  onRetry, failure,
+  onApplyProposal, onRejectProposal, proposalBusy, nodeTitles, onFollowUp,
+  preparingLabel = "Готовлю ответ", onRetry, failure,
 }: ChatTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
@@ -171,6 +174,7 @@ export function ChatTimeline({
                 onRejectProposal={onRejectProposal}
                 proposalBusy={proposalBusy}
                 nodeTitles={nodeTitles}
+                onFollowUp={onFollowUp}
                 headingRef={(heading) => {
                   if (heading) headingRefs.current.set(message.id, heading);
                   else headingRefs.current.delete(message.id);
@@ -181,7 +185,7 @@ export function ChatTimeline({
           {preparing && (
             <div className="chat-timeline-item">
               <p className="chat-status-line" role="status">
-                Готовлю ответ
+                {preparingLabel}
                 <span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span>
               </p>
             </div>

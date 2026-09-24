@@ -241,7 +241,6 @@ class BackgroundJobKind(StrEnum):
     LINK_ANSWERS = "link_answers"
     AI_ANSWER_SECTIONS = "ai_answer_sections"
     AI_PROGRAM_BUILD = "ai_program_build"
-    AI_SOURCE_SEARCH = "ai_source_search"
     COVERAGE_RESEARCH = "coverage_research"
     RETRIEVAL_INDEX = "retrieval_index"
     RETRIEVAL_MODEL_INSTALL = "retrieval_model_install"
@@ -435,6 +434,9 @@ class ChatMode(StrEnum):
     # Чат построения программы учебника — TEXTBOOK_MODE.md §3, режим «С ИИ».
     # Сессия проектная (program_node_id может быть NULL), а не по одному вопросу.
     PROGRAM = "program"
+    # Чат «Поиск в интернете» в Материалах — тоже проектная сессия без темы
+    # (docs/architecture/source-search-chat.md).
+    SOURCE_SEARCH = "source_search"
 
 
 class ChatToolRunState(StrEnum):

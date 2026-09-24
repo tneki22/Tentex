@@ -271,13 +271,15 @@ ROLE_SPECS = {
         AiRoleSpec(
             "source_web_search",
             "Поиск материалов в интернете",
-            "По явной кнопке ищет в сети статьи, лекции и видео к цели или теме "
-            "проекта. Адреса сверяются с выдачей поиска; работает через OpenRouter.",
+            "Чат в Материалах: составляет запросы к локальному поисковику SearXNG "
+            "по программе и цели проекта и отбирает из выдачи учебные источники.",
             "text",
             frozenset({"structured_output"}),
             "none",
-            "source-web-search-v2",
-            {"max_output_tokens": 4000},
+            "source-search-chat-v1",
+            {"max_output_tokens": 6000},
+            # Модель выбирается в композере чата, как у остальных чатов.
+            True,
         ),
         AiRoleSpec(
             "settings_model_test",

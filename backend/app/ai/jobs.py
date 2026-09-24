@@ -27,7 +27,7 @@ from app.bindings import answers_ai
 from app.db import job_write_transaction
 from app.materials import ai_cleanup
 from app.models import AiRun, BackgroundJob, BackgroundJobKind, BackgroundJobState, utc_now
-from app.projects import import_repair, preparation_ai, program_ai, program_chat, source_search
+from app.projects import import_repair, preparation_ai, program_ai, program_chat
 from app.projects.errors import ProjectDomainError
 
 log = logging.getLogger("tentex.worker")
@@ -46,7 +46,6 @@ DEADLINE_SECONDS: dict[BackgroundJobKind, int] = {
     BackgroundJobKind.AI_PROGRAM_BUILD: 900,
     # Живой вызов с поиском в сети идёт до полутора-двух минут; запас — на один
     # повтор, если ответ не прошёл схему.
-    BackgroundJobKind.AI_SOURCE_SEARCH: 600,
 }
 
 
@@ -112,15 +111,6 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
         # Без Pydantic-команды из checkpoint["command"]: run_build читает и
         # дописывает checkpoint сам по пакетам (см. app/projects/program_chat.py).
         return await program_chat.run_build(session, gateway, job.project_id, job.id)
-    elif job.kind == BackgroundJobKind.AI_SOURCE_SEARCH:
-        assert job.project_id is not None
-        return await source_search.run(
-            session,
-            gateway,
-            job.project_id,
-            source_search.SourceSearchWrite.model_validate(command),
-            job_id=job.id,
-        )
     elif job.kind == BackgroundJobKind.AI_CLEANUP:
         assert job.material_id is not None
         page_number = int(job.checkpoint["page_number"])

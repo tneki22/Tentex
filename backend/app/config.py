@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     worker_cloud_concurrency: int = Field(default=2, ge=1, le=32)
     worker_ai_concurrency: int = Field(default=8, ge=1, le=32)
     retrieval_model_url: str = "http://retrieval-model:8010"
+    # Локальный SearXNG чата «Поиск в интернете». В Docker api ходит в сервис
+    # `searxng`; при запуске бэкенда на хосте — в порт, проброшенный на localhost.
+    searxng_url: str = "http://localhost:8888"
     # Защитные пределы переносимых архивов. Сам архив может быть большим,
     # но распакованный объём ограничен отдельно от размера HTTP-загрузки.
     transfer_upload_max_bytes: int = Field(default=25 * 1024**3, ge=1024**2)

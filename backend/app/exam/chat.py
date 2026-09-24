@@ -108,9 +108,10 @@ def list_sessions(session: Session, project_id: UUID, node_id: UUID | None) -> l
             .where(
                 ChatSession.project_id == project_id,
                 ChatSession.program_node_id == node_id,
-                # Чат построения программы тоже живёт без темы, но это другой
-                # режим со своим списком — в ленту чата проекта он не попадает.
-                ChatSession.mode != ChatMode.PROGRAM,
+                # Чаты построения программы и поиска в интернете тоже живут без
+                # темы, но это другие режимы со своими списками — в ленту чата
+                # проекта они не попадают.
+                ChatSession.mode.in_((ChatMode.EXAM, ChatMode.STUDY)),
             )
             .order_by(ChatSession.updated_at.desc())
         )

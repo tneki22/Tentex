@@ -59,8 +59,6 @@ function backgroundJobPath(job: BackgroundJobRead): string | null {
         : null;
     case "coverage_research":
       return job.project_id ? `/projects/${job.project_id}/coverage` : null;
-    case "ai_source_search":
-      return job.project_id ? `/projects/${job.project_id}/materials` : null;
     case "retrieval_index":
       return "/setup?section=search&subsection=index";
     case "retrieval_model_install":

@@ -1,16 +1,13 @@
 import { useEffect, useState } from "react";
 import { BookOpen, Target } from "lucide-react";
 import type { ChatMessageRead, ProgramChatDiffPayload } from "../../../api/chat";
-import {
-  applyProgramChatProposal,
-  rejectProgramChatProposal,
-  type ProgramChatManifestEntry,
-} from "../../../api/programChat";
+import { applyProgramChatProposal, rejectProgramChatProposal } from "../../../api/programChat";
+import type { ProjectChatManifestEntry } from "../../../api/projectChat";
 import type { ProgramChangeResult, ProgramState } from "../../../api/projects";
 import { OfflineNotice } from "../../../components/domain";
 import { Button, ErrorState, LoadingState } from "../../../components/ui";
 import { useAiRoleAvailability } from "../../../hooks/useAiRoleAvailability";
-import { useProgramChat } from "../../../hooks/useProgramChat";
+import { useProjectChat } from "../../../hooks/useProjectChat";
 import { ChatComposer } from "./ChatComposer";
 import { ChatHeader } from "./ChatHeader";
 import { ChatModelControl } from "./ChatModelControl";
@@ -31,7 +28,7 @@ const FLAG_META: Record<string, { title: string; icon: typeof BookOpen }> = {
 };
 
 function buildProgramChipList(
-  manifest: ProgramChatManifestEntry[] | undefined,
+  manifest: ProjectChatManifestEntry[] | undefined,
 ): ChipDef[] | null {
   if (!manifest) return null;
   const byFlag = new Map<string, typeof manifest>();
@@ -86,7 +83,7 @@ function quickStarts(variant: "textbook" | "free", outlineSourceName: string | n
 export function ProgramChatWorkspace({
   projectId, program, execute, onMessagesChange, variant = "textbook", outlineSourceName, onSwitchToManual,
 }: ProgramChatWorkspaceProps) {
-  const chat = useProgramChat({ projectId });
+  const chat = useProjectChat({ projectId, channel: "program-chat" });
   const [proposalBusy, setProposalBusy] = useState<string | null>(null);
   const availability = useAiRoleAvailability("study_program_assistant", chat.session?.model_override);
 

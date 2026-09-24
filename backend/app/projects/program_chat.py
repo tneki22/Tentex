@@ -19,17 +19,17 @@ from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.gateway import AiTextRequest, ModelGateway
-from app.ai.roles import validate_role_parameters
 from app.ai.schemas import AiMessage, AiModelSelection
-from app.ai.settings import seed_from_preset, validate_model_selection
 from app.background.schemas import BackgroundJobStartRead
 from app.bindings.service import search_project_materials
 from app.chat import common as chat_common
-from app.chat.common import ChatMessageRead, ManifestEntryRead
+from app.chat import project_sessions
+from app.chat.common import ManifestEntryRead
+from app.chat.project_sessions import ProjectChatChannel, ProjectChatContextPreviewRead
 from app.db import job_write_transaction, project_write_transaction
 from app.materials import library
 from app.materials.naming import project_material_display_name
@@ -54,17 +54,14 @@ from app.models import (
     ProgramNodeSourcePageRange,
     Project,
     ProjectMaterial,
-    ProjectStatus,
     SourceRole,
     TargetOutcome,
     TemplateKey,
-    WorkspaceVariant,
     utc_now,
 )
 from app.projects import program
 from app.projects.errors import (
     ProjectConflictError,
-    ProjectDomainError,
     ProjectInvariantError,
     ProjectNotFoundError,
 )
@@ -80,24 +77,25 @@ SINGLE_CALL_OUTLINE_CHARS = 24_000
 MAX_BUILD_PACKETS = 2
 SEND_MESSAGE_CONTEXT_CHARS = 40_000
 
-CONTEXT_FLAG_KEYS = frozenset(
-    {"profile", "primary_sources", "secondary_sources", "reference_sources"}
-)
-
-
 # Ответ приходит одной структурированной схемой (`gateway.complete` с
 # `response_model`), потока здесь нет — значит и `streaming` требовать незачем.
 CHAT_ROLE = "study_program_assistant"
 REQUIRED_MODEL_CAPABILITIES = frozenset({"structured_output"})
 
-
-def default_context_flags() -> dict[str, bool]:
-    return {
+CHANNEL = ProjectChatChannel(
+    mode=ChatMode.PROGRAM,
+    role=CHAT_ROLE,
+    required_capabilities=REQUIRED_MODEL_CAPABILITIES,
+    title="Программа",
+    feature="Чат построения программы",
+    default_flags={
         "profile": True,
         "primary_sources": True,
         "secondary_sources": True,
         "reference_sources": False,
-    }
+    },
+    code_prefix="program_chat",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -221,64 +219,6 @@ _OPERATIONS_ADAPTER: TypeAdapter[list[ProgramChatOperation]] = TypeAdapter(
 # ---------------------------------------------------------------------------
 
 
-class ProgramChatSessionSummary(ChatApiModel):
-    model_config = ConfigDict(extra="forbid", from_attributes=True)
-
-    id: UUID
-    project_id: UUID
-    title: str
-    updated_at: Any
-    message_count: int
-
-
-class ProgramChatModelOverrideRead(ChatApiModel):
-    provider_id: UUID
-    model_id: str
-
-
-class ProgramChatSettingsWrite(ChatApiModel):
-    """Смена модели чата: выбор и его параметры приходят одним запросом."""
-
-    model_override: ProgramChatModelOverrideRead | None = None
-    model_parameters: dict[str, object] | None = None
-
-
-class ProgramChatSessionDetail(ChatApiModel):
-    model_config = ConfigDict(extra="forbid", from_attributes=True)
-
-    id: UUID
-    project_id: UUID
-    section_scope_node_id: UUID | None
-    title: str
-    model_override: ProgramChatModelOverrideRead | None
-    model_parameters: dict[str, object]
-    context_flags: dict[str, bool]
-    draft_text: str
-    created_at: Any
-    updated_at: Any
-    messages: list[ChatMessageRead]
-
-
-class ProgramChatDraftWrite(ChatApiModel):
-    text: str = Field(max_length=200_000)
-
-
-class ProgramChatContextWrite(ChatApiModel):
-    section_scope_node_id: UUID | None = None
-    context_flags: dict[str, bool] | None = None
-
-
-class ProgramChatContextPreviewRead(ChatApiModel):
-    session_id: UUID
-    manifest: list[ManifestEntryRead]
-    fingerprint: str
-    total_bytes: int
-
-
-class ProgramChatMessageWrite(ChatApiModel):
-    text: NonBlank = Field(max_length=20_000)
-
-
 class ProgramChatBuildWrite(ChatApiModel):
     scenario: Literal["outline", "goal"]
     expected_program_revision: int = Field(ge=0)
@@ -387,206 +327,6 @@ SEARCH_QUERIES_PROMPT = """Пользователь строит програм�
 5 коротких поисковых запросов (по-русски, 2-6 слов каждый) по переданной
 цели и паспорту проекта — так, чтобы найти в материалах проекта фрагменты,
 относящиеся к цели. Не составляй программу сейчас, только запросы."""
-
-
-# ---------------------------------------------------------------------------
-# Гейт и служебные функции
-# ---------------------------------------------------------------------------
-
-
-def _require_textbook_project(session: Session, project_id: UUID) -> Project:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise ProjectNotFoundError()
-    if project.workspace_variant != WorkspaceVariant.TEXTBOOK:
-        raise ProjectConflictError(
-            "Чат построения программы доступен только учебниковому проекту",
-            code="program_chat_textbook_only",
-        )
-    if project.status not in {ProjectStatus.DRAFT, ProjectStatus.ACTIVE}:
-        raise ProjectConflictError(
-            "Архивный или завершённый проект нельзя изменять",
-            code="project_read_only",
-            context={"current_status": project.status.value},
-        )
-    return project
-
-
-def _require_session(session: Session, project_id: UUID, session_id: UUID) -> ChatSession:
-    chat = session.get(ChatSession, session_id)
-    if (
-        chat is None
-        or chat.project_id != project_id
-        or chat.mode != ChatMode.PROGRAM
-    ):
-        raise ProjectDomainError(
-            "Чат не найден", status=404, code="program_chat_session_not_found"
-        )
-    return chat
-
-
-def _summary(chat: ChatSession, message_count: int) -> ProgramChatSessionSummary:
-    return ProgramChatSessionSummary(
-        id=chat.id,
-        project_id=chat.project_id,
-        title=chat.title,
-        updated_at=chat.updated_at,
-        message_count=message_count,
-    )
-
-
-def list_session_summaries(
-    session: Session, project_id: UUID
-) -> list[ProgramChatSessionSummary]:
-    _require_textbook_project(session, project_id)
-    chats = list(
-        session.scalars(
-            select(ChatSession)
-            .where(ChatSession.project_id == project_id, ChatSession.mode == ChatMode.PROGRAM)
-            .order_by(ChatSession.updated_at.desc())
-        )
-    )
-    counts = chat_common.message_counts(session, [chat.id for chat in chats])
-    return [_summary(chat, counts.get(chat.id, 0)) for chat in chats]
-
-
-def create_session(session: Session, project_id: UUID) -> ChatSession:
-    with project_write_transaction(session, project_id):
-        _require_textbook_project(session, project_id)
-        existing = session.scalar(
-            select(func.count(ChatSession.id)).where(
-                ChatSession.project_id == project_id, ChatSession.mode == ChatMode.PROGRAM
-            )
-        )
-        ordinal = existing + 1
-        title = "Программа" if ordinal == 1 else f"Программа · {ordinal}"
-        selection, parameters = seed_from_preset(
-            session, role=CHAT_ROLE, required=REQUIRED_MODEL_CAPABILITIES
-        )
-        chat = ChatSession(
-            project_id=project_id,
-            program_node_id=None,
-            section_scope_node_id=None,
-            title=title,
-            mode=ChatMode.PROGRAM,
-            model_override=selection,
-            model_parameters=parameters,
-            context_flags=default_context_flags(),
-            draft_text="",
-        )
-        session.add(chat)
-        session.flush()
-        session.refresh(chat)
-    return chat
-
-
-def _session_detail(session: Session, chat: ChatSession) -> ProgramChatSessionDetail:
-    messages = session.scalars(
-        select(ChatMessage).where(ChatMessage.session_id == chat.id).order_by(ChatMessage.sequence)
-    )
-    return ProgramChatSessionDetail(
-        id=chat.id,
-        project_id=chat.project_id,
-        section_scope_node_id=chat.section_scope_node_id,
-        title=chat.title,
-        model_override=_model_override_read(chat),
-        model_parameters=chat.model_parameters or {},
-        context_flags=chat.context_flags,
-        draft_text=chat.draft_text,
-        created_at=chat.created_at,
-        updated_at=chat.updated_at,
-        messages=[chat_common.message_read(message) for message in messages],
-    )
-
-
-def get_session_detail(
-    session: Session, project_id: UUID, session_id: UUID
-) -> ProgramChatSessionDetail:
-    _require_textbook_project(session, project_id)
-    chat = _require_session(session, project_id, session_id)
-    return _session_detail(session, chat)
-
-
-def save_draft(session: Session, project_id: UUID, session_id: UUID, text: str) -> ChatSession:
-    with project_write_transaction(session, project_id):
-        _require_textbook_project(session, project_id)
-        chat = _require_session(session, project_id, session_id)
-        return chat_common.save_draft_text(session, chat, text)
-
-
-def _model_override_read(chat: ChatSession) -> ProgramChatModelOverrideRead | None:
-    if not chat.model_override:
-        return None
-    return ProgramChatModelOverrideRead.model_validate(chat.model_override)
-
-
-def _request_model_override(chat: ChatSession | None) -> AiModelSelection | None:
-    if chat is None or not chat.model_override:
-        return None
-    return AiModelSelection(
-        provider_id=chat.model_override["provider_id"],
-        model_id=chat.model_override["model_id"],
-    )
-
-
-def update_settings(
-    session: Session, project_id: UUID, session_id: UUID, command: ProgramChatSettingsWrite
-) -> ChatSession:
-    with project_write_transaction(session, project_id):
-        _require_textbook_project(session, project_id)
-        chat = _require_session(session, project_id, session_id)
-        snapshot = None
-        parameters = None
-        if command.model_override is not None:
-            selection = AiModelSelection(
-                provider_id=command.model_override.provider_id,
-                model_id=command.model_override.model_id,
-            )
-            validate_model_selection(session, selection, required=REQUIRED_MODEL_CAPABILITIES)
-            snapshot = {
-                "provider_id": str(selection.provider_id),
-                "model_id": selection.model_id,
-            }
-            parameters = validate_role_parameters(CHAT_ROLE, command.model_parameters or {})
-        chat_common.apply_model_choice(
-            session, chat, selection=snapshot, parameters=parameters
-        )
-        session.flush()
-        session.refresh(chat)
-    return chat
-
-
-def update_context(
-    session: Session, project_id: UUID, session_id: UUID, command: ProgramChatContextWrite
-) -> ChatSession:
-    fields = command.model_fields_set
-    with project_write_transaction(session, project_id):
-        _require_textbook_project(session, project_id)
-        chat = _require_session(session, project_id, session_id)
-        if "section_scope_node_id" in fields:
-            if command.section_scope_node_id is not None:
-                node = session.get(ProgramNode, command.section_scope_node_id)
-                if node is None or node.project_id != project_id:
-                    raise ProjectDomainError(
-                        "Узел области контекста не найден",
-                        status=404,
-                        code="program_chat_scope_node_not_found",
-                    )
-            chat.section_scope_node_id = command.section_scope_node_id
-        if "context_flags" in fields and command.context_flags is not None:
-            unknown = set(command.context_flags) - CONTEXT_FLAG_KEYS
-            if unknown:
-                raise ProjectDomainError(
-                    "Неизвестная часть контекста",
-                    status=422,
-                    code="program_chat_context_flag_unknown",
-                    context={"keys": sorted(unknown)},
-                )
-            chat.context_flags = {**chat.context_flags, **command.context_flags}
-        chat.updated_at = utc_now()
-        session.flush()
-        session.refresh(chat)
-    return chat
 
 
 # ---------------------------------------------------------------------------
@@ -730,7 +470,7 @@ def _tree_text(nodes: list[ProgramNode]) -> str:
 
 
 def build_program_context(session: Session, chat: ChatSession) -> ProgramChatContext:
-    flags = chat.context_flags or default_context_flags()
+    flags = CHANNEL.flags(chat)
     project = session.get(Project, chat.project_id)
     assert project is not None
     passport = session.get(GoalPassport, chat.project_id)
@@ -806,12 +546,12 @@ def build_program_context(session: Session, chat: ChatSession) -> ProgramChatCon
 
 def context_preview(
     session: Session, project_id: UUID, session_id: UUID
-) -> ProgramChatContextPreviewRead:
-    _require_textbook_project(session, project_id)
-    chat = _require_session(session, project_id, session_id)
+) -> ProjectChatContextPreviewRead:
+    project_sessions.require_project(session, project_id, CHANNEL)
+    chat = project_sessions.require_session(session, project_id, session_id, CHANNEL)
     ctx = build_program_context(session, chat)
     manifest = [ManifestEntryRead.model_validate(entry) for entry in ctx.manifest]
-    return ProgramChatContextPreviewRead(
+    return ProjectChatContextPreviewRead(
         session_id=chat.id,
         manifest=manifest,
         fingerprint=ctx.fingerprint,
@@ -899,8 +639,8 @@ async def send_message(
     session: Session, gateway: ModelGateway, project_id: UUID, session_id: UUID, text: str
 ) -> ChatMessage:
     with project_write_transaction(session, project_id):
-        _require_textbook_project(session, project_id)
-        chat = _require_session(session, project_id, session_id)
+        project_sessions.require_project(session, project_id, CHANNEL)
+        chat = project_sessions.require_session(session, project_id, session_id, CHANNEL)
         ctx = build_program_context(session, chat)
         tail = list(
             session.scalars(
@@ -916,7 +656,7 @@ async def send_message(
         )
         chat.draft_text = ""
         messages = _reply_messages(ctx, tail, text)
-        model_override = _request_model_override(chat)
+        model_override = project_sessions.request_model_override(chat)
         parameters = dict(chat.model_parameters or {})
 
     request = AiTextRequest(
@@ -935,7 +675,7 @@ async def send_message(
     reply = result.value
     payload_kind = ChatPayloadKind.PROGRAM_DIFF if reply.operations else ChatPayloadKind.NONE
     with project_write_transaction(session, project_id):
-        chat = _require_session(session, project_id, session_id)
+        chat = project_sessions.require_session(session, project_id, session_id, CHANNEL)
         return chat_common.append_message_row(
             session,
             chat,
@@ -1154,7 +894,7 @@ async def run_build(
             ctx.fingerprint,
             scenario_prompt,
             job_id,
-            _request_model_override(chat),
+            project_sessions.request_model_override(chat),
             dict(chat.model_parameters or {}),
             ctx.template_key,
         )
@@ -1215,8 +955,8 @@ def start_build(
     session: Session, project_id: UUID, session_id: UUID, command: ProgramChatBuildWrite
 ) -> BackgroundJobStartRead:
     with project_write_transaction(session, project_id):
-        project = _require_textbook_project(session, project_id)
-        chat = _require_session(session, project_id, session_id)
+        project = project_sessions.require_project(session, project_id, CHANNEL)
+        chat = project_sessions.require_session(session, project_id, session_id, CHANNEL)
         if project.program_revision != command.expected_program_revision:
             raise ProjectConflictError(
                 "Программа уже изменена в другой вкладке",
@@ -1584,7 +1324,7 @@ def apply_proposal(
     session: Session, project_id: UUID, message_id: UUID, command: ProgramChatApplyWrite
 ) -> ProgramChangeResult:
     with project_write_transaction(session, project_id):
-        project = _require_textbook_project(session, project_id)
+        project = project_sessions.require_project(session, project_id, CHANNEL)
         message = session.get(ChatMessage, message_id)
         if message is None or message.payload_kind != ChatPayloadKind.PROGRAM_DIFF:
             raise ProjectNotFoundError(
@@ -1699,7 +1439,7 @@ def apply_proposal(
 
 def reject_proposal(session: Session, project_id: UUID, message_id: UUID) -> ChatMessage:
     with project_write_transaction(session, project_id):
-        _require_textbook_project(session, project_id)
+        project_sessions.require_project(session, project_id, CHANNEL)
         message = session.get(ChatMessage, message_id)
         if message is None or message.payload_kind != ChatPayloadKind.PROGRAM_DIFF:
             raise ProjectNotFoundError(

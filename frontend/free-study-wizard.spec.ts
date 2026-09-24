@@ -20,36 +20,9 @@ interface StubOptions {
 }
 
 const PROVIDER = "66666666-6666-4666-8666-666666666666";
-const SOURCE_JOB = "88888888-8888-4888-8888-888888888888";
+const SEARCH_SESSION = "55555555-5555-4555-8555-555555555555";
+const TOPIC = "99999999-9999-4999-8999-999999999999";
 const EXTERNAL_MATERIAL = "99999999-9999-4999-8999-999999999999";
-
-const SOURCE_RESULT = {
-  query: "Экономика — Разобраться в основах экономики",
-  program_node_id: null,
-  candidates: [
-    {
-      url: "https://habr.com/ru/articles/economics/", title: "Экономика простыми словами", kind: "article",
-      why: "Разбирает спрос и предложение на примерах", snippet: "Рынок уравновешивает спрос и предложение", import_kind: "url",
-    },
-    {
-      url: "https://example.org/micro.pdf", title: "Микроэкономика — конспект", kind: "pdf",
-      why: "Короткий конспект курса", snippet: "", import_kind: "pdf_manual",
-    },
-  ],
-  unverified_count: 1,
-  already_attached_count: 0,
-  run_id: "run-1",
-  actual_model_id: "test/model",
-};
-
-function sourceJob() {
-  return {
-    id: SOURCE_JOB, kind: "ai_source_search", state: "completed", material_id: null, project_id: PROJECT,
-    subject: "Экономика", model_label: "", progress_unit: "", needs_review: true, stage: null, parser_mode: null,
-    done: 1, total: 1, diagnostics: [], error: null, pause_requested: false, control_action: null,
-    created_at: NOW, updated_at: NOW,
-  };
-}
 
 function aiSettings(enabled: boolean) {
   return {
@@ -85,6 +58,54 @@ function aiSettings(enabled: boolean) {
       pricing_snapshot_at: NOW, catalog_snapshot_at: NOW, is_manually_added: false, favorite_order: 1, is_available: true,
     }],
     today_usage: { input_tokens: 0, output_tokens: 0, actual_cost_usd: "0", actual_cost_rub: "0", cache_hits: 0 },
+  };
+}
+
+const SEARCH_RESULT = {
+  summary: "Нашлась лекция по рынку, каталог файлов и видео.",
+  searches: [{ query: "рынок и цены лекция", category: "general", language: "ru", node_ids: [TOPIC], found: 8 }],
+  items: [
+    {
+      url: "https://lectures.example/market", title: "Лекция: рынок и цены", host: "lectures.example", kind: "lecture",
+      why: "Объясняет равновесие спроса и предложения", gist: "Кривые спроса и предложения, равновесная цена",
+      level: "beginner", volume: { kind: "html", words: 1800, minutes: 10, pages: null, size_bytes: null, file_links: 0 },
+      author: null, node_ids: [TOPIC],
+    },
+    {
+      url: "https://files.example/micro", title: "Все лекции по микроэкономике", host: "files.example", kind: "catalog",
+      why: "Лекции курса одним архивом", gist: "Страница со ссылками на PDF лекций", level: null,
+      volume: { kind: "html", words: 90, minutes: 1, pages: null, size_bytes: null, file_links: 14 }, author: null, node_ids: [],
+    },
+    {
+      url: "https://www.youtube.com/watch?v=abc", title: "Видеолекция о ценах", host: "youtube.com", kind: "video",
+      why: "Разбор на графиках", gist: "Как меняется цена при сдвиге спроса", level: null,
+      volume: { kind: "video", duration: "40:46" }, author: "Кафедра", node_ids: [TOPIC],
+    },
+  ],
+  candidate_count: 12,
+  hidden_attached: 1,
+  hidden_seen: 0,
+  unresponsive_engines: ["google"],
+  follow_ups: ["Найди задачи по рынку и ценам"],
+};
+
+function searchMessage(sequence: number, role: "user" | "assistant", text: string, payload: Record<string, unknown> = {}) {
+  return {
+    id: `44444444-4444-4444-8444-44444444444${sequence}`,
+    session_id: SEARCH_SESSION,
+    sequence,
+    role,
+    text,
+    stream_state: "complete",
+    payload_kind: Object.keys(payload).length ? "tool_result" : "none",
+    payload,
+    context_snapshot: {},
+    skill: null,
+    ai_run_id: null,
+    attempt_id: null,
+    grade_attempt_id: null,
+    created_at: NOW,
+    updated_at: NOW,
   };
 }
 
@@ -214,9 +235,16 @@ async function installStub(page: Page, options: StubOptions = {}) {
   let programNodes: Array<Record<string, unknown>> = [...(options.initialNodes ?? [])];
   let modelRequests = 0;
   let chatMessages: Array<Record<string, unknown>> = [];
-  const sourceSearches: Array<Record<string, unknown>> = [];
-  const externalAdded: Array<Record<string, unknown>> = [];
-  let sourceResolved = false;
+  // Чат «Поиск в интернете» в Материалах.
+  let searchCreated = false;
+  let searchMessages: Array<Record<string, unknown>> = [];
+  let searchFlags: Record<string, boolean> = {
+    profile: true, program: true, topic_queries: true, attached_materials: true, only_missing: true, english_sources: false,
+  };
+  let searchScope: string | null = null;
+  let searchDraft = "";
+  const searchSent: string[] = [];
+  const searchContextPatches: Array<Record<string, unknown>> = [];
   let chatCreated = false;
   let project = {
     id: PROJECT,
@@ -398,19 +426,62 @@ async function installStub(page: Page, options: StubOptions = {}) {
     }
     if (path === `/api/projects/${PROJECT}` && method === "GET") return json(activeDetail());
     if (path === `/api/projects/${PROJECT}/materials` && method === "GET") return json(materials);
-    if (path === `/api/projects/${PROJECT}/source-search` && method === "POST") {
-      sourceSearches.push(request.postDataJSON());
-      return json({ job_id: SOURCE_JOB }, 202);
+    if (path === `/api/projects/${PROJECT}/conspects`) return json({ entries: [] });
+    const searchBase = `/api/projects/${PROJECT}/source-search-chat/sessions`;
+    const searchDetail = () => ({
+      id: SEARCH_SESSION, project_id: PROJECT, section_scope_node_id: searchScope, title: "Поиск",
+      model_override: null, model_parameters: {}, context_flags: searchFlags,
+      draft_text: searchDraft, created_at: NOW, updated_at: NOW, messages: searchMessages,
+    });
+    if (path === searchBase && method === "GET") {
+      return json(searchCreated
+        ? [{ id: SEARCH_SESSION, project_id: PROJECT, title: "Поиск", updated_at: NOW, message_count: searchMessages.length }]
+        : []);
     }
-    if (path === `/api/background-jobs/${SOURCE_JOB}`) return json(sourceJob());
-    if (path === `/api/background-jobs/${SOURCE_JOB}/result`) return json(SOURCE_RESULT);
-    if (path === `/api/background-jobs/${SOURCE_JOB}/resolve` && method === "POST") {
-      sourceResolved = true;
-      return json(sourceJob());
+    if (path === searchBase && method === "POST") {
+      searchCreated = true;
+      return json(searchDetail(), 201);
+    }
+    if (path === `${searchBase}/${SEARCH_SESSION}` && method === "GET") return json(searchDetail());
+    if (path === `${searchBase}/${SEARCH_SESSION}/draft`) {
+      searchDraft = request.postDataJSON().text;
+      return json(searchDetail());
+    }
+    if (path === `${searchBase}/${SEARCH_SESSION}/context` && method === "GET") {
+      const entry = (kind: string, flag: string, count: number | null) => ({
+        kind, id: PROJECT, included: searchFlags[flag], truncated: false, bytes: 200, count,
+        reason: searchFlags[flag] ? null : "excluded_by_user", flag_key: flag, label: null,
+      });
+      return json({ session_id: SEARCH_SESSION, fingerprint: "f", total_bytes: 800, manifest: [
+        entry("profile", "profile", null),
+        entry("program_tree", "program", 1),
+        entry("topic_queries", "topic_queries", 1),
+        entry("attached_materials", "attached_materials", 0),
+      ] });
+    }
+    if (path === `${searchBase}/${SEARCH_SESSION}/context` && method === "PUT") {
+      const body = request.postDataJSON();
+      searchContextPatches.push(body);
+      if (body.context_flags) searchFlags = { ...searchFlags, ...body.context_flags };
+      if ("section_scope_node_id" in body) searchScope = body.section_scope_node_id;
+      return json(searchDetail());
+    }
+    if (path === `${searchBase}/${SEARCH_SESSION}/messages` && method === "POST") {
+      const text = request.postDataJSON().text;
+      searchSent.push(text);
+      const sequence = searchMessages.length + 1;
+      searchMessages = [
+        ...searchMessages,
+        searchMessage(sequence, "user", text),
+        searchMessage(sequence + 1, "assistant", SEARCH_RESULT.summary, {
+          tool_key: "search_external_sources", output_kind: "source_search_results", state: "succeeded",
+          query: "", input: { searches: SEARCH_RESULT.searches }, result: SEARCH_RESULT,
+        }),
+      ];
+      return json(searchMessages.at(-1));
     }
     if (path === `/api/projects/${PROJECT}/materials/external` && method === "POST") {
       const body = request.postDataJSON();
-      externalAdded.push(body);
       const created = projectMaterial({
         id: EXTERNAL_MATERIAL, display_name: "Свёртка простыми словами", original_name: body.url,
         source_kind: body.kind, presentation_kind: "html", source_url: body.url, status: "processing",
@@ -491,9 +562,8 @@ async function installStub(page: Page, options: StubOptions = {}) {
 
   return {
     modelRequests: () => modelRequests,
-    sourceSearches,
-    externalAdded,
-    sourceResolved: () => sourceResolved,
+    searchSent,
+    searchContextPatches,
   };
 }
 
@@ -663,38 +733,96 @@ test("темы без материала: «Без материала» откр
   await expect(dialog.getByRole("link", { name: "соберите урок из найденного" })).toHaveAttribute("href", /lessons\?topic=/);
 });
 
-test("«Найти в интернете» на шаге материалов: найденная страница добавляется, PDF остаётся ручным", async ({ page }) => {
-  const state = await installStub(page, { aiEnabled: true });
-  await openFreeWizard(page);
-  await enterGoal(page, "Экономика");
-  await page.getByRole("button", { name: "Найти в интернете" }).click();
-  const dialog = page.getByRole("dialog", { name: "Найти материалы в интернете" });
-  await expect(dialog.getByRole("textbox", { name: "Что искать" })).toHaveValue("Экономика — Разобраться в основах экономики");
-  await expect(dialog.getByText("Запрос и цель проекта уйдут в OpenRouter.", { exact: false })).toBeVisible();
-  await dialog.getByRole("button", { name: "Найти" }).click();
 
-  await expect(dialog.getByText("Экономика простыми словами")).toBeVisible();
-  await expect(dialog.getByText("PDF по ссылке не загружается", { exact: false })).toBeVisible();
-  await expect(dialog.getByText("Скрыто ссылок вне выдачи поиска: 1.", { exact: false })).toBeVisible();
-  await dialog.getByRole("button", { name: "Добавить выбранные (1)" }).click();
-  await expect(dialog.getByText("Добавлено: 1.", { exact: false })).toBeVisible();
-
-  expect(state.sourceSearches).toEqual([{ query: "Экономика — Разобраться в основах экономики", program_node_id: null, confirmed: true }]);
-  expect(state.externalAdded).toEqual([{
-    kind: "url", url: "https://habr.com/ru/articles/economics/", source_role: "main", purposes: ["study_source"],
-  }]);
-  expect(state.sourceResolved()).toBe(true);
-  await page.keyboard.press("Escape");
-  await expect(page.getByText("Свёртка простыми словами")).toBeVisible();
-});
-
-test("поиск в интернете без внешних моделей объясняет, как включить", async ({ page }) => {
-  const state = await installStub(page, { aiEnabled: false });
+test("шаг материалов без поиска в интернете, а на проверке программа — дерево с отступами", async ({ page }) => {
+  await installStub(page, {
+    initialNodes: [
+      programNode("11111111-aaaa-4aaa-8aaa-111111111111", "Рынок", "section", null),
+      programNode("22222222-aaaa-4aaa-8aaa-222222222222", "Цены и равновесие", "topic", "11111111-aaaa-4aaa-8aaa-111111111111"),
+    ],
+  });
   await openFreeWizard(page);
   await enterGoal(page);
-  await page.getByRole("button", { name: "Найти в интернете" }).click();
-  const dialog = page.getByRole("dialog", { name: "Найти материалы в интернете" });
-  await expect(dialog.getByText("Внешние модели выключены", { exact: false })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Найти" })).toBeDisabled();
-  expect(state.sourceSearches).toEqual([]);
+  await expect(page.getByText("Пока вы можете добавить материалы из Библиотеки.", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Найти в интернете" })).toHaveCount(0);
+  await page.getByRole("button", { name: "К программе" }).click();
+  await page.getByRole("button", { name: "К проверке" }).click();
+  const section = page.locator(".program-review-row.is-section");
+  const topic = page.locator(".program-review-row.is-topic");
+  await expect(topic).toContainText("Цены и равновесие");
+  const indent = async (row: typeof section) => row.evaluate((node) => parseFloat(getComputedStyle(node).paddingLeft));
+  expect(await indent(topic)).toBeGreaterThan(await indent(section));
+});
+
+test("Материалы: поиск в интернете свёрнут, кнопка раскрывает чат, ход даёт карточки источников", async ({ page }) => {
+  const state = await installStub(page, {
+    aiEnabled: true,
+    initialNodes: [{
+      ...programNode(TOPIC, "Рынок и цены", "topic", null),
+      origin_kind: "model", basis_kind: "custom", needs_material: true, origin_material_id: null,
+      source_page_ranges: [], material_search_queries: ["рынок и цены лекция"], material_kind: "lecture",
+    }],
+  });
+  await page.goto(`${BASE}/projects/${PROJECT}/materials`);
+  const add = page.getByRole("button", { name: "Добавить материал" });
+  const online = page.getByRole("button", { name: "Найти в интернете" }).first();
+  await expect(online).toBeVisible();
+  // Три действия шапки — в одну строку.
+  expect(Math.round((await online.boundingBox())!.y)).toBe(Math.round((await add.boundingBox())!.y));
+
+  const block = page.getByRole("region", { name: "Поиск в интернете" });
+  const toggle = block.getByRole("button", { name: /Поиск в интернете/ });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByText("Найдём материалы в интернете")).toHaveCount(0);
+
+  await online.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(block.getByRole("heading", { name: "Найдём материалы в интернете" })).toBeInViewport();
+
+  await block.getByRole("button", { name: "Видеолекции" }).click();
+  await expect(block.getByText("Нашлась лекция по рынку, каталог файлов и видео.")).toBeVisible();
+  await expect(block.getByText("«рынок и цены лекция»")).toBeVisible();
+  const lecture = block.getByRole("link", { name: "Лекция: рынок и цены" });
+  await expect(lecture).toHaveAttribute("href", "https://lectures.example/market");
+  await expect(block.getByText("Объясняет равновесие спроса и предложения")).toBeVisible();
+  await expect(block.getByText("Кривые спроса и предложения, равновесная цена")).toBeVisible();
+  await expect(block.getByText("lectures.example · ≈ 10 мин чтения · для начинающих")).toBeVisible();
+  await expect(block.getByText("Страница со ссылками на файлы")).toBeVisible();
+  await expect(block.getByText("ссылок на файлы: 14", { exact: false })).toBeVisible();
+  await expect(block.getByText("youtube.com · видео · 40:46 · Кафедра")).toBeVisible();
+  await expect(block.getByRole("list", { name: "Темы программы" }).first()).toContainText("1 Рынок и цены");
+  await expect(block.getByText("Уже в проекте: 1.", { exact: false })).toBeVisible();
+  await expect(block.getByRole("button", { name: /^Добавить/ })).toHaveCount(0);
+
+  await block.getByRole("button", { name: "Найди задачи по рынку и ценам" }).click();
+  await expect.poll(() => state.searchSent).toEqual([
+    "Найди видеолекции по темам программы",
+    "Найди задачи по рынку и ценам",
+  ]);
+
+  await block.getByText("Контекст и поиск", { exact: false }).click();
+  await block.getByRole("switch", { name: "Искать и на английском" }).click();
+  await expect.poll(() => state.searchContextPatches).toContainEqual({ context_flags: { english_sources: true } });
+});
+
+test("«Найти в интернете» у темы открывает чат с областью этой темы и готовой просьбой", async ({ page }) => {
+  const state = await installStub(page, {
+    aiEnabled: true,
+    initialNodes: [{
+      ...programNode(TOPIC, "Рынок и цены", "topic", null),
+      origin_kind: "model", basis_kind: "custom", needs_material: true, origin_material_id: null,
+      source_page_ranges: [], material_search_queries: ["рынок и цены лекция"], material_kind: "lecture",
+    }],
+  });
+  await page.goto(`${BASE}/projects/${PROJECT}/program`);
+  await page.getByRole("button", { name: "Без материала: 1" }).click();
+  const dialog = page.getByRole("dialog", { name: "Материалы к темам" });
+  await dialog.getByRole("button", { name: /Рынок и цены/ }).click();
+  await dialog.getByRole("link", { name: "Найти в интернете" }).click();
+
+  await expect(page).toHaveURL(`${BASE}/projects/${PROJECT}/materials?search=1&topic=${TOPIC}`);
+  const block = page.getByRole("region", { name: "Поиск в интернете" });
+  await expect(block.getByRole("textbox")).toHaveValue("Найди материалы по теме «Рынок и цены»");
+  await expect.poll(() => state.searchContextPatches).toContainEqual({ section_scope_node_id: TOPIC });
+  expect(state.searchSent).toEqual([]);
 });

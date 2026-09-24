@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.ai.gateway import ModelGateway
 from app.ai.provider import FakeTransport, ProviderCompletion, ProviderUsage
 from app.chat import common as chat_common
+from app.chat import project_sessions
 from app.exam import chat as exam_chat
 from app.models import (
     ChatMessage,
@@ -57,7 +58,7 @@ def test_program_hides_page_ranges_of_detached_material(session: Session) -> Non
 
 def test_project_chat_list_skips_program_sessions(session: Session) -> None:
     project = make_free_project(session)
-    program_chat.create_session(session, project.id)
+    project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     session.add(ChatSession(
         project_id=project.id,
         program_node_id=None,
@@ -99,7 +100,7 @@ async def test_free_chat_without_materials_uses_free_prompt(
         starting_level=StartingLevel.BEGINNER,
     ))
     session.commit()
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     reply = {
         "summary": "Черновик программы", "pros": [], "cons": [],
         "operations": [{
@@ -131,7 +132,7 @@ def test_free_apply_keeps_hints_only_for_topics_without_outline(session: Session
     material.outline = [{"level": 1, "title": "Свёрточные сети", "page": 5}]
     session.commit()
     link_material(session, project, material)
-    chat = program_chat.create_session(session, project.id)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
     message = _diff(session, chat, [
         {"op": "add", "node_type": "section", "title": "Основы", "goal_role": "prerequisite",
          "search_queries": ["основы нейросетей"], "material_kind": "textbook", "children": [

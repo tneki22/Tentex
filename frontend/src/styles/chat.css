@@ -1387,3 +1387,199 @@
   .chat-send-spinner { animation: none; }
   .chat-timeline-item.is-sending { animation: none; }
 }
+
+/* --- Чат «Поиск в интернете» в Материалах (docs/architecture/source-search-chat.md) --- */
+
+/* Под списком материалов: отделён линией, свёрнут до явного раскрытия. */
+.materials-web-search {
+  margin-top: var(--space-8);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-4);
+}
+
+.materials-web-search-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--motion-fast) var(--motion-ease), background-color var(--motion-fast) var(--motion-ease);
+}
+
+.materials-web-search-toggle:hover { border-color: var(--accent-edge); background: var(--surface-hover); }
+.materials-web-search-toggle > svg:first-child { flex: none; color: var(--accent); }
+.materials-web-search-toggle > span:nth-child(2) { display: grid; flex: 1; min-width: 0; gap: 2px; }
+.materials-web-search-toggle strong { font-size: var(--text-sm); }
+.materials-web-search-toggle small { color: var(--muted); font-size: var(--text-xs); }
+.materials-web-search-state { color: var(--ink-soft); font-size: var(--text-xs); }
+.materials-web-search-chevron { flex: none; color: var(--muted); transition: transform var(--motion-fast) var(--motion-ease); }
+.materials-web-search.is-open .materials-web-search-chevron { transform: rotate(180deg); }
+
+.materials-web-search-body {
+  height: min(760px, calc(100vh - 160px));
+  min-height: 480px;
+  margin-top: var(--space-3);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+}
+
+.source-search-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4) 0;
+}
+
+.source-search-scope { min-width: 220px; max-width: min(420px, 100%); }
+.source-search-coverage { color: var(--muted); font-size: var(--text-xs); }
+
+.source-search-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  flex-basis: 100%;
+}
+
+.source-search-chip {
+  padding: 3px var(--space-2);
+  border: 1px solid var(--accent-edge);
+  border-radius: var(--radius-pill);
+  background: var(--accent-wash);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  transition: background-color var(--motion-fast) var(--motion-ease);
+}
+
+.source-search-chip:hover:not(:disabled) { background: var(--accent-wash-strong); }
+.source-search-chip:disabled { cursor: default; opacity: 0.55; }
+
+.source-search-settings { display: grid; gap: var(--space-2); margin-bottom: var(--space-2); }
+
+.web-search-result { display: grid; gap: var(--space-3); }
+.web-search-summary { margin: 0; color: var(--ink); font-size: var(--text-sm); line-height: var(--leading-relaxed); }
+
+.web-search-queries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.web-search-queries li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+}
+
+.web-search-queries svg { color: var(--muted); }
+.web-search-queries small { color: var(--muted); }
+.web-search-queries small::before { content: "· "; }
+
+/* Строки источника — вид прежнего диалога поиска: название-ссылка, вид, домен. */
+.external-sources {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.external-source {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+
+.external-source.is-catalog { border-color: color-mix(in srgb, var(--tone-warning) 35%, var(--line)); }
+.external-source.is-video { border-left: 3px solid color-mix(in srgb, var(--tone-info) 60%, var(--line)); }
+.external-source.is-textbook,
+.external-source.is-course { border-left: 3px solid var(--accent-edge); }
+
+.external-source-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.external-source-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+
+.external-source-title:hover { color: var(--accent); }
+.external-source-title svg { flex: none; color: var(--muted); }
+
+.external-source-host { color: var(--muted); font-size: var(--text-xs); }
+
+.external-source-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.web-source-line { margin: 0; color: var(--ink-soft); font-size: var(--text-sm); line-height: var(--leading-snug); }
+.web-source-line b { color: var(--ink); font-weight: var(--weight-medium); }
+
+.web-source-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.web-source-topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.web-source-topics li {
+  max-width: 260px;
+  overflow: hidden;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--tone-info) 10%, var(--paper));
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-source-actions { display: flex; align-items: center; gap: var(--space-1); margin-left: auto; }
+.web-source-actions .text-button { display: inline-flex; align-items: center; gap: var(--space-1); }
+
+.web-search-follow-ups { display: flex; flex-wrap: wrap; gap: var(--space-2); }
