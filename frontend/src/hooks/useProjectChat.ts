@@ -292,7 +292,7 @@ function localMessage(
     sequence: saved.reduce((max, item) => Math.max(max, item.sequence), 0) + 1,
     role,
     text,
-    stream_state: role === "user" ? "complete" : "stopped",
+    stream_state: "complete",
     payload_kind: "none",
     payload: {},
     context_snapshot: {},
