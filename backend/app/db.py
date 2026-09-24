@@ -160,7 +160,19 @@ def _ensure_wal_mode(attempts: int = 5, delay: float = 0.5) -> None:
 
 
 def upgrade_database() -> None:
+    """Поднять схему до head.
+
+    Api и worker зовут это на своём старте независимо (`docker compose restart
+    api worker web` их не упорядочивает — `depends_on: condition:
+    service_healthy` работает только на `up`). Если оба стартуют одновременно,
+    один успевает применить миграцию первым; вторая транзакция уже прочитала
+    старый снимок alembic_version и на попытке записи ловит
+    `SQLITE_BUSY_SNAPSHOT` ("database is locked") мимо busy handler — 24.09.2026
+    так падал api сразу после того, как worker применял 0059/0060, и оставался
+    нездоровым до ручного перезапуска. `retry_on_locked` берёт свежий снимок и
+    на повторной попытке видит, что миграция уже на head — no-op.
+    """
     _ensure_wal_mode()
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "migrations"))
-    command.upgrade(config, "head")
+    retry_on_locked(lambda: command.upgrade(config, "head"))

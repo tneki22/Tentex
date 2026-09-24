@@ -211,6 +211,16 @@ Session`. Состояние снимается с задачи до откат�
 07.09.2026 отмена задачи ИИ по этой причине отвечала 500 (тесты её не ловили:
 они шли по объекту, уже лежащему в сессии, и SQL не выполнялся).
 
+Сама запись — короткий `UPDATE` — обёрнута в `db.retry_on_locked`: чужая
+конкурентная транзакция между чтением задачи и этим `UPDATE` иногда ловит
+`database is locked` (`SQLITE_BUSY_SNAPSHOT`, мимо busy handler — см.
+`test_db_write_contention.py`). 24.09.2026 так отвечал 500-й `resolve`. Тот же
+приём — на `upgrade_database()` (`backend/app/db.py`): api и worker зовут её на
+своём старте независимо, и `docker compose restart api worker web` не
+упорядочивает их (`depends_on: service_healthy` работает только на `up`);
+`retry_on_locked` даёт проигравшему процессу увидеть на повторе, что схема уже
+на head.
+
 Отмена (`backend/app/background/registry.py:cancel_job`) разветвляется по виду
 задачи:
 

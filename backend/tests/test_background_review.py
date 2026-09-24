@@ -9,11 +9,28 @@
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+import app.db as db_module
 from app.background import registry
 from app.models import BackgroundJob, BackgroundJobKind, BackgroundJobState, utc_now
 from app.projects.errors import ProjectConflictError
+
+
+def _fail_session_begin_once(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Заставить первый `session.begin()` внутри реестра словить чужую блокировку."""
+    monkeypatch.setattr(db_module.time, "sleep", lambda _: None)
+    original_begin = session.begin
+    calls = {"count": 0}
+
+    def flaky_begin(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OperationalError("UPDATE background_jobs", {}, Exception("database is locked"))
+        return original_begin(*args, **kwargs)
+
+    monkeypatch.setattr(session, "begin", flaky_begin)
 
 
 def _job(
@@ -108,6 +125,28 @@ def test_running_ai_job_is_cancelled_on_a_session_that_already_read_it(
     job = _job(session, BackgroundJobKind.AI_GROUPING, state=BackgroundJobState.RUNNING)
 
     assert registry.cancel_job(session, job.id).pause_requested is True
+
+
+def test_resolve_job_retries_past_a_transient_lock(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """24.09.2026: чужая блокировка записи роняла `resolve_job` 500-й — теперь
+    `retry_on_locked` берёт свежий снимок и пробует ещё раз."""
+    job = _job(session, BackgroundJobKind.AI_GROUPING, state=BackgroundJobState.FAILED)
+    _fail_session_begin_once(session, monkeypatch)
+
+    resolved = registry.resolve_job(session, job.id)
+    assert resolved.reviewed_at is not None
+
+
+def test_cancel_job_retries_past_a_transient_lock(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job = _job(session, BackgroundJobKind.AI_GROUPING, state=BackgroundJobState.QUEUED)
+    _fail_session_begin_once(session, monkeypatch)
+
+    cancelled = registry.cancel_job(session, job.id)
+    assert cancelled.state == BackgroundJobState.CANCELLED
 
 
 def test_resolve_rejects_unfinished_job(session: Session) -> None:
