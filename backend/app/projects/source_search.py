@@ -10,11 +10,11 @@
 from __future__ import annotations
 
 import json
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, BeforeValidator, ConfigDict, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -71,19 +71,25 @@ class SourceSearchWrite(BaseModel):
     confirmed: bool = False
 
 
-# Длину полей модель не держит точно, а повтор по схеме с поиском в сети стоит
-# ещё минуту-две. Поэтому пределов в схеме ответа нет: лишнее обрезает сервер.
+def _known_kind(value: object) -> object:
+    return value if value in get_args(SourceKind) else "other"
+
+
+# Не все провайдеры OpenRouter соблюдают строгую схему, а повтор по схеме с
+# поиском в сети стоит ещё минуту-две. Поэтому ответ принимается терпимо:
+# пределов длины нет (лишнее обрезает сервер), незнакомый вид — «прочее»,
+# лишние поля отбрасываются.
 class SourceCandidateWire(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8)]
     title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-    kind: SourceKind
+    kind: Annotated[SourceKind, BeforeValidator(_known_kind)]
     why: Annotated[str, StringConstraints(strip_whitespace=True)]
 
 
 class SourceSearchWire(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     candidates: list[SourceCandidateWire]
 

@@ -172,3 +172,26 @@ def test_citations_are_read_from_openrouter_annotations() -> None:
             ]}
 
     assert _citations(Message()) == (UrlCitation(url=CITED, title="Хабр", content="Текст"),)
+
+
+def test_schema_retry_keeps_citations_of_the_first_search(session: Session, ai_config: str) -> None:
+    """Повтор по схеме ищет заново по тексту замечания; первая выдача не теряется."""
+    del ai_config
+    _use_openrouter(session)
+    project = make_free_project(session)
+    first = ProviderCompletion(
+        content="```json\n{}\n```",
+        actual_model_id="test/structured-model",
+        usage=ProviderUsage(input_tokens=10, output_tokens=5),
+        citations=(UrlCitation(url=CITED, content="Ядро свёртки"),),
+    )
+    second = _completion([_candidate(CITED, "lecture")], (UrlCitation(url=VIDEO),))
+    transport = FakeTransport(completions=[first, second])
+    command = source_search.SourceSearchWrite(query="свёртка", confirmed=True)
+
+    result = _run(session, transport, project.id, command)
+
+    assert transport.complete_calls == 2
+    assert [(item.url, item.kind) for item in result.candidates] == [(CITED, "other")]
+    assert result.candidates[0].snippet == "Ядро свёртки"
+    assert result.unverified_count == 0

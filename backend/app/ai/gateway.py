@@ -5,6 +5,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import math
 import time
 import wave
@@ -57,6 +58,8 @@ from app.models import (
     utc_now,
 )
 from app.projects.errors import ProjectDomainError
+
+log = logging.getLogger("tentex.ai")
 
 ZERO = Decimal("0")
 
@@ -346,6 +349,10 @@ class ModelGateway:
             "max_output_tokens": preflight.estimated_output_tokens,
         })
         combined_usage = ProviderUsage()
+        # Повтор по схеме с поиском в сети ищет заново — уже по тексту замечания,
+        # и его выдача не совпадает с первой. Адреса, которые модель видела в
+        # любой попытке этого запуска, одинаково настоящие.
+        citations: dict[str, UrlCitation] = {}
         # Временный сбой провайдера или один невалидный по схеме ответ не должен
         # ронять весь вызов: попытки повторяются с растущей паузой, и только
         # исчерпав их, мы сдаёмся и записываем неудачу. Схему модель
@@ -387,9 +394,15 @@ class ModelGateway:
             if budget_receipt is not None:
                 request.budget_context.settle(budget_receipt, result.usage)
             combined_usage = _sum_usage(combined_usage, result.usage)
+            for citation in result.citations:
+                citations.setdefault(citation.url, citation)
             try:
                 value = request.response_model.model_validate_json(result.content)
             except (ValidationError, ValueError, json.JSONDecodeError) as error:
+                log.warning(
+                    "structured output rejected role=%s attempt=%d: %s",
+                    request.role, attempt + 1, str(error)[:500],
+                )
                 if not last_attempt:
                     messages = [
                         *messages,
@@ -424,7 +437,7 @@ class ModelGateway:
                 requested_model_id=resolved.model_id,
                 actual_model_id=result.actual_model_id,
                 cached=False,
-                citations=result.citations,
+                citations=tuple(citations.values()),
             )
         raise AssertionError("unreachable: loop always returns or raises")
 
