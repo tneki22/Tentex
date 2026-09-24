@@ -13,6 +13,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.background.schemas import BackgroundJobRead
+from app.db import retry_on_locked
 from app.materials import library
 from app.materials.naming import material_display_name
 from app.models import (
@@ -345,17 +346,35 @@ def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:
     session.rollback()
     if material_scoped:
         assert material_id is not None and snapshot is not None
-        with session.begin():
-            library.control_task_core(session, material_id, "cancel")
+
+        def _cancel_material() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with session.begin():
+                library.control_task_core(session, material_id, "cancel")
+
+        retry_on_locked(_cancel_material)
         return snapshot.model_copy(update={"state": BackgroundJobState.CANCELLED})
     if state == BackgroundJobState.QUEUED:
-        with session.begin():
-            job.state = BackgroundJobState.CANCELLED
-            job.updated_at = utc_now()
+
+        def _cancel_queued() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with session.begin():
+                job.state = BackgroundJobState.CANCELLED
+                job.updated_at = utc_now()
+
+        retry_on_locked(_cancel_queued)
     elif state == BackgroundJobState.RUNNING:
-        with session.begin():
-            job.pause_requested = True
-            job.updated_at = utc_now()
+
+        def _pause_running() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with session.begin():
+                job.pause_requested = True
+                job.updated_at = utc_now()
+
+        retry_on_locked(_pause_running)
     else:
         raise ProjectConflictError(
             "Задачу нельзя отменить в текущем состоянии", code="background_job_not_cancellable"
@@ -384,10 +403,14 @@ def resolve_job(session: Session, job_id: UUID) -> BackgroundJobRead:
         )
     if reviewed_at is None:
         # Как и в `cancel_job`: читающая транзакция закрывается до записи.
-        session.rollback()
-        with session.begin():
-            job.reviewed_at = utc_now()
-            job.updated_at = utc_now()
+        def _mark_reviewed() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with session.begin():
+                job.reviewed_at = utc_now()
+                job.updated_at = utc_now()
+
+        retry_on_locked(_mark_reviewed)
         session.expire_all()
     return get_job(session, job_id)
 
