@@ -1,7 +1,7 @@
-import { forwardRef, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { ChevronDown, Globe } from "lucide-react";
 import type { ProgramNodeRead } from "../../api/projects";
-import { SourceSearchChat, type SourceSearchChatHandle } from "../workspace/chat/SourceSearchChat";
+import { SourceSearchChat } from "../workspace/chat/SourceSearchChat";
 
 export interface MaterialsWebSearchHandle {
   /** Раскрыть блок, поставить его по центру экрана и перевести фокус в поле ввода. */
@@ -11,33 +11,30 @@ export interface MaterialsWebSearchHandle {
 interface MaterialsWebSearchProps {
   projectId: string;
   nodes: ProgramNodeRead[];
-  /** Пришли по ссылке `?search=1`: блок открыт сразу. */
-  initiallyOpen?: boolean;
+  /** Пришли из подбора к теме: область чата — эта тема. */
   initialTopicId?: string | null;
 }
 
 /** Блок «Поиск в интернете» под списком материалов: отделён линией, по умолчанию свёрнут. */
 export const MaterialsWebSearch = forwardRef<MaterialsWebSearchHandle, MaterialsWebSearchProps>(
-  function MaterialsWebSearch({ projectId, nodes, initiallyOpen = false, initialTopicId = null }, forwardedRef) {
-    const [open, setOpen] = useState(initiallyOpen);
+  function MaterialsWebSearch({ projectId, nodes, initialTopicId = null }, forwardedRef) {
+    const [open, setOpen] = useState(false);
+    // Каждый вызов reveal — новый запрос прокрутки и фокуса, даже если блок уже открыт.
+    const [revealRequest, setRevealRequest] = useState(0);
     const section = useRef<HTMLElement>(null);
-    const chat = useRef<SourceSearchChatHandle>(null);
-
-    /* Чат монтируется только при раскрытии, поэтому прокрутка и фокус ждут кадр,
-       в котором блок уже занял своё место. */
-    function center() {
-      window.requestAnimationFrame(() => {
-        section.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-        window.setTimeout(() => chat.current?.focus(), 250);
-      });
-    }
 
     useImperativeHandle(forwardedRef, () => ({
       reveal: () => {
         setOpen(true);
-        center();
+        setRevealRequest((value) => value + 1);
       },
     }), []);
+
+    /* Тело чата фиксированной высоты, поэтому центрировать можно сразу после
+       раскрытия, не дожидаясь загрузки переписки. */
+    useEffect(() => {
+      if (revealRequest > 0) section.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, [revealRequest]);
 
     return (
       <section ref={section} className={`materials-web-search${open ? " is-open" : ""}`} aria-label="Поиск в интернете">
@@ -57,7 +54,12 @@ export const MaterialsWebSearch = forwardRef<MaterialsWebSearchHandle, Materials
         </button>
         {open && (
           <div className="materials-web-search-body">
-            <SourceSearchChat ref={chat} projectId={projectId} nodes={nodes} initialTopicId={initialTopicId} />
+            <SourceSearchChat
+              projectId={projectId}
+              nodes={nodes}
+              initialTopicId={initialTopicId}
+              focusRequest={revealRequest}
+            />
           </div>
         )}
       </section>

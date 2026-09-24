@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Files, ListTree, Search, Target } from "lucide-react";
 import type { ProjectChatManifestEntry } from "../../../api/projectChat";
 import type { ProgramNodeRead } from "../../../api/projects";
@@ -53,15 +53,13 @@ function contextChips(manifest: ProjectChatManifestEntry[] | undefined): ChipDef
   });
 }
 
-export interface SourceSearchChatHandle {
-  focus: () => void;
-}
-
 interface SourceSearchChatProps {
   projectId: string;
   nodes: ProgramNodeRead[];
   /** Пришли из подбора к теме: область — эта тема, в поле — просьба о ней. */
   initialTopicId?: string | null;
+  /** Растёт с каждым «Найти в интернете»: поле ввода получает фокус, как только появится. */
+  focusRequest?: number;
 }
 
 /**
@@ -69,210 +67,213 @@ interface SourceSearchChatProps {
  * подсказкам «Где искать», SearXNG ищет, лучшие страницы открываются ради объёма,
  * а ответ — карточки источников. Материалом найденное само не становится.
  */
-export const SourceSearchChat = forwardRef<SourceSearchChatHandle, SourceSearchChatProps>(
-  function SourceSearchChat({ projectId, nodes, initialTopicId = null }, forwardedRef) {
-    const chat = useProjectChat({ projectId, channel: "source-search-chat" });
-    const availability = useAiRoleAvailability("source_web_search", chat.session?.model_override);
-    const composer = useRef<ChatComposerHandle>(null);
-    const appliedTopic = useRef<string | null>(null);
+export function SourceSearchChat({ projectId, nodes, initialTopicId = null, focusRequest = 0 }: SourceSearchChatProps) {
+  const chat = useProjectChat({ projectId, channel: "source-search-chat" });
+  const availability = useAiRoleAvailability("source_web_search", chat.session?.model_override);
+  const composer = useRef<ChatComposerHandle>(null);
+  const appliedTopic = useRef<string | null>(null);
 
-    useImperativeHandle(forwardedRef, () => ({ focus: () => composer.current?.focus() }), []);
-
-    const flat = useMemo(() => {
-      const current = nodes.filter((node) => node.is_in_current_program && !node.is_archived);
-      try { return flattenProgramTree(buildProgramTree(current)); }
-      catch { return []; }
-    }, [nodes]);
-    const topicLabels = useMemo(
-      () => Object.fromEntries(flat.map((node) => [node.id, `${node.number} ${node.title}`])),
-      [flat],
-    );
-    const studyNodeIds = useMemo(
-      () => new Set(flat.filter((node) => node.node_type !== "section").map((node) => node.id)),
-      [flat],
-    );
-    const searchedCount = useMemo(() => {
-      const searched = new Set<string>();
-      for (const message of chat.messages) {
-        const payload = parsePayload(message);
-        if (payload.kind !== "tool_result" || payload.data.output_kind !== "source_search_results") continue;
-        const result = payload.data.result as { searches?: Array<{ node_ids: string[] }> };
-        for (const search of result.searches ?? []) {
-          for (const id of search.node_ids) if (studyNodeIds.has(id)) searched.add(id);
-        }
+  const flat = useMemo(() => {
+    const current = nodes.filter((node) => node.is_in_current_program && !node.is_archived);
+    try { return flattenProgramTree(buildProgramTree(current)); }
+    catch { return []; }
+  }, [nodes]);
+  const topicLabels = useMemo(
+    () => Object.fromEntries(flat.map((node) => [node.id, `${node.number} ${node.title}`])),
+    [flat],
+  );
+  const studyNodeIds = useMemo(
+    () => new Set(flat.filter((node) => node.node_type !== "section").map((node) => node.id)),
+    [flat],
+  );
+  const searchedCount = useMemo(() => {
+    const searched = new Set<string>();
+    for (const message of chat.messages) {
+      const payload = parsePayload(message);
+      if (payload.kind !== "tool_result" || payload.data.output_kind !== "source_search_results") continue;
+      const result = payload.data.result as { searches?: Array<{ node_ids: string[] }> };
+      for (const search of result.searches ?? []) {
+        for (const id of search.node_ids) if (studyNodeIds.has(id)) searched.add(id);
       }
-      return searched.size;
-    }, [chat.messages, studyNodeIds]);
-
-    /* Переход «Найти в интернете» из темы: область и черновик подставляются один
-       раз, запрос не уходит сам — платный ход запускает человек. */
-    const sessionId = chat.session?.id;
-    useEffect(() => {
-      if (!initialTopicId || !sessionId || appliedTopic.current === initialTopicId) return;
-      const label = topicLabels[initialTopicId];
-      if (!label) return;
-      appliedTopic.current = initialTopicId;
-      void chat.updateScope(initialTopicId);
-      const title = flat.find((node) => node.id === initialTopicId)?.title ?? label;
-      chat.setDraft(`Найди материалы по теме «${title}»`);
-      composer.current?.focus();
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [initialTopicId, sessionId, topicLabels]);
-
-    if (chat.loadError) {
-      return (
-        <div className="chat-panel-error">
-          <ErrorState title="Чат не открылся" message={chat.loadError} />
-          <Button onClick={chat.reloadSessions}>Повторить</Button>
-        </div>
-      );
     }
-    if (chat.sessions === null) return <LoadingState label="Загружаем чат" />;
+    return searched.size;
+  }, [chat.messages, studyNodeIds]);
 
-    const flags = chat.session?.context_flags ?? {};
-    const ready = availability.state === "ready";
-    const send = (text: string) => void chat.sendMessage(text);
-    const scopeOptions = flat.map((node) => ({
-      value: node.id,
-      label: `${node.number} ${node.title}`,
-      description: node.node_type === "section" ? "раздел" : undefined,
-    }));
+  /* Поле ввода появляется только после загрузки сессии — фокус ждёт его. */
+  const sessionId = chat.session?.id;
+  const detailReady = Boolean(sessionId) && !chat.detailLoading;
+  useEffect(() => {
+    // Без прокрутки: блок уже плавно едет к центру экрана, фокус её не должен сбить.
+    if (focusRequest > 0 && detailReady) composer.current?.focus({ preventScroll: true });
+  }, [focusRequest, detailReady]);
 
+  /* Переход «Найти в интернете» из темы: область и черновик подставляются один
+     раз, запрос не уходит сам — платный ход запускает человек. */
+  useEffect(() => {
+    if (!initialTopicId || !sessionId || appliedTopic.current === initialTopicId) return;
+    const label = topicLabels[initialTopicId];
+    if (!label) return;
+    appliedTopic.current = initialTopicId;
+    void chat.updateScope(initialTopicId);
+    const title = flat.find((node) => node.id === initialTopicId)?.title ?? label;
+    chat.setDraft(`Найди материалы по теме «${title}»`);
+    composer.current?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTopicId, sessionId, topicLabels]);
+
+  if (chat.loadError) {
     return (
-      <div className="program-chat-workspace source-search-chat">
-        <ChatHeader
-          sessions={chat.sessions}
-          activeSessionId={chat.activeSessionId}
-          onSelectSession={chat.setActiveSessionId}
-          onNewChat={() => void chat.startNewChat()}
-          showResponseControl={false}
-          historyTitle="Поиски в интернете"
-        />
+      <div className="chat-panel-error">
+        <ErrorState title="Чат не открылся" message={chat.loadError} />
+        <Button onClick={chat.reloadSessions}>Повторить</Button>
+      </div>
+    );
+  }
+  if (chat.sessions === null) return <LoadingState label="Загружаем чат" />;
 
-        {chat.detailLoading && <LoadingState label="Загружаем переписку" />}
-        {chat.detailError && (
-          <div className="chat-panel-error">
-            <ErrorState title="Переписка не загрузилась" message={chat.detailError} />
-            <Button onClick={chat.retryDetail}>Повторить</Button>
-          </div>
-        )}
+  const flags = chat.session?.context_flags ?? {};
+  const ready = availability.state === "ready";
+  const send = (text: string) => void chat.sendMessage(text);
+  const scopeOptions = flat.map((node) => ({
+    value: node.id,
+    label: `${node.number} ${node.title}`,
+    description: node.node_type === "section" ? "раздел" : undefined,
+  }));
 
-        {chat.session && !chat.detailLoading && !chat.detailError && (
-          <>
-            {chat.messages.length === 0 ? (
-              <div className="chat-empty-invite">
-                <h2>Найдём материалы в интернете</h2>
-                <p>
-                  Попросите, что нужно: учебники, статьи, видео или задачи — по всей программе,
-                  разделу или теме. ИИ составит запросы по программе и подсказкам «Где искать»,
-                  поисковик SearXNG найдёт страницы, а лучшие из них откроются, чтобы показать
-                  объём и суть. В проект найденное само не добавляется.
-                </p>
-                {availability.state === "disabled" && (
-                  <OfflineNotice reason="disabled" alternative="Материалы можно добавить файлом или ссылкой." />
-                )}
-                {availability.state === "unavailable" && (
-                  <p className="program-chat-unavailable" role="status">{availability.reason}</p>
-                )}
-                {ready && (
-                  <div className="program-chat-quick-starts" aria-label="Быстрый старт">
-                    {QUICK_ACTIONS.map((action) => (
-                      <Button key={action.label} variant="secondary" disabled={chat.sending} onClick={() => send(action.text)}>
-                        {action.label}
-                      </Button>
-                    ))}
-                  </div>
-                )}
-                <p className="chat-empty-context-note">
-                  В запрос модели уходят цель, программа с подсказками «Где искать» и список
-                  материалов проекта — состав можно поменять ниже. Каждый ход — два вызова модели
-                  и 20–60 секунд.
-                </p>
-              </div>
-            ) : (
-              <ChatTimeline
-                projectId={projectId}
-                messages={chat.messages}
-                streamingMessageId={null}
-                preparing={chat.sending}
-                preparingLabel="Ищу в интернете — обычно 20–60 секунд"
-                failure={chat.sendError ? { code: "source_search_send_error", detail: chat.sendError } : null}
-                onRetry={() => send(chat.draft)}
-                nodeTitles={topicLabels}
-                onFollowUp={ready && !chat.sending ? send : undefined}
-              />
-            )}
+  return (
+    <div className="program-chat-workspace source-search-chat">
+      <ChatHeader
+        sessions={chat.sessions}
+        activeSessionId={chat.activeSessionId}
+        onSelectSession={chat.setActiveSessionId}
+        onNewChat={() => void chat.startNewChat()}
+        showResponseControl={false}
+        historyTitle="Поиски в интернете"
+      />
 
-            <div className="source-search-toolbar">
-              <Select
-                className="source-search-scope"
-                ariaLabel="Искать для"
-                value={chat.session.section_scope_node_id}
-                emptyOption="Вся программа"
-                options={scopeOptions}
-                onValueChange={(value) => void chat.updateScope(value)}
-                disabled={flat.length === 0}
-              />
-              {studyNodeIds.size > 0 && (
-                <span className="source-search-coverage">Искали по {searchedCount} из {studyNodeIds.size} тем</span>
+      {chat.detailLoading && <LoadingState label="Загружаем переписку" />}
+      {chat.detailError && (
+        <div className="chat-panel-error">
+          <ErrorState title="Переписка не загрузилась" message={chat.detailError} />
+          <Button onClick={chat.retryDetail}>Повторить</Button>
+        </div>
+      )}
+
+      {chat.session && !chat.detailLoading && !chat.detailError && (
+        <>
+          {chat.messages.length === 0 ? (
+            <div className="chat-empty-invite">
+              <h2>Найдём материалы в интернете</h2>
+              <p>
+                Попросите, что нужно: учебники, статьи, видео или задачи — по всей программе,
+                разделу или теме. ИИ составит запросы по программе и подсказкам «Где искать»,
+                поисковик SearXNG найдёт страницы, а лучшие из них откроются, чтобы показать
+                объём и суть. В проект найденное само не добавляется.
+              </p>
+              {availability.state === "disabled" && (
+                <OfflineNotice reason="disabled" alternative="Материалы можно добавить файлом или ссылкой." />
               )}
-              {chat.messages.length > 0 && ready && (
-                <div className="source-search-quick" aria-label="Быстрые действия">
+              {availability.state === "unavailable" && (
+                <p className="program-chat-unavailable" role="status">{availability.reason}</p>
+              )}
+              {ready && (
+                <div className="program-chat-quick-starts" aria-label="Быстрый старт">
                   {QUICK_ACTIONS.map((action) => (
-                    <button key={action.label} type="button" className="source-search-chip" disabled={chat.sending} onClick={() => send(action.text)}>
+                    <Button key={action.label} variant="secondary" disabled={chat.sending} onClick={() => send(action.text)}>
                       {action.label}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               )}
+              <p className="chat-empty-context-note">
+                В запрос модели уходят цель, программа с подсказками «Где искать» и список
+                материалов проекта — состав можно поменять ниже. Каждый ход — два вызова модели
+                и 20–60 секунд.
+              </p>
             </div>
-
-            <ContextChips
-              label="Контекст и поиск"
-              chips={contextChips(chat.contextPreview?.manifest)}
-              contextFlags={flags}
-              onToggleFlag={chat.updateContextFlag}
-              controls={
-                <div className="source-search-settings">
-                  <Switch
-                    label="Только темы без материала"
-                    hint="Темы с привязанным материалом или страницами учебника не ищутся отдельно"
-                    checked={flags.only_missing ?? true}
-                    onCheckedChange={(value) => chat.updateContextFlag("only_missing", value)}
-                  />
-                  <Switch
-                    label="Искать и на английском"
-                    hint="Модель сможет добавить англоязычные запросы"
-                    checked={flags.english_sources ?? false}
-                    onCheckedChange={(value) => chat.updateContextFlag("english_sources", value)}
-                  />
-                </div>
-              }
+          ) : (
+            <ChatTimeline
+              projectId={projectId}
+              messages={chat.messages}
+              streamingMessageId={null}
+              preparing={chat.sending}
+              preparingLabel="Ищу в интернете — обычно 20–60 секунд"
+              failure={chat.sendError ? { code: "source_search_send_error", detail: chat.sendError } : null}
+              onRetry={() => send(chat.draft)}
+              nodeTitles={topicLabels}
+              onFollowUp={ready && !chat.sending ? send : undefined}
             />
+          )}
 
-            <ChatComposer
-              ref={composer}
-              value={chat.draft}
-              onChange={chat.setDraft}
-              onSend={() => send(chat.draft)}
-              placeholder="Что найти? Например: видеолекции по планированию процессов"
-              modelPicker={
-                <ChatModelControl
-                  role="source_web_search"
-                  capabilities={SEARCH_MODEL_CAPABILITIES}
-                  value={chat.session.model_override}
-                  parameters={chat.session.model_parameters}
-                  contextBytes={chat.contextPreview?.total_bytes}
-                  messageCount={chat.messages.length}
-                  onChange={chat.updateModel}
+          <div className="source-search-toolbar">
+            <Select
+              className="source-search-scope"
+              ariaLabel="Искать для"
+              value={chat.session.section_scope_node_id}
+              emptyOption="Вся программа"
+              options={scopeOptions}
+              onValueChange={(value) => void chat.updateScope(value)}
+              disabled={flat.length === 0}
+            />
+            {studyNodeIds.size > 0 && (
+              <span className="source-search-coverage">Искали по {searchedCount} из {studyNodeIds.size} тем</span>
+            )}
+            {chat.messages.length > 0 && ready && (
+              <div className="source-search-quick" aria-label="Быстрые действия">
+                {QUICK_ACTIONS.map((action) => (
+                  <button key={action.label} type="button" className="source-search-chip" disabled={chat.sending} onClick={() => send(action.text)}>
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <ContextChips
+            label="Контекст и поиск"
+            chips={contextChips(chat.contextPreview?.manifest)}
+            contextFlags={flags}
+            onToggleFlag={chat.updateContextFlag}
+            controls={
+              <div className="source-search-settings">
+                <Switch
+                  label="Только темы без материала"
+                  hint="Темы с привязанным материалом или страницами учебника не ищутся отдельно"
+                  checked={flags.only_missing ?? true}
+                  onCheckedChange={(value) => chat.updateContextFlag("only_missing", value)}
                 />
-              }
-              showModeIndicator={false}
-              sending={chat.sending}
-            />
-          </>
-        )}
-      </div>
-    );
-  },
-);
+                <Switch
+                  label="Искать и на английском"
+                  hint="Модель сможет добавить англоязычные запросы"
+                  checked={flags.english_sources ?? false}
+                  onCheckedChange={(value) => chat.updateContextFlag("english_sources", value)}
+                />
+              </div>
+            }
+          />
+
+          <ChatComposer
+            ref={composer}
+            value={chat.draft}
+            onChange={chat.setDraft}
+            onSend={() => send(chat.draft)}
+            placeholder="Что найти? Например: видеолекции по планированию процессов"
+            modelPicker={
+              <ChatModelControl
+                role="source_web_search"
+                capabilities={SEARCH_MODEL_CAPABILITIES}
+                value={chat.session.model_override}
+                parameters={chat.session.model_parameters}
+                contextBytes={chat.contextPreview?.total_bytes}
+                messageCount={chat.messages.length}
+                onChange={chat.updateModel}
+              />
+            }
+            showModeIndicator={false}
+            sending={chat.sending}
+          />
+        </>
+      )}
+    </div>
+  );
+}
