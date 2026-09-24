@@ -276,10 +276,8 @@ ROLE_SPECS = {
             "text",
             frozenset({"structured_output"}),
             "none",
-            "source-web-search-v1",
-            # Подбор ссылок из готовой выдачи — не задача на рассуждение: с «low»
-            # ответ приходит заметно быстрее, а поиск и так добавляет к нему время.
-            {"max_output_tokens": 4000, "reasoning_effort": "low"},
+            "source-web-search-v2",
+            {"max_output_tokens": 4000},
         ),
         AiRoleSpec(
             "settings_model_test",
