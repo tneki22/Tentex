@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.ai.dependencies import get_model_gateway
@@ -471,6 +471,24 @@ _register_project_chat(
     source_search_chat.context_preview,
     source_search_chat.send_message,
 )
+
+
+@projects.post("/{project_id}/source-search-chat/sessions/{session_id}/messages/stream")
+def stream_source_search_message(
+    project_id: UUID,
+    session_id: UUID,
+    command: project_sessions.ProjectChatMessageWrite,
+    session: SessionDependency,
+) -> StreamingResponse:
+    """Ход поиска с этапами в ленте; закрытие соединения — остановка поиска."""
+    # Проект и сессия проверяются до потока: «не найдено» приходит обычным ответом.
+    project_sessions.require_project(session, project_id, source_search_chat.CHANNEL)
+    project_sessions.require_session(session, project_id, session_id, source_search_chat.CHANNEL)
+    return StreamingResponse(
+        source_search_chat.stream_turn(project_id, session_id, command.text),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @projects.post(

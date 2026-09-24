@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
 import type { AttemptOutcome, ChatMessageRead } from "../../../api/chat";
 import { OfflineNotice } from "../../../components/domain";
@@ -33,6 +33,8 @@ interface ChatTimelineProps {
   onFollowUp?: (text: string) => void;
   /** Строка ожидания ответа: поиск в интернете идёт дольше обычного ответа. */
   preparingLabel?: string;
+  /** Вместо строки ожидания — живые этапы хода (поиск в интернете). */
+  preparingContent?: ReactNode;
   onRetry: () => void;
   failure: StreamFailure | null;
 }
@@ -41,7 +43,7 @@ export function ChatTimeline({
   projectId, messages, streamingMessageId, preparing,
   onAnswerAgain, onCheckAgain, onSelfAssessment,
   onApplyProposal, onRejectProposal, proposalBusy, nodeTitles, onFollowUp,
-  preparingLabel = "Готовлю ответ", onRetry, failure,
+  preparingLabel = "Готовлю ответ", preparingContent, onRetry, failure,
 }: ChatTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
@@ -84,7 +86,7 @@ export function ChatTimeline({
       setShowJump(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, messages.at(-1)?.text, preparing]);
+  }, [messages.length, messages.at(-1)?.text, preparing, preparingContent]);
 
   // Высота ленты меняется и без новых сообщений: поле ввода растёт и схлопывается
   // после отправки, раскрывается диф. Пока читатель внизу, держим его внизу.
@@ -182,7 +184,8 @@ export function ChatTimeline({
               />
             </div>
           ))}
-          {preparing && (
+          {preparing && preparingContent && <div className="chat-timeline-item">{preparingContent}</div>}
+          {preparing && !preparingContent && (
             <div className="chat-timeline-item">
               <p className="chat-status-line" role="status">
                 {preparingLabel}

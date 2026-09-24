@@ -21,7 +21,7 @@ export const MaterialsWebSearch = forwardRef<MaterialsWebSearchHandle, Materials
     const [open, setOpen] = useState(false);
     // Каждый вызов reveal — новый запрос прокрутки и фокуса, даже если блок уже открыт.
     const [revealRequest, setRevealRequest] = useState(0);
-    const section = useRef<HTMLElement>(null);
+    const body = useRef<HTMLDivElement>(null);
 
     useImperativeHandle(forwardedRef, () => ({
       reveal: () => {
@@ -30,14 +30,14 @@ export const MaterialsWebSearch = forwardRef<MaterialsWebSearchHandle, Materials
       },
     }), []);
 
-    /* Тело чата фиксированной высоты, поэтому центрировать можно сразу после
-       раскрытия, не дожидаясь загрузки переписки. */
+    /* Тело чата почти во весь экран и фиксированной высоты: по центру ставится оно,
+       а не весь блок с заголовком, — и сразу после раскрытия, без ожидания переписки. */
     useEffect(() => {
-      if (revealRequest > 0) section.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (revealRequest > 0) body.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, [revealRequest]);
 
     return (
-      <section ref={section} className={`materials-web-search${open ? " is-open" : ""}`} aria-label="Поиск в интернете">
+      <section className={`materials-web-search${open ? " is-open" : ""}`} aria-label="Поиск в интернете">
         <button
           type="button"
           className="materials-web-search-toggle"
@@ -53,7 +53,7 @@ export const MaterialsWebSearch = forwardRef<MaterialsWebSearchHandle, Materials
           <ChevronDown className="materials-web-search-chevron" size={16} aria-hidden="true" />
         </button>
         {open && (
-          <div className="materials-web-search-body">
+          <div ref={body} className="materials-web-search-body">
             <SourceSearchChat
               projectId={projectId}
               nodes={nodes}

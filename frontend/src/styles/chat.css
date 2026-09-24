@@ -1421,9 +1421,11 @@
 .materials-web-search-chevron { flex: none; color: var(--muted); transition: transform var(--motion-fast) var(--motion-ease); }
 .materials-web-search.is-open .materials-web-search-chevron { transform: rotate(180deg); }
 
+/* Почти весь экран по высоте: поле ввода и развёрнутый контекст не должны уходить
+   за нижний край, лента и пустой экран сжимаются первыми. */
 .materials-web-search-body {
-  height: min(760px, calc(100vh - 160px));
-  min-height: 480px;
+  height: calc(100dvh - var(--space-16));
+  min-height: 520px;
   margin-top: var(--space-3);
   overflow: hidden;
   border: 1px solid var(--line);
@@ -1432,22 +1434,27 @@
   box-shadow: var(--shadow-sm);
 }
 
-.source-search-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4) 0;
+.source-search-chat .chat-empty-invite {
+  min-height: 0;
+  overflow-y: auto;
+  place-content: safe center;
 }
 
-.source-search-scope { min-width: 220px; max-width: min(420px, 100%); }
-.source-search-coverage { color: var(--muted); font-size: var(--text-xs); }
+.source-search-chat > .chat-context-disclosure,
+.source-search-chat > .chat-composer { flex: none; }
+
+/* Настройки и чипы контекста — не выше половины чата, дальше прокрутка внутри. */
+.source-search-chat .chat-context-disclosure .disclosure-inner {
+  max-height: 40dvh;
+  overflow-y: auto;
+}
 
 .source-search-quick {
+  flex: none;
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1);
-  flex-basis: 100%;
+  padding: var(--space-2) var(--space-5) 0;
 }
 
 .source-search-chip {
@@ -1464,7 +1471,89 @@
 .source-search-chip:hover:not(:disabled) { background: var(--accent-wash-strong); }
 .source-search-chip:disabled { cursor: default; opacity: 0.55; }
 
-.source-search-settings { display: grid; gap: var(--space-2); margin-bottom: var(--space-2); }
+.source-search-settings { display: grid; gap: var(--space-2); margin-bottom: var(--space-2); padding-inline: var(--space-5); }
+
+/* «Процесс поиска»: этапы хода живьём и свёрнутый журнал под ответом. */
+.search-process.is-live {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.search-process-title { margin: 0; color: var(--ink); font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.search-process > .disclosure-trigger { color: var(--muted); font-size: var(--text-xs); }
+
+.search-process-steps {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.search-process-step { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: var(--space-2); }
+.search-process-step-body { display: grid; gap: var(--space-1); min-width: 0; }
+.search-process-label { color: var(--ink-soft); font-size: var(--text-sm); }
+.search-process-step.is-active .search-process-label { color: var(--ink); }
+.search-process-reply { margin: 0; color: var(--muted); font-size: var(--text-xs); }
+
+.search-process-mark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  color: var(--tone-success);
+  background: color-mix(in srgb, var(--tone-success) 12%, var(--paper));
+}
+
+.search-process-step.is-active .search-process-mark { background: var(--accent-wash); }
+
+.search-process-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--accent-edge);
+  border-top-color: var(--accent);
+  border-radius: var(--radius-pill);
+  animation: search-process-spin 0.8s linear infinite;
+}
+
+@keyframes search-process-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .search-process-spinner { animation: none; }
+}
+
+.search-process-links {
+  display: grid;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.search-process-links li { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; font-size: var(--text-xs); }
+
+.search-process-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-process-links a:hover { color: var(--accent); }
+.search-process-links svg { flex: none; color: var(--muted); }
+.search-process-links small { flex: none; color: var(--muted); }
 
 .web-search-result { display: grid; gap: var(--space-3); }
 .web-search-summary { margin: 0; color: var(--ink); font-size: var(--text-sm); line-height: var(--leading-relaxed); }

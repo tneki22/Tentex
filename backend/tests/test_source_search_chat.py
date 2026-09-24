@@ -210,7 +210,8 @@ async def test_turn_searches_selected_topics_and_picks_candidates_by_id(
     plan_prompt = json.dumps(fake.complete_requests[0]["messages"], ensure_ascii=False)
     assert "«планирование процессов ОС лекция»" in plan_prompt
     # «Только темы без материала»: тема со страницами учебника не предлагается к поиску.
-    focus = plan_prompt.split("<focus_topics область=")[1].split("</focus_topics>")[0]
+    # Блок данных, а не упоминание тега в системной части промпта.
+    focus = plan_prompt.split("<focus_topics>\\n")[1].split("</focus_topics>")[0]
     assert "Взаимоблокировки" not in focus and "Потоки" in focus
 
     # Уже подключённый адрес не показывается, видео не открывается ради объёма.
@@ -342,7 +343,7 @@ def test_sessions_do_not_leak_between_project_chats(
     assert caught.value.code == "program_chat_session_not_found"
 
 
-def test_context_flags_and_scope_shape_the_request(
+def test_context_flags_shape_the_request(
     session: Session, ai_config: str, project: Project,
 ) -> None:
     del ai_config
@@ -353,6 +354,7 @@ def test_context_flags_and_scope_shape_the_request(
     assert preview["topic_queries"].count == 2
     assert preview["attached_materials"].count == 1
 
+    # Области поиска нет: старая сессия с выбранной темой ищет по всей программе.
     streams = session.scalar(select(ProgramNode).where(ProgramNode.title == "Потоки"))
     project_sessions.update_context(session, project.id, chat.id,
                                     project_sessions.ProjectChatContextWrite(
@@ -362,8 +364,7 @@ def test_context_flags_and_scope_shape_the_request(
                                     ), CHANNEL)
     session.refresh(chat)
     ctx = source_search_chat.build_search_context(session, chat)
-    assert [topic.title for topic in ctx.focus] == ["Потоки"]
-    assert ctx.scope_label == "1.2 «Потоки»"
+    assert len(ctx.focus) == 3 and "Потоки" in [topic.title for topic in ctx.focus]
     assert "где искать" not in source_search_chat._context_message(ctx)  # noqa: SLF001
 
     project_sessions.update_context(session, project.id, chat.id,
@@ -380,3 +381,52 @@ def test_context_flags_and_scope_shape_the_request(
                                             context_flags={"primary_sources": True}), CHANNEL)
     assert caught.value.code == "source_search_chat_context_flag_unknown"
     assert session.get(ChatSession, chat.id).context_flags["program"] is False
+
+
+@pytest.mark.asyncio
+async def test_turn_reports_stages_and_drops_whole_program_topics(
+    session: Session, ai_config: str, project: Project, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del ai_config
+    _install(monkeypatch, _Web(HITS, PROBES))
+    # Порог «весь предмет» уменьшен под маленькую программу фикстуры.
+    monkeypatch.setattr(source_search_chat, "MAX_TOPICS", 1)
+    chat = project_sessions.create_session(session, project.id, CHANNEL)
+    plan = {"reply": "Ищу по всему предмету", "searches": [
+        {"query": "операционные системы учебник", "category": "general", "language": "ru",
+         "topics": ["1.1", "1.2"]},
+    ]}
+    pick = {"summary": "Нашёлся учебник", "items": [
+        {"id": 1, "kind": "textbook", "why": "", "gist": "", "topics": ["1.1", "1.2"]},
+    ]}
+    fake = FakeTransport(completions=[_completion(plan), _completion(pick)])
+    events = [event async for event in source_search_chat.run_turn(
+        session, ModelGateway(session, fake), project.id, chat.id, "Найди учебник",
+    )]
+
+    assert [event.stage for event in events] == [
+        "planning", "searching", "opening", "picking", "done",
+    ]
+    assert events[1].data["queries"] == ["операционные системы учебник"]
+    opening = events[2].data
+    assert [item["url"] for item in opening["candidates"]] == [
+        HITS[0].url, HITS[2].url, HITS[3].url,
+    ]
+    assert opening["opening"] == 2
+    result = events[-1].message.payload["result"]
+    # Запрос и источник «про все темы» не привязываются ни к одной.
+    assert result["searches"][0]["node_ids"] == []
+    assert result["items"][0]["node_ids"] == []
+    assert [item["opened"] for item in result["candidates"]] == [True, True, False]
+    assert result["plan_reply"] == "Ищу по всему предмету"
+
+
+def test_stopped_search_leaves_a_mark_in_the_feed(
+    session: Session, ai_config: str, project: Project,
+) -> None:
+    del ai_config
+    chat = project_sessions.create_session(session, project.id, CHANNEL)
+    message = source_search_chat.save_stopped(session, project.id, chat.id)
+    assert (message.role, message.text, message.stream_state.value) == (
+        ChatMessageRole.ASSISTANT, "Поиск остановлен.", "stopped",
+    )
