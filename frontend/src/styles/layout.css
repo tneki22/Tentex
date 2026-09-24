@@ -5869,7 +5869,8 @@ button.wizard-back-projects {
 /* Ритм шага держит grid-gap: собственный отступ панели кнопок оставлял под
    кнопками материалов пустую полосу. */
 .free-study-step > .wizard-actions { margin-top: var(--space-2); }
-.free-study-step > .wizard-step-intro + .wizard-step-intro { margin-top: calc(var(--space-3) * -1); }
+.free-study-intro { display: grid; gap: var(--space-2); margin: var(--space-3) 0 var(--space-2); }
+.free-study-intro p { margin: 0; }
 /* Шаг «Цель» — одна узкая колонка: заголовок, поля и кнопка выровнены по
    одной ширине и центрированы на странице. */
 .wizard-flow.is-goal { width: min(720px, 100%); }
