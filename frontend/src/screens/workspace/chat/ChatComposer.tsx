@@ -6,7 +6,8 @@ import { DictationButton } from "../../../components/domain";
 import { IconButton } from "../../../components/ui";
 
 export interface ChatComposerHandle {
-  focus: () => void;
+  /** `preventScroll` — когда экран сам ставит чат на место плавной прокруткой. */
+  focus: (options?: FocusOptions) => void;
 }
 
 interface ChatComposerProps {
@@ -43,7 +44,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const ref = useRef<HTMLTextAreaElement>(null);
   const availableModes = modes.filter((mode) => mode.available);
 
-  useImperativeHandle(forwardedRef, () => ({ focus: () => ref.current?.focus() }), []);
+  useImperativeHandle(forwardedRef, () => ({ focus: (options) => ref.current?.focus(options) }), []);
 
   // Расшифровка приходит через секунды: за это время в поле могли дописать своё,
   // поэтому добавляем к актуальному тексту, а не к тому, что был при нажатии.

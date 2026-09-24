@@ -778,6 +778,7 @@ test("Материалы: поиск в интернете свёрнут, кн�
   await online.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(block.getByRole("heading", { name: "Найдём материалы в интернете" })).toBeInViewport();
+  await expect(block.getByRole("textbox")).toBeFocused();
 
   await block.getByRole("button", { name: "Видеолекции" }).click();
   await expect(block.getByText("Нашлась лекция по рынку, каталог файлов и видео.")).toBeVisible();

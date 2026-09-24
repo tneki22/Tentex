@@ -1921,7 +1921,6 @@ function MaterialSurface() {
                 ref={webSearch}
                 projectId={projectId}
                 nodes={project.program.nodes}
-                initiallyOpen={searchRequested}
                 initialTopicId={searchTopicId}
               />
             ) : null}
