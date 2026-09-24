@@ -83,7 +83,7 @@ def test_only_urls_from_search_results_survive(session: Session, ai_config: str)
             _candidate("https://example.org/cnn.pdf", "pdf"),
         ],
         (
-            UrlCitation(url=CITED, title="Хабр", content="Ядро   скользит по изображению"),
+            UrlCitation(url=CITED, title="Хабр", content="# Свёртка\n##### Ядро   скользит"),
             UrlCitation(url="https://youtube.com/watch?v=abc123", title="Лекция"),
             UrlCitation(url="https://example.org/cnn.pdf"),
         ),
@@ -98,7 +98,7 @@ def test_only_urls_from_search_results_survive(session: Session, ai_config: str)
         CITED, "https://youtube.com/watch?v=abc123", "https://example.org/cnn.pdf",
     ]
     assert [item.import_kind for item in result.candidates] == ["url", "youtube", "pdf_manual"]
-    assert result.candidates[0].snippet == "Ядро скользит по изображению"
+    assert result.candidates[0].snippet == "Свёртка Ядро скользит"
     assert result.unverified_count == 1
     request = transport.complete_requests[0]
     plugins = [{"id": "web", "max_results": source_search.WEB_RESULTS}]

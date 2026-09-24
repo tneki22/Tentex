@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Annotated, Literal, get_args
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
@@ -119,6 +120,11 @@ class SourceSearchRead(BaseModel):
     already_attached_count: int
     run_id: UUID
     actual_model_id: str
+
+
+def _snippet(content: str) -> str:
+    """Фрагмент выдачи — это markdown страницы; решётки заголовков в карточке — шум."""
+    return " ".join(re.sub(r"#{1,6}\s*", "", content).split())[:280]
 
 
 def _normalize(url: str) -> str:
@@ -278,7 +284,7 @@ def verify_candidates(
             title=(item.title or citation.title)[:200],
             kind=item.kind,
             why=item.why[:400],
-            snippet=" ".join(citation.content.split())[:280],
+            snippet=_snippet(citation.content),
             import_kind=_import_kind(citation.url, item.kind),
         ))
     return result[:MAX_CANDIDATES], unverified, already
