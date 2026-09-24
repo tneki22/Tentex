@@ -23,6 +23,7 @@ server:
   image_proxy: false
   public_instance: false
 
+# Ход чата шлёт до шести запросов разом: с 4 с видеодвижки не успевали ответить.
 outgoing:
-  request_timeout: 4.0
-  max_request_timeout: 8.0
+  request_timeout: 6.0
+  max_request_timeout: 10.0

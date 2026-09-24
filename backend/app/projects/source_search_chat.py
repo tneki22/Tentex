@@ -887,7 +887,8 @@ async def send_message(
         _save_turn(session, project_id, session_id, text="", payload=None, run_id=None,
                    snapshot=ctx.snapshot, tool_error=error.code)
         raise
-    unresponsive = sorted({name for page in pages for name in page.unresponsive_engines})
+    # Движок, не успевший на один из шести запросов, — шум; показываем молчавших на всех.
+    unresponsive = sorted(set.intersection(*(set(page.unresponsive_engines) for page in pages)))
     merged = merge_results(searches, pages, ctx)
     to_probe = [item for item in merged.candidates[:PROBE_LIMIT] if not item.is_video]
     probes = await web_search.probe_pages([item.hit.url for item in to_probe])

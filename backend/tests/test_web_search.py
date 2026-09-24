@@ -34,6 +34,19 @@ def test_search_response_keeps_web_pages_and_video_length() -> None:
     assert page.unresponsive_engines == ("google", "wikidata")
 
 
+def test_video_length_in_seconds_becomes_clock_time() -> None:
+    page = web_search.parse_search_response(
+        {"results": [
+            {"url": "https://a.example/v", "title": "A", "length": "720.0"},
+            {"url": "https://b.example/v", "title": "B", "length": 3182},
+            {"url": "https://c.example/v", "title": "C", "length": "1:02:33"},
+            {"url": "https://d.example/v", "title": "D", "length": "0"},
+        ]},
+        limit=10,
+    )
+    assert [hit.duration for hit in page.hits] == ["12:00", "53:02", "1:02:33", None]
+
+
 def test_search_reports_unreachable_service(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "searxng_url", "http://127.0.0.1:9")
     with pytest.raises(web_search.WebSearchUnavailableError) as caught:
