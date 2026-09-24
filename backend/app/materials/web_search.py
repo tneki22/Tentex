@@ -91,6 +91,20 @@ def _clean(text: object, limit: int) -> str:
     return " ".join(str(text or "").split())[:limit]
 
 
+def _duration(value: object) -> str | None:
+    """Длительность видео: одни движки дают «40:46», другие — секунды («720.0»)."""
+    text = _clean(value, 20)
+    try:
+        seconds = round(float(text))
+    except ValueError:
+        return text or None
+    if seconds <= 0:
+        return None
+    hours, rest = divmod(seconds, 3600)
+    minutes, seconds = divmod(rest, 60)
+    return f"{hours}:{minutes:02}:{seconds:02}" if hours else f"{minutes}:{seconds:02}"
+
+
 def parse_search_response(payload: dict[str, object], limit: int) -> WebSearchPage:
     """Выдача SearXNG в JSON → попадания без пустых и нестраничных адресов."""
     hits: list[WebHit] = []
@@ -105,7 +119,7 @@ def parse_search_response(payload: dict[str, object], limit: int) -> WebSearchPa
             title=_clean(raw.get("title"), 300) or urlsplit(url).netloc,
             snippet=_clean(raw.get("content"), 400),
             engine=str(raw.get("engine") or ""),
-            duration=_clean(raw.get("length"), 20) or None,
+            duration=_duration(raw.get("length")),
             author=_clean(raw.get("author"), 120) or None,
         ))
         if len(hits) >= limit:
