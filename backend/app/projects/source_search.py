@@ -14,7 +14,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -71,19 +71,21 @@ class SourceSearchWrite(BaseModel):
     confirmed: bool = False
 
 
+# Длину полей модель не держит точно, а повтор по схеме с поиском в сети стоит
+# ещё минуту-две. Поэтому пределов в схеме ответа нет: лишнее обрезает сервер.
 class SourceCandidateWire(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8, max_length=2000)]
-    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8)]
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     kind: SourceKind
-    why: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
+    why: Annotated[str, StringConstraints(strip_whitespace=True)]
 
 
 class SourceSearchWire(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    candidates: list[SourceCandidateWire] = Field(max_length=10)
+    candidates: list[SourceCandidateWire]
 
 
 class SourceCandidateRead(BaseModel):
@@ -267,9 +269,9 @@ def verify_candidates(
         seen.add(key)
         result.append(SourceCandidateRead(
             url=citation.url,
-            title=item.title or citation.title,
+            title=(item.title or citation.title)[:200],
             kind=item.kind,
-            why=item.why,
+            why=item.why[:400],
             snippet=" ".join(citation.content.split())[:280],
             import_kind=_import_kind(citation.url, item.kind),
         ))

@@ -229,7 +229,7 @@ export function ExternalSourceSearchDialog({
 
       {running && (
         <div className="external-source-running">
-          <LoadingState label="Ищем в интернете — обычно до минуты" />
+          <LoadingState label="Ищем в интернете — обычно одна-две минуты" />
           <p className="external-source-note">Окно можно закрыть: результат дождётся вас в фоновых задачах.</p>
           <Button variant="secondary" disabled={busy} onClick={() => void cancel()}>Отменить</Button>
         </div>

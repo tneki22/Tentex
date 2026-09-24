@@ -44,8 +44,9 @@ DEADLINE_SECONDS: dict[BackgroundJobKind, int] = {
     # Может делать до двух пакетных вызовов + один объединяющий — запас как у
     # починки списка вопросов.
     BackgroundJobKind.AI_PROGRAM_BUILD: 900,
-    # Поиск в сети добавляет к ответу десятки секунд, но вызов один.
-    BackgroundJobKind.AI_SOURCE_SEARCH: 300,
+    # Живой вызов с поиском в сети идёт до полутора-двух минут; запас — на один
+    # повтор, если ответ не прошёл схему.
+    BackgroundJobKind.AI_SOURCE_SEARCH: 600,
 }
 
 
