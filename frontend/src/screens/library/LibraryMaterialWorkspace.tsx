@@ -557,7 +557,7 @@ export function LibraryMaterialWorkspace() {
           onEditText={detail.capabilities.can_edit_text
             ? editOpen
               ? () => requestLeave(closeEditor)
-              : openTextEditor
+              : () => openTextEditor()
             : undefined}
           editDisabled={editOpen
             ? editBusy
@@ -656,7 +656,7 @@ export function LibraryMaterialWorkspace() {
             onControl={(action) => void store.controlProcessing(action)}
             onTypstBuild={(downloadPackages, entrypoint) => void store.buildTypst(downloadPackages, entrypoint)}
             onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
-            onEditPage={openTextEditor}
+            onEditPage={() => openTextEditor()}
             onCleanupPage={() => setCleanupOpen(true)}
             onRemoveTimestamps={() => {
               if (page) openTextEditor(removeYoutubeTimestamps(page.markdown || page.text));
@@ -757,7 +757,7 @@ export function LibraryMaterialWorkspace() {
             onControl={(action) => void store.controlProcessing(action)}
             onTypstBuild={(downloadPackages, entrypoint) => void store.buildTypst(downloadPackages, entrypoint)}
             onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
-            onEditPage={openTextEditor}
+            onEditPage={() => openTextEditor()}
             onCleanupPage={() => setCleanupOpen(true)}
             onRemoveTimestamps={() => {
               if (page) openTextEditor(removeYoutubeTimestamps(page.markdown || page.text));
