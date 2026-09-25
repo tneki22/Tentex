@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { ArrowLeft, GraduationCap, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { createLessonFromSearch, createManualLesson, createQuickLesson, editLessonBlocks, getLesson, type FoundPage, type LessonBlockCommand } from "../../api/lessons";
@@ -68,10 +68,14 @@ export function Lessons() {
   const overview = useLessonsOverview(projectId, available);
   const lessons = useMemo(() => overview.data?.lessons ?? [], [overview.data]);
 
+  // Дерево программы (сотни узлов у крупного учебника) рендерится в дереве
+  // синхронно и надолго блокирует коммит — эффект загрузки обзора уроков
+  // ждал бы того же кадра. useDeferredValue отпускает загрузку раньше дерева.
+  const deferredNodes = useDeferredValue(detail?.program.nodes);
   const treeResult = useMemo(() => {
-    try { return { tree: buildProgramTree(detail?.program.nodes ?? []), error: "" }; }
+    try { return { tree: buildProgramTree(deferredNodes ?? []), error: "" }; }
     catch (caught) { return { tree: [], error: errorText(caught, "Программа повреждена") }; }
-  }, [detail?.program.nodes]);
+  }, [deferredNodes]);
   const flat = useMemo(() => flattenProgramTree(treeResult.tree).filter(isVisible), [treeResult.tree]);
 
   const topicParam = searchParams.get("topic");
