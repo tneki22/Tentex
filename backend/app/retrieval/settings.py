@@ -90,18 +90,21 @@ def read_settings(session: Session) -> RetrievalSettingsRead:
     if active is None:
         reasons.append("Semantic-индекс ещё не активирован")
     else:
-        ready_materials = (
-            session.scalar(
-                select(func.count(func.distinct(RetrievalChunk.material_id))).where(
-                    RetrievalChunk.index_id == active.id,
-                    RetrievalChunk.revision
-                    == select(Material.active_parse_revision)
-                    .where(Material.id == RetrievalChunk.material_id)
-                    .scalar_subquery(),
-                )
+        # На Windows bind-mount проверка ревизии для каждого chunk делает тысячи
+        # чтений SQLite. Материалов существенно меньше; индекс (index_id, material_id)
+        # позволяет остановиться на первом подходящем chunk каждого материала.
+        current_chunk = (
+            select(RetrievalChunk.id)
+            .where(
+                RetrievalChunk.index_id == active.id,
+                RetrievalChunk.material_id == Material.id,
+                RetrievalChunk.revision == Material.active_parse_revision,
             )
-            or 0
+            .exists()
         )
+        ready_materials = session.scalar(
+            select(func.count()).select_from(Material).where(current_chunk)
+        ) or 0
         if ready_materials < total:
             reasons.append("Часть источников — только поиск по словам")
     return RetrievalSettingsRead(

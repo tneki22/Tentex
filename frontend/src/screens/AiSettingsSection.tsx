@@ -255,12 +255,16 @@ function CapabilityTags({ model }: { model: AiModelRead }) {
 function OverviewPanel({
   settings,
   runs,
+  runsLoading,
+  runsFailed,
   onSettings,
   navigate,
   onFocusModel,
 }: {
   settings: AiSettingsRead;
   runs: AiRunRead[];
+  runsLoading: boolean;
+  runsFailed: boolean;
   onSettings: (settings: AiSettingsRead) => void;
   navigate: (subsection: AiSettingsSubsection, providerId?: string) => void;
   onFocusModel: (selection: AiModelSelection) => void;
@@ -326,7 +330,7 @@ function OverviewPanel({
         </button>
         <button type="button" onClick={() => navigate("usage")}>
           <span>Расход сегодня</span><strong>{money(settings.today_usage.actual_cost_usd)}</strong>
-          <small>Запросов: {todayRunCount} · из кэша: {settings.today_usage.cache_hits}</small>
+          <small>Запросов: {runsFailed ? "—" : runsLoading ? "…" : todayRunCount} · из кэша: {settings.today_usage.cache_hits}</small>
         </button>
       </div>
 
@@ -1231,6 +1235,8 @@ export function AiSettingsSection({
   const [searchParams] = useSearchParams();
   const [settings, setSettings] = useState<AiSettingsRead | null>(null);
   const [runs, setRuns] = useState<AiRunRead[]>([]);
+  const [runsLoading, setRunsLoading] = useState(true);
+  const [runsError, setRunsError] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(() => (
@@ -1268,19 +1274,22 @@ export function AiSettingsSection({
     setLoading(true);
     const since = new Date();
     since.setDate(since.getDate() - 30);
-    Promise.all([
-      getAiSettings(controller.signal),
-      listAiRuns({ from: since.toISOString() }, controller.signal),
-    ]).then(([nextSettings, nextRuns]) => {
-      setSettings(nextSettings);
-      setRuns(nextRuns);
-    }).catch((caught: unknown) => {
+    getAiSettings(controller.signal).then(setSettings).catch((caught: unknown) => {
       if (!controller.signal.aborted) {
         setError(errorText(caught, "Параметры ИИ не загрузились"));
       }
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false);
     });
+    // История велика и нужна только для статистики: не задерживаем показ настроек.
+    void listAiRuns({ from: since.toISOString() }, controller.signal)
+      .then(setRuns)
+      .catch((caught: unknown) => {
+        if (!controller.signal.aborted) setRunsError(errorText(caught, "История ИИ не загрузилась"));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setRunsLoading(false);
+      });
     return () => controller.abort();
   }, []);
 
@@ -1315,12 +1324,14 @@ export function AiSettingsSection({
   if (error) return <><ErrorState message={error} /><Button onClick={() => window.location.reload()}>Загрузить ещё раз</Button></>;
   if (!settings) return null;
   return <div className="ai-settings">
-    <div id="ai-overview" className="ai-anchor-section"><OverviewPanel settings={settings} runs={runs} onSettings={acceptSettings} navigate={navigate} onFocusModel={focusModel} /></div>
+    <div id="ai-overview" className="ai-anchor-section"><OverviewPanel settings={settings} runs={runs} runsLoading={runsLoading} runsFailed={Boolean(runsError)} onSettings={acceptSettings} navigate={navigate} onFocusModel={focusModel} /></div>
     <div id="ai-providers" className="ai-anchor-section"><ProvidersPanel settings={settings} onSettings={acceptSettings} onModels={(id) => navigate("models", id)} /></div>
     <div id="ai-models" className="ai-anchor-section"><ModelsPanel settings={settings} onSettings={acceptSettings} providerId={selectedProviderId} onProvider={setSelectedProviderId} focusRequest={focusRequest} /></div>
     <div id="ai-defaults" className="ai-anchor-section"><DefaultsPanel settings={settings} onSettings={acceptSettings} /></div>
     <div id="ai-functions" className="ai-anchor-section"><FunctionsPanel settings={settings} onSettings={acceptSettings} /></div>
     <div id="ai-limits" className="ai-anchor-section"><LimitsPanel settings={settings} onSettings={acceptSettings} /></div>
-    <div id="ai-usage" className="ai-anchor-section"><UsagePanel settings={settings} runs={runs} /></div>
+    <div id="ai-usage" className="ai-anchor-section">{runsError
+      ? <ErrorState message={runsError} />
+      : runsLoading ? <LoadingState label="Загружаем историю ИИ" /> : <UsagePanel settings={settings} runs={runs} />}</div>
   </div>;
 }

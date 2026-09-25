@@ -25,6 +25,7 @@ from app.models import (
     ProjectMaterial,
     ProjectStatus,
     RetrievalChunk,
+    RetrievalChunkKind,
     RetrievalIndex,
     RetrievalIndexState,
     RetrievalPreset,
@@ -58,6 +59,7 @@ from app.retrieval.schemas import (
     RetrievalIndexMaterialsWrite,
     RetrievalScope,
 )
+from app.retrieval.settings import read_settings
 from app.retrieval.vector import reciprocal_rank_fusion
 
 
@@ -90,6 +92,31 @@ def _index(session: Session, profile: EmbeddingProfile) -> RetrievalIndex:
     session.add(row)
     session.commit()
     return row
+
+
+def test_settings_count_material_once_only_for_current_index_revision(session: Session) -> None:
+    current = make_material(session, "501")
+    outdated = make_material(session, "502")
+    make_material(session, "503")
+    profile = _profile(session)
+    index = _index(session, profile)
+    index.state = RetrievalIndexState.ACTIVE
+    session.add(RetrievalSettings(id=1, active_index_id=index.id))
+    for order, (material, revision) in enumerate(
+        [(current, 1), (current, 1), (outdated, 1)]
+    ):
+        session.add(RetrievalChunk(
+            index_id=index.id, material_id=material.id, revision=revision,
+            kind=RetrievalChunkKind.TEXT, sort_order=order,
+            text="текст", token_count=1, content_hash=str(order).rjust(64, "0"),
+        ))
+    outdated.active_parse_revision = 2
+    session.commit()
+
+    result = read_settings(session)
+    assert result.ready_materials == 1
+    assert result.total_ready_materials == 3
+    assert result.degraded
 
 
 def test_chunking_splits_a_giant_atom_without_exceeding_maximum() -> None:

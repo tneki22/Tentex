@@ -90,7 +90,8 @@ export function Lessons() {
     return keys;
   }, [panelLesson.data]);
 
-  useEffect(() => { panelLesson.refresh(); }, [rangesKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // useLesson уже загружает урок при монтировании; повтор нужен только после правки.
+  useEffect(() => { if (rangesKey > 0) panelLesson.refresh(); }, [rangesKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* Ссылка «Искать в материалах проекта» ведёт в поиск панели — скрытую панель
      она открывает, но сохранённую раскладку не трогает. */

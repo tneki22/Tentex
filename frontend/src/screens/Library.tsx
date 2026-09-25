@@ -93,6 +93,9 @@ const STATUS_LABEL: Record<LibraryMaterialRead["status"], string> = {
 
 const SCROLL_KEY = "tentex-library-scroll";
 const CONTENT_CACHE_KEY = "tentex-library-content-search";
+const LIBRARY_REUSE_MS = 15_000;
+let librarySnapshot: LibraryMaterialRead[] | null = null;
+let librarySnapshotAt = 0;
 
 interface ContentSearchCache {
   surface: "names" | "content";
@@ -185,8 +188,8 @@ export function Library() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const [materials, setMaterials] = useState<LibraryMaterialRead[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [materials, setMaterials] = useState<LibraryMaterialRead[]>(() => librarySnapshot ?? []);
+  const [loading, setLoading] = useState(() => librarySnapshot === null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [addOpen, setAddOpen] = useState(false);
@@ -235,7 +238,11 @@ export function Library() {
     if (!silent) setLoading(true);
     setError("");
     try {
-      setMaterials(await listLibraryMaterials(signal));
+      const next = await listLibraryMaterials(signal);
+      if (signal?.aborted) return;
+      librarySnapshot = next;
+      librarySnapshotAt = Date.now();
+      setMaterials(next);
     } catch (caught) {
       if (!signal?.aborted) {
         setError(caught instanceof Error ? caught.message : "Не удалось загрузить Библиотеку");
@@ -246,8 +253,9 @@ export function Library() {
   }, []);
 
   useEffect(() => {
+    if (librarySnapshot && Date.now() - librarySnapshotAt < LIBRARY_REUSE_MS) return;
     const controller = new AbortController();
-    void load({ signal: controller.signal });
+    void load({ signal: controller.signal, silent: librarySnapshot !== null });
     return () => controller.abort();
   }, [load]);
 
@@ -467,6 +475,7 @@ export function Library() {
     /* Удаляем из списка сразу: подтверждение уже получено, и ждать ответа
        сервера пользователю незачем. При ошибке строки возвращаются. */
     setMaterials((current) => current.filter((material) => !ids.includes(material.id)));
+    librarySnapshot = null;
     setSelectedIds(new Set());
     setDeleteTargets([]);
     setDeletePreview(null);
@@ -477,6 +486,7 @@ export function Library() {
       await deleteLibraryMaterials(ids);
     } catch (caught) {
       setMaterials(snapshot);
+      librarySnapshot = null;
       setNotice("");
       setError(caught instanceof Error ? caught.message : "Не удалось удалить материалы");
     } finally {
@@ -628,6 +638,7 @@ export function Library() {
     setMetadataSaving(true);
     setError("");
     setMaterials((current) => current.map((item) => item.id === material.id ? { ...item, ...command } : item));
+    librarySnapshot = null;
     try {
       const saved = await updateLibraryMaterialMetadata(material.id, command);
       setMaterials((current) => current.map((item) => item.id === material.id ? { ...item, ...saved } : item));
@@ -985,6 +996,7 @@ export function Library() {
         open={addOpen}
         onOpenChange={setAddOpen}
         onCreated={(created) => {
+          librarySnapshot = null;
           sessionStorage.setItem(scrollKey, "0");
           const back = encodeURIComponent(`${location.pathname}${location.search}`);
           navigate(`/library/${created.id}?returnTo=${back}`);

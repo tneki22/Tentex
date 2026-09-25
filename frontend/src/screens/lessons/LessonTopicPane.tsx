@@ -127,7 +127,8 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
     ...(data.blocks.some((block) => block.refs.some((ref) => ref.boundary_shifted)) ? ["разрез сдвинут после нового распознавания"] : []),
   ] : [];
 
-  useEffect(() => { lesson.refresh(); }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // useLesson сам загружает урок при монтировании.
+  useEffect(() => { if (refreshKey > 0) lesson.refresh(); }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (data && data.revision > revisionRef.current) revisionRef.current = data.revision;
   }, [data]);
@@ -170,7 +171,6 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
         revisionRef.current = result.lesson.revision;
         setOffer(result.unbind_offer);
       }
-      lesson.refresh();
       onChanged();
     } catch (caught) {
       setError(errorText(caught, fallback));
@@ -194,8 +194,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
       onSelectBlock(null);
       setOffer(null);
       const overview = await getLessonsOverview(projectId);
-      if (overview.lessons.some((item) => item.id === data.id)) lesson.refresh();
-      else onSelectLesson(null);
+      if (!overview.lessons.some((item) => item.id === data.id)) onSelectLesson(null);
       onChanged();
     } catch (caught) {
       setError(errorText(caught, "Отменить не удалось"));

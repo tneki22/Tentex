@@ -13,8 +13,26 @@ interface Loadable<T> {
   refresh: () => void;
 }
 
+const pendingLessons = new Map<string, Promise<LessonRead>>();
+
+/** Одновременные потребители урока (редактор и панель) делят один GET. */
+function getLessonShared(projectId: string, lessonId: string): Promise<LessonRead> {
+  const key = `${projectId}:${lessonId}`;
+  const pending = pendingLessons.get(key);
+  if (pending) return pending;
+  // Signal хука по-прежнему защищает его state. Общий GET не принадлежит
+  // одному компоненту, поэтому его нельзя отменять при размонтировании одного из них.
+  const request = getLesson(projectId, lessonId);
+  pendingLessons.set(key, request);
+  void request.then(
+    () => pendingLessons.delete(key),
+    () => pendingLessons.delete(key),
+  );
+  return request;
+}
+
 /** Общий каркас загрузки: отмена по смене ключа, повтор через `refresh`. */
-function useLoadable<T>(key: string | null, load: (signal: AbortSignal) => Promise<T>): Loadable<T> {
+function useLoadable<T>(key: string | null, load: (signal: AbortSignal, attempt: number) => Promise<T>): Loadable<T> {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(Boolean(key));
   const [error, setError] = useState<unknown>(null);
@@ -29,7 +47,7 @@ function useLoadable<T>(key: string | null, load: (signal: AbortSignal) => Promi
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    load(controller.signal)
+    load(controller.signal, attempt)
       .then((next) => { if (!controller.signal.aborted) setData(next); })
       .catch((caught: unknown) => { if (!controller.signal.aborted) setError(caught); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -52,7 +70,9 @@ export function useLessonsOverview(projectId: string, enabled = true) {
 export function useLesson(projectId: string, lessonId: string | null) {
   const result = useLoadable<LessonRead>(
     projectId && lessonId ? `${projectId}:${lessonId}` : null,
-    (signal) => getLesson(projectId, lessonId ?? "", signal),
+    (signal, attempt) => attempt === 0
+      ? getLessonShared(projectId, lessonId ?? "")
+      : getLesson(projectId, lessonId ?? "", signal),
   );
   return result;
 }
