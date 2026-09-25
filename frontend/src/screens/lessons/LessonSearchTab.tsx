@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { Plus, Search } from "lucide-react";
 import type { FoundPage, LessonBlockCommand } from "../../api/lessons";
 import { searchProjectMaterials } from "../../api/search";
-import { QualityBadge } from "../../components/domain";
+import { QualityBadge } from "../../components/domain/QualityBadge";
 import { Button, Checkbox, ErrorState, LoadingState, StatusBadge } from "../../components/ui";
 import { renderSearchHighlights } from "../workspace/searchHighlights";
 import { toSourcePlaces, type SourcePlace } from "../workspace/sourcePlaces";

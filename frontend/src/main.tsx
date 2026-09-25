@@ -3,7 +3,6 @@ import "katex/dist/katex.min.css";
 /* Только структурная тема Crepe (без цвета) — палитру задаёт conspects.css
  * поверх токенов Tentex, поэтому она должна лечь до них и ничего не красить. */
 import "@milkdown/crepe/theme/common/style.css";
-import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { App } from "./App";
@@ -31,9 +30,7 @@ const container = document.getElementById("root");
 if (!container) throw new Error("Не найден #root");
 
 createRoot(container).render(
-  <StrictMode>
-    <BrowserRouter>
-      <BackgroundProvider><App /></BackgroundProvider>
-    </BrowserRouter>
-  </StrictMode>,
+  <BrowserRouter>
+    <BackgroundProvider><App /></BackgroundProvider>
+  </BrowserRouter>,
 );

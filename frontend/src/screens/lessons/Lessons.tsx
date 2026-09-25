@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { ArrowLeft, GraduationCap, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { createLessonFromSearch, createManualLesson, createQuickLesson, editLessonBlocks, getLesson, type FoundPage, type LessonBlockCommand } from "../../api/lessons";
 import { getProject, ProjectApiError, type ProjectDetail } from "../../api/projects";
-import { ProjectNav } from "../../components/domain";
+import { ProjectNav } from "../../components/domain/ProjectNav";
 import { Button, EmptyState, ErrorState, IconButton, LoadingState, PanelResizeHandle } from "../../components/ui";
 import { useLesson, useLessonsOverview } from "../../hooks/useLessons";
 import { buildProgramTree, flattenProgramTree } from "../programTree";
 import { LessonBulkTable } from "./LessonBulkTable";
 import { insertPlacement, INSERT_AT_END, type LessonInsertPoint } from "./lessonBlocks";
-import { LessonMaterialPanel, type PanelTab } from "./LessonMaterialPanel";
+import type { PanelTab } from "./LessonMaterialPanel";
 import { LessonSectionOverview } from "./LessonSectionOverview";
 import { LessonSourcesDialog } from "./LessonSourcesDialog";
 import { LessonsTree } from "./LessonsTree";
@@ -17,6 +17,9 @@ import { LessonTopicPane } from "./LessonTopicPane";
 import { errorText, isVisible, STUDY_TYPES } from "./lessonTree";
 
 const LAYOUT_KEY = "tentex:lessons-layout";
+const LessonMaterialPanel = lazy(() =>
+  import("./LessonMaterialPanel").then((module) => ({ default: module.LessonMaterialPanel })),
+);
 
 interface LessonsLayout {
   tree: number;
@@ -345,22 +348,24 @@ export function Lessons() {
             onReset={() => updateLayout((current) => ({ ...current, panel: 360 }))}
           />
           <aside className="lessons-panel">
-            <LessonMaterialPanel
-              projectId={projectId}
-              topic={selectedTopics.length > 0 ? null : active}
-              busy={busy}
-              refreshKey={rangesKey}
-              onCreateFromRange={(materialId) => void createLesson([materialId])}
-              lessonId={activeLessonId}
-              lessonPages={lessonPages}
-              blocks={panelLesson.data?.id === activeLessonId ? panelLesson.data.blocks : []}
-              insertPoint={insertPoint}
-              onInsertPointChange={chooseInsertPoint}
-              onAdd={addFromPanel}
-              onUseFound={addFound}
-              initialTab={panelParam}
-              tabRequest={panelTabRequest}
-            />
+            <Suspense fallback={<LoadingState label="Открываем материал" />}>
+              <LessonMaterialPanel
+                projectId={projectId}
+                topic={selectedTopics.length > 0 ? null : active}
+                busy={busy}
+                refreshKey={rangesKey}
+                onCreateFromRange={(materialId) => void createLesson([materialId])}
+                lessonId={activeLessonId}
+                lessonPages={lessonPages}
+                blocks={panelLesson.data?.id === activeLessonId ? panelLesson.data.blocks : []}
+                insertPoint={insertPoint}
+                onInsertPointChange={chooseInsertPoint}
+                onAdd={addFromPanel}
+                onUseFound={addFound}
+                initialTab={panelParam}
+                tabRequest={panelTabRequest}
+              />
+            </Suspense>
           </aside>
         </>
       )}

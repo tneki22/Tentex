@@ -7,7 +7,7 @@ import {
   type MaterialPageRead,
   type MaterialRead,
 } from "../../api/materials";
-import { QualityBadge } from "../../components/domain";
+import { QualityBadge } from "../../components/domain/QualityBadge";
 import { PageNumberInput, PdfOutline, StructuredPage } from "../../components/domain/material-viewer";
 import { Button, Dialog, LoadingState, Select, StatusBadge } from "../../components/ui";
 import { groupPlacesByMaterial, type SourcePlace } from "../workspace/sourcePlaces";

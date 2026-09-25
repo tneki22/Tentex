@@ -15,7 +15,7 @@ import {
   ProjectApiError,
   updateProjectSettings,
 } from "../api/projects";
-import { ProjectNav } from "../components/domain";
+import { ProjectNav } from "../components/domain/ProjectNav";
 import type {
   ExamFormat,
   GoalPassportWrite,
@@ -29,7 +29,7 @@ import type {
   StudyFormat,
   TargetOutcome,
 } from "../api/projects";
-import { PROJECT_ICONS } from "../components/domain";
+import { PROJECT_ICONS } from "../components/domain/ProjectChip";
 import {
   Button,
   Card,

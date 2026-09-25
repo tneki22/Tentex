@@ -20,8 +20,7 @@ import {
   type ProjectStats,
   type ProjectSummary,
 } from "../api/projects";
-import { ProjectChip } from "../components/domain";
-import type { ProjectColor, ProjectIconName } from "../components/domain";
+import { ProjectChip, type ProjectColor, type ProjectIconName } from "../components/domain/ProjectChip";
 import {
   Button,
   Card,
@@ -228,26 +227,19 @@ export function Projects() {
   async function load(signal?: AbortSignal) {
     setLoading(true);
     setLoadError("");
-    void loadStats(signal);
     try {
-      setProjects(await listProjects(signal));
+      const [nextProjects, nextStats] = await Promise.all([
+        listProjects(signal),
+        listProjectStats(signal).catch(() => []),
+      ]);
+      if (signal?.aborted) return;
+      setStats(Object.fromEntries(nextStats.map((row) => [row.project_id, row])));
+      setProjects(nextProjects);
     } catch (error) {
       if (signal?.aborted) return;
       setLoadError(error instanceof Error ? error.message : "Не удалось загрузить проекты");
     } finally {
       if (!signal?.aborted) setLoading(false);
-    }
-  }
-
-  /* Сводка грузится отдельно и экран не задерживает: список пришёл — карточки
-     уже видны. Если сводка не доехала, метрик просто нет (FR-P3), а не нули. */
-  async function loadStats(signal?: AbortSignal) {
-    try {
-      const rows = await listProjectStats(signal);
-      if (signal?.aborted) return;
-      setStats(Object.fromEntries(rows.map((row) => [row.project_id, row])));
-    } catch {
-      if (!signal?.aborted) setStats({});
     }
   }
 

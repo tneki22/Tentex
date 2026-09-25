@@ -31,7 +31,7 @@ import {
   type BackgroundJobRead,
 } from "../api/backgroundJobs";
 import { pauseRetrievalIndexBuild, resumeRetrievalIndexBuild } from "../api/retrieval";
-import { TaskRow, type BackgroundTask } from "../components/domain";
+import { TaskRow, type BackgroundTask } from "../components/domain/TaskRow";
 import { estimateEtaSeconds } from "../hooks/backgroundTaskEta";
 
 const BACKGROUND_POLL_MS = 4000;

@@ -10,7 +10,8 @@ import {
   type LessonChangeResult, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
 } from "../../api/lessons";
 import { undoProjectAction } from "../../api/projects";
-import { LessonDocument, TopicMaterialFinderDialog } from "../../components/domain";
+import { LessonDocument } from "../../components/domain/lesson/LessonDocument";
+import { TopicMaterialFinderDialog } from "../../components/domain/TopicMaterialFinderDialog";
 import type { LessonSplitPoint } from "../../components/domain/lesson/LessonDocument";
 import {
   Button, ConfirmDialog, Dialog, EmptyState, ErrorState, IconButton, LoadingState, Menu, SegmentedTabs, Select,

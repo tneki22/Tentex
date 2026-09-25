@@ -10,7 +10,7 @@ import {
   type LessonSummaryRead,
 } from "../../api/lessons";
 import type { ProgramNodeRead } from "../../api/projects";
-import { LessonDocument } from "../../components/domain";
+import { LessonDocument } from "../../components/domain/lesson/LessonDocument";
 import { Button, EmptyState, ErrorState, LoadingState, SegmentedTabs, Select, StatusBadge } from "../../components/ui";
 import { useLesson, useLessonsOverview } from "../../hooks/useLessons";
 import { useLessonViewMode, type LessonViewMode } from "../../hooks/useLessonViewMode";

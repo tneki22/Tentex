@@ -5,12 +5,10 @@ import { createBindings } from "../../api/bindings";
 import { decideCoverage, type CoverageDecisionAction } from "../../api/coverage";
 import { undoProjectAction } from "../../api/projects";
 import { searchProjectMaterials } from "../../api/search";
-import {
-  EvidenceCard,
-  EvidenceDecisionMenu,
-  EvidenceStructuredReader,
-  LessonEvidenceDialog,
-} from "../../components/domain";
+import { EvidenceCard } from "../../components/domain/EvidenceCard";
+import { EvidenceDecisionMenu } from "../../components/domain/EvidenceDecisionMenu";
+import { EvidenceStructuredReader } from "../../components/domain/EvidenceStructuredReader";
+import { LessonEvidenceDialog } from "../../components/domain/LessonEvidenceDialog";
 import {
   Button,
   EmptyState,

@@ -53,19 +53,14 @@ import {
 } from "../api/projects";
 import type { SearchResultRead } from "../api/search";
 import { searchProjectMaterials } from "../api/search";
-import {
-  AnswerScanPages,
-  answerScanGroups,
-  PERSONAL_MARK_OPTIONS,
-  PersonalMarkIcon,
-  ProgramSectionRow,
-  ProgramTopicRow,
-  ProjectNav,
-  QualityBadge,
-  ReferenceAnswerBadge,
-  referenceAnswerStatusLabel,
-  TopicMaterialFinder,
-} from "../components/domain";
+import { AnswerScanPages } from "../components/domain/AnswerScanPages";
+import { answerScanGroups } from "../components/domain/answerPages";
+import { PERSONAL_MARK_OPTIONS, PersonalMarkIcon } from "../components/domain/PersonalMarkIcon";
+import { ProgramSectionRow, ProgramTopicRow } from "../components/domain/ProgramTreeRows";
+import { ProjectNav } from "../components/domain/ProjectNav";
+import { QualityBadge } from "../components/domain/QualityBadge";
+import { ReferenceAnswerBadge, referenceAnswerStatusLabel } from "../components/domain/ReferenceAnswerBadge";
+import { TopicMaterialFinder } from "../components/domain/TopicMaterialFinder";
 import {
   Button,
   ContextMenu,
@@ -79,8 +74,6 @@ import {
   Tooltip,
 } from "../components/ui";
 import type { ContextMenuItem } from "../components/ui";
-import { LessonHistoryTab } from "./lessons/LessonHistoryTab";
-import { LessonTab } from "./lessons/LessonTab";
 import { useLessonsOverview } from "../hooks/useLessons";
 import { readDetachedPane, removeDetachedPane, writeDetachedPane } from "./workspace/detachedPane";
 import { useBindings } from "../hooks/useBindings";
@@ -92,12 +85,10 @@ import {
 } from "./programTree";
 import { usePersonalMarks } from "../hooks/usePersonalMarks";
 import { useAnswerViewMode } from "../hooks/useAnswerViewMode";
-import { ExamChatPanel } from "./workspace/chat/ExamChatPanel";
 import { AttemptHistory } from "./workspace/AttemptHistory";
 import { ReferenceAnswerContent, type ReferenceAnswerMedia } from "./workspace/ReferenceAnswerContent";
 import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
 import { BoundSourceReader } from "./workspace/BoundSourceReader";
-import { TextbookSourcePanel } from "./workspace/TextbookSourcePanel";
 import { SourcePreviewDialog } from "./workspace/SourcePreviewDialog";
 import { toSourcePlaces, type SourcePlace } from "./workspace/sourcePlaces";
 import { renderSearchHighlights } from "./workspace/searchHighlights";
@@ -111,6 +102,10 @@ const ConspectEditor = lazy(() =>
 const ConspectSummary = lazy(() =>
   import("../components/domain/ConspectSummary").then((module) => ({ default: module.ConspectSummary })),
 );
+const ExamChatPanel = lazy(() => import("./workspace/chat/ExamChatPanel").then((module) => ({ default: module.ExamChatPanel })));
+const LessonTab = lazy(() => import("./lessons/LessonTab").then((module) => ({ default: module.LessonTab })));
+const LessonHistoryTab = lazy(() => import("./lessons/LessonHistoryTab").then((module) => ({ default: module.LessonHistoryTab })));
+const TextbookSourcePanel = lazy(() => import("./workspace/TextbookSourcePanel").then((module) => ({ default: module.TextbookSourcePanel })));
 
 const DEFAULT_LAYOUT: WorkspaceLayout = {
   selected_node_id: null,
@@ -819,14 +814,14 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
     if (tab === "source") return sourcePanel();
     if (tab === "chat" && projectId) {
       return (
-        <ExamChatPanel
+        <Suspense fallback={<LoadingState label="Открываем чат" />}><ExamChatPanel
           projectId={projectId}
           node={selected}
           onAnsweringChange={setAnsweringForTracking}
           takeAnswerSeconds={tracking.answerReset}
           onAttemptsChanged={() => setAttemptsReloadKey((value) => value + 1)}
           studyOnly={Boolean(textbook)}
-        />
+        /></Suspense>
       );
     }
     if (tab === "conspect") {
@@ -850,10 +845,10 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
       );
     }
     if (tab === "lesson" && textbook && selected) {
-      return <LessonTab projectId={projectId} node={selected} preferredLessonId={preferredLesson} onLessonsChanged={lessonsOverview.refresh} />;
+      return <Suspense fallback={<LoadingState label="Открываем урок" />}><LessonTab projectId={projectId} node={selected} preferredLessonId={preferredLesson} onLessonsChanged={lessonsOverview.refresh} /></Suspense>;
     }
     if (tab === "history" && textbook && selected) {
-      return <LessonHistoryTab projectId={projectId} node={selected} />;
+      return <Suspense fallback={<LoadingState label="Открываем историю" />}><LessonHistoryTab projectId={projectId} node={selected} /></Suspense>;
     }
     return renderTabStub(tab);
   }
@@ -982,7 +977,7 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
       return <div className="workspace-empty-copy"><FileText size={26} /><h2>Выберите тему</h2><p>Материал появится после выбора темы слева.</p></div>;
     }
     if (textbook) {
-      return <TextbookSourcePanel
+      return <Suspense fallback={<LoadingState label="Открываем источник" />}><TextbookSourcePanel
         projectId={projectId}
         topicId={selected.id}
         topicTitle={selected.title}
@@ -992,7 +987,7 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
           void reloadSourceBindings(selected.id);
           void bindings.refreshSummary();
         }}
-      />;
+      /></Suspense>;
     }
     // Привязки файла эталонных ответов (mechanism "answers_file") уже показаны
     // во вкладке «Ответ» как страницы/медиа эталона — здесь это другая сущность.
@@ -1300,12 +1295,12 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
       <main className="workspace-main">
         {!selectedNode && freeProject ? (
           <div className="workspace-free-chat">
-            <ExamChatPanel
+            <Suspense fallback={<LoadingState label="Открываем чат" />}><ExamChatPanel
               projectId={projectId}
               node={null}
               studyOnly
               projectChat
-            />
+            /></Suspense>
           </div>
         ) : !selectedNode ? (
           <div className="workspace-section-overview is-empty"><EmptyState title="Программа пока пуста"><p>Добавьте разделы и темы, не покидая проектную рабочую область.</p><Link className="primary-button" to={`/projects/${projectId}/program`}>Открыть программу</Link></EmptyState></div>

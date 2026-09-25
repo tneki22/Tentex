@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Search, X } from "lucide-react";
 import type { LessonSummaryRead } from "../../api/lessons";
-import { ProgramSectionRow, ProgramTopicRow } from "../../components/domain";
+import { ProgramSectionRow, ProgramTopicRow } from "../../components/domain/ProgramTreeRows";
 import { Button, Checkbox, Tooltip } from "../../components/ui";
 import { filterProgramTree, type ProgramTreeNode } from "../programTree";
 import { countsByNode, isVisible, lessonStateMark, studyNodesOf, sumCounts } from "./lessonTree";

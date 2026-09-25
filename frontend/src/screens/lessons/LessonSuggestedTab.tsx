@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { decideCoverage, type CoverageDecisionAction, type EvidenceSummary } from "../../api/coverage";
 import type { LessonBlockCommand, LessonBlockRead } from "../../api/lessons";
-import { EvidenceCard, EvidenceInspector } from "../../components/domain";
+import { EvidenceCard } from "../../components/domain/EvidenceCard";
+import { EvidenceInspector } from "../../components/domain/EvidenceInspector";
 import { EmptyState, StatusBadge } from "../../components/ui";
 import { useTopicEvidence } from "../../hooks/useTopicEvidence";
 import type { ProgramTreeNode } from "../programTree";
