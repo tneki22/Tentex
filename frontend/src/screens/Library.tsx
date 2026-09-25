@@ -654,11 +654,14 @@ export function Library() {
             ? "Общие материалы установки. Файл хранится один раз, проекты на него ссылаются."
             : undefined
         }
-        actions={
+        actions={<>
+          <Button variant="secondary" onClick={() => navigate("/library/search")}>
+            <Globe size={15} aria-hidden="true" /> Поиск
+          </Button>
           <Button onClick={() => setAddOpen(true)}>
             <Plus size={15} aria-hidden="true" /> Добавить материал
           </Button>
-        }
+        </>}
       />
       {error && <ErrorState message={error} />}
 

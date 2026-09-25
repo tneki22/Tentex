@@ -41,11 +41,12 @@ interface SourceSearchResultsProps {
   /** «3.3 Планирование процессорного времени» по id узла программы. */
   topicLabels?: Record<string, string>;
   onFollowUp?: (text: string) => void;
+  destination?: "project" | "library";
 }
 
 /** Ход чата «Поиск в интернете»: запросы и отобранные источники. Кнопки «Добавить»
  * нет намеренно: поиск чаще находит страницу со ссылками, а не сам файл. */
-export function SourceSearchResults({ result, topicLabels = {}, onFollowUp }: SourceSearchResultsProps) {
+export function SourceSearchResults({ result, topicLabels = {}, onFollowUp, destination = "project" }: SourceSearchResultsProps) {
   const hidden = result.hidden_attached + result.hidden_seen;
   return (
     <div className="web-search-result">
@@ -81,7 +82,9 @@ export function SourceSearchResults({ result, topicLabels = {}, onFollowUp }: So
       )}
       {result.items.length > 0 && (
         <p className="external-source-note">
-          Чтобы взять источник в проект, скачайте файл или скопируйте ссылку и нажмите «Добавить материал» вверху страницы.
+          {destination === "library"
+            ? "Чтобы сохранить источник, скопируйте ссылку и добавьте её в Библиотеке."
+            : "Чтобы взять источник в проект, скачайте файл или скопируйте ссылку и нажмите «Добавить материал» вверху страницы."}
         </p>
       )}
       {onFollowUp && result.follow_ups.length > 0 && (
@@ -127,6 +130,9 @@ function SourceRow({ item, topicLabels }: { item: WebSourceItem; topicLabels: Re
         {fileLinks > 0 && ` · ссылок на файлы: ${fileLinks}`}
       </span>
       {item.why && <p className="web-source-line"><b>Чем полезно.</b> {item.why}</p>}
+      {item.priority_reason && <p className="web-source-line"><b>Почему сейчас.</b> {item.priority_reason}</p>}
+      {item.use_advice && <p className="web-source-line"><b>Как использовать.</b> {item.use_advice}</p>}
+      {item.time_fit && <p className="web-source-line"><b>По времени.</b> {item.time_fit}</p>}
       {item.gist && <p className="web-source-line"><b>Суть.</b> {item.gist}</p>}
       <div className="web-source-foot">
         {topics.length > 0 && (

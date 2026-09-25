@@ -261,7 +261,7 @@ function MaterialOverview({
   onOpen: (id: string) => void;
   onAdd: () => void;
   onChooseLibrary: () => void;
-  /** Раскрыть чат поиска в интернете; есть только у учебникового и свободного проекта. */
+  /** Раскрыть чат поиска в интернете для любого проекта. */
   onFindOnline?: () => void;
   onResearch: (id: string) => void;
   /** Блок «Поиск в интернете» под списком материалов. */
@@ -1305,8 +1305,8 @@ function MaterialSurface() {
   const searchRequested = searchParams.get("search") === "1";
   const searchTopicId = searchParams.get("topic");
   useEffect(() => {
-    if (searchRequested && textbook) webSearch.current?.reveal();
-  }, [searchRequested, searchTopicId, textbook]);
+    if (searchRequested && project) webSearch.current?.reveal();
+  }, [searchRequested, searchTopicId, project]);
 
   const treeResult = useMemo(() => {
     try { return buildProgramTree(project?.program.nodes ?? []); }
@@ -1928,13 +1928,14 @@ function MaterialSurface() {
             onOpen={(id) => navigate(`/projects/${projectId}/materials/${id}`)}
             onAdd={() => setAddOpen(true)}
             onChooseLibrary={() => setLibraryOpen(true)}
-            onFindOnline={textbook ? () => webSearch.current?.reveal() : undefined}
+            onFindOnline={() => webSearch.current?.reveal()}
             onResearch={(id) => { setResearchMaterialIds([id]); setResearchOpen(true); }}
-            webSearch={textbook && project ? (
+            webSearch={project ? (
               <MaterialsWebSearch
                 ref={webSearch}
                 projectId={projectId}
                 nodes={project.program.nodes}
+                variant={project.project.template_key}
                 initialTopicId={searchTopicId}
               />
             ) : null}

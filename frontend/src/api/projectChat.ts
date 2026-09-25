@@ -7,7 +7,7 @@ export type ProjectChatChannel = "program-chat" | "source-search-chat";
 
 export interface ProjectChatSessionSummary {
   id: string;
-  project_id: string;
+  project_id: string | null;
   title: string;
   updated_at: string;
   message_count: number;
@@ -15,7 +15,7 @@ export interface ProjectChatSessionSummary {
 
 export interface ProjectChatSessionDetail {
   id: string;
-  project_id: string;
+  project_id: string | null;
   section_scope_node_id: string | null;
   title: string;
   model_override: ChatModelOverride | null;
@@ -37,6 +37,7 @@ export interface ProjectChatManifestEntry {
   reason: string | null;
   flag_key: string | null;
   label: string | null;
+  preview: string[];
 }
 
 export interface ProjectChatContextPreview {
@@ -107,8 +108,10 @@ export interface ProjectChatSettingsPatch {
 }
 
 /** Клиент одного проектного чата: история, черновик, контекст, модель и ход. */
-export function projectChatApi(projectId: string, channel: ProjectChatChannel) {
-  const sessions = `/api/projects/${encodeURIComponent(projectId)}/${channel}/sessions`;
+export function projectChatApi(projectId: string | null, channel: ProjectChatChannel) {
+  const sessions = projectId === null
+    ? "/api/library/source-search-chat/sessions"
+    : `/api/projects/${encodeURIComponent(projectId)}/${channel}/sessions`;
   const session = (sessionId: string) => `${sessions}/${encodeURIComponent(sessionId)}`;
   return {
     list: (signal?: AbortSignal): Promise<ProjectChatSessionSummary[]> =>

@@ -1,6 +1,7 @@
 """Чат «Поиск в интернете»: план запросов → SearXNG → страницы → отбор по номеру кандидата."""
 
 import json
+from datetime import date, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -22,6 +23,8 @@ from app.models import (
     ChatToolRun,
     ChatToolRunState,
     GoalPassport,
+    Lesson,
+    LessonTopic,
     Material,
     MaterialSourceKind,
     MaterialState,
@@ -436,3 +439,132 @@ def test_topic_numbers_accept_titles_from_the_model() -> None:
         "topics": ["4.1 Виртуальные адреса", " 3 ", "без номера", 7],
     })
     assert choice.topics == ["4.1", "3", "7"]
+
+
+@pytest.mark.asyncio
+async def test_library_search_has_own_history_and_no_project_context(
+    session: Session, ai_config: str, project: Project, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del ai_config
+    _install(monkeypatch, _Web(HITS, PROBES))
+    library_chat = project_sessions.create_session(session, None, CHANNEL)
+    project_chat = project_sessions.create_session(session, project.id, CHANNEL)
+    assert [item.id for item in project_sessions.list_session_summaries(
+        session, None, CHANNEL)] == [library_chat.id]
+    assert [item.id for item in project_sessions.list_session_summaries(
+        session, project.id, CHANNEL)] == [project_chat.id]
+    with pytest.raises(ProjectDomainError):
+        project_sessions.get_session_detail(session, project.id, library_chat.id, CHANNEL)
+    assert source_search_chat.context_preview(session, None, library_chat.id).manifest == []
+
+    fake = FakeTransport(completions=[
+        _completion({"reply": "Ищу", "searches": [{
+            "query": "учебник операционные системы", "category": "general",
+            "language": "ru", "topics": [],
+        }]}),
+        _completion({"summary": "Нашёл", "items": [{
+            "id": 1, "kind": "textbook", "why": "По запросу", "gist": "Планирование",
+            "topics": [],
+        }]}),
+    ])
+    message = await source_search_chat.send_message(
+        session, ModelGateway(session, fake), None, library_chat.id, "Найди учебник ОС",
+    )
+    prompt = json.dumps(fake.complete_requests[0]["messages"], ensure_ascii=False)
+    assert "Операционные системы" not in prompt
+    assert "Таненбаум" not in prompt
+    assert "Планирование процессов" not in prompt
+    assert "Найди учебник ОС" in prompt
+    assert message.payload["result"]["items"][0]["node_ids"] == []
+    run = session.scalar(select(ChatToolRun).where(ChatToolRun.session_id == library_chat.id))
+    assert run.project_id is None and run.message_id == message.id
+
+
+def test_exam_context_and_time_toggle(session: Session, ai_config: str) -> None:
+    del ai_config
+    project = Project(
+        template_key=TemplateKey.EXAM, workspace_variant=WorkspaceVariant.EXAM,
+        status=ProjectStatus.ACTIVE, name="Экзамен по сетям",
+        deadline=date.today() + timedelta(days=8),
+    )
+    session.add(project)
+    session.flush()
+    session.add(GoalPassport(
+        project_id=project.id, subject="Компьютерные сети", minutes_per_day=60,
+        days_per_week=5, goal="Подготовиться к экзамену",
+    ))
+    session.commit()
+    _node(session, project, "Маршрутизация")
+    chat = project_sessions.create_session(session, project.id, CHANNEL)
+    ctx = source_search_chat.build_search_context(session, chat)
+    assert ctx.variant == "exam"
+    assert ctx.time_budget["exam_date"] == project.deadline.isoformat()
+    assert int(ctx.time_budget["remaining_minutes"]) > 0
+    assert "Маршрутизация" in source_search_chat._context_message(ctx)  # noqa: SLF001
+    project_sessions.update_context(
+        session, project.id, chat.id,
+        project_sessions.ProjectChatContextWrite(context_flags={"time_budget": False}), CHANNEL,
+    )
+    session.refresh(chat)
+    without = source_search_chat.build_search_context(session, chat)
+    assert without.time_budget == {}
+    assert project.deadline.isoformat() not in source_search_chat._context_message(  # noqa: SLF001
+        without
+    )
+
+
+def test_large_exam_source_stays_and_unknown_volume_has_no_time_claim(
+    session: Session, ai_config: str,
+) -> None:
+    del ai_config
+    project = Project(
+        template_key=TemplateKey.EXAM, workspace_variant=WorkspaceVariant.EXAM,
+        status=ProjectStatus.ACTIVE, name="Экзамен",
+        deadline=date.today() + timedelta(days=5),
+    )
+    session.add(project)
+    session.flush()
+    session.add(GoalPassport(project_id=project.id, minutes_per_day=45, days_per_week=5))
+    session.commit()
+    chat = project_sessions.create_session(session, project.id, CHANNEL)
+    ctx = source_search_chat.build_search_context(session, chat)
+    candidate = source_search_chat.Candidate(WebHit(
+        url="https://books.example/large.pdf", title="Большой учебник",
+        snippet="Курс", engine="brave",
+    ))
+    choice = source_search_chat.PickedSource(
+        id=1, kind="textbook", why="Полезен", gist="Курс", topics=[],
+        time_fit="Прочитать целиком за день",
+    )
+    assert source_search_chat.pick_sources(  # noqa: SLF001
+        source_search_chat.SearchPick(summary="", items=[choice]), [candidate]
+    ) == [(candidate, choice)]
+    result = source_search_chat._payload(  # noqa: SLF001
+        [], source_search_chat.Merged([candidate], 0, 0, []), [(candidate, choice)],
+        source_search_chat.SearchPick(summary="", items=[choice]), [], ctx,
+    )["result"]
+    assert result["items"][0]["time_fit"] is None
+
+
+def test_textbook_search_marks_unfinished_lesson(session: Session, ai_config: str) -> None:
+    del ai_config
+    project = Project(
+        template_key=TemplateKey.TEXTBOOK, workspace_variant=WorkspaceVariant.TEXTBOOK,
+        status=ProjectStatus.ACTIVE, name="Учебник",
+    )
+    session.add(project)
+    session.commit()
+    node = _node(session, project, "Алгоритмы")
+    lesson = Lesson(project_id=project.id, title="Алгоритмы", completed_at=None)
+    session.add(lesson)
+    session.flush()
+    session.add(LessonTopic(
+        lesson_id=lesson.id, program_node_id=node.id, project_id=project.id,
+        sort_order=0, topic_title_snapshot=node.title,
+    ))
+    session.commit()
+    chat = project_sessions.create_session(session, project.id, CHANNEL)
+    ctx = source_search_chat.build_search_context(session, chat)
+    assert ctx.variant == "textbook"
+    assert ctx.focus[0].lesson_open
+    assert "урок не пройден" in source_search_chat._context_message(ctx)  # noqa: SLF001

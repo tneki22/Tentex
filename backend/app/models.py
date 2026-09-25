@@ -2064,6 +2064,8 @@ class ChatSession(Base):
 
     __tablename__ = "chat_sessions"
     __table_args__ = (
+        CheckConstraint("project_id IS NOT NULL OR mode = 'source_search'",
+                        name="library_search_scope"),
         ForeignKeyConstraint(
             ["project_id", "program_node_id"],
             ["program_nodes.project_id", "program_nodes.id"],
@@ -2073,8 +2075,8 @@ class ChatSession(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    project_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    project_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
     )
     program_node_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     # Ближайший предок-раздел на момент создания; NULL — плоский список.
@@ -2154,8 +2156,8 @@ class ChatToolRun(Base):
     __table_args__ = (Index("ix_chat_tool_runs_session_created", "session_id", "created_at"),)
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    project_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    project_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
     )
     session_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="CASCADE")

@@ -11,13 +11,14 @@ export interface MaterialsWebSearchHandle {
 interface MaterialsWebSearchProps {
   projectId: string;
   nodes: ProgramNodeRead[];
+  variant: "exam" | "textbook" | "free";
   /** Пришли из подбора к теме: область чата — эта тема. */
   initialTopicId?: string | null;
 }
 
 /** Блок «Поиск в интернете» под списком материалов: отделён линией, по умолчанию свёрнут. */
 export const MaterialsWebSearch = forwardRef<MaterialsWebSearchHandle, MaterialsWebSearchProps>(
-  function MaterialsWebSearch({ projectId, nodes, initialTopicId = null }, forwardedRef) {
+  function MaterialsWebSearch({ projectId, nodes, variant, initialTopicId = null }, forwardedRef) {
     const [open, setOpen] = useState(false);
     // Каждый вызов reveal — новый запрос прокрутки и фокуса, даже если блок уже открыт.
     const [revealRequest, setRevealRequest] = useState(0);
@@ -57,6 +58,7 @@ export const MaterialsWebSearch = forwardRef<MaterialsWebSearchHandle, Materials
             <SourceSearchChat
               projectId={projectId}
               nodes={nodes}
+              variant={variant}
               initialTopicId={initialTopicId}
               focusRequest={revealRequest}
             />

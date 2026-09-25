@@ -20,6 +20,7 @@ from app.exam.router import router as exam_router
 from app.lessons.router import router as lessons_router
 from app.logging_config import configure_logging
 from app.materials.router import router as materials_router
+from app.materials.search_router import router as library_search_router
 from app.ocr.router import router as ocr_router
 from app.preparation.router import router as preparation_router
 from app.projects.demo import seed_demo_project
@@ -137,6 +138,7 @@ def create_app() -> FastAPI:
     app.include_router(projects_router)
     app.include_router(coverage_router)
     app.include_router(materials_router)
+    app.include_router(library_search_router)
     app.include_router(bindings_router)
     app.include_router(cards_router)
     app.include_router(conspects_router)

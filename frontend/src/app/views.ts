@@ -4,6 +4,7 @@ import { CoverageMap } from "../screens/CoverageMap";
 import { CoverageOverviewScreen } from "../screens/coverage/CoverageOverview";
 import { Library } from "../screens/Library";
 import { LibraryMaterialWorkspace } from "../screens/library/LibraryMaterialWorkspace";
+import { LibrarySearch } from "../screens/library/LibrarySearch";
 import { Lessons } from "../screens/lessons/Lessons";
 import { Materials, SourceViewer } from "../screens/Materials";
 import { Plan } from "../screens/Plan";
@@ -38,6 +39,7 @@ export const SCREEN_VIEWS: Record<string, ComponentType> = {
   "textbook-coverage": CoverageOverviewScreen,
   settings: ProjectSettings,
   library: Library,
+  "library-search": LibrarySearch,
   "library-material": LibraryMaterialWorkspace,
   setup: Setup,
   "ui-kit": UiKit,

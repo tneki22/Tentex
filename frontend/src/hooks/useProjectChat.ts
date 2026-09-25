@@ -11,7 +11,7 @@ import {
 const DRAFT_DEBOUNCE_MS = 800;
 
 interface UseProjectChatOptions {
-  projectId: string;
+  projectId: string | null;
   channel: ProjectChatChannel;
   /** Ход потоком: этапы видны в ленте, ход можно остановить (поиск в интернете). */
   streaming?: boolean;

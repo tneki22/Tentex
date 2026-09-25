@@ -290,6 +290,9 @@ export interface WebSourceItem {
   volume: WebSourceVolume;
   author: string | null;
   node_ids: string[];
+  priority_reason?: string | null;
+  use_advice?: string | null;
+  time_fit?: string | null;
 }
 
 export interface WebSearchRun {
