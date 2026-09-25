@@ -16,7 +16,7 @@ import {
   getLibraryPage,
 } from "../api/materials";
 import { ProjectApiError } from "../api/projects";
-import { ACTIVE_JOB_STATES, cancelBackgroundJob, findResumableBackgroundJob, getBackgroundJobResult, listBackgroundJobs, resolveBackgroundJob, type BackgroundJobRead } from "../api/backgroundJobs";
+import { ACTIVE_JOB_STATES, cancelBackgroundJob, findResumableBackgroundJob, getBackgroundJob, getBackgroundJobResult, listBackgroundJobs, resolveBackgroundJob, type BackgroundJobRead } from "../api/backgroundJobs";
 import { useBackgroundJob } from "../hooks/useBackgroundJob";
 import { AiFailureNotice } from "../components/domain";
 import {
@@ -121,19 +121,20 @@ export function AiCleanupPanel({
   const [discardOpen, setDiscardOpen] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [pendingJobs, setPendingJobs] = useState<BackgroundJobRead[]>([]);
+  const [newRunRequested, setNewRunRequested] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const dirty = Boolean(runResult && preview !== originalSuggestion);
   const { job, error: jobError } = useBackgroundJob(jobId);
   const jobActive = Boolean(job && ACTIVE_JOB_STATES.has(job.state));
-
-  const wasOpen = useRef(false);
+  const resumeKey = `${projectId ?? "library"}:${material.id}:${page.page_number}:${initialJobId ?? "latest"}`;
+  const [resumeReadyKey, setResumeReadyKey] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open || wasOpen.current) {
-      wasOpen.current = open;
+    if (!open) {
+      setResumeReadyKey(null);
       return;
     }
-    wasOpen.current = true;
+    setResumeReadyKey(null);
     setInstruction("");
     setPreflight(null);
     setRunResult(null);
@@ -145,18 +146,36 @@ export function AiCleanupPanel({
     setCompareTab("result");
     setJobId(null);
     setProposalSource(null);
-    // При открытии сверяемся с реестром: уборка этой страницы могла остаться
-    // идти в фоне с прошлого раза, когда диалог был закрыт.
+    setBusy(null);
+    setNewRunRequested(false);
+    // Сначала восстанавливаем конкретную задачу или последнее неразобранное
+    // предложение. Пока поиск идёт, не оцениваем новый запуск.
     const controller = new AbortController();
-    void findResumableBackgroundJob(
-      "ai_cleanup",
-      { materialId: material.id, projectId: projectId ?? undefined, pageNumber: page.page_number, jobId: initialJobId ?? undefined },
-      controller.signal,
-    )
-      .then((active) => { if (!controller.signal.aborted && active) setJobId(active.id); })
-      .catch(() => undefined);
+    const lookup = initialJobId
+      ? getBackgroundJob(initialJobId, controller.signal).then((candidate) => {
+        if (candidate.kind !== "ai_cleanup" || candidate.material_id !== material.id
+          || candidate.project_id !== projectId || candidate.page_number !== page.page_number
+          || (!candidate.needs_review && !ACTIVE_JOB_STATES.has(candidate.state))) {
+          throw new Error("Предложение этой страницы больше не ожидает проверки.");
+        }
+        return candidate;
+      })
+      : findResumableBackgroundJob(
+        "ai_cleanup",
+        { materialId: material.id, projectId: projectId ?? undefined, pageNumber: page.page_number },
+        controller.signal,
+      );
+    void lookup.then((active) => {
+      if (controller.signal.aborted) return;
+      setJobId(active?.id ?? null);
+      setResumeReadyKey(resumeKey);
+    }).catch((caught) => {
+      if (controller.signal.aborted) return;
+      setError(caught);
+      setResumeReadyKey(resumeKey);
+    });
     return () => controller.abort();
-  }, [open, material.id, projectId, page.page_number, initialJobId]);
+  }, [open, resumeKey, material.id, projectId, page.page_number, initialJobId]);
 
   useEffect(() => {
     if (!open) return;
@@ -171,7 +190,7 @@ export function AiCleanupPanel({
   }, [open, material.id, projectId, page.page_number, job?.updated_at]);
 
   useEffect(() => {
-    if (!open || busy === "starting" || busy === "apply" || jobActive || jobId || runResult) return;
+    if (!open || resumeReadyKey !== resumeKey || (initialJobId && !newRunRequested) || busy === "starting" || busy === "apply" || jobActive || jobId || runResult) return;
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
@@ -196,8 +215,9 @@ export function AiCleanupPanel({
     return () => {
       window.clearTimeout(timer);
       controller.abort();
+      setBusy((current) => current === "preflight" ? null : current);
     };
-  }, [open, projectId, material.id, page.id, page.page_number, instruction, jobActive, jobId, runResult]);
+  }, [open, resumeReadyKey, resumeKey, initialJobId, newRunRequested, projectId, material.id, page.id, page.page_number, instruction, jobActive, jobId, runResult]);
 
   // Закрытие панели задачу не отменяет — она живёт в очереди, и вернувшийся
   // экран забирает её готовую уборку из реестра, а не зовёт модель заново.
@@ -312,12 +332,13 @@ export function AiCleanupPanel({
     if (!jobId) return;
     setBusy("apply");
     void resolveBackgroundJob(jobId)
-      .then(() => { setRunResult(null); setJobId(null); setPreview(""); setOriginalSuggestion(""); })
+      .then(() => { setRunResult(null); setJobId(null); setPreview(""); setOriginalSuggestion(""); onOpenChange(false); })
       .catch(setError)
       .finally(() => setBusy(null));
   }
 
   function prepareNewRun() {
+    setNewRunRequested(true);
     setRunResult(null);
     setJobId(null);
     setPreflight(null);
