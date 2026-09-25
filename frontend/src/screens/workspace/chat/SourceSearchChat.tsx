@@ -263,6 +263,7 @@ export function SourceSearchChat({ projectId, nodes, variant = "free", initialTo
             }
             showModeIndicator={false}
             sending={chat.sending}
+            disabled={!ready}
           />
         </>
       )}

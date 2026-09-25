@@ -919,3 +919,13 @@ test("Библиотека: отдельная страница и чат без
   await expect(page.getByText("Найдено", { exact: true })).toBeVisible();
   await expect(page.getByText("Чтобы сохранить источник, скопируйте ссылку", { exact: false })).toBeVisible();
 });
+
+test("поиск материалов: без внешней модели композер отключён", async ({ page }) => {
+  await installStub(page, { aiEnabled: false });
+  await page.goto(`${BASE}/projects/${PROJECT}/materials`);
+  await page.getByRole("button", { name: "Найти в интернете" }).first().click();
+  const block = page.getByRole("region", { name: "Поиск в интернете" });
+  await expect(block.getByText("Внешние модели выключены", { exact: false })).toBeVisible();
+  await expect(block.getByRole("textbox")).toBeDisabled();
+  await expect(block.getByRole("button", { name: "Отправить" })).toBeDisabled();
+});
