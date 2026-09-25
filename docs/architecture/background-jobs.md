@@ -54,8 +54,7 @@ cleanup и Typst.
 
 `parse`, `typst_compile`, `ai_grouping`, `ai_import_repair`, `ai_preparation`,
 `ai_cleanup`, `link_answers`, `ai_answer_sections` (разметка файла эталонных ответов
-моделью), `ai_program_build` (составление программы учебника), `ai_source_search`
-(поиск материалов в интернете, миграция `20260924_0060`), а также операции
+моделью), `ai_program_build` (составление программы учебника), а также операции
 хранилища `backup_create`, `project_export`, `project_import`, `storage_verify`,
 `storage_cleanup`.
 
@@ -112,7 +111,6 @@ cleanup и Typst.
 | `ai_cleanup` | 300 | уборка одной страницы |
 | `ai_answer_sections` | 900 | разметка большого файла ответов и объёмный структурированный результат |
 | `ai_program_build` | 900 | до двух пакетных вызовов и объединение результата |
-| `ai_source_search` | 600 | живой вызов с поиском в сети — до полутора-двух минут, запас на один повтор по схеме |
 
 Истёк срок — `TimeoutError` ловится в `process_ai_job`, задача честно падает в
 `failed` с понятным текстом ошибки, а воркер идёт к следующей задаче в очереди, а не
@@ -172,8 +170,10 @@ cleanup и Typst.
 молчать.
 
 `REVIEW_REQUIRED_KINDS` — `ai_grouping`, `ai_import_repair`,
-`ai_answer_sections`, `ai_cleanup` (с 22.09.2026, см. дополнение вверху) и
-`ai_source_search`. Остальные виды не входят по существу:
+`ai_answer_sections` и `ai_cleanup` (с 22.09.2026, см. дополнение вверху). Вид
+`ai_source_search` (миграция `0060`) удалён миграцией `0061` вместе с прежним поиском в
+интернете: чат поиска (`source-search-chat.md`) идёт потоком без фоновой задачи.
+Остальные виды не входят по существу:
 
 | Вид | Почему не ждёт проверки |
 | --- | --- |
