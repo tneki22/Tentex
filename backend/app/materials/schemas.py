@@ -307,6 +307,13 @@ class LibraryMaterialRead(ApiModel):
     usage: list[LibraryUsageRead]
 
 
+class LibraryMaterialMetadataRead(ApiModel):
+    id: UUID
+    display_name: str
+    subject: str | None
+    updated_at: datetime
+
+
 OutlineSource = Literal["embedded", "printed", "recognized", "model", "none"]
 
 

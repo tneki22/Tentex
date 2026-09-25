@@ -83,8 +83,38 @@ def reindex_material(session: Session, material_id: UUID) -> int:
             MaterialPage.revision == material.active_parse_revision,
         )
     ).all()
-    for fragment_id, fragment_text in rows:
-        _insert_fragment(session, fragment_id, material_id, fragment_text)
+    # Транскрипт YouTube может содержать сотни коротких фрагментов. Два INSERT
+    # и SELECT last_insert_rowid() на каждый из них оставляли задачу на 1/1
+    # после появления текста. SQLite допускает явные rowid в FTS5; текущая
+    # write-транзакция гарантирует, что другой писатель не займёт эти номера.
+    first_rowid = session.execute(
+        text("SELECT COALESCE(MAX(rowid), 0) FROM fragment_search")
+    ).scalar_one() + 1
+    indexed = [
+        {
+            "rowid": first_rowid + position,
+            "norm": norm_text(fragment_text),
+            "lemmas": index_text(fragment_text),
+            "fragment_id": fragment_id.hex,
+            "material_id": material_id.hex,
+        }
+        for position, (fragment_id, fragment_text) in enumerate(rows)
+    ]
+    if indexed:
+        session.execute(
+            text(
+                "INSERT INTO fragment_search(rowid, norm, lemmas, fragment_id, material_id) "
+                "VALUES (:rowid, :norm, :lemmas, :fragment_id, :material_id)"
+            ),
+            indexed,
+        )
+        session.execute(
+            text(
+                "INSERT INTO fragment_search_map(fragment_id, material_id, rowid) "
+                "VALUES (:fragment_id, :material_id, :rowid)"
+            ),
+            indexed,
+        )
     from app.retrieval.indexing import queue_incremental_reindex
 
     queue_incremental_reindex(session, material_id)

@@ -418,17 +418,20 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
   }, []);
 
   useEffect(() => {
-    if (controller.detail || controller.status !== "idle") return;
-    void controller.ensureDraft().catch((error) => {
+    if (controller.status !== "idle" || controller.detail
+      || JSON.stringify(form) === JSON.stringify(EMPTY_FORM)) return;
+    void controller.queueSave(command(step)).catch((error) => {
       setActionError(error instanceof Error ? error.message : "Не удалось создать черновик");
     });
-  }, [controller.detail, controller.ensureDraft, controller.status]);
+  }, [form, controller.status, controller.detail, controller.queueSave, step]);
 
   useEffect(() => {
     const detail = controller.detail;
     const key = detail ? `${detail.project.id}:${controller.hydrationVersion}` : null;
     if (!detail || initializedKey.current === key) return;
     initializedKey.current = key;
+    if (controller.hydrationVersion === 0
+      && JSON.stringify(form) !== JSON.stringify(EMPTY_FORM)) return;
     const state = detail.draft.state;
     const goal = detail.goal_passport;
     const restoredFormat = (state.exam_format as ExamFormat | undefined)

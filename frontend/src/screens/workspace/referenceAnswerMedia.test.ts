@@ -5,6 +5,7 @@ import {
   attachmentImageLabel,
   canonicalImageMedia,
   legacyBoundImages,
+  removeAttachmentImageMarker,
   type ReferenceAnswerMedia,
 } from "./referenceAnswerMedia";
 
@@ -44,4 +45,13 @@ test("attachment-first and later-bound images retain distinct canonical labels",
   assert.notEqual(attachment.label, laterBinding.label);
   assert.equal(canonicalImageMedia(media, attachment.label!), attachment);
   assert.equal(canonicalImageMedia(media, laterBinding.label!), laterBinding);
+});
+
+test("removing an attachment marker preserves the surrounding answer and other images", () => {
+  const first = `[изображение: ${attachmentImageLabel("Вставка.png", "first")}]`;
+  const second = `[изображение: ${attachmentImageLabel("Вставка.png", "second")}]`;
+  assert.equal(
+    removeAttachmentImageMarker(`Вступление\n${first}\nПояснение\n${second}`, "Вставка.png", "first"),
+    `Вступление\nПояснение\n${second}`,
+  );
 });

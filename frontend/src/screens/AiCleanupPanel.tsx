@@ -171,7 +171,7 @@ export function AiCleanupPanel({
   }, [open, material.id, projectId, page.page_number, job?.updated_at]);
 
   useEffect(() => {
-    if (!open || busy === "starting" || busy === "apply" || jobActive) return;
+    if (!open || busy === "starting" || busy === "apply" || jobActive || jobId || runResult) return;
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
@@ -197,7 +197,7 @@ export function AiCleanupPanel({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [open, projectId, material.id, page.id, page.page_number, instruction, jobActive]);
+  }, [open, projectId, material.id, page.id, page.page_number, instruction, jobActive, jobId, runResult]);
 
   // Закрытие панели задачу не отменяет — она живёт в очереди, и вернувшийся
   // экран забирает её готовую уборку из реестра, а не зовёт модель заново.
@@ -317,6 +317,14 @@ export function AiCleanupPanel({
       .finally(() => setBusy(null));
   }
 
+  function prepareNewRun() {
+    setRunResult(null);
+    setJobId(null);
+    setPreflight(null);
+    setPreview("");
+    setOriginalSuggestion("");
+  }
+
   const aiFailure = describeAiFailure(error);
   const preflightValue = preflight?.preflight ?? null;
 
@@ -334,7 +342,7 @@ export function AiCleanupPanel({
             <Button variant="secondary" onClick={stop}><Square size={13} />Остановить</Button>
           ) : runResult ? (
             <>
-              <Button variant="secondary" disabled={busy !== null} onClick={() => void runCleanup()}><RotateCcw size={14} />Новый запуск</Button>
+              <Button variant="secondary" disabled={busy !== null} onClick={prepareNewRun}><RotateCcw size={14} />Новый запуск</Button>
               <Button variant="ghost" disabled={busy !== null} onClick={reject}>Отказаться</Button>
               <Button disabled={busy !== null || !preview.trim() || conflict || runResult.revision !== material.active_parse_revision} onClick={() => void applyCleanup()}>{busy === "apply" ? "Применяем…" : "Применить"}</Button>
             </>
@@ -344,16 +352,16 @@ export function AiCleanupPanel({
         </>}
       >
         <div className="ai-cleanup-flow">
-          <section className="ai-cleanup-source">
+          {!runResult && <section className="ai-cleanup-source">
             <header><strong>Исходный текст</strong><span>ревизия {preflight?.revision ?? material.active_parse_revision}</span></header>
             <pre>{originalText}</pre>
-          </section>
+          </section>}
 
-          <label className="ai-instruction-field">
+          {!runResult && <label className="ai-instruction-field">
             <span>Что изменить</span>
             <textarea value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Например: сократи вступление, убери повторы и сохрани определения" />
             <small>Пустая инструкция исправляет разрывы строк, пунктуацию, списки, заголовки и отступы — без новых фактов, удаления смысла и сокращения текста.</small>
-          </label>
+          </label>}
 
           {busy === "preflight" && !preflightValue && !jobId && <LoadingState label="Оцениваем состав и стоимость" />}
           {preflightValue && !jobId && (
@@ -385,7 +393,7 @@ export function AiCleanupPanel({
           {Boolean(error) && !aiFailure && <p className="inline-error" role="alert">{error instanceof Error ? error.message : "Вызов не выполнен"}</p>}
           {jobError && <p className="inline-error" role="alert">{jobError}</p>}
 
-          {pendingJobs.length > 1 && (
+          {!runResult && pendingJobs.length > 1 && (
             <section className="ai-change-list">
               <strong>Нерешённые результаты этой страницы</strong>
               <ul>{pendingJobs.map((item) => <li key={item.id}>

@@ -25,7 +25,12 @@ from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.retrieval.chunking import ChunkDraft, material_chunks
 from app.retrieval.embeddings import backend_for_profile
 from app.retrieval.jobs import finish, write_job
-from app.retrieval.schemas import RetrievalIndexBuildRead, RetrievalIndexBuildWrite
+from app.retrieval.schemas import (
+    RetrievalIndexBuildRead,
+    RetrievalIndexBuildWrite,
+    RetrievalIndexMaterialsRead,
+    RetrievalIndexMaterialsWrite,
+)
 from app.retrieval.vector import vector_blob
 
 QWEN_CPU_MAX_BATCH_SIZE = 4
@@ -209,6 +214,86 @@ def queue_incremental_reindex(session: Session, material_id: UUID) -> None:
             },
         )
     )
+
+
+def queue_index_materials(
+    session: Session, index_id: UUID, command: RetrievalIndexMaterialsWrite
+) -> RetrievalIndexMaterialsRead:
+    """Поставить выбранные материалы в активный индекс, включая повторные.
+
+    Весь набор проверяется до постановки первой задачи. Повторный запрос для
+    уже идущих материалов возвращает их задачи вместо создания дублей.
+    """
+    material_ids = list(dict.fromkeys(command.material_ids))
+    with session.begin():
+        settings = _settings(session)
+        index = session.get(RetrievalIndex, index_id)
+        if index is None:
+            raise ProjectNotFoundError("Retrieval-индекс не найден")
+        if settings.active_index_id != index_id or index.state != RetrievalIndexState.ACTIVE:
+            raise ProjectConflictError(
+                "Выбранный индекс больше не активен", code="retrieval_index_not_active"
+            )
+        profile = session.get(EmbeddingProfile, index.profile_id)
+        if profile is None:
+            raise ProjectNotFoundError("Embedding-профиль не найден")
+        materials = list(session.scalars(select(Material).where(Material.id.in_(material_ids))))
+        by_id = {material.id: material for material in materials}
+        if any(
+            material_id not in by_id
+            or by_id[material_id].status != MaterialState.READY
+            or by_id[material_id].active_parse_revision <= 0
+            for material_id in material_ids
+        ):
+            raise ProjectConflictError(
+                "Один из материалов ещё не подготовлен", code="material_not_ready"
+            )
+        if (
+            profile.backend_kind == EmbeddingBackendKind.OPENAI_COMPATIBLE
+            and not command.cloud_consent
+        ):
+            raise ProjectConflictError(
+                "Подтвердите отправку текста внешней embedding-модели",
+                code="retrieval_cloud_consent_required",
+                context={
+                    "material_count": len(material_ids),
+                    "size_bytes": sum(by_id[item].size_bytes for item in material_ids),
+                },
+            )
+        existing = {
+            job.material_id: job.id
+            for job in session.scalars(
+                select(BackgroundJob).where(
+                    BackgroundJob.kind == BackgroundJobKind.RETRIEVAL_INDEX,
+                    BackgroundJob.material_id.in_(material_ids),
+                    BackgroundJob.state.in_(
+                        (BackgroundJobState.QUEUED, BackgroundJobState.RUNNING)
+                    ),
+                )
+            )
+            if job.checkpoint.get("index_id") == str(index_id)
+        }
+        job_ids: list[UUID] = []
+        for material_id in material_ids:
+            job_id = existing.get(material_id)
+            if job_id is None:
+                job_id = uuid4()
+                session.add(
+                    BackgroundJob(
+                        id=job_id,
+                        material_id=material_id,
+                        kind=BackgroundJobKind.RETRIEVAL_INDEX,
+                        state=BackgroundJobState.QUEUED,
+                        total=1,
+                        checkpoint={
+                            "index_id": str(index_id),
+                            "mode": "incremental",
+                            "material_id": str(material_id),
+                        },
+                    )
+                )
+            job_ids.append(job_id)
+    return RetrievalIndexMaterialsRead(job_ids=job_ids)
 
 
 def queue_material_reindex(session: Session, material_id: UUID) -> UUID:
@@ -516,14 +601,12 @@ def _process_incremental(
                 RetrievalChunk.material_id == material_id,
             )
         )
-        next_order = (
-            inner.scalar(
-                select(func.max(RetrievalChunk.sort_order)).where(
-                    RetrievalChunk.index_id == index_id
-                )
+        max_order = inner.scalar(
+            select(func.max(RetrievalChunk.sort_order)).where(
+                RetrievalChunk.index_id == index_id
             )
-            or -1
-        ) + 1
+        )
+        next_order = (max_order if max_order is not None else -1) + 1
         rows = []
         for draft, vector in embedded:
             rows.append(_chunk_row(index_id, next_order, draft, vector))
@@ -547,6 +630,11 @@ def _process_incremental(
         index.corpus_manifest = manifest
         index.material_count = len(manifest)
         index.chunk_count = _chunk_count(inner, index_id)
+        index.indexed_material_count = inner.scalar(
+            select(func.count(func.distinct(RetrievalChunk.material_id))).where(
+                RetrievalChunk.index_id == index_id
+            )
+        ) or 0
         finish(
             job,
             BackgroundJobState.CANCELLED

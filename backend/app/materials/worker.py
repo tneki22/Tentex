@@ -266,6 +266,10 @@ def _save_page(session: Session, task_id: UUID, parsed: ParsedPage) -> bool:
         )
         task.checkpoint = checkpoint
         task.done = min(task.total, int(checkpoint["next_index"]))
+        if task.done == task.total:
+            # Страница уже доступна по task_id; до публикации ревизии остаётся
+            # сборка общей структуры. Не показываем этот этап как «1 из 1».
+            task.stage = ProcessingStage.SEGMENT
         task.heartbeat_at = utc_now()
         task.lease_expires_at = utc_now() + timedelta(seconds=LEASE_SECONDS)
         task.updated_at = utc_now()

@@ -8,11 +8,11 @@ import {
   deleteLibraryMaterial,
   getLibraryPage,
   getMaterialDeletePreview,
+  listLibrarySubjects,
   refreshLibrarySource,
   restoreMaterialRevision,
   searchLibraryMaterial,
   updateLibraryPageText,
-  updateLibraryMaterialMetadata,
   type MaterialDeletePreview,
   type MaterialPageRead,
   type MaterialPurpose,
@@ -96,6 +96,7 @@ export function LibraryMaterialWorkspace() {
   const [attachOpen, setAttachOpen] = useState(false);
   const [deletePreview, setDeletePreview] = useState<MaterialDeletePreview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [subjects, setSubjects] = useState<string[]>([]);
   const [comparisonPage, setComparisonPage] = useState<MaterialPageRead | null>(null);
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
@@ -122,6 +123,11 @@ export function LibraryMaterialWorkspace() {
     page: view.page,
     revision: selectedRevision,
   });
+  useEffect(() => {
+    const controller = new AbortController();
+    void listLibrarySubjects(controller.signal).then(setSubjects).catch(() => undefined);
+    return () => controller.abort();
+  }, [materialId]);
   const { detail } = store;
   const page = editSession?.page ?? store.page;
   const editDirty = editSession !== null && editText !== editSession.initial;
@@ -676,9 +682,14 @@ export function LibraryMaterialWorkspace() {
               return result;
             })}
             onDelete={() => void getMaterialDeletePreview(detail.id).then(setDeletePreview)}
+            subjects={subjects}
             onSaveMetadata={async (command) => {
-              await store.run(() => updateLibraryMaterialMetadata(detail.id, command));
-              setNotice("Название и предмет сохранены.");
+              const saved = await store.updateMetadata(command);
+              if (saved) {
+                if (command.subject) setSubjects((current) => [...new Set([...current, command.subject!])].sort((a, b) => a.localeCompare(b, "ru")));
+                setNotice("Название и предмет сохранены.");
+              }
+              return saved;
             }}
           />
         )}
@@ -761,9 +772,14 @@ export function LibraryMaterialWorkspace() {
             onAddToProject={() => setAttachOpen(true)}
             onRefreshSource={() => void store.run(() => refreshLibrarySource(detail.id))}
             onDelete={() => void getMaterialDeletePreview(detail.id).then(setDeletePreview)}
+            subjects={subjects}
             onSaveMetadata={async (command) => {
-              await store.run(() => updateLibraryMaterialMetadata(detail.id, command));
-              setNotice("Название и предмет сохранены.");
+              const saved = await store.updateMetadata(command);
+              if (saved) {
+                if (command.subject) setSubjects((current) => [...new Set([...current, command.subject!])].sort((a, b) => a.localeCompare(b, "ru")));
+                setNotice("Название и предмет сохранены.");
+              }
+              return saved;
             }}
           />
         </div>
@@ -786,7 +802,7 @@ export function LibraryMaterialWorkspace() {
 
       {page && detail.presentation_kind !== "typst" && (
         <AiCleanupPanel
-          open={cleanupOpen}
+          open={cleanupOpen && (!requestedCleanupJob || page.page_number === requestedPage)}
           projectId={null}
           material={{
             id: detail.id,
@@ -794,7 +810,14 @@ export function LibraryMaterialWorkspace() {
             active_parse_revision: detail.active_parse_revision,
           }}
           page={page}
-          onOpenChange={setCleanupOpen}
+          onOpenChange={(open) => {
+            setCleanupOpen(open);
+            if (!open && requestedCleanupJob) {
+              const next = new URLSearchParams(searchParams);
+              next.delete("job");
+              setSearchParams(next, { replace: true });
+            }
+          }}
           initialJobId={requestedCleanupJob}
           onManualEdit={openTextEditor}
           onReload={async () => {

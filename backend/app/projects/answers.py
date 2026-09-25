@@ -533,15 +533,32 @@ async def add_attachment(
         return ReferenceAnswerAttachmentRead.model_validate(row)
 
 
-def delete_attachment(session: Session, project_id: UUID, attachment_id: UUID) -> None:
+def delete_attachment(
+    session: Session, project_id: UUID, attachment_id: UUID
+) -> ReferenceAnswerSlot:
     with session.begin():
         _require_exam_project(session, project_id, writable=True)
         row = session.get(ReferenceAnswerAttachment, attachment_id)
         if row is None or row.project_id != project_id:
             raise ProjectNotFoundError("Вложение не найдено")
+        node = _require_study_node(session, project_id, row.program_node_id)
+        answer = session.get(ReferenceAnswer, (project_id, row.program_node_id))
+        if answer is not None and row.media_type.startswith("image/"):
+            marker = f"[изображение: вложение · {row.file_name} · {row.id}]"
+            without_line = re.sub(
+                rf"(?m)^[ \t]*{re.escape(marker)}[ \t]*(?:\r?\n|$)", "", answer.text
+            )
+            cleaned = without_line.replace(marker, "")
+            if cleaned != answer.text:
+                answer.text = cleaned
+                answer.revision += 1
+                answer.updated_at = utc_now()
         path = material_path(row.storage_path)
         session.delete(row)
+        session.flush()
+        result = _slot(node, answer)
     path.unlink(missing_ok=True)
+    return result
 
 
 def attachment_path(session: Session, project_id: UUID, attachment_id: UUID) -> Path:

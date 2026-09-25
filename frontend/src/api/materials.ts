@@ -170,6 +170,13 @@ export interface LibraryMaterialRead {
   usage: LibraryUsageRead[];
 }
 
+export interface LibraryMaterialMetadataRead {
+  id: string;
+  display_name: string;
+  subject: string | null;
+  updated_at: string;
+}
+
 /* ── Глобальная Библиотека. Общий материал не знает про проект: роли,
    назначения и привязки живут в `ProjectMaterial` и остаются проектными. ── */
 
@@ -845,10 +852,13 @@ export const getLibraryPage = (
 export const updateLibraryMaterialMetadata = (
   materialId: string,
   command: { display_name?: string; subject?: string | null },
-): Promise<LibraryMaterialDetailRead> => request(libraryPath(materialId), {
+): Promise<LibraryMaterialMetadataRead> => request(libraryPath(materialId), {
   method: "PATCH",
   body: JSON.stringify(command),
 });
+
+export const listLibrarySubjects = (signal?: AbortSignal): Promise<string[]> =>
+  request("/api/materials/subjects", { signal });
 
 /**
  * Метка растра в адресе: пока файл материала не менялся, метка та же, и браузер

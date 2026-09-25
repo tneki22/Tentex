@@ -250,6 +250,7 @@ export function LibraryProcessingPanel({
       total: task.total,
       etaSeconds: estimateEtaSeconds(task.id, task.done, task.total, task.updated_at),
       state: task.state,
+      finalizing: task.stage === "segment" && task.total > 0 && task.done === task.total,
       error: task.error ?? undefined,
     };
   }, [task, material.display_name, material.presentation_kind, isAudio, speechModelLabel]);

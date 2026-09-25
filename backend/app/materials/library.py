@@ -60,6 +60,7 @@ from app.materials.schemas import (
     LibraryMaterialAttachWrite,
     LibraryMaterialCapabilities,
     LibraryMaterialDetailRead,
+    LibraryMaterialMetadataRead,
     LibraryMaterialMetadataUpdate,
     LibraryMaterialRead,
     LibrarySearchHit,
@@ -588,6 +589,16 @@ def list_library_materials(session: Session) -> list[LibraryMaterialRead]:
     ]
 
 
+def list_library_subjects(session: Session) -> list[str]:
+    """Короткий список существующих предметов без чтения карточек и страниц."""
+    return list(session.scalars(
+        select(Material.subject)
+        .where(Material.subject.is_not(None))
+        .distinct()
+        .order_by(Material.subject)
+    ))
+
+
 def read_library_material(session: Session, material_id: UUID) -> LibraryMaterialDetailRead:
     material = material_or_404(session, material_id)
     aggregate = library_aggregates(session, [material]).get(material.id, EMPTY_LIBRARY_AGGREGATE)
@@ -661,7 +672,7 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
 
 def update_library_material_metadata(
     session: Session, material_id: UUID, command: LibraryMaterialMetadataUpdate
-) -> LibraryMaterialDetailRead:
+) -> LibraryMaterialMetadataRead:
     """Изменить пользовательские метаданные, не трогая исходный файл и его имя."""
     with session.begin():
         material = material_or_404(session, material_id)
@@ -672,7 +683,12 @@ def update_library_material_metadata(
             material.subject = values["subject"]
         material.updated_at = utc_now()
         session.flush()
-    return read_library_material(session, material_id)
+    return LibraryMaterialMetadataRead(
+        id=material.id,
+        display_name=material_display_name(material),
+        subject=material.subject,
+        updated_at=material.updated_at,
+    )
 
 
 # ── Чтение страниц, исходника и версий ──────────────────────────────────────

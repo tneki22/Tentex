@@ -92,6 +92,7 @@
 }
 .lib-active-index { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .lib-active-index > div { display: grid; gap: var(--space-1); min-width: 0; }
+.lib-active-index .lib-active-index-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
 .lib-active-index span { color: var(--accent); font-weight: var(--weight-medium); }
 .lib-active-index small,
 .lib-content-sources > strong,
@@ -106,6 +107,12 @@
 .lib-content-source-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: var(--space-1) var(--space-3); max-height: min(18rem, 40vh); overflow: auto; padding: var(--space-2) 0; }
 .lib-content-source-list .checkbox-row { min-width: 0; }
 .lib-content-source-list .checkbox-row label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-content-source-list .lib-source-missing label,
+.lib-content-source-list .lib-source-missing small { color: var(--tone-danger); }
+.lib-content-source-list .lib-source-missing small { display: block; padding-inline-start: var(--space-6); font-size: var(--text-xs); }
+.library-metadata-dialog-field { display: grid; gap: var(--space-2); }
+.library-index-add-summary { display: grid; gap: var(--space-3); }
+.library-index-add-summary p { margin: 0; }
 .lib-content-history { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
 .lib-content-history button { border: 0; border-radius: var(--radius-pill); padding: var(--space-1) var(--space-2); background: var(--surface-sunken); color: var(--ink-soft); cursor: pointer; font: inherit; font-size: var(--text-xs); }
 .lib-content-history button:hover { background: var(--accent-wash); color: var(--accent); }
@@ -321,6 +328,7 @@
   .retrieval-manual-model,
   .retrieval-quality-guide { grid-template-columns: 1fr; }
   .lib-active-index { grid-template-columns: 1fr; }
+  .lib-active-index .lib-active-index-actions { justify-content: flex-start; }
   .lib-content-sources-head,
   .library-index-build-model,
   .library-index-build-materials { align-items: stretch; flex-direction: column; grid-template-columns: 1fr; }

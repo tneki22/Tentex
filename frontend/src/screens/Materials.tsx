@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { getBackgroundJob } from "../api/backgroundJobs";
 import type { BindingFragmentRead, HeadingSuggestion, NodeBindingSummary } from "../api/bindings";
 import { listBindings, resolveAnswersHeading } from "../api/bindings";
 import {
@@ -1213,7 +1214,7 @@ function MaterialInspector({
 
 function MaterialSurface() {
   const { projectId = "", materialId } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const store = useProjectMaterials(projectId);
   const bindings = useBindings(projectId);
@@ -1246,6 +1247,19 @@ function MaterialSurface() {
   const [editText, setEditText] = useState("");
   const [editBusy, setEditBusy] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
+  const requestedCleanupJob = searchParams.get("job");
+  useEffect(() => {
+    if (!requestedCleanupJob || !materialId) return;
+    const controller = new AbortController();
+    void getBackgroundJob(requestedCleanupJob, controller.signal).then((job) => {
+      if (controller.signal.aborted || job.kind !== "ai_cleanup"
+        || job.material_id !== materialId || job.project_id !== projectId
+        || !job.page_number) return;
+      setPageNumber(job.page_number);
+      setCleanupOpen(true);
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, [requestedCleanupJob, materialId, projectId]);
   const [researchOpen, setResearchOpen] = useState(false);
   const [researchMaterialIds, setResearchMaterialIds] = useState<string[]>([]);
   const [project, setProject] = useState<ProjectDetail | null>(null);
@@ -2201,11 +2215,19 @@ function MaterialSurface() {
       </Dialog>
       {material && page && (
         <AiCleanupPanel
-          open={cleanupOpen}
+          open={cleanupOpen && (!requestedCleanupJob || page.page_number === pageNumber)}
           projectId={projectId}
           material={material}
           page={page}
-          onOpenChange={setCleanupOpen}
+          onOpenChange={(open) => {
+            setCleanupOpen(open);
+            if (!open && requestedCleanupJob) {
+              const next = new URLSearchParams(searchParams);
+              next.delete("job");
+              setSearchParams(next, { replace: true });
+            }
+          }}
+          initialJobId={requestedCleanupJob}
           onManualEdit={() => {
             setEditText(page.markdown || page.text);
             setEditOpen(true);

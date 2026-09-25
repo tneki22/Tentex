@@ -242,11 +242,13 @@ def download_answer_attachment(
     return FileResponse(answers.attachment_path(session, project_id, attachment_id))
 
 
-@projects.delete("/{project_id}/attachments/{attachment_id}", status_code=204)
+@projects.delete(
+    "/{project_id}/attachments/{attachment_id}", response_model=ReferenceAnswerSlot
+)
 def remove_answer_attachment(
     project_id: UUID, attachment_id: UUID, session: SessionDependency
-) -> None:
-    answers.delete_attachment(session, project_id, attachment_id)
+) -> ReferenceAnswerSlot:
+    return answers.delete_attachment(session, project_id, attachment_id)
 
 
 @projects.post(

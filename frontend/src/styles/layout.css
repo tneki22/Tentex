@@ -2627,6 +2627,10 @@
   min-width: 0;
 }
 
+.ai-cleanup-source {
+  grid-template-rows: var(--space-5) minmax(18rem, 45vh);
+}
+
 .ai-cleanup-source header,
 .ai-cleanup-result > header,
 .ai-cleanup-result > header > div,
@@ -2660,7 +2664,9 @@
 }
 
 .ai-cleanup-source pre {
-  max-height: 10rem;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
   padding: var(--space-4);
 }
 

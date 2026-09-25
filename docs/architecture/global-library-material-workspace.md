@@ -56,6 +56,8 @@
 | --- | --- | --- |
 | `GET` | `/api/materials` | Список Библиотеки |
 | `GET` | `/api/materials/{id}` | `LibraryMaterialDetailRead`: `presentation_kind`, возможности, оглавление, активная версия, диагностика, задача, использования |
+| `GET` | `/api/materials/subjects` | Существующие предметы для быстрого выбора |
+| `PATCH` | `/api/materials/{id}` | Обновить общее название и/или предмет; краткий ответ `id, display_name, subject, updated_at`, без перечитывания карточки и версий |
 | `POST` | `/api/materials/upload` · `/text` · `/external` | Создание общего материала без проекта |
 | `POST` | `/api/materials/{id}/project-links` | Подключение к проекту: только `ProjectMaterial`, без копирования и повторной обработки |
 | `GET` | `/api/materials/{id}/pages/{page}` | Страница активной, исторической (`?revision=`) или строящейся (`?task_id=`) версии |

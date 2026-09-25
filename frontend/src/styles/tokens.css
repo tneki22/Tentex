@@ -49,6 +49,7 @@
   --tone-warning: light-dark(#96650a, #e9b23c);
   --tone-danger: light-dark(#c02a38, #f87b87);
   --tone-info: light-dark(#0b6e7d, #4cc5d8);
+  --subject-ink: light-dark(#745092, #c5a1e3);
 
   /* Текст на красной кнопке: --on-accent сюда не годится, он рассчитан на кобальт */
   --on-danger: light-dark(#ffffff, #1a0d10);

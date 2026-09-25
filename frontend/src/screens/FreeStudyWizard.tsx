@@ -110,6 +110,7 @@ export function FreeStudyWizard({
   const [suggestionsKey, setSuggestionsKey] = useState(0);
   const [attachingId, setAttachingId] = useState<string | null>(null);
   const initializedKey = useRef<string | null>(null);
+  const autosaveTimer = useRef<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const materials = useProjectMaterials(controller.detail?.project.id);
   const projectId = controller.detail?.project.id;
@@ -117,11 +118,12 @@ export function FreeStudyWizard({
   const lastPendingDiffValue = lastPendingDiff(aiChatMessages);
 
   useEffect(() => {
-    if (controller.detail || controller.status !== "idle") return;
-    void controller.ensureDraft().catch((error) => {
+    if (controller.status !== "idle" || controller.detail
+      || JSON.stringify(form) === JSON.stringify(EMPTY_FORM)) return;
+    void controller.queueSave(command(step)).catch((error) => {
       setActionError(error instanceof Error ? error.message : "Не удалось создать черновик");
     });
-  }, [controller.detail, controller.ensureDraft, controller.status]);
+  }, [form, controller.status, controller.detail, controller.queueSave, step]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -138,6 +140,10 @@ export function FreeStudyWizard({
     const key = detail ? `${detail.project.id}:${controller.hydrationVersion}` : null;
     if (!detail || initializedKey.current === key) return;
     initializedKey.current = key;
+    // WizardChrome перемонтирует шаг. Тогда локальная форма пуста, а уже
+    // сохранённый draft нужно прочитать даже при hydrationVersion=0.
+    if (controller.hydrationVersion === 0
+      && JSON.stringify(form) !== JSON.stringify(EMPTY_FORM)) return;
     const state = detail.draft.state;
     const saved = (state.outlines_by_material_id as OutlinesByMaterialId | undefined) ?? {};
     setOutlinesByMaterialId(Object.fromEntries(Object.entries(saved).map(([materialId, outline]) => [
@@ -268,10 +274,10 @@ export function FreeStudyWizard({
 
   useEffect(() => {
     if (!controller.detail || initializedKey.current === null || controller.conflict) return;
-    const timer = window.setTimeout(() => {
+    autosaveTimer.current = window.setTimeout(() => {
       void controller.queueSave(command(step)).catch(() => undefined);
     }, 400);
-    return () => window.clearTimeout(timer);
+    return () => { if (autosaveTimer.current !== null) window.clearTimeout(autosaveTimer.current); };
   }, [form, step, nameManual, basisMaterialId, view, programMode, outlinesByMaterialId]);
 
   function changeStep(nextStep: number) {
@@ -281,6 +287,7 @@ export function FreeStudyWizard({
 
   async function go(nextStep: number) {
     setActionError("");
+    if (autosaveTimer.current !== null) window.clearTimeout(autosaveTimer.current);
     try {
       await controller.queueSave(command(nextStep));
       changeStep(nextStep);

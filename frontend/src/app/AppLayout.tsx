@@ -119,6 +119,7 @@ function toBackgroundTask(job: BackgroundJobRead, pendingIds: ReadonlySet<string
     state: job.needs_review ? "review" : (job.state as BackgroundTask["state"]),
     error: backgroundJobError(job),
     finishable: job.kind === "retrieval_index" && job.material_id === null,
+    finalizing: job.kind === "parse" && job.stage === "segment" && job.total > 0 && job.done === job.total,
     // `pause_requested` переживает опрос: отмена бегущей задачи не исчезает
     // мгновенно (воркер должен сам заметить флаг), и после клика строка не
     // должна выглядеть снова кликабельной, пока это не произойдёт на самом деле.

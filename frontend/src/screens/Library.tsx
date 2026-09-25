@@ -7,6 +7,7 @@ import {
   Globe,
   Play,
   Plus,
+  Pencil,
   Pause,
   Search,
   Trash2,
@@ -20,6 +21,7 @@ import {
   getLibraryPage,
   libraryPageImageUrl,
   listLibraryMaterials,
+  updateLibraryMaterialMetadata,
   previewMaterialsDelete,
   startLibraryProcessing,
   type LibraryMaterialRead,
@@ -29,11 +31,15 @@ import {
 } from "../api/materials";
 import {
   buildRetrievalIndex,
+  addRetrievalIndexMaterials,
+  activateRetrievalIndex,
+  listRetrievalIndexes,
   pauseRetrievalIndexBuild,
   resumeRetrievalIndexBuild,
   searchLibraryContent,
   getRetrievalSettings,
   type RetrievalHitRead,
+  type RetrievalIndexRead,
   type SearchStrategy,
 } from "../api/retrieval";
 import { cancelBackgroundJob, listBackgroundJobs, type BackgroundJobRead } from "../api/backgroundJobs";
@@ -44,6 +50,7 @@ import {
   Button,
   Checkbox,
   ConfirmDialog,
+  ContextMenu,
   Disclosure,
   Dialog,
   EmptyState,
@@ -56,6 +63,7 @@ import {
   SegmentedTabs,
 } from "../components/ui";
 import { AddLibraryMaterialDialog } from "./library/AddLibraryMaterialDialog";
+import { AddToProjectDialog } from "./library/AddToProjectDialog";
 import {
   DEFAULT_FILTERS,
   LibraryFilters,
@@ -84,8 +92,6 @@ const STATUS_LABEL: Record<LibraryMaterialRead["status"], string> = {
 };
 
 const SCROLL_KEY = "tentex-library-scroll";
-/** Проектов в строке видно два: дальше строка растёт и уводит кнопку удаления. */
-const USAGE_SHOWN = 2;
 const CONTENT_CACHE_KEY = "tentex-library-content-search";
 
 interface ContentSearchCache {
@@ -192,6 +198,11 @@ export function Library() {
   const [contentHistory, setContentHistory] = useState<string[]>(initialContentCache.history);
   const [contentMaterialIds, setContentMaterialIds] = useState<string[]>(initialContentCache.materialIds);
   const [retrievalSettings, setRetrievalSettings] = useState<Awaited<ReturnType<typeof getRetrievalSettings>> | null>(null);
+  const [indexes, setIndexes] = useState<RetrievalIndexRead[]>([]);
+  const [indexSwitching, setIndexSwitching] = useState(false);
+  const [indexAddIds, setIndexAddIds] = useState<string[] | null>(null);
+  const [indexAdding, setIndexAdding] = useState(false);
+  const [indexCloudConsent, setIndexCloudConsent] = useState(false);
   const [contentProfileId, setContentProfileId] = useState<string | null>(null);
   const [indexBuildOpen, setIndexBuildOpen] = useState(false);
   const [indexBuilding, setIndexBuilding] = useState(false);
@@ -200,6 +211,9 @@ export function Library() {
   const [previewPageLoading, setPreviewPageLoading] = useState(false);
   const [contentSearching, setContentSearching] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [metadataDialog, setMetadataDialog] = useState<{ material: LibraryMaterialRead; kind: "name" | "subject"; value: string } | null>(null);
+  const [metadataSaving, setMetadataSaving] = useState(false);
+  const [attachTarget, setAttachTarget] = useState<LibraryMaterialRead | null>(null);
   /* Кого сейчас подтверждают к удалению. Пустой массив — диалог закрыт. */
   const [deleteTargets, setDeleteTargets] = useState<LibraryMaterialRead[]>([]);
   const [deletePreview, setDeletePreview] = useState<MaterialsDeletePreview | null>(null);
@@ -237,12 +251,16 @@ export function Library() {
     return () => controller.abort();
   }, [load]);
 
-  useEffect(() => {
-    void getRetrievalSettings().then((next) => {
-      setRetrievalSettings(next);
-      setContentProfileId(next.default_profile_id ?? next.active_index?.profile_id ?? null);
-    }).catch(() => setRetrievalSettings(null));
+  const refreshIndexes = useCallback(async () => {
+    const [next, available] = await Promise.all([getRetrievalSettings(), listRetrievalIndexes()]);
+    setRetrievalSettings(next);
+    setIndexes(available);
+    setContentProfileId((current) => current ?? next.default_profile_id ?? next.active_index?.profile_id ?? null);
   }, []);
+
+  useEffect(() => {
+    if (!indexJob) void refreshIndexes().catch(() => setRetrievalSettings(null));
+  }, [indexJob, refreshIndexes]);
 
   useEffect(() => {
     let active = true;
@@ -556,6 +574,72 @@ export function Library() {
     }
   }
 
+  async function switchIndex(indexId: string | null) {
+    if (!indexId || indexId === retrievalSettings?.active_index?.id) return;
+    setIndexSwitching(true);
+    setError("");
+    try {
+      await activateRetrievalIndex(indexId);
+      await refreshIndexes();
+      setContentHits([]);
+      setContentReasons([]);
+      if (contentQuery.trim()) await runContentSearch();
+      setNotice("Активный индекс переключён для всей установки.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Не удалось переключить индекс");
+    } finally {
+      setIndexSwitching(false);
+    }
+  }
+
+  function askAddToIndex(ids: string[]) {
+    const ready = ids.filter((id) => readyContentMaterials.some((item) => item.id === id));
+    if (ready.length === 0) return;
+    setIndexCloudConsent(false);
+    setIndexAddIds(ready);
+  }
+
+  async function addSelectedToIndex() {
+    const active = retrievalSettings?.active_index;
+    if (!active || !indexAddIds?.length) return;
+    setIndexAdding(true);
+    setError("");
+    try {
+      const result = await addRetrievalIndexMaterials(active.id, indexAddIds, indexCloudConsent);
+      setNotice(`В индекс поставлено ${result.job_ids.length} ${plural(result.job_ids.length, "материал", "материала", "материалов")}.`);
+      setIndexAddIds(null);
+      void listBackgroundJobs({ activeOnly: true }).then((jobs) => {
+        setIndexJob(jobs.find((job) => result.job_ids.includes(job.id)) ?? null);
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Не удалось добавить материалы в индекс");
+    } finally {
+      setIndexAdding(false);
+    }
+  }
+
+  async function saveListMetadata() {
+    if (!metadataDialog) return;
+    const { material, kind, value } = metadataDialog;
+    const normalized = value.trim();
+    if (kind === "name" && !normalized) return;
+    const command = kind === "name" ? { display_name: normalized } : { subject: normalized || null };
+    const previous = material;
+    setMetadataSaving(true);
+    setError("");
+    setMaterials((current) => current.map((item) => item.id === material.id ? { ...item, ...command } : item));
+    try {
+      const saved = await updateLibraryMaterialMetadata(material.id, command);
+      setMaterials((current) => current.map((item) => item.id === material.id ? { ...item, ...saved } : item));
+      setMetadataDialog(null);
+    } catch (caught) {
+      setMaterials((current) => current.map((item) => item.id === material.id ? previous : item));
+      setError(caught instanceof Error ? caught.message : "Не удалось сохранить метаданные");
+    } finally {
+      setMetadataSaving(false);
+    }
+  }
+
   if (loading) return <LoadingState label="Загружаем Библиотеку" placement="page" />;
 
   const allVisibleSelected = visible.length > 0 && selected.length === visible.length;
@@ -594,17 +678,23 @@ export function Library() {
               <div className="lib-active-index">
                 <div role="status">
                   <strong>Активный индекс</strong>
-                  <span>{retrievalSettings?.active_index
-                    ? `${retrievalSettings.profiles.find((profile) => profile.id === retrievalSettings.active_index?.profile_id)?.label ?? "Embedding-модель"} · ${retrievalSettings.active_index.indexed_material_count} из ${retrievalSettings.active_index.material_count} ${plural(retrievalSettings.active_index.material_count, "материал", "материала", "материалов")}${retrievalSettings.active_index.indexed_material_count < retrievalSettings.active_index.material_count ? " · неполный" : ""}`
-                    : "Индекс не собран"}</span>
+                  <Select
+                    ariaLabel="Активный индекс поиска"
+                    value={retrievalSettings?.active_index?.id ?? null}
+                    placeholder="Индекс не собран"
+                    disabled={indexSwitching || indexes.every((item) => item.state !== "ready" && item.state !== "active")}
+                    options={indexes.filter((item) => item.state === "ready" || item.state === "active").map((item) => ({
+                      value: item.id,
+                      label: retrievalSettings?.profiles.find((profile) => profile.id === item.profile_id)?.label ?? "Embedding-модель",
+                      description: `${new Date(item.completed_at ?? item.created_at).toLocaleDateString("ru-RU")} · ${item.indexed_material_count} из ${item.material_count} материалов`,
+                    }))}
+                    onValueChange={(value) => void switchIndex(value)}
+                  />
                 </div>
-                <Button
-                  variant="secondary"
-                  disabled={!retrievalSettings?.profiles.length || readyContentMaterials.length === 0}
-                  onClick={() => setIndexBuildOpen(true)}
-                >
-                  Собрать индекс по выбранным
-                </Button>
+                <div className="lib-active-index-actions">
+                  <Button variant="secondary" disabled={!retrievalSettings?.profiles.length || readyContentMaterials.length === 0} onClick={() => setIndexBuildOpen(true)}>Собрать индекс по выбранным</Button>
+                  <Button variant="secondary" disabled={!retrievalSettings?.active_index || contentMaterialIds.length === 0} onClick={() => askAddToIndex(contentMaterialIds)}>Добавить выбранные в индекс</Button>
+                </div>
               </div>
               {indexJob && (
                 <div className="retrieval-download-progress" role="status">
@@ -648,12 +738,14 @@ export function Library() {
                   <Disclosure summary={`Искать в источниках · ${contentMaterialIds.length} из ${readyContentMaterials.length}`}>
                     <div className="lib-content-source-list">
                       {readyContentMaterials.map((material) => (
-                        <Checkbox
-                          key={material.id}
-                          checked={contentMaterialIds.includes(material.id)}
-                          onCheckedChange={(checked) => setContentMaterialIds((current) => checked ? [...new Set([...current, material.id])] : current.filter((id) => id !== material.id))}
-                          label={material.display_name}
-                        />
+                        <div key={material.id} className={indexedMaterialIds.has(material.id) ? "" : "lib-source-missing"}>
+                          <Checkbox
+                            checked={contentMaterialIds.includes(material.id)}
+                            onCheckedChange={(checked) => setContentMaterialIds((current) => checked ? [...new Set([...current, material.id])] : current.filter((id) => id !== material.id))}
+                            label={material.display_name}
+                          />
+                          {!indexedMaterialIds.has(material.id) && <small>Нет в индексе</small>}
+                        </div>
                       ))}
                     </div>
                   </Disclosure>
@@ -786,13 +878,21 @@ export function Library() {
           {visible.map((material, index) => {
             const Icon = KIND_ICON[kindOf(material)];
             const busy = pendingIds.has(material.id);
-            const shown = material.usage.slice(0, USAGE_SHOWN);
-            const hidden = material.usage.slice(USAGE_SHOWN);
             return (
-              <div
+              <ContextMenu
+                key={material.id}
+                label={`Действия с «${material.display_name}»`}
+                items={[
+                  { label: "Открыть", onSelect: () => open(material.id) },
+                  { label: "Переименовать в Библиотеке", icon: <Pencil size={15} />, onSelect: () => setMetadataDialog({ material, kind: "name", value: material.display_name }) },
+                  { label: "Задать предмет", onSelect: () => setMetadataDialog({ material, kind: "subject", value: material.subject ?? "" }) },
+                  { label: "Добавить в проект", onSelect: () => setAttachTarget(material) },
+                  { label: "Добавить в активный индекс", disabled: material.status !== "ready" || !retrievalSettings?.active_index, onSelect: () => askAddToIndex([material.id]) },
+                  { label: "Удалить", icon: <Trash2 size={15} />, destructive: true, onSelect: () => void askDelete([material]) },
+                ]}
+                trigger={<div
                 className={`lib-row${selectedIds.has(material.id) ? " is-selected" : ""}`}
                 role="listitem"
-                key={material.id}
               >
                 <span
                   className="lib-row-select"
@@ -823,7 +923,6 @@ export function Library() {
                   <span className="lib-row-body">
                     <span className="lib-row-name">{material.display_name}</span>
                     <span className="lib-row-meta">
-                      <span>{material.subject ?? "Без предмета"}</span>
                       <span>{sizeLabel(material.size_bytes)}</span>
                       {material.page_count !== null && <span>{pageLabel(material.page_count)}</span>}
                       {material.block_count > 0 && <span>блоков {material.block_count}</span>}
@@ -849,8 +948,9 @@ export function Library() {
 
                 <div className="lib-row-usage">
                   {material.usage.length > 0 ? (
-                    <>
-                      {shown.map((usage) => (
+                    material.usage.length > 2 ? (
+                      <span className="lib-usage-more" title={material.usage.map((usage) => usage.project_name).join(", ")}>в {material.usage.length} проектах</span>
+                    ) : material.usage.map((usage) => (
                         <Link
                           key={`${usage.project_id}-${usage.display_name}`}
                           to={`/projects/${usage.project_id}/materials/${material.id}`}
@@ -858,18 +958,11 @@ export function Library() {
                         >
                           {usage.project_name}
                         </Link>
-                      ))}
-                      {hidden.length > 0 && (
-                        <span
-                          className="lib-usage-more"
-                          title={hidden.map((usage) => usage.project_name).join(", ")}
-                        >
-                          +{hidden.length}
-                        </span>
-                      )}
-                    </>
+                      ))
                   ) : <span className="lib-unused">не используется</span>}
                 </div>
+
+                <span className="lib-row-subject" title={material.subject ?? "Без предмета"}>{material.subject ?? "Без предмета"}</span>
 
                 <IconButton
                   label={`Удалить ${material.display_name}`}
@@ -878,7 +971,8 @@ export function Library() {
                 >
                   <Trash2 size={15} />
                 </IconButton>
-              </div>
+              </div>}
+              />
             );
           })}
         </div>
@@ -893,6 +987,47 @@ export function Library() {
           navigate(`/library/${created.id}?returnTo=${back}`);
         }}
       />
+
+      {attachTarget && <AddToProjectDialog
+        open
+        materialId={attachTarget.id}
+        materialName={attachTarget.display_name}
+        attachedProjectIds={attachTarget.usage.map((usage) => usage.project_id)}
+        onOpenChange={(open) => { if (!open) setAttachTarget(null); }}
+        onAttached={() => { setAttachTarget(null); void load({ silent: true }); }}
+      />}
+
+      <Dialog
+        open={metadataDialog !== null}
+        onOpenChange={(open) => { if (!open && !metadataSaving) setMetadataDialog(null); }}
+        title={metadataDialog?.kind === "subject" ? "Задать предмет" : "Переименовать в Библиотеке"}
+        footer={<><Button variant="ghost" disabled={metadataSaving} onClick={() => setMetadataDialog(null)}>Отмена</Button><Button disabled={metadataSaving || (metadataDialog?.kind === "name" && !metadataDialog.value.trim())} onClick={() => void saveListMetadata()}>{metadataSaving ? "Сохраняем…" : "Сохранить"}</Button></>}
+      >
+        {metadataDialog && <label className="library-metadata-dialog-field">
+          {metadataDialog.kind === "subject" ? "Предмет" : "Название"}
+          <input
+            autoFocus
+            list={metadataDialog.kind === "subject" ? "library-context-subjects" : undefined}
+            value={metadataDialog.value}
+            onChange={(event) => setMetadataDialog((current) => current ? { ...current, value: event.target.value } : current)}
+            onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void saveListMetadata(); } }}
+          />
+          {metadataDialog.kind === "subject" && <datalist id="library-context-subjects">{subjects.map((subject) => <option key={subject} value={subject} />)}</datalist>}
+        </label>}
+      </Dialog>
+
+      <Dialog
+        open={indexAddIds !== null}
+        onOpenChange={(open) => { if (!open && !indexAdding) setIndexAddIds(null); }}
+        title="Добавить выбранные в активный индекс"
+        footer={<><Button variant="ghost" disabled={indexAdding} onClick={() => setIndexAddIds(null)}>Отмена</Button><Button disabled={indexAdding || !indexAddIds?.length || (retrievalSettings?.profiles.find((item) => item.id === retrievalSettings.active_index?.profile_id)?.backend_kind === "openai_compatible" && !indexCloudConsent)} onClick={() => void addSelectedToIndex()}>{indexAdding ? "Ставим в очередь…" : "Добавить в индекс"}</Button></>}
+      >
+        {indexAddIds && <div className="library-index-add-summary">
+          <p>Выбрано: {indexAddIds.length}. Новых: {indexAddIds.filter((id) => !indexedMaterialIds.has(id)).length}. Уже в индексе: {indexAddIds.filter((id) => indexedMaterialIds.has(id)).length}.</p>
+          <p>Материалы, уже входящие в индекс, будут обработаны повторно. Поиск продолжит работать во время обновления.</p>
+          {retrievalSettings?.profiles.find((item) => item.id === retrievalSettings.active_index?.profile_id)?.backend_kind === "openai_compatible" && <Checkbox checked={indexCloudConsent} onCheckedChange={setIndexCloudConsent} label="Подтверждаю отправку текста выбранных материалов внешней embedding-модели" />}
+        </div>}
+      </Dialog>
 
       <Dialog
         open={indexBuildOpen}

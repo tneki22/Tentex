@@ -175,6 +175,15 @@ class RetrievalIndexBuildRead(ApiModel):
     job_id: UUID
 
 
+class RetrievalIndexMaterialsWrite(ApiModel):
+    material_ids: list[UUID] = Field(min_length=1, max_length=500)
+    cloud_consent: bool = False
+
+
+class RetrievalIndexMaterialsRead(ApiModel):
+    job_ids: list[UUID]
+
+
 class RetrievalSettingsWrite(ApiModel):
     default_profile_id: UUID | None = None
     preset: RetrievalPreset = RetrievalPreset.BALANCED

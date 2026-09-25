@@ -65,7 +65,7 @@ import { useRecentAnswers } from "../hooks/useRecentAnswers";
 import { useAnswerAutoMatch } from "../hooks/useAnswerAutoMatch";
 import { useAnswerFileMode, useAnswerViewMode } from "../hooks/useAnswerViewMode";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
-import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
+import { attachmentImageLabel, removeAttachmentImageMarker } from "./workspace/referenceAnswerMedia";
 import { AnswerEditor } from "./answers/AnswerEditor";
 import { AnswerFileList, type AnswerFile } from "./answers/AnswerFileList";
 import { AnswerHeadingSuggestions } from "./answers/AnswerHeadingSuggestions";
@@ -447,8 +447,14 @@ export function CoverageMap() {
     setBusy(true);
     setCommandError("");
     try {
-      await deleteAnswerAttachment(projectId, attachmentId);
+      const attachment = attachments.find((item) => item.id === attachmentId);
+      const nextSlot = await deleteAnswerAttachment(projectId, attachmentId);
+      setSlot(nextSlot);
+      if (attachment?.media_type.startsWith("image/")) {
+        setAnswerDraft((current) => removeAttachmentImageMarker(current, attachment.file_name, attachmentId));
+      }
       setAttachments((current) => current.filter((item) => item.id !== attachmentId));
+      void getCoverageMap(projectId).then(setCoverage).catch(() => undefined);
     } catch (error) {
       setCommandError(requestErrorMessage(error));
     } finally {

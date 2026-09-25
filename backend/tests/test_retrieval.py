@@ -24,6 +24,7 @@ from app.models import (
     Project,
     ProjectMaterial,
     ProjectStatus,
+    RetrievalChunk,
     RetrievalIndex,
     RetrievalIndexState,
     RetrievalPreset,
@@ -35,6 +36,7 @@ from app.models import (
     utc_now,
 )
 from app.projects.errors import ProjectConflictError, ProjectDomainError
+from app.retrieval import indexing as indexing_service
 from app.retrieval import local_models
 from app.retrieval.chunking import ChunkAtom, chunk_atoms, material_chunks
 from app.retrieval.embeddings import OpenAIEmbeddingBackend, _validate_vectors
@@ -46,10 +48,16 @@ from app.retrieval.indexing import (
     pause_index_build,
     process_index_job,
     queue_incremental_reindex,
+    queue_index_materials,
     resume_index_build,
     start_index_build,
 )
-from app.retrieval.schemas import ExhaustiveRunWrite, RetrievalIndexBuildWrite, RetrievalScope
+from app.retrieval.schemas import (
+    ExhaustiveRunWrite,
+    RetrievalIndexBuildWrite,
+    RetrievalIndexMaterialsWrite,
+    RetrievalScope,
+)
 from app.retrieval.vector import reciprocal_rank_fusion
 
 
@@ -282,6 +290,82 @@ def test_revision_change_queues_one_local_incremental_job(session: Session) -> N
     )
     assert len(jobs) == 1
     assert jobs[0].checkpoint["mode"] == "incremental"
+
+
+def test_add_materials_to_active_index_deduplicates_jobs(session: Session) -> None:
+    first, second = make_material(session, "101"), make_material(session, "102")
+    profile = _profile(session)
+    index = _index(session, profile)
+    index.state = RetrievalIndexState.ACTIVE
+    session.add(RetrievalSettings(id=1, active_index_id=index.id, default_profile_id=profile.id))
+    session.commit()
+
+    command = RetrievalIndexMaterialsWrite(material_ids=[first.id, first.id, second.id])
+    first_result = queue_index_materials(session, index.id, command)
+    second_result = queue_index_materials(session, index.id, command)
+
+    assert len(first_result.job_ids) == 2
+    assert first_result.job_ids == second_result.job_ids
+    assert len(list(session.scalars(select(BackgroundJob)))) == 2
+
+
+def test_add_materials_to_external_index_requires_cloud_consent(session: Session) -> None:
+    material = make_material(session, "103")
+    profile = _profile(session, external=True)
+    index = _index(session, profile)
+    index.state = RetrievalIndexState.ACTIVE
+    session.add(RetrievalSettings(id=1, active_index_id=index.id, default_profile_id=profile.id))
+    session.commit()
+    index_id, material_id = index.id, material.id
+
+    with pytest.raises(ProjectConflictError) as excinfo:
+        queue_index_materials(
+            session, index_id, RetrievalIndexMaterialsWrite(material_ids=[material_id])
+        )
+    assert excinfo.value.code == "retrieval_cloud_consent_required"
+    session.rollback()
+
+    result = queue_index_materials(
+        session, index_id,
+        RetrievalIndexMaterialsWrite(material_ids=[material_id], cloud_consent=True),
+    )
+    assert len(result.job_ids) == 1
+
+
+def test_add_material_to_index_updates_manifest_without_duplicate_chunks(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    material = make_material(session, "104")
+    add_page_with_fragments(
+        session, material, page_number=1, revision=1, fragments=["Текст источника для индекса"]
+    )
+    profile = _profile(session)
+    index = _index(session, profile)
+    index.state = RetrievalIndexState.ACTIVE
+    session.add(RetrievalSettings(id=1, active_index_id=index.id, default_profile_id=profile.id))
+    session.commit()
+    index_id, material_id = index.id, material.id
+
+    class Backend:
+        async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(indexing_service, "backend_for_profile", lambda *_: Backend())
+    for _ in range(2):
+        response = queue_index_materials(
+            session, index_id, RetrievalIndexMaterialsWrite(material_ids=[material_id])
+        )
+        job = session.get(BackgroundJob, response.job_ids[0])
+        assert job is not None
+        process_index_job(session, job)
+        session.expire_all()
+        saved = session.get(RetrievalIndex, index_id)
+        assert saved is not None
+        assert saved.indexed_material_count == saved.material_count == 1
+        assert saved.chunk_count == 1
+        assert len(saved.corpus_manifest) == 1
+        assert len(list(session.scalars(select(RetrievalChunk)))) == 1
+        session.commit()
 
 
 def test_index_build_can_pause_resume_and_finish_as_partial_candidate(session: Session) -> None:

@@ -1,5 +1,5 @@
 import { Download, ExternalLink, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import {
   libraryRenderedUrl,
@@ -28,7 +28,8 @@ interface LibraryMaterialFilePanelProps {
   onAddToProject: () => void;
   onRefreshSource: () => void;
   onDelete: () => void;
-  onSaveMetadata: (command: { display_name: string; subject: string | null }) => Promise<void>;
+  subjects: string[];
+  onSaveMetadata: (command: { display_name?: string; subject?: string | null }) => Promise<boolean>;
 }
 
 /**
@@ -42,18 +43,43 @@ export function LibraryMaterialFilePanel({
   onAddToProject,
   onRefreshSource,
   onDelete,
+  subjects,
   onSaveMetadata,
 }: LibraryMaterialFilePanelProps) {
   const [refreshOpen, setRefreshOpen] = useState(false);
   const [displayName, setDisplayName] = useState(material.display_name);
   const [subject, setSubject] = useState(material.subject ?? "");
+  const [saveError, setSaveError] = useState("");
+  const pendingSubject = useRef<string | null>(null);
   useEffect(() => {
     setDisplayName(material.display_name);
     setSubject(material.subject ?? "");
   }, [material.display_name, material.subject]);
   const isYoutube = material.presentation_kind === "youtube";
-  const metadataDirty = displayName.trim() !== material.display_name
-    || subject.trim() !== (material.subject ?? "");
+  const nameDirty = displayName.trim() !== material.display_name;
+
+  async function saveSubject(value: string) {
+    const normalized = value.trim();
+    if (normalized === (material.subject ?? "") || pendingSubject.current === normalized) return;
+    pendingSubject.current = normalized;
+    setSaveError("");
+    const saved = await onSaveMetadata({ subject: normalized || null });
+    pendingSubject.current = null;
+    if (!saved) {
+      setSubject(material.subject ?? "");
+      setSaveError("Предмет не сохранён. Попробуйте ещё раз.");
+    }
+  }
+
+  async function saveName() {
+    if (!displayName.trim()) return;
+    setSaveError("");
+    const saved = await onSaveMetadata({ display_name: displayName.trim() });
+    if (!saved) {
+      setDisplayName(material.display_name);
+      setSaveError("Название не сохранено. Попробуйте ещё раз.");
+    }
+  }
 
   return (
     <div className="inspector-content">
@@ -64,15 +90,31 @@ export function LibraryMaterialFilePanel({
             <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
           </Field>
           <Field label="Предмет" hint="Широкая дисциплина, например «Физика»">
-            <input value={subject} onChange={(event) => setSubject(event.target.value)} />
+            <input
+              list={`library-subjects-${material.id}`}
+              value={subject}
+              onChange={(event) => {
+                const next = event.target.value;
+                setSubject(next);
+                if (subjects.includes(next)) void saveSubject(next);
+              }}
+              onBlur={() => void saveSubject(subject)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") { event.preventDefault(); void saveSubject(subject); }
+              }}
+            />
+            <datalist id={`library-subjects-${material.id}`}>
+              {subjects.map((item) => <option key={item} value={item} />)}
+            </datalist>
           </Field>
           <Button
             variant="secondary"
-            disabled={busy || !displayName.trim() || !metadataDirty}
-            onClick={() => void onSaveMetadata({ display_name: displayName.trim(), subject: subject.trim() || null })}
+            disabled={busy || !displayName.trim() || !nameDirty}
+            onClick={() => void saveName()}
           >
-            <Save size={14} aria-hidden="true" /> Сохранить метаданные
+            <Save size={14} aria-hidden="true" /> Сохранить название
           </Button>
+          {saveError && <p className="inline-error" role="alert">{saveError}</p>}
         </div>
         <dl className="inspector-facts">
           <div><dt>Исходное имя</dt><dd title={material.original_name}>{material.original_name}</dd></div>

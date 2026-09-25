@@ -110,21 +110,25 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   const researchStarted = useRef(false);
   const [outlinesByMaterialId, setOutlinesByMaterialId] = useState<OutlinesByMaterialId>({});
   const initializedKey = useRef<string | null>(null);
+  const autosaveTimer = useRef<number | null>(null);
   const materialInput = useRef<HTMLInputElement>(null);
   const materials = useProjectMaterials(controller.detail?.project.id);
 
   useEffect(() => {
-    if (controller.detail || controller.status !== "idle") return;
-    void controller.ensureDraft().catch((error) => {
+    if (controller.status !== "idle" || controller.detail
+      || JSON.stringify(form) === JSON.stringify(EMPTY_FORM)) return;
+    void controller.queueSave(command(step)).catch((error) => {
       setActionError(error instanceof Error ? error.message : "Не удалось создать черновик");
     });
-  }, [controller.detail, controller.ensureDraft, controller.status]);
+  }, [form, controller.status, controller.detail, controller.queueSave, step]);
 
   useEffect(() => {
     const detail = controller.detail;
     const key = detail ? `${detail.project.id}:${controller.hydrationVersion}` : null;
     if (!detail || initializedKey.current === key) return;
     initializedKey.current = key;
+    if (controller.hydrationVersion === 0
+      && JSON.stringify(form) !== JSON.stringify(EMPTY_FORM)) return;
     const goal = detail.goal_passport;
     setStep(detail.draft.current_step);
     setView((detail.draft.state.program_view as TextbookProgramView) ?? "tree");
@@ -225,10 +229,10 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   useEffect(() => {
     const key = controller.detail ? `${controller.detail.project.id}:${controller.hydrationVersion}` : null;
     if (!controller.detail || initializedKey.current !== key || controller.conflict) return;
-    const timer = window.setTimeout(() => {
+    autosaveTimer.current = window.setTimeout(() => {
       void controller.queueSave(command(step)).catch(() => undefined);
     }, 400);
-    return () => window.clearTimeout(timer);
+    return () => { if (autosaveTimer.current !== null) window.clearTimeout(autosaveTimer.current); };
   }, [form, step, view, programMode, outlinesByMaterialId]);
 
   const updateOutline = useCallback((materialId: string, next: OutlineDraftState | null) => {
@@ -241,6 +245,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
 
   async function go(nextStep: number) {
     setActionError("");
+    if (autosaveTimer.current !== null) window.clearTimeout(autosaveTimer.current);
     try {
       await controller.queueSave(command(nextStep));
       changeStep(nextStep);

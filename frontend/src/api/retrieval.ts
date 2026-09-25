@@ -166,6 +166,18 @@ export const deleteLocalEmbeddingModel = (modelId: string): Promise<void> =>
 export const listRetrievalIndexes = (): Promise<RetrievalIndexRead[]> =>
   request("/api/retrieval/indexes");
 
+export const addRetrievalIndexMaterials = (
+  indexId: string,
+  materialIds: string[],
+  cloudConsent: boolean,
+): Promise<{ job_ids: string[] }> => request(
+  `/api/retrieval/indexes/${encodeURIComponent(indexId)}/materials`,
+  {
+    method: "POST",
+    body: JSON.stringify({ material_ids: materialIds, cloud_consent: cloudConsent }),
+  },
+);
+
 export const buildRetrievalIndex = (command: {
   profile_id: string;
   preset: RetrievalPreset;

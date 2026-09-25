@@ -21,6 +21,7 @@ from app.materials.schemas import (
     LibraryExternalMaterialCreate,
     LibraryMaterialAttachWrite,
     LibraryMaterialDetailRead,
+    LibraryMaterialMetadataRead,
     LibraryMaterialMetadataUpdate,
     LibraryMaterialRead,
     LibrarySearchResult,
@@ -60,6 +61,11 @@ router = APIRouter(prefix="/api", tags=["materials"])
 @router.get("/materials", response_model=list[LibraryMaterialRead])
 def list_library_materials(session: SessionDependency) -> list[LibraryMaterialRead]:
     return library.list_library_materials(session)
+
+
+@router.get("/materials/subjects", response_model=list[str])
+def list_library_subjects(session: SessionDependency) -> list[str]:
+    return library.list_library_subjects(session)
 
 
 @router.post(
@@ -193,12 +199,12 @@ def create_library_external_material(
     return library.create_library_external(session, command)
 
 
-@router.patch("/materials/{material_id}", response_model=LibraryMaterialDetailRead)
+@router.patch("/materials/{material_id}", response_model=LibraryMaterialMetadataRead)
 def update_library_material_metadata(
     material_id: UUID,
     command: LibraryMaterialMetadataUpdate,
     session: SessionDependency,
-) -> LibraryMaterialDetailRead:
+) -> LibraryMaterialMetadataRead:
     return library.update_library_material_metadata(session, material_id, command)
 
 

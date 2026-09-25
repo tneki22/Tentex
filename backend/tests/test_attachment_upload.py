@@ -21,8 +21,40 @@ from app.materials.storage import store_answer_upload
 from app.models import MaterialFragment, ReferenceAnswerAttachment
 from app.projects import answers
 from app.projects.errors import ProjectDomainError
+from app.projects.schemas import ReferenceAnswerWrite
 
 ALLOWED = {".txt", ".md", ".png"}
+
+
+def test_deleting_image_removes_only_its_saved_answer_marker(
+    session, tmp_path, monkeypatch
+) -> None:
+    project = make_exam_project(session)
+    node = make_topic_node(session, project, title="Текст с фотографиями")
+    first, second = uuid4(), uuid4()
+    image_path = tmp_path / "image.png"
+    image_path.write_bytes(b"png")
+    monkeypatch.setattr(answers, "material_path", lambda _: image_path)
+    for attachment_id, name in ((first, "первое.png"), (second, "второе.png")):
+        session.add(ReferenceAnswerAttachment(
+            id=attachment_id, project_id=project.id, program_node_id=node.id,
+            file_name=name, storage_path="answers/image.png", media_type="image/png",
+            size_bytes=3, created_at=datetime.now(UTC).replace(tzinfo=None),
+        ))
+    session.commit()
+    first_marker = f"[изображение: вложение · первое.png · {first}]"
+    second_marker = f"[изображение: вложение · второе.png · {second}]"
+    original = f"Начало\n{first_marker}\nСередина\n{second_marker}\nКонец"
+    saved = answers.put_reference_answer(
+        session, project.id, node.id,
+        ReferenceAnswerWrite(expected_revision=None, text=original, source_label=None),
+    )
+
+    result = answers.delete_attachment(session, project.id, first)
+
+    assert result.answer is not None
+    assert result.answer.text == f"Начало\nСередина\n{second_marker}\nКонец"
+    assert result.answer.revision == saved.answer.revision + 1
 
 
 def _upload(name: str, data: bytes) -> UploadFile:

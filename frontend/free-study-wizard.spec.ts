@@ -584,6 +584,21 @@ async function enterGoal(page: Page, subject?: string) {
   await expect(page.getByRole("heading", { name: "Подберите материалы" })).toBeVisible();
 }
 
+test("пустой вход в мастер не создаёт черновик, ввод цели создаёт", async ({ page }) => {
+  await installStub(page);
+  let created = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/wizard-drafts") created += 1;
+  });
+  await openFreeWizard(page);
+  await page.goto(`${BASE}/projects/new`);
+  expect(created).toBe(0);
+
+  await openFreeWizard(page);
+  await page.getByRole("textbox", { name: "Цель", exact: true }).fill("Изучить экономику");
+  await expect.poll(() => created).toBe(1);
+});
+
 test("цель без предмета и материалов создаёт проект и открывает общую Программу", async ({ page }) => {
   await installStub(page);
   await openFreeWizard(page);

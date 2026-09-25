@@ -49,7 +49,8 @@ interface LibraryMaterialInspectorProps {
   onAddToProject: () => void;
   onRefreshSource: () => void;
   onDelete: () => void;
-  onSaveMetadata: (command: { display_name: string; subject: string | null }) => Promise<void>;
+  subjects: string[];
+  onSaveMetadata: (command: { display_name?: string; subject?: string | null }) => Promise<boolean>;
 }
 
 /**
@@ -83,6 +84,7 @@ export function LibraryMaterialInspector({
   onAddToProject,
   onRefreshSource,
   onDelete,
+  subjects,
   onSaveMetadata,
 }: LibraryMaterialInspectorProps) {
   return (
@@ -141,6 +143,7 @@ export function LibraryMaterialInspector({
               onAddToProject={onAddToProject}
               onRefreshSource={onRefreshSource}
               onDelete={onDelete}
+              subjects={subjects}
               onSaveMetadata={onSaveMetadata}
             />
           </Tabs.Content>

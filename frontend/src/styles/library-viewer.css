@@ -197,7 +197,7 @@
 
 .lib-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(0, 240px) auto;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, calc(var(--space-16) * 3)) minmax(0, calc(var(--space-16) * 2.5)) auto;
   align-items: center;
   gap: var(--space-3);
   padding-inline-end: var(--space-3);
@@ -304,9 +304,7 @@
   justify-content: flex-end;
 }
 
-/* Один файл может лежать в пяти проектах. Список не переносится и не растит
-   строку: видно первые два проекта, остальные — счётчиком с полным перечнем
-   в подсказке. Иначе кнопка удаления уезжала бы вниз вместе с высотой строки. */
+/* Два проекта делят отведённую колонку; третий заменяет список счётчиком. */
 .lib-row-usage {
   display: flex;
   flex-wrap: nowrap;
@@ -317,11 +315,22 @@
 }
 
 .lib-row-usage a {
+  flex: 1 1 0;
+  min-width: 0;
   overflow: hidden;
   max-width: 100%;
   color: var(--accent);
   white-space: nowrap;
   text-decoration: none;
+  text-overflow: ellipsis;
+}
+
+.lib-row-subject {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--subject-ink);
+  font-size: var(--text-sm);
+  white-space: nowrap;
   text-overflow: ellipsis;
 }
 
@@ -2106,9 +2115,10 @@
   .lib-row .icon-button { grid-area: 1 / 3; }
 
   .lib-row-usage {
-    grid-area: 2 / 1 / 2 / -1;
-    padding: 0 var(--space-3) var(--space-3);
+    grid-area: 2 / 2 / 3 / 3;
+    padding: 0 var(--space-3);
   }
+  .lib-row-subject { grid-area: 3 / 2 / 4 / 3; padding: 0 var(--space-3) var(--space-3); }
 }
 
 /* На узком экране четыре пилюли в один ряд уже не читаются: разрешаем группе

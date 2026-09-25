@@ -11,6 +11,12 @@ export function attachmentImageLabel(fileName: string, attachmentId: string): st
   return `вложение · ${fileName} · ${attachmentId}`;
 }
 
+export function removeAttachmentImageMarker(text: string, fileName: string, attachmentId: string): string {
+  const marker = `[изображение: ${attachmentImageLabel(fileName, attachmentId)}]`;
+  return text.split(/\r?\n/).filter((line) => line.trim() !== marker)
+    .join("\n").replaceAll(marker, "");
+}
+
 export function canonicalImageMedia(
   media: ReferenceAnswerMedia[],
   label: string,

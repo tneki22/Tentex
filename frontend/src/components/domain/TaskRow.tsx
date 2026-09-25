@@ -39,6 +39,8 @@ export interface BackgroundTask {
    *  кнопки прячутся, а строка честно говорит «Завершаем…» вместо того чтобы
    *  выглядеть нерабочей до следующего опроса. */
   pending?: boolean;
+  /** Страницы уже доступны, но ревизия ещё публикуется. */
+  finalizing?: boolean;
 }
 
 const KIND_LABEL: Record<TaskKind, string> = {
@@ -85,6 +87,7 @@ interface TaskRowProps {
  */
 function metaText(task: BackgroundTask): string {
   if (task.pending) return "Завершаем…";
+  if (task.finalizing) return "Завершаем обработку";
   if (task.state === "review") return "результат готов — откройте и проверьте";
   if (task.state === "queued") return "в очереди";
   const parts: string[] = [];
@@ -168,7 +171,7 @@ export function TaskRow({ task, onPause, onResume, onRetry, onCancel, onDismiss 
       {/* Полоса рисуется там, где у работы есть измеримый конец. У ролей ИИ его
           нет: одна неделимая операция вместо обхода страниц — там полоса либо
           врала бы нулём, либо всегда стояла бы полной. */}
-      {(task.total > 0 || waiting) && (
+      {!task.finalizing && (task.total > 0 || waiting) && (
         <Progress
           value={waiting ? 1 : task.done}
           max={waiting ? 1 : task.total}

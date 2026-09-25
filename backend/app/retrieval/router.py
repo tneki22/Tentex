@@ -26,6 +26,8 @@ from app.retrieval.schemas import (
     LocalModelRead,
     RetrievalIndexBuildRead,
     RetrievalIndexBuildWrite,
+    RetrievalIndexMaterialsRead,
+    RetrievalIndexMaterialsWrite,
     RetrievalIndexRead,
     RetrievalSearchRead,
     RetrievalSearchWrite,
@@ -129,6 +131,17 @@ def resume_index_job(job_id: UUID, session: SessionDependency) -> BackgroundJobR
 @router.post("/retrieval/indexes/{index_id}/activate", response_model=RetrievalIndexRead)
 def activate_index(index_id: UUID, session: SessionDependency) -> RetrievalIndex:
     return indexing.activate_index(session, index_id)
+
+
+@router.post(
+    "/retrieval/indexes/{index_id}/materials",
+    response_model=RetrievalIndexMaterialsRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def add_index_materials(
+    index_id: UUID, command: RetrievalIndexMaterialsWrite, session: SessionDependency
+) -> RetrievalIndexMaterialsRead:
+    return indexing.queue_index_materials(session, index_id, command)
 
 
 @router.delete("/retrieval/indexes/{index_id}", status_code=status.HTTP_204_NO_CONTENT)

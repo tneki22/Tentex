@@ -637,7 +637,7 @@ export const addAnswerAttachment = async (
 export const deleteAnswerAttachment = (
   projectId: string,
   attachmentId: string,
-): Promise<void> => request(
+): Promise<ReferenceAnswerSlot> => request(
   `${projectPath(projectId)}/attachments/${encodeURIComponent(attachmentId)}`,
   { method: "DELETE" },
 );

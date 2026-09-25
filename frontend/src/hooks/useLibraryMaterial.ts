@@ -7,6 +7,7 @@ import {
   getLibraryPage,
   listMaterialRevisions,
   startLibraryProcessing,
+  updateLibraryMaterialMetadata,
   type LibraryMaterialDetailRead,
   type MaterialPageRead,
   type MaterialRevisionRead,
@@ -155,6 +156,25 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
     }
   }, [refreshDetail]);
 
+  const updateMetadata = useCallback(async (command: { display_name?: string; subject?: string | null }): Promise<boolean> => {
+    const previous = detail;
+    if (!previous) return false;
+    setBusy(true);
+    setError(null);
+    setDetail((current) => current ? { ...current, ...command } : current);
+    try {
+      const saved = await updateLibraryMaterialMetadata(materialId, command);
+      setDetail((current) => current ? { ...current, ...saved } : current);
+      return true;
+    } catch (caught) {
+      setDetail(previous);
+      setError(caught instanceof Error ? caught.message : "Не удалось сохранить метаданные");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [detail, materialId]);
+
   const startProcessing = useCallback((command: {
     parser_mode: ParserMode;
     scope: ProcessingScope;
@@ -192,5 +212,6 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
     buildTypst,
     addTypstFile,
     run,
+    updateMetadata,
   };
 }
