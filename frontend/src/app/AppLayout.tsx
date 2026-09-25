@@ -10,7 +10,6 @@ import {
   PieChart,
 } from "lucide-react";
 import {
-  Disclosure,
   PageHeadSlotProvider,
   Popover,
   Tooltip,
@@ -22,7 +21,6 @@ import { screenById } from "./screens";
 import { SCREEN_VIEWS } from "./views";
 import { ThemeToggle } from "./ThemeToggle";
 import { getAiSettings, updateAiDefault, type AiModality, type AiSettingsRead } from "../api/ai";
-import { listRecentStudy, type RecentStudyItem } from "../api/projects";
 import {
   ACTIVE_JOB_STATES,
   cancelBackgroundJob,
@@ -285,8 +283,8 @@ export function AppLayout() {
   // Отмена или снятие уже отправлены, ответ ещё не пришёл — строка показывает
   // «Завершаем…» вместо того чтобы молча ничего не делать до следующего опроса.
   const [pendingJobIds, setPendingJobIds] = useState<Set<string>>(new Set());
-  const [recentStudy, setRecentStudy] = useState<RecentStudyItem[]>([]);
   const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
+  const [viewSlot, setViewSlot] = useState<HTMLElement | null>(null);
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -304,12 +302,6 @@ export function AppLayout() {
       active = false;
       window.clearInterval(timer);
     };
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void listRecentStudy(controller.signal).then(setRecentStudy).catch(() => undefined);
-    return () => controller.abort();
   }, []);
 
   function markPending(jobId: string) {
@@ -501,20 +493,6 @@ export function AppLayout() {
             <p className="sidebar-empty">Покрытие появится после привязок на этапе 8</p>
           </Popover>
 
-          <Disclosure className="sidebar-recent" summary="Последние занятия">
-            {recentStudy.length === 0 ? <p className="sidebar-empty">Пройденные уроки и ответы появятся здесь.</p> : (
-              <div className="sidebar-recent-list">
-                {recentStudy.map((item) => (
-                  <Link className="sidebar-recent-row" key={`${item.kind}-${item.item_id}`} to={item.kind === "lesson" ? `/projects/${item.project_id}/lessons?lesson=${item.item_id}` : `/projects/${item.project_id}?node=${item.item_id}`}>
-                    <small><span className="sidebar-project-type">{item.template_key === "exam" ? "Э" : item.template_key === "textbook" ? "Уч" : "СИ"}</span>{item.project_name}</small>
-                    <b>{item.kind === "lesson" ? "Урок:" : "Вопрос:"} {item.title}</b>
-                    <small>{new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(item.happened_at))}</small>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </Disclosure>
-
           <div className="app-widgets" aria-label="Состояние установки">
             <BackgroundJobsWidget
               backgroundJobs={backgroundJobs}
@@ -590,13 +568,14 @@ export function AppLayout() {
           </div>
         </nav>
 
-        <PageHeadSlotProvider title={titleSlot} actions={actionsSlot}>
+        <PageHeadSlotProvider title={titleSlot} view={viewSlot} actions={actionsSlot}>
           <div className="app-frame">
             <header className={`app-topbar ${scrolled ? "is-scrolled" : ""}`.trim()}>
-              {/* Одна строка на экран: заголовок, поиск по центру, действие
-                  справа. По краям сюда переезжает PageHead текущего экрана. */}
+              {/* PageHead переносит сюда заголовок, выбор вида и действия.
+                  На узком окне поиск переходит на следующую строку. */}
               <div className="app-topbar-inner">
                 <div className="topbar-lead" ref={setTitleSlot} />
+                <div className="topbar-view" ref={setViewSlot} />
                 <CommandPalette />
                 <div className="topbar-actions" ref={setActionsSlot} />
               </div>
