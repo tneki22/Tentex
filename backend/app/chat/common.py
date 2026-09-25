@@ -66,6 +66,7 @@ class ManifestEntryRead(BaseModel):
     # их именем источника — exam-контекст эти поля не заполняет (остаются None).
     flag_key: str | None = None
     label: str | None = None
+    preview: list[str] = []
 
 
 def message_read(message: ChatMessage) -> ChatMessageRead:

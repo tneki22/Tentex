@@ -1389,6 +1389,14 @@
 }
 
 /* --- Чат «Поиск в интернете» в Материалах (docs/architecture/source-search-chat.md) --- */
+.library-search-page { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+.library-search-surface { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; margin: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); overflow: hidden; }
+.library-search-heading { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--line); }
+.library-search-surface .source-search-chat { min-height: 0; height: calc(100dvh - 12rem); }
+.chat-context-preview { max-width: min(34rem, 70vw); margin: var(--space-2) 0; }
+.chat-context-preview summary { cursor: pointer; color: var(--accent); }
+.chat-context-preview ul { max-height: 12rem; overflow: auto; padding-left: var(--space-4); }
+.chat-context-preview li { margin-top: var(--space-1); overflow-wrap: anywhere; }
 
 /* Под списком материалов: отделён линией, свёрнут до явного раскрытия. */
 .materials-web-search {

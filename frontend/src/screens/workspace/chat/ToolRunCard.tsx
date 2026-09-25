@@ -51,7 +51,8 @@ export function ToolRunCard({ projectId, payload, headingRef, nodeTitles, onFoll
       ) : isMaterialSearchResult(payload) ? (
         <MaterialSearchResults projectId={projectId} query={payload.query} items={payload.result.items} />
       ) : isSourceSearchResult(payload) ? (
-        <SourceSearchResults result={payload.result} topicLabels={nodeTitles} onFollowUp={onFollowUp} />
+        <SourceSearchResults result={payload.result} topicLabels={nodeTitles} onFollowUp={onFollowUp}
+          destination={projectId ? "project" : "library"} />
       ) : (
         <p className="chat-tool-card-unknown">Результат получен, но пока не показывается в интерфейсе.</p>
       )}

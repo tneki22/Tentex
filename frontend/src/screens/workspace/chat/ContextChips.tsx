@@ -21,6 +21,8 @@ export interface ChipDef {
   count: number | null;
   reason: string | null;
   futureNote?: string;
+  description?: string;
+  preview?: string[];
 }
 
 export const CONTEXT_REASON_LABELS: Record<string, string> = {
@@ -29,6 +31,7 @@ export const CONTEXT_REASON_LABELS: Record<string, string> = {
   reference_missing: "У темы ещё нет ответа",
   not_implemented: "Пока не реализовано",
   context_budget_exceeded: "Не поместилось в бюджет контекста",
+  deadline_missing: "Дата экзамена не указана",
 };
 
 interface ContextChipsProps {
@@ -83,6 +86,13 @@ export function ContextChips({ chips, contextFlags, onToggleFlag, controls, labe
                 </p>
               )}
               {chip.futureNote && <p className="chat-context-chip-future">{chip.futureNote}</p>}
+              {chip.description && <p>{chip.description}</p>}
+              {chip.included && chip.preview && chip.preview.length > 0 && (
+                <details className="chat-context-preview">
+                  <summary>Что войдёт в запрос · {chip.preview.length}</summary>
+                  <ul>{chip.preview.map((line, index) => <li key={`${chip.key}-${index}`}>{line}</li>)}</ul>
+                </details>
+              )}
               {chip.flagKey && !chip.futureNote && (
                 <Switch
                   checked={contextFlags[chip.flagKey] ?? false}

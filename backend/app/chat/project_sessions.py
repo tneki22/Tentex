@@ -23,7 +23,7 @@ from app.ai.schemas import AiModelSelection
 from app.ai.settings import seed_from_preset, validate_model_selection
 from app.chat import common as chat_common
 from app.chat.common import ChatMessageRead, ManifestEntryRead
-from app.db import project_write_transaction
+from app.db import chat_write_transaction
 from app.models import (
     ChatMessage,
     ChatMode,
@@ -69,7 +69,7 @@ class ProjectChatSessionSummary(ChatApiModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
     id: UUID
-    project_id: UUID
+    project_id: UUID | None
     title: str
     updated_at: Any
     message_count: int
@@ -91,7 +91,7 @@ class ProjectChatSessionDetail(ChatApiModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
     id: UUID
-    project_id: UUID
+    project_id: UUID | None
     section_scope_node_id: UUID | None
     title: str
     model_override: ProjectChatModelOverrideRead | None
@@ -123,11 +123,16 @@ class ProjectChatMessageWrite(ChatApiModel):
     text: NonBlank = Field(max_length=20_000)
 
 
-def require_project(session: Session, project_id: UUID, channel: ProjectChatChannel) -> Project:
+def require_project(
+    session: Session, project_id: UUID | None, channel: ProjectChatChannel
+) -> Project | None:
+    if project_id is None and channel.mode == ChatMode.SOURCE_SEARCH:
+        return None
     project = session.get(Project, project_id)
     if project is None:
         raise ProjectNotFoundError()
-    if project.workspace_variant != WorkspaceVariant.TEXTBOOK:
+    if (channel.mode != ChatMode.SOURCE_SEARCH
+            and project.workspace_variant != WorkspaceVariant.TEXTBOOK):
         raise ProjectConflictError(
             f"{channel.feature} доступен только учебниковому проекту",
             code=f"{channel.code_prefix}_textbook_only",
@@ -142,7 +147,7 @@ def require_project(session: Session, project_id: UUID, channel: ProjectChatChan
 
 
 def require_session(
-    session: Session, project_id: UUID, session_id: UUID, channel: ProjectChatChannel
+    session: Session, project_id: UUID | None, session_id: UUID, channel: ProjectChatChannel
 ) -> ChatSession:
     chat = session.get(ChatSession, session_id)
     if chat is None or chat.project_id != project_id or chat.mode != channel.mode:
@@ -153,7 +158,7 @@ def require_session(
 
 
 def list_session_summaries(
-    session: Session, project_id: UUID, channel: ProjectChatChannel
+    session: Session, project_id: UUID | None, channel: ProjectChatChannel
 ) -> list[ProjectChatSessionSummary]:
     require_project(session, project_id, channel)
     chats = list(
@@ -177,9 +182,9 @@ def list_session_summaries(
 
 
 def create_session(
-    session: Session, project_id: UUID, channel: ProjectChatChannel
+    session: Session, project_id: UUID | None, channel: ProjectChatChannel
 ) -> ChatSession:
-    with project_write_transaction(session, project_id):
+    with chat_write_transaction(session, project_id):
         require_project(session, project_id, channel)
         existing = session.scalar(
             select(func.count(ChatSession.id)).where(
@@ -244,7 +249,7 @@ def session_detail(
 
 
 def get_session_detail(
-    session: Session, project_id: UUID, session_id: UUID, channel: ProjectChatChannel
+    session: Session, project_id: UUID | None, session_id: UUID, channel: ProjectChatChannel
 ) -> ProjectChatSessionDetail:
     require_project(session, project_id, channel)
     chat = require_session(session, project_id, session_id, channel)
@@ -252,9 +257,10 @@ def get_session_detail(
 
 
 def save_draft(
-    session: Session, project_id: UUID, session_id: UUID, text: str, channel: ProjectChatChannel
+    session: Session, project_id: UUID | None, session_id: UUID,
+    text: str, channel: ProjectChatChannel,
 ) -> ChatSession:
-    with project_write_transaction(session, project_id):
+    with chat_write_transaction(session, project_id):
         require_project(session, project_id, channel)
         chat = require_session(session, project_id, session_id, channel)
         return chat_common.save_draft_text(session, chat, text)
@@ -262,12 +268,12 @@ def save_draft(
 
 def update_settings(
     session: Session,
-    project_id: UUID,
+    project_id: UUID | None,
     session_id: UUID,
     command: ProjectChatSettingsWrite,
     channel: ProjectChatChannel,
 ) -> ChatSession:
-    with project_write_transaction(session, project_id):
+    with chat_write_transaction(session, project_id):
         require_project(session, project_id, channel)
         chat = require_session(session, project_id, session_id, channel)
         snapshot = None
@@ -291,19 +297,19 @@ def update_settings(
 
 def update_context(
     session: Session,
-    project_id: UUID,
+    project_id: UUID | None,
     session_id: UUID,
     command: ProjectChatContextWrite,
     channel: ProjectChatChannel,
 ) -> ChatSession:
     fields = command.model_fields_set
-    with project_write_transaction(session, project_id):
+    with chat_write_transaction(session, project_id):
         require_project(session, project_id, channel)
         chat = require_session(session, project_id, session_id, channel)
         if "section_scope_node_id" in fields:
             if command.section_scope_node_id is not None:
                 node = session.get(ProgramNode, command.section_scope_node_id)
-                if node is None or node.project_id != project_id:
+                if project_id is None or node is None or node.project_id != project_id:
                     raise ProjectDomainError(
                         "Узел области контекста не найден",
                         status=404,

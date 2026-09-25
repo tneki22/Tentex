@@ -162,6 +162,9 @@ function sourceSearchResult(value: unknown): SourceSearchResult | null {
       volume: (item.volume ?? { kind: null }) as WebSourceVolume,
       author: typeof item.author === "string" ? item.author : null,
       node_ids: strings(item.node_ids),
+      priority_reason: typeof item.priority_reason === "string" ? item.priority_reason : null,
+      use_advice: typeof item.use_advice === "string" ? item.use_advice : null,
+      time_fit: typeof item.time_fit === "string" ? item.time_fit : null,
     });
   }
   const searches: WebSearchRun[] = [];

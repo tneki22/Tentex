@@ -91,6 +91,20 @@ def project_write_transaction(session: Session, project_id: UUID):
 
 
 @contextmanager
+def chat_write_transaction(session: Session, project_id: UUID | None):
+    """Резервировать writer для проектного либо библиотечного чата."""
+    if project_id is not None:
+        with project_write_transaction(session, project_id):
+            yield
+        return
+    if session.in_transaction():
+        session.commit()
+    with session.begin():
+        session.execute(text("UPDATE chat_sessions SET id = id WHERE 1=0"))
+        yield
+
+
+@contextmanager
 def job_write_transaction(session: Session, job_id: UUID | None = None):
     """Тот же приём резервирования writer, что у `project_write_transaction`,
     но для фоновой задачи (`SQLITE_BUSY_SNAPSHOT` объяснён там же).

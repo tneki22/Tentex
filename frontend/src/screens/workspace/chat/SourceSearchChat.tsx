@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Files, ListTree, Search, Target } from "lucide-react";
+import { CalendarDays, Files, ListTree, Search, Target } from "lucide-react";
 import type { WebCandidateLink } from "../../../api/chat";
 import type { ProjectChatManifestEntry } from "../../../api/projectChat";
 import type { ProgramNodeRead } from "../../../api/projects";
@@ -18,11 +18,17 @@ import { SearchProcessLive } from "./SearchProcess";
 // Оба вызова хода — структурированные ответы без потока (`source_search_chat.py`).
 const SEARCH_MODEL_CAPABILITIES = ["structured_output"];
 
-const CONTEXT_META: Array<{ flag: string; kind: string; title: string; icon: typeof Target }> = [
-  { flag: "profile", kind: "profile", title: "Профиль цели", icon: Target },
-  { flag: "program", kind: "program_tree", title: "Программа", icon: ListTree },
-  { flag: "topic_queries", kind: "topic_queries", title: "Запросы «Где искать»", icon: Search },
-  { flag: "attached_materials", kind: "attached_materials", title: "Материалы проекта", icon: Files },
+const CONTEXT_META: Array<{ flag: string; kind: string; title: string; icon: typeof Target; description: string }> = [
+  { flag: "profile", kind: "profile", title: "Профиль цели", icon: Target,
+    description: "Заполненные поля паспорта цели: предмет, цель, уровень, важное и исключения. Не включает дату экзамена." },
+  { flag: "program", kind: "program_tree", title: "Программа", icon: ListTree,
+    description: "Названия и номера текущих тем или вопросов, отметки о наличии источника и ходе подготовки. Не полный текст материалов." },
+  { flag: "topic_queries", kind: "topic_queries", title: "Подсказки «Где искать»", icon: Search,
+    description: "Запросы, предложенные при построении программы и сохранённые у её тем. Модель выбирает нужные и может переформулировать их." },
+  { flag: "attached_materials", kind: "attached_materials", title: "Материалы проекта", icon: Files,
+    description: "Только названия и исходные URL подключённых материалов. Полный текст файлов не передаётся." },
+  { flag: "time_budget", kind: "time_budget", title: "Время до экзамена", icon: CalendarDays,
+    description: "Дата экзамена и расчёт оставшихся учебных минут и дней по «Моей подготовке» или паспорту цели. Влияет на советы и порядок, не исключает большие источники." },
 ];
 
 /** Готовые просьбы: подставляются в поле ввода, отправляет их сам пользователь. */
@@ -36,9 +42,9 @@ const QUICK_ACTIONS: Array<{ label: string; text: string }> = [
   { label: "Где ещё не искали", text: "Продолжи поиск по темам, где ещё не искали" },
 ];
 
-function contextChips(manifest: ProjectChatManifestEntry[] | undefined): ChipDef[] | null {
+function contextChips(manifest: ProjectChatManifestEntry[] | undefined, variant: "exam" | "textbook" | "free"): ChipDef[] | null {
   if (!manifest) return null;
-  return CONTEXT_META.map((meta) => {
+  return CONTEXT_META.filter((meta) => meta.flag !== "time_budget" || variant === "exam").map((meta) => {
     const entry = manifest.find((item) => item.kind === meta.kind);
     const count = entry?.count ?? null;
     return {
@@ -50,6 +56,8 @@ function contextChips(manifest: ProjectChatManifestEntry[] | undefined): ChipDef
       bytes: entry?.bytes ?? 0,
       count,
       reason: entry?.reason ?? null,
+      description: meta.description,
+      preview: entry?.preview ?? [],
     };
   });
 }
@@ -69,8 +77,9 @@ function liveProcess(progress: ProjectChatProgress | null) {
 }
 
 interface SourceSearchChatProps {
-  projectId: string;
+  projectId: string | null;
   nodes: ProgramNodeRead[];
+  variant?: "exam" | "textbook" | "free" | "library";
   /** Пришли из подбора к теме: в поле — просьба о ней с номером темы. */
   initialTopicId?: string | null;
   /** Растёт с каждым «Найти в интернете»: поле ввода получает фокус, как только появится. */
@@ -82,7 +91,7 @@ interface SourceSearchChatProps {
  * подсказкам «Где искать», SearXNG ищет, лучшие страницы открываются ради объёма,
  * а ответ — карточки источников. Материалом найденное само не становится.
  */
-export function SourceSearchChat({ projectId, nodes, initialTopicId = null, focusRequest = 0 }: SourceSearchChatProps) {
+export function SourceSearchChat({ projectId, nodes, variant = "free", initialTopicId = null, focusRequest = 0 }: SourceSearchChatProps) {
   const chat = useProjectChat({ projectId, channel: "source-search-chat", streaming: true });
   const availability = useAiRoleAvailability("source_web_search", chat.session?.model_override);
   const composer = useRef<ChatComposerHandle>(null);
@@ -130,6 +139,7 @@ export function SourceSearchChat({ projectId, nodes, initialTopicId = null, focu
   if (chat.sessions === null) return <LoadingState label="Загружаем чат" />;
 
   const flags = chat.session?.context_flags ?? {};
+  const quickActions = variant === "library" ? [] : QUICK_ACTIONS;
   const ready = availability.state === "ready";
   const send = (text: string) => void chat.sendMessage(text);
   const insertDraft = (text: string) => {
@@ -162,11 +172,9 @@ export function SourceSearchChat({ projectId, nodes, initialTopicId = null, focu
             <div className="chat-empty-invite">
               <h2>Найдём материалы в интернете</h2>
               <p>
-                Напишите, что нужно: учебники, статьи, видео или задачи — по всему предмету
-                или по теме, например «видеолекции по теме 3.3». ИИ составит запросы по
-                программе и подсказкам «Где искать», поисковик SearXNG найдёт страницы,
-                а лучшие из них откроются, чтобы показать объём и суть. В проект найденное
-                само не добавляется.
+                {variant === "library"
+                  ? "Опишите, что хотите найти. Поиск учитывает только вашу просьбу и историю этого чата. Найденное само не добавляется в Библиотеку."
+                  : "Напишите, что нужно: учебники, статьи, видео или задачи — по всему предмету или конкретной теме. Поиск учитывает программу и выбранный ниже контекст. Найденное само не добавляется в проект."}
               </p>
               {availability.state === "disabled" && (
                 <OfflineNotice reason="disabled" alternative="Материалы можно добавить файлом или ссылкой." />
@@ -174,24 +182,20 @@ export function SourceSearchChat({ projectId, nodes, initialTopicId = null, focu
               {availability.state === "unavailable" && (
                 <p className="program-chat-unavailable" role="status">{availability.reason}</p>
               )}
-              {ready && (
+              {ready && quickActions.length > 0 && (
                 <div className="program-chat-quick-starts" aria-label="Быстрый старт">
-                  {QUICK_ACTIONS.map((action) => (
+                  {quickActions.map((action) => (
                     <Button key={action.label} variant="secondary" onClick={() => insertDraft(action.text)}>
                       {action.label}
                     </Button>
                   ))}
                 </div>
               )}
-              <p className="chat-empty-context-note">
-                В запрос модели уходят цель, программа с подсказками «Где искать» и список
-                материалов проекта — состав можно поменять ниже. Каждый ход — два вызова модели
-                и 20–60 секунд.
-              </p>
+              <p className="chat-empty-context-note">Каждый поиск — два вызова модели и обычно 20–60 секунд.</p>
             </div>
           ) : (
             <ChatTimeline
-              projectId={projectId}
+              projectId={projectId ?? ""}
               messages={chat.messages}
               streamingMessageId={null}
               preparing={chat.sending}
@@ -203,9 +207,9 @@ export function SourceSearchChat({ projectId, nodes, initialTopicId = null, focu
             />
           )}
 
-          {chat.messages.length > 0 && ready && (
+          {chat.messages.length > 0 && ready && quickActions.length > 0 && (
             <div className="source-search-quick" aria-label="Готовые просьбы">
-              {QUICK_ACTIONS.map((action) => (
+              {quickActions.map((action) => (
                 <button key={action.label} type="button" className="source-search-chip" onClick={() => insertDraft(action.text)}>
                   {action.label}
                 </button>
@@ -213,16 +217,19 @@ export function SourceSearchChat({ projectId, nodes, initialTopicId = null, focu
             </div>
           )}
 
-          <ContextChips
+          {variant !== "library" ? <ContextChips
             label="Контекст и поиск"
-            chips={contextChips(chat.contextPreview?.manifest)}
+            chips={contextChips(chat.contextPreview?.manifest, variant)}
             contextFlags={flags}
             onToggleFlag={chat.updateContextFlag}
             controls={
               <div className="source-search-settings">
                 <Switch
-                  label="Только темы без материала"
-                  hint="Темы с привязанным материалом или страницами учебника не ищутся отдельно"
+                  label={variant === "exam" ? "Сначала вопросы с пробелами" : variant === "textbook"
+                    ? "Сначала темы без источника и с непройденным уроком" : "Только темы без материала"}
+                  hint={variant === "exam" ? "В общем поиске приоритет у вопросов без источника или без статуса «освоено». Прямую просьбу это не ограничивает."
+                    : variant === "textbook" ? "Непройденный урок — сигнал для поиска, а не оценка знания. Прямую просьбу это не ограничивает."
+                      : "Темы с привязанным материалом или страницами учебника не ищутся отдельно"}
                   checked={flags.only_missing ?? true}
                   onCheckedChange={(value) => chat.updateContextFlag("only_missing", value)}
                 />
@@ -234,7 +241,7 @@ export function SourceSearchChat({ projectId, nodes, initialTopicId = null, focu
                 />
               </div>
             }
-          />
+          /> : <p className="chat-empty-context-note">Контекст: только ваш запрос и история этого чата.</p>}
 
           <ChatComposer
             ref={composer}

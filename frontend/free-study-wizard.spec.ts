@@ -7,6 +7,7 @@ const MATERIAL = "22222222-2222-4222-8222-222222222222";
 const NOW = "2026-09-20T10:00:00Z";
 
 interface StubOptions {
+  projectTemplate?: "free" | "textbook" | "exam";
   library?: Array<Record<string, unknown>>;
   initialMaterials?: Array<Record<string, unknown>>;
   outline?: Array<{ level: number; title: string; page: number }>;
@@ -239,8 +240,11 @@ async function installStub(page: Page, options: StubOptions = {}) {
   let searchCreated = false;
   let searchMessages: Array<Record<string, unknown>> = [];
   let searchFlags: Record<string, boolean> = {
-    profile: true, program: true, topic_queries: true, attached_materials: true, only_missing: true, english_sources: false,
+    profile: true, program: true, topic_queries: true, attached_materials: true,
+    time_budget: true, only_missing: true, english_sources: false,
   };
+  let librarySearchCreated = false;
+  let librarySearchMessages: Array<Record<string, unknown>> = [];
   let searchScope: string | null = null;
   let searchDraft = "";
   const searchSent: string[] = [];
@@ -248,8 +252,8 @@ async function installStub(page: Page, options: StubOptions = {}) {
   let chatCreated = false;
   let project = {
     id: PROJECT,
-    template_key: "free",
-    workspace_variant: "textbook",
+    template_key: options.projectTemplate ?? "free",
+    workspace_variant: options.projectTemplate === "exam" ? "exam" : "textbook",
     status: "draft",
     name: null,
     description: null,
@@ -299,6 +303,10 @@ async function installStub(page: Page, options: StubOptions = {}) {
     });
 
     if (path === "/api/settings/ai") return json(aiSettings(options.aiEnabled ?? false));
+    if (path === "/api/settings/retrieval") return json({
+      profiles: [], default_profile_id: null, active_index: null, preset: "balanced",
+      expert_parameters: {},
+    });
     if (path === `/api/projects/${PROJECT}/material-suggestions` && method === "POST") {
       const body = request.postDataJSON();
       const candidate = library[0];
@@ -427,6 +435,36 @@ async function installStub(page: Page, options: StubOptions = {}) {
     if (path === `/api/projects/${PROJECT}` && method === "GET") return json(activeDetail());
     if (path === `/api/projects/${PROJECT}/materials` && method === "GET") return json(materials);
     if (path === `/api/projects/${PROJECT}/conspects`) return json({ entries: [] });
+    const librarySearchBase = "/api/library/source-search-chat/sessions";
+    const librarySearchDetail = () => ({
+      id: SEARCH_SESSION, project_id: null, section_scope_node_id: null, title: "Поиск",
+      model_override: null, model_parameters: {}, context_flags: searchFlags,
+      draft_text: searchDraft, created_at: NOW, updated_at: NOW, messages: librarySearchMessages,
+    });
+    if (path === librarySearchBase && method === "GET") return json(librarySearchCreated
+      ? [{ id: SEARCH_SESSION, project_id: null, title: "Поиск", updated_at: NOW, message_count: librarySearchMessages.length }]
+      : []);
+    if (path === librarySearchBase && method === "POST") {
+      librarySearchCreated = true;
+      return json(librarySearchDetail(), 201);
+    }
+    if (path === `${librarySearchBase}/${SEARCH_SESSION}` && method === "GET") return json(librarySearchDetail());
+    if (path === `${librarySearchBase}/${SEARCH_SESSION}/context` && method === "GET") {
+      return json({ session_id: SEARCH_SESSION, fingerprint: "library", total_bytes: 0, manifest: [] });
+    }
+    if (path === `${librarySearchBase}/${SEARCH_SESSION}/draft`) {
+      searchDraft = request.postDataJSON().text;
+      return json(librarySearchDetail());
+    }
+    if (path === `${librarySearchBase}/${SEARCH_SESSION}/messages/stream` && method === "POST") {
+      const text = request.postDataJSON().text;
+      librarySearchMessages = [searchMessage(1, "user", text), searchMessage(2, "assistant", "Найдено", {
+        tool_key: "search_external_sources", output_kind: "source_search_results", state: "succeeded",
+        query: text, input: { searches: [] }, result: { ...SEARCH_RESULT, summary: "Найдено" },
+      })];
+      return route.fulfill({ status: 200, contentType: "text/event-stream",
+        body: `event: completed\ndata: ${JSON.stringify({ message: librarySearchMessages[1] })}\n\n` });
+    }
     const searchBase = `/api/projects/${PROJECT}/source-search-chat/sessions`;
     const searchDetail = () => ({
       id: SEARCH_SESSION, project_id: PROJECT, section_scope_node_id: searchScope, title: "Поиск",
@@ -451,12 +489,15 @@ async function installStub(page: Page, options: StubOptions = {}) {
       const entry = (kind: string, flag: string, count: number | null) => ({
         kind, id: PROJECT, included: searchFlags[flag], truncated: false, bytes: 200, count,
         reason: searchFlags[flag] ? null : "excluded_by_user", flag_key: flag, label: null,
+        preview: kind === "attached_materials" ? ["Таненбаум — https://example.test/book"]
+          : kind === "topic_queries" ? ["1.1 Планирование: планирование процессов ОС лекция"] : [],
       });
       return json({ session_id: SEARCH_SESSION, fingerprint: "f", total_bytes: 800, manifest: [
         entry("profile", "profile", null),
         entry("program_tree", "program", 1),
         entry("topic_queries", "topic_queries", 1),
         entry("attached_materials", "attached_materials", 0),
+        ...(options.projectTemplate === "exam" ? [entry("time_budget", "time_budget", null)] : []),
       ] });
     }
     if (path === `${searchBase}/${SEARCH_SESSION}/context` && method === "PUT") {
@@ -848,4 +889,33 @@ test("«Найти в интернете» у темы открывает чат
   const block = page.getByRole("region", { name: "Поиск в интернете" });
   await expect(block.getByRole("textbox")).toHaveValue("Найди материалы по теме 1 «Рынок и цены»");
   expect(state.searchSent).toEqual([]);
+});
+
+test("экзамен: поиск открыт и время можно исключить из контекста", async ({ page }) => {
+  const state = await installStub(page, {
+    aiEnabled: true, projectTemplate: "exam",
+    initialNodes: [programNode(TOPIC, "Маршрутизация", "topic", null)],
+  });
+  await page.goto(`${BASE}/projects/${PROJECT}/materials`);
+  const block = page.getByRole("region", { name: "Поиск в интернете" });
+  await expect(block).toBeVisible();
+  await page.getByRole("button", { name: "Найти в интернете" }).first().click();
+  await block.getByText("Контекст и поиск", { exact: false }).click();
+  await block.getByRole("listitem").filter({ hasText: "Время до экзамена" }).click();
+  await expect(page.getByText("Дата экзамена и расчёт оставшихся учебных минут", { exact: false })).toBeVisible();
+  await page.getByRole("switch", { name: "Включено в запрос" }).last().click();
+  await expect.poll(() => state.searchContextPatches).toContainEqual({ context_flags: { time_budget: false } });
+});
+
+test("Библиотека: отдельная страница и чат без проектных чипов", async ({ page }) => {
+  await installStub(page, { aiEnabled: true });
+  await page.goto(`${BASE}/library`);
+  await page.getByRole("button", { name: "Поиск", exact: true }).click();
+  await expect(page).toHaveURL(/\/library\/search$/);
+  await expect(page.getByText("Контекст: только ваш запрос и история этого чата.")).toBeVisible();
+  await expect(page.getByText("Материалы проекта")).toHaveCount(0);
+  await page.getByRole("textbox").fill("Найди учебник по операционным системам");
+  await page.getByRole("textbox").press("Enter");
+  await expect(page.getByText("Найдено", { exact: true })).toBeVisible();
+  await expect(page.getByText("Чтобы сохранить источник, скопируйте ссылку", { exact: false })).toBeVisible();
 });
