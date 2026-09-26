@@ -474,6 +474,9 @@ def visual_page_locators(
         )
         .distinct()
         .order_by(Material.created_at, MaterialPage.page_number)
+        # Оглавление учебника (~120 КБ JSON) иначе читалось, сравнивалось в
+        # DISTINCT и разбиралось в каждой строке с картинкой.
+        .options(defer(Material.outline), defer(Material.diagnostics))
     ).all()
     return [(material_display_name(material), page_number) for material, page_number in rows]
 

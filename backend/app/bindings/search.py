@@ -27,7 +27,7 @@ from uuid import UUID
 
 from sqlalchemy import select, text
 from sqlalchemy.engine import Connection
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.materials.lexicon import (
     index_text,
@@ -342,13 +342,16 @@ def _search_fragments(
         ranked_order.append(fragment_id)
 
     # От страницы нужен только номер: её text, markdown и elements в разы
-    # тяжелее фрагмента и на bind mount удваивали время выдачи.
+    # тяжелее фрагмента и на bind mount удваивали время выдачи. Оглавление
+    # материала (у учебника ~120 КБ JSON) иначе читалось и разбиралось заново
+    # в каждой из сотен строк выдачи.
     fragment_rows = session.execute(
         select(MaterialFragment, MaterialPage.page_number, MaterialBlock, Material)
         .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
         .join(MaterialBlock, MaterialBlock.id == MaterialFragment.block_id)
         .join(Material, Material.id == MaterialFragment.material_id)
         .where(MaterialFragment.id.in_(ranked_order))
+        .options(defer(Material.outline), defer(Material.diagnostics))
     ).all()
     by_fragment_id = {row[0].id: row for row in fragment_rows}
 
