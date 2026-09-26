@@ -20,6 +20,7 @@ import {
   updateRetrievalSettings,
   type BenchmarkRunRead,
   type LocalModelRead,
+  type ModelSupport,
   type RetrievalIndexRead,
   type RetrievalPreset,
   type RetrievalSettingsRead,
@@ -41,6 +42,31 @@ const INDEX_STATUS: Record<RetrievalIndexRead["state"], { label: string; tone: "
   ready: { label: "Готов к активации", tone: "neutral" },
   active: { label: "Активен", tone: "success" },
   failed: { label: "Ошибка", tone: "danger" },
+};
+
+/** Честная подпись к модели: с какими моделями поиск по смыслу проверен, а с какими — нет. */
+const MODEL_SUPPORT: Record<ModelSupport, { label: string; hint: string; tone: "success" | "info" | "warning" } | null> = {
+  verified: {
+    label: "Проверена в Tentex",
+    hint: "Прогнана на контрольных запросах по Библиотеке с текущей нарезкой",
+    tone: "success",
+  },
+  recipe: {
+    label: "Шаблоны известны",
+    hint: "Инструкция запроса и pooling подставляются сами, но на контрольных запросах модель не прогонялась",
+    tone: "info",
+  },
+  short_window: {
+    label: "Видит начало куска",
+    hint: "Окно модели — 128 токенов, кусок — до 500: конец куска в поиск по смыслу не попадает",
+    tone: "warning",
+  },
+  unknown: {
+    label: "Шаблоны неизвестны",
+    hint: "Tentex не знает, в каком виде модель ждёт запрос и документ: поиск по смыслу может быть слабым",
+    tone: "warning",
+  },
+  not_embedding: null,
 };
 
 function errorText(caught: unknown): string {
@@ -406,9 +432,13 @@ export function SearchSettingsSection({
           <div className="retrieval-model-list">
             {models.map((model) => {
               const profile = settings.profiles.find((item) => item.model_id === model.model_id);
+              const support = MODEL_SUPPORT[model.support];
               return <article key={model.model_id}>
                 <div>
-                  <strong>{model.label}</strong>
+                  <span className="retrieval-model-title">
+                    <strong>{model.label}</strong>
+                    {support && <span title={support.hint}><StatusBadge tone={support.tone}>{support.label}</StatusBadge></span>}
+                  </span>
                   <small>{model.model_id}</small>
                   <span>{model.recommended_for}</span>
                 </div>
@@ -513,7 +543,14 @@ export function SearchSettingsSection({
               ariaLabel="Embedding-профиль"
               value={settings.default_profile_id}
               emptyOption="Не выбран"
-              options={settings.profiles.map((profile) => ({ value: profile.id, label: profile.label, description: profile.dimension ? `${profile.dimension}d` : "не проверен" }))}
+              options={settings.profiles.map((profile) => ({
+                value: profile.id,
+                label: profile.label,
+                description: [
+                  profile.dimension ? `${profile.dimension}d` : "не проверен",
+                  MODEL_SUPPORT[profile.support]?.label.toLowerCase(),
+                ].filter(Boolean).join(" · "),
+              }))}
               onValueChange={(value) => void action("default", async () => {
                 setSettings(await updateRetrievalSettings({
                   default_profile_id: value,

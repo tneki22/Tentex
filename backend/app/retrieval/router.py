@@ -35,6 +35,7 @@ from app.retrieval.schemas import (
     RetrievalSettingsWrite,
 )
 from app.retrieval.search import HybridRetriever
+from app.retrieval.snapshot import warm_active_snapshot
 
 SessionDependency = Annotated[Session, Depends(get_session)]
 SearchSessionDependency = Annotated[Session, Depends(get_search_session)]
@@ -131,7 +132,9 @@ def resume_index_job(job_id: UUID, session: SessionDependency) -> BackgroundJobR
 
 @router.post("/retrieval/indexes/{index_id}/activate", response_model=RetrievalIndexRead)
 def activate_index(index_id: UUID, session: SessionDependency) -> RetrievalIndex:
-    return indexing.activate_index(session, index_id)
+    index = indexing.activate_index(session, index_id)
+    warm_active_snapshot()
+    return index
 
 
 @router.post(

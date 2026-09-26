@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 DEFAULT_TEMPLATE = "{text}"
 
@@ -43,3 +44,36 @@ def model_recipe(model_id: str) -> EmbeddingRecipe | None:
     if "bge-m3" in name:
         return EmbeddingRecipe("cls", DEFAULT_TEMPLATE, DEFAULT_TEMPLATE)
     return None
+
+
+class ModelSupport(StrEnum):
+    """Что Tentex знает о модели: будет ли с ней нормально работать поиск по смыслу."""
+
+    #: Прогнана на контрольных запросах по настоящей Библиотеке.
+    VERIFIED = "verified"
+    #: Шаблоны и pooling известны из карточки модели, прогона на корпусе не было.
+    RECIPE = "recipe"
+    #: Окно модели меньше куска: хвост куска в вектор не попадает.
+    SHORT_WINDOW = "short_window"
+    #: Reranker и прочие модели, которые не строят векторы.
+    NOT_EMBEDDING = "not_embedding"
+    UNKNOWN = "unknown"
+
+
+#: Проверено 26.09.2026: 10 контрольных запросов, старая и новая нарезка.
+_VERIFIED = ("multilingual-e5-base",)
+#: sentence-transformers paraphrase-* и MiniLM видят 128 токенов, кусок — до ≈ 500.
+_SHORT_WINDOW = ("minilm", "paraphrase-")
+
+
+def model_support(model_id: str) -> ModelSupport:
+    name = model_id.lower()
+    if "rerank" in name:
+        return ModelSupport.NOT_EMBEDDING
+    if any(marker in name for marker in _VERIFIED):
+        return ModelSupport.VERIFIED
+    if any(marker in name for marker in _SHORT_WINDOW):
+        return ModelSupport.SHORT_WINDOW
+    if model_recipe(model_id) is not None:
+        return ModelSupport.RECIPE
+    return ModelSupport.UNKNOWN

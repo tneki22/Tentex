@@ -1,9 +1,9 @@
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from conftest import add_page_with_fragments, make_material
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.ai.provider import FakeTransport, ProviderEmbeddings, ProviderError, ProviderUsage
@@ -18,6 +18,7 @@ from app.models import (
     EmbeddingBackendKind,
     EmbeddingProfile,
     Material,
+    MaterialBlock,
     MaterialSourceKind,
     MaterialState,
     PageQuality,
@@ -596,13 +597,166 @@ def _paragraph(seed: str, words: int) -> str:
     return " ".join(f"{seed}{number}" for number in range(words)) + "."
 
 
-def _section(index: int, title: str, texts: list[str], *, heading_only: bool = False):
+def _section(
+    index: int,
+    title: str,
+    texts: list[str],
+    *,
+    heading_only: bool = False,
+    level: int | None = None,
+):
     from app.retrieval.chunking import Section
 
     atoms = [ChunkAtom(title, heading=True, section=index)] if heading_only else [
         ChunkAtom(text, uuid4(), section=index) for text in texts
     ]
-    return Section(block_id=uuid4(), title=title, atoms=atoms, heading_only=heading_only)
+    return Section(
+        block_id=uuid4(), title=title, atoms=atoms, heading_only=heading_only, level=level
+    )
+
+
+def test_vector_search_reads_snapshot_and_sees_replaced_chunks(session: Session) -> None:
+    """Векторы читаются из снимка в памяти, но замена кусков видна сразу."""
+    from app.retrieval.vector import SqliteVecIndex, vector_blob
+
+    material = make_material(session, "96")
+    index = _index(session, _profile(session))
+
+    def add_chunk(order: int, vector: list[float], revision: int = 1) -> UUID:
+        chunk_id = uuid4()
+        session.add(RetrievalChunk(
+            id=chunk_id, index_id=index.id, material_id=material.id, revision=revision,
+            kind=RetrievalChunkKind.TEXT, sort_order=order, title="Раздел",
+            text=f"кусок {order}", token_count=2, fragment_ids=[], locator={},
+            content_hash=str(order) * 64, embedding=vector_blob(vector),
+        ))
+        session.commit()
+        return chunk_id
+
+    near, far = add_chunk(0, [1.0, 0.0]), add_chunk(1, [0.0, 1.0])
+    search = SqliteVecIndex().search
+
+    def nearest() -> list[UUID]:
+        hits = search(
+            session, index_id=index.id, material_ids=[material.id],
+            query_vector=[1.0, 0.1], limit=5,
+        )
+        return [hit.chunk_id for hit in hits]
+
+    assert nearest() == [near, far]
+
+    session.execute(delete(RetrievalChunk).where(RetrievalChunk.id == near))
+    replacement = add_chunk(2, [0.9, 0.1])
+    add_chunk(3, [1.0, 0.0], revision=2)
+
+    # Кусок старой ревизии материала непригоден, даже если он ближе всех.
+    assert nearest() == [replacement, far]
+
+
+def test_section_parent_follows_numbering_and_chapter_marks() -> None:
+    """Раньше родителем была последняя заголовочная секция где угодно выше:
+    «Простейшая сеть из двух компьютеров» стояла над всей главой 3."""
+    from app.retrieval.chunking import _Outline
+
+    text = [_paragraph("текст", 30)]
+    sections = [
+        _section(0, "ГЛАВА 2 Общие принципы построения сетей", text),
+        _section(1, "Простейшая сеть из двух компьютеров", [], heading_only=True, level=2),
+        _section(2, "Совместное использование ресурсов", text, level=3),
+        _section(3, "Проблемы связи нескольких компьютеров", text, level=1),
+        _section(4, "ГЛАВА 3 Коммутация каналов и пакетов", text, level=1),
+        _section(5, "Коммутация пакетов", text, level=2),
+        _section(6, "2.2. Функции СУБД", [], heading_only=True),
+        _section(7, "2.2.5. Управление транзакциями", text),
+        _section(8, "2.2.6. Управление блокировками", text),
+        _section(9, "Приложение Б. Основные термины", text),
+    ]
+    outline = _Outline(sections)
+
+    assert outline.parent(2) == 1
+    assert outline.parent(3) == 0
+    assert outline.parent(4) is None
+    assert outline.parent(5) == 4
+    assert outline.parent(8) == 6
+    assert outline.parent(9) is None
+
+
+def test_material_chunks_skip_table_of_contents_and_bibliography(session: Session) -> None:
+    material = make_material(session, "95")
+    blocks = [
+        ("Краткое содержание", ["Глава 1 . Эволюция сетей . . . . . . . . . . 25"]),
+        (
+            "ГЛАВА 1 Эволюция сетей",
+            [
+                _paragraph("эволюция", 60),
+                "Глава 2 . Принципы построения . . . . . . . . . . . . 41",
+            ],
+        ),
+        ("Рекомендуемая и использованная литература", ["1. Таненбаум Э. Компьютерные сети."]),
+    ]
+    for order, (title, fragments) in enumerate(blocks):
+        page = add_page_with_fragments(
+            session, material, page_number=order + 1, revision=1,
+            block_title=title, fragments=fragments,
+        )
+        block = session.get(MaterialBlock, page.block_id)
+        assert block is not None
+        block.sort_order = 10 + order
+        session.flush()
+
+    chunks = material_chunks(session, material, target_tokens=100, max_tokens=160, overlap_tokens=0)
+    text = "\n".join(chunk.text for chunk in chunks)
+
+    assert "эволюция0" in text
+    assert ". . . ." not in text
+    assert "Таненбаум" not in text
+
+
+def test_typst_preamble_and_graph_code_stay_out_of_chunks(session: Session) -> None:
+    material = Material(
+        id=uuid4(),
+        sha256="6" * 64,
+        original_name="main.typ",
+        storage_path="typst/main.zip",
+        media_type="application/zip",
+        source_kind=MaterialSourceKind.TYPST,
+        size_bytes=100,
+        status=MaterialState.READY,
+        active_parse_revision=1,
+    )
+    session.add(material)
+    sources = [
+        '#set page(margin: 1cm)\n#let mathbox(kind, body) = {\n  let palette = (\n'
+        '    fill: rgb("#F7F9FC"),\n  )\n}',
+        "== Раскраска графа // черновик\n\n#definition[\n  *Раскраской* графа называют "
+        'приписывание цветов его вершинам.\n]\n#let graph = {\n  "strict graph {\n'
+        '  x1 -- x2;\n  x2 -- x3;\n  }"\n}\nЧисло цветов принципиально минимизируют.',
+    ]
+    for order, source_text in enumerate(sources):
+        session.add(
+            TypstSourceChunk(
+                material_id=material.id,
+                revision=1,
+                sort_order=order,
+                path="main.typ",
+                line_from=1 + order * 10,
+                line_to=9 + order * 10,
+                source_text=source_text,
+                source_hash=str(order) * 64,
+            )
+        )
+    session.commit()
+
+    chunks = material_chunks(
+        session, material, target_tokens=384, max_tokens=480, overlap_tokens=64
+    )
+    text = "\n".join(chunk.text for chunk in chunks)
+
+    assert "mathbox" not in text
+    assert "x1 -- x2" not in text
+    assert "*Раскраской*" in text and "минимизируют" in text
+    assert chunks[0].title == "Раскраска графа"
+    assert chunks[0].locator["line_from"] == 11
 
 
 def test_heading_only_section_joins_its_text_instead_of_becoming_a_chunk() -> None:

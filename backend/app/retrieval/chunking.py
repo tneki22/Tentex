@@ -22,6 +22,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import PurePath
+from typing import NamedTuple
 from uuid import UUID
 
 from sqlalchemy import select
@@ -52,8 +53,40 @@ _SENTENCE_RE = re.compile(r"(?<=[.!?…])\s+|\n{2,}")
 _VISUAL_ONLY = re.compile(r"^\s*\[Изображение(?:[^]]*)?]\s*$", re.IGNORECASE)
 _PAGE_NUMBER = re.compile(r"^\s*[-–—(]?\s*(?:\d{1,4}|[ivxlc]{1,6})\s*[-–—)]?\s*$", re.IGNORECASE)
 _RUNNING_KEY = re.compile(r"[\d\W_]+", re.UNICODE)
-_TYPST_HEADING = re.compile(r"^\s*=+\s*(.*?)\s*$")
+_TYPST_HEADING = re.compile(r"^\s*(=+)\s*(.*?)\s*$")
 _TYPST_NOISE = re.compile(r"^\s*(?:=+\s*.*|//.*|#\w+\(\)|#pagebreak\(.*\))?\s*$")
+
+#: Служебные разделы, которые разбор не пометил: сегментация знает только точные
+#: «Оглавление» и «Литература», а в книгах бывают «Краткое содержание»,
+#: «Рекомендуемая и использованная литература» и заголовки выходных данных.
+_SERVICE_TITLE = re.compile(
+    r"^(?:(?:(?:краткое\s+)?(?:оглавление|содержание)|(?:table\s+of\s+)?contents"
+    r"|(?:рекомендуемая\s+)?(?:и\s+)?(?:использованная\s+)?литература"
+    r"|(?:список|перечень)\s+(?:рекомендуемой\s+|использованной\s+)?литературы"
+    r"|(?:список|перечень)\s+(?:использованных\s+)?источников|библиографический\s+список"
+    r"|библиография|references|bibliography)[\s.:]*$|(?:ббк|удк|isbn)[\s:])",
+    re.IGNORECASE,
+)
+#: Строка оглавления: заполнитель из точек до номера страницы.
+_TOC_LEADER = re.compile(r"[.…·](?:\s?[.…·]){5,}")
+#: Номер раздела «2.2.6.» и маркеры глав: по ним ищется родительский раздел.
+_NUMBERED = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3})*)\.?(?=\s|$)")
+_PART_MARK = re.compile(
+    r"^\s*(?:часть|part|приложение|appendix)\s+[\dIVXLCА-ЯA-Z]{1,6}\b", re.IGNORECASE
+)
+_CHAPTER_MARK = re.compile(
+    r"^\s*(?:(?:глава|лекция|тема|раздел|модуль|вопрос|билет|chapter|lecture|section)"
+    r"\s*№?\s*[\dIVXLC]{1,6}\b|§\s*\d)",
+    re.IGNORECASE,
+)
+#: Typst-код преамбулы: правила оформления и функции, а не текст материала.
+_TYPST_CODE = re.compile(
+    r"^\s*(?:#(?:let|set|show|import|include)\b|//|[\w-]+\s*:\s|[)\]}]+[,;]?\s*$"
+    r"|(?:let|if|else|return|for|while)\b|\}|\"|\w+\s*\[)"
+)
+_TYPST_GRAPH = re.compile(r"\"\s*(?:strict\s+)?(?:di)?graph\s*\{")
+_TYPST_COMMENT = re.compile(r"(?:^|\s+)//.*$")
+_LETTER = re.compile(r"[^\W\d_]", re.UNICODE)
 
 #: Строка повторяется на стольких страницах — это колонтитул, а не содержание.
 _RUNNING_MIN_PAGES = 4
@@ -86,6 +119,9 @@ class Section:
     atoms: list[ChunkAtom]
     heading_only: bool
     group: str | None = None
+    #: Уровень заголовка из разбора; у PDF ненадёжен и сравнивается только внутри
+    #: одного материала.
+    level: int | None = None
 
 
 @dataclass(frozen=True)
@@ -280,26 +316,75 @@ def _short(title: str | None) -> str | None:
     return title if len(title) <= _TITLE_PART_CHARS else f"{title[:_TITLE_PART_CHARS - 1]}…"
 
 
-def _chunk_title(atoms: list[ChunkAtom], sections: list[Section]) -> tuple[int, str | None]:
-    """Главная секция куска и путь «родительский раздел › раздел».
+def _rank(title: str | None) -> tuple[int, tuple[int, ...]] | None:
+    """Ранг заголовка по его виду: часть < глава < «1.» < «1.1.»; None — вид молчит."""
+    if not title:
+        return None
+    if _PART_MARK.match(title):
+        return 0, ()
+    if _CHAPTER_MARK.match(title):
+        return 1, ()
+    if match := _NUMBERED.match(title):
+        number = tuple(int(part) for part in match.group(1).split("."))
+        return 1 + len(number), number
+    return None
 
-    Уровни заголовков у разбора PDF ненадёжны, поэтому родителем считается
-    последняя заголовочная секция перед главной: для «Иерархии скоростей» это
-    «Сети OTN», и одинаковые подзаголовки разных глав перестают сливаться.
+
+class _Outline:
+    """Родительские разделы секций одного материала.
+
+    Уровни заголовков у разбора PDF ненадёжны: в одной книге глава и её
+    подраздел оба первого уровня, в другой все заголовки одного уровня. Поэтому
+    сначала смотрим на вид заголовка — «Часть», «Глава/Лекция/Вопрос/§»,
+    нумерацию «2.2.6» — и только у ненумерованных сравниваем уровни. Раньше
+    родителем была последняя заголовочная секция, и «Простейшая сеть из двух
+    компьютеров» из главы 2 стояла над всей книгой до следующей такой секции.
     """
+
+    def __init__(self, sections: list[Section]) -> None:
+        self.sections = sections
+        self._ranks = [_rank(section.title) for section in sections]
+        self._parents: dict[int, int | None] = {}
+
+    def parent(self, index: int) -> int | None:
+        if index not in self._parents:
+            self._parents[index] = self._find_parent(index)
+        return self._parents[index]
+
+    def _find_parent(self, index: int) -> int | None:
+        target, rank = self.sections[index], self._ranks[index]
+        for position in range(index - 1, -1, -1):
+            candidate, candidate_rank = self.sections[position], self._ranks[position]
+            if candidate.group != target.group:
+                return None
+            if rank is not None:
+                # «2.2.6» входит в «2.2» или «2», но не в «1.» и не в соседний «2.2.5».
+                if candidate_rank is None or candidate_rank[0] >= rank[0]:
+                    continue
+                prefix = candidate_rank[1]
+                if prefix and rank[1] and rank[1][: len(prefix)] != prefix:
+                    continue
+                return position
+            if candidate_rank is not None:
+                return position
+            if candidate.heading_only and (
+                candidate.level is None
+                or target.level is None
+                or candidate.level < target.level
+            ):
+                return position
+        return None
+
+
+def _chunk_title(atoms: list[ChunkAtom], outline: _Outline) -> tuple[int, str | None]:
+    """Главная секция куска и путь «родительский раздел › раздел»."""
     weights: dict[int, int] = defaultdict(int)
     for atom in atoms:
         weights[atom.section] += 0 if atom.heading else count_tokens(atom.text)
     main = max(weights, key=lambda index: (weights[index], -index))
-    title = _short(sections[main].title)
-    parent = next(
-        (
-            _short(sections[index].title)
-            for index in range(main - 1, -1, -1)
-            if sections[index].heading_only and sections[index].group == sections[main].group
-        ),
-        None,
-    )
+    title = _short(outline.sections[main].title)
+    parent_index = outline.parent(main)
+    parent = _short(outline.sections[parent_index].title) if parent_index is not None else None
     if parent and title and parent != title:
         return main, f"{parent} › {title}"
     return main, title or parent
@@ -315,10 +400,11 @@ def _draft(
     material: Material,
     kind: RetrievalChunkKind,
     atoms: list[ChunkAtom],
-    sections: list[Section],
+    outline: _Outline,
 ) -> ChunkDraft:
+    sections = outline.sections
     text = _join_atoms(atoms)
-    main, title = _chunk_title(atoms, sections)
+    main, title = _chunk_title(atoms, outline)
     pages = [atom.page for atom in atoms if atom.page is not None]
     fragment_ids = list(dict.fromkeys(atom.fragment_id for atom in atoms if atom.fragment_id))
     block_ids = list(
@@ -353,70 +439,128 @@ def _draft(
     )
 
 
-def _running_keys(rows: list[tuple[MaterialBlock, MaterialFragment, MaterialPage]]) -> set[str]:
+class _FragmentRow(NamedTuple):
+    block_id: UUID
+    block_title: str | None
+    block_order: int
+    fragment_id: UUID
+    fragment_order: int
+    text: str
+    element_kind: str
+    structure_level: int | None
+    quality: PageQuality
+    page_number: int
+
+
+def _running_keys(rows: list[_FragmentRow]) -> set[str]:
     """Колонтитулы: короткая строка без цифр, повторённая на многих страницах."""
     pages_by_key: dict[str, set[int]] = defaultdict(set)
-    for _block, fragment, page in rows:
-        if fragment.element_kind == "heading" or len(fragment.text) > _RUNNING_MAX_CHARS:
+    for row in rows:
+        if row.element_kind == "heading" or len(row.text) > _RUNNING_MAX_CHARS:
             continue
-        key = _RUNNING_KEY.sub(" ", fragment.text.lower()).strip()
+        key = _RUNNING_KEY.sub(" ", row.text.lower()).strip()
         if key:
-            pages_by_key[key].add(page.page_number)
+            pages_by_key[key].add(row.page_number)
     return {key for key, pages in pages_by_key.items() if len(pages) >= _RUNNING_MIN_PAGES}
+
+
+def _fragment_rows(session: Session, material: Material) -> list[_FragmentRow]:
+    """Фрагменты содержательных блоков в порядке чтения — только нужные колонки.
+
+    Строка страницы хранит полный текст и markdown страницы. Выборка целых
+    `MaterialPage` на каждый фрагмент перечитывала их через bind-mount: у
+    расшифровки видео с одной «страницей» это 108 с на 1370 фрагментов.
+    """
+    page_numbers = dict(
+        session.execute(
+            select(MaterialPage.id, MaterialPage.page_number).where(
+                MaterialPage.material_id == material.id,
+                MaterialPage.revision == material.active_parse_revision,
+            )
+        ).all()
+    )
+    rows = [
+        _FragmentRow(*row[:-1], page_numbers[row[-1]])
+        for row in session.execute(
+            select(
+                MaterialBlock.id,
+                MaterialBlock.title,
+                MaterialBlock.sort_order,
+                MaterialFragment.id,
+                MaterialFragment.sort_order,
+                MaterialFragment.text,
+                MaterialFragment.element_kind,
+                MaterialFragment.structure_level,
+                MaterialFragment.quality,
+                MaterialFragment.page_id,
+            )
+            .join(MaterialFragment, MaterialFragment.block_id == MaterialBlock.id)
+            .where(
+                MaterialBlock.material_id == material.id,
+                MaterialBlock.revision == material.active_parse_revision,
+                MaterialBlock.block_class == BlockClass.CONTENT,
+            )
+        ).tuples()
+        if row[-1] in page_numbers
+    ]
+    rows.sort(key=lambda row: (row.block_order, row.page_number, row.fragment_order))
+    return rows
 
 
 def material_sections(session: Session, material: Material) -> list[Section]:
     """Содержательные блоки активной ревизии в порядке чтения, без шума страниц."""
-    rows = session.execute(
-        select(MaterialBlock, MaterialFragment, MaterialPage)
-        .join(MaterialFragment, MaterialFragment.block_id == MaterialBlock.id)
-        .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
-        .where(
-            MaterialBlock.material_id == material.id,
-            MaterialBlock.revision == material.active_parse_revision,
-            MaterialBlock.block_class == BlockClass.CONTENT,
-            MaterialPage.revision == material.active_parse_revision,
-        )
-        .order_by(MaterialBlock.sort_order, MaterialPage.page_number, MaterialFragment.sort_order)
-    ).all()
+    rows = _fragment_rows(session, material)
     running = _running_keys(rows)
-    grouped: dict[UUID, tuple[MaterialBlock, list[tuple[MaterialFragment, int]]]] = {}
-    for block, fragment, page in rows:
-        text = fragment.text.strip()
-        if not text or _VISUAL_ONLY.match(text) or _PAGE_NUMBER.match(text):
+    grouped: dict[UUID, list[_FragmentRow]] = {}
+    for row in rows:
+        text = row.text.strip()
+        if not text or _VISUAL_ONLY.match(text) or _PAGE_NUMBER.match(text) or _is_toc_line(text):
             continue
         if (
-            fragment.element_kind != "heading"
+            row.element_kind != "heading"
             and len(text) <= _RUNNING_MAX_CHARS
             and _RUNNING_KEY.sub(" ", text.lower()).strip() in running
         ):
             continue
-        grouped.setdefault(block.id, (block, []))[1].append((fragment, page.page_number))
+        if _SERVICE_TITLE.match(" ".join((row.block_title or "").split())):
+            continue
+        grouped.setdefault(row.block_id, []).append(row)
     sections: list[Section] = []
-    for block, fragments in grouped.values():
+    for block_id, fragments in grouped.items():
         index = len(sections)
-        title_key = " ".join((block.title or "").split()).lower()
+        title = fragments[0].block_title
+        title_key = " ".join((title or "").split()).lower()
         atoms = [
             ChunkAtom(
-                fragment.text,
-                fragment.id,
-                page_number,
-                fragment.quality,
-                heading=fragment.element_kind == "heading"
-                or " ".join(fragment.text.split()).lower() == title_key,
+                row.text,
+                row.fragment_id,
+                row.page_number,
+                row.quality,
+                heading=row.element_kind == "heading"
+                or " ".join(row.text.split()).lower() == title_key,
                 section=index,
             )
-            for fragment, page_number in fragments
+            for row in fragments
         ]
         sections.append(
             Section(
-                block_id=block.id,
-                title=block.title,
+                block_id=block_id,
+                title=title,
                 atoms=atoms,
                 heading_only=all(atom.heading for atom in atoms),
+                level=next(
+                    (row.structure_level for row in fragments if row.element_kind == "heading"),
+                    None,
+                ),
             )
         )
     return sections
+
+
+def _is_toc_line(text: str) -> bool:
+    """Строка оглавления «Глава 2 . . . . 41»: по ней не ищут, она ведёт к тексту."""
+    leaders = _TOC_LEADER.findall(text)
+    return bool(leaders) and (len(leaders) >= 2 or len(text) <= 200)
 
 
 def material_chunks(
@@ -436,8 +580,9 @@ def material_chunks(
     else:
         kind = RetrievalChunkKind.TEXT
         sections = material_sections(session, material)
+    outline = _Outline(sections)
     return [
-        _draft(material, kind, atoms, sections)
+        _draft(material, kind, atoms, outline)
         for atoms in pack_sections(
             sections,
             target_tokens=target_tokens,
@@ -461,28 +606,62 @@ def _typst_sections(session: Session, material: Material) -> list[Section]:
     sections: list[Section] = []
     for source in rows:
         lines = source.source_text.splitlines()
-        heading = next(
-            (match.group(1) for line in lines if (match := _TYPST_HEADING.match(line))), None
-        )
+        headings = [match for line in lines if (match := _TYPST_HEADING.match(line))]
+        prose = _typst_prose(lines)
+        code_only = _letters(prose) < _letters(lines) / 4
+        if code_only and not headings:
+            # Преамбула: `#set`, `#let` и оформление блоков. Как знание она
+            # только мешает — выигрывала поиск по словам из названий функций.
+            continue
         index = len(sections)
+        titles = [_TYPST_COMMENT.sub("", match.group(2)) for match in headings]
         atom = ChunkAtom(
-            source.source_text,
+            "\n".join(match.group(0) for match in headings) if code_only else "\n".join(prose),
             page=source.page_from,
             locator={
                 "typst_path": source.path,
                 "line_from": source.line_from,
                 "line_to": source.line_to,
             },
-            heading=all(_TYPST_NOISE.match(line) for line in lines),
+            heading=code_only or all(_TYPST_NOISE.match(line) for line in prose),
             section=index,
         )
         sections.append(
             Section(
                 block_id=None,
-                title=heading or None,
+                title=next((title for title in titles if title), None),
                 atoms=[atom],
                 heading_only=atom.heading,
                 group=source.path,
+                level=len(headings[0].group(1)) if headings else None,
             )
         )
     return sections
+
+
+def _letters(lines: list[str]) -> int:
+    return sum(len(_LETTER.findall(line)) for line in lines)
+
+
+def _typst_prose(lines: list[str]) -> list[str]:
+    """Строки Typst без кода: определений, оформления и описаний графов.
+
+    Описание графа для diagraph — строка DOT `"strict digraph { … }"` из
+    десятков строк `x3 -> x4;`. В куске оно вытесняло определения и теоремы,
+    рядом с которыми стоит, и делало кусок похожим на любой другой граф.
+    Номера строк источника остаются в локаторе, поэтому переход к исходнику
+    не зависит от вырезанного.
+    """
+    kept: list[str] = []
+    in_graph = False
+    for line in lines:
+        if in_graph:
+            in_graph = '}"' not in line
+            continue
+        if _TYPST_GRAPH.search(line):
+            in_graph = '}"' not in line
+            continue
+        if _TYPST_CODE.match(line) and not _TYPST_HEADING.match(line):
+            continue
+        kept.append(line)
+    return kept

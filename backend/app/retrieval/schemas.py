@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from app.models import (
     EmbeddingBackendKind,
@@ -16,6 +16,7 @@ from app.retrieval.chunking import (
     DEFAULT_OVERLAP_TOKENS,
     DEFAULT_TARGET_TOKENS,
 )
+from app.retrieval.recipes import ModelSupport, model_support
 
 
 class ApiModel(BaseModel):
@@ -137,6 +138,11 @@ class EmbeddingProfileRead(EmbeddingProfileWrite):
     created_at: datetime
     updated_at: datetime
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def support(self) -> ModelSupport:
+        return model_support(self.model_id)
+
 
 class RetrievalIndexBuildWrite(ApiModel):
     profile_id: UUID
@@ -214,6 +220,7 @@ class LocalModelRead(ApiModel):
     installed: bool
     installing: bool = False
     recommended_for: str
+    support: ModelSupport = ModelSupport.UNKNOWN
 
 
 class BenchmarkCaseWrite(ApiModel):

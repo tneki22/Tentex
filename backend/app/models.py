@@ -1193,13 +1193,9 @@ class RetrievalChunk(Base):
         ),
         Index("ix_retrieval_chunks_index_material", "index_id", "material_id"),
         Index("ix_retrieval_chunks_index_block", "index_id", "block_id"),
-        # Покрывающий индекс для перевода фрагментов BM25 в куски: без него
-        # json_each(fragment_ids) читал строку целиком вместе с длинным text и
-        # вектором, и на bind mount с Windows это стоило 5–10 с на поиск.
-        Index(
-            "ix_retrieval_chunks_material_fragments",
-            "index_id", "material_id", "revision", "sort_order", "fragment_ids", "id",
-        ),
+        # Фрагменты кусков и векторы читает снимок индекса в памяти
+        # (`retrieval/snapshot.py`): покрывающий индекс по fragment_ids из
+        # миграции 0065 снят миграцией 0066.
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)

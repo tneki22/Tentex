@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import math
+import sqlite3
 from array import array
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+from app.retrieval.snapshot import current_revisions, index_snapshot
 
 
 class VectorUnavailableError(RuntimeError):
@@ -26,20 +28,7 @@ def vector_blob(values: list[float]) -> bytes:
 
 
 class SqliteVecIndex:
-    """Точный cosine search после SQL-фильтра по индексу и материалам."""
-
-    def _load(self, session: Session) -> None:
-        try:
-            import sqlite_vec
-
-            raw = session.connection().connection.driver_connection
-            raw.enable_load_extension(True)
-            try:
-                sqlite_vec.load(raw)
-            finally:
-                raw.enable_load_extension(False)
-        except (ImportError, AttributeError, OSError) as error:
-            raise VectorUnavailableError("sqlite-vec недоступен") from error
+    """Точный cosine search по кускам текущих ревизий материалов области."""
 
     def search(
         self,
@@ -51,46 +40,21 @@ class SqliteVecIndex:
         limit: int,
         block_ids: list[UUID] | None = None,
     ) -> list[VectorHit]:
-        if not material_ids:
+        if not material_ids or (block_ids is not None and not block_ids):
             return []
-        self._load(session)
-        placeholders = ", ".join(f":m{number}" for number in range(len(material_ids)))
-        params: dict[str, object] = {
-            "index_id": index_id.hex,
-            "query": vector_blob(query_vector),
-            "limit": limit,
-        }
-        params.update({f"m{number}": item.hex for number, item in enumerate(material_ids)})
-        block_filter = ""
-        if block_ids is not None:
-            if not block_ids:
-                return []
-            block_placeholders = ", ".join(f":b{number}" for number in range(len(block_ids)))
-            merged_placeholders = ", ".join(f":j{number}" for number in range(len(block_ids)))
-            params.update({f"b{number}": item.hex for number, item in enumerate(block_ids)})
-            params.update({f"j{number}": str(item) for number, item in enumerate(block_ids)})
-            # Кусок из нескольких блоков хранит их в `locator.block_ids`: он
-            # относится к теме, если к ней привязан любой из его блоков.
-            block_filter = (
-                f"AND (block_id IN ({block_placeholders}) OR EXISTS (SELECT 1 FROM "
-                "json_each(retrieval_chunks.locator, '$.block_ids') AS merged "
-                f"WHERE merged.value IN ({merged_placeholders}))) "
-            )
+        query = vector_blob(query_vector)
         try:
-            rows = session.execute(
-                text(
-                    "SELECT id, vec_distance_cosine(embedding, :query) AS distance "
-                    "FROM retrieval_chunks WHERE index_id = :index_id "
-                    f"AND material_id IN ({placeholders}) {block_filter}AND embedding IS NOT NULL "
-                    "AND revision = (SELECT active_parse_revision FROM materials "
-                    "WHERE materials.id = retrieval_chunks.material_id) "
-                    "ORDER BY distance LIMIT :limit"
-                ),
-                params,
-            ).all()
-        except Exception as error:
+            # Кусок из нескольких блоков хранит их в `locator.block_ids`: снимок
+            # относит его к теме, если к ней привязан любой из его блоков.
+            hits = index_snapshot(session, index_id).nearest(
+                query,
+                current_revisions(session, material_ids),
+                limit=limit,
+                block_ids=block_ids,
+            )
+        except (ImportError, OSError, sqlite3.Error) as error:
             raise VectorUnavailableError("sqlite-vec не выполнил cosine search") from error
-        return [VectorHit(UUID(hex=row[0]), float(row[1])) for row in rows]
+        return [VectorHit(chunk_id, distance) for chunk_id, distance in hits]
 
 
 def reciprocal_rank_fusion(

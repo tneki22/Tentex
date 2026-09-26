@@ -23,6 +23,7 @@ from app.models import (
 )
 from app.projects.errors import ProjectConflictError
 from app.retrieval.jobs import finish, write_job
+from app.retrieval.recipes import model_support
 from app.retrieval.schemas import LocalModelRead
 
 _MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -33,10 +34,15 @@ CURATED_MODELS = (
         "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         "MiniLM multilingual",
         "embedding",
-        "Быстро, CPU",
+        "Быстрая, но видит только начало куска",
     ),
     ("intfloat/multilingual-e5-base", "Multilingual E5 Base", "embedding", "Базовая линия"),
-    ("Qwen/Qwen3-Embedding-0.6B", "Qwen3 Embedding 0.6B", "embedding", "Максимум качества"),
+    (
+        "Qwen/Qwen3-Embedding-0.6B",
+        "Qwen3 Embedding 0.6B",
+        "embedding",
+        "Сильнее на запросах по смыслу, медленнее на CPU",
+    ),
     ("Qwen/Qwen3-Reranker-0.6B", "Qwen3 Reranker 0.6B", "reranker", "Профиль «Точно»"),
 )
 
@@ -83,6 +89,7 @@ def list_models(session: Session) -> list[LocalModelRead]:
             installed=model_path(model_id).is_dir(),
             installing=model_id in installing,
             recommended_for=recommended_for,
+            support=model_support(model_id),
         )
         for model_id, label, role, recommended_for in CURATED_MODELS
     ]
@@ -100,6 +107,7 @@ def list_models(session: Session) -> list[LocalModelRead]:
             installed=model_path(profile.model_id).is_dir(),
             installing=profile.model_id in installing,
             recommended_for="Добавленная вручную модель",
+            support=model_support(profile.model_id),
         ))
     return curated
 
