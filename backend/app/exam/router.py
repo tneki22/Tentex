@@ -131,6 +131,26 @@ def post_tool_run(
     return ChatToolRunRead.model_validate(run)
 
 
+#: Уточнение короче стольких слов не ищется само по себе: «а подробнее?» без
+#: прошлого вопроса находит в источниках случайные места.
+_FOLLOW_UP_WORDS = 6
+
+
+def _retrieval_query(text: str, tail: list[ChatMessage]) -> str:
+    """Запрос к источникам: короткое уточнение дополняется прошлым вопросом."""
+    if len(text.split()) >= _FOLLOW_UP_WORDS:
+        return text
+    previous = next(
+        (
+            item.text
+            for item in reversed(tail)
+            if item.role == ChatMessageRole.USER and item.text.strip()
+        ),
+        None,
+    )
+    return f"{previous}\n{text}" if previous else text
+
+
 def _history_messages(tail: list[ChatMessage]) -> list[AiMessage]:
     messages: list[AiMessage] = []
     for item in tail:
@@ -221,7 +241,7 @@ async def post_chat_message(
         result = await HybridRetriever().search(
             session,
             RetrievalSearchWrite(
-                query=command.text,
+                query=_retrieval_query(command.text, ctx.tail),
                 strategy=SearchStrategy.HYBRID,
                 scope=RetrievalScope(command.retrieval_scope),
                 project_id=project_id,
