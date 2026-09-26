@@ -209,6 +209,40 @@ function mapSummary(project: ProjectSummary, stats: ProjectStats | undefined): s
   return "Программа пока не заполнена";
 }
 
+function ProjectActivity({ stats }: { stats?: ProjectStats }) {
+  const activityAt = stats?.last_activity_at;
+  return (
+    <p className="project-map-node-activity">
+      {activityAt
+        ? `Последняя работа — ${dayFormat.format(new Date(activityAt))}`
+        : "Занятий пока не было"}
+    </p>
+  );
+}
+
+function ExamDeadline({ projects }: { projects: ProjectSummary[] }) {
+  const upcoming = projects
+    .filter((project): project is ProjectSummary & { deadline: string } => project.deadline !== null && daysUntil(project.deadline) >= 0)
+    .sort((left, right) => left.deadline.localeCompare(right.deadline))[0];
+  const days = upcoming ? daysUntil(upcoming.deadline) : null;
+
+  return (
+    <div className="project-map-exam">
+      <span className="project-map-exam-label">Ближайший экзамен:</span>
+      {upcoming && days !== null ? (
+        <>
+          <strong className={`project-map-exam-days is-${urgency(days)}`}>
+            {days === 0 ? "Экзамен сегодня" : `${days} ${plural(days, "день", "дня", "дней")}`}
+          </strong>
+          <small>по предмету {upcoming.name}</small>
+        </>
+      ) : (
+        <small>Предстоящих экзаменов нет</small>
+      )}
+    </div>
+  );
+}
+
 /** Карта остаётся полезной по типам, даже когда у проектов нет общих источников. */
 function ProjectMap({ projects, stats, materials, materialLoading, materialError }: {
   projects: ProjectSummary[];
@@ -229,7 +263,7 @@ function ProjectMap({ projects, stats, materials, materialLoading, materialError
           <section className={`project-map-group is-${group.key}`} key={group.key}>
             <div className="project-map-heading">
               <span className="project-map-index">{String(mapGroups.indexOf(group) + 1).padStart(2, "0")}</span>
-              <div><h2>{group.label}</h2><p>{group.note}</p></div>
+              <div><h2>{group.label}</h2><p>{group.note}</p>{group.key === "exam" && <ExamDeadline projects={members} />}</div>
               <span className="project-map-count">{members.length}</span>
             </div>
             <div className="project-map-nodes">
@@ -239,6 +273,7 @@ function ProjectMap({ projects, stats, materials, materialLoading, materialError
                   <article className="project-map-node" key={project.id} style={{ "--proj": `var(--project-color-${color(project.color)})` } as CSSProperties}>
                     <div className="project-map-node-top"><ProjectChip icon={icon(project.icon)} color={color(project.color)} size="sm" /><Link to={`/projects/${project.id}`}>{project.name}</Link></div>
                     <div className="project-map-node-meta">{mapSummary(project, stats[project.id])}</div>
+                    <ProjectActivity stats={stats[project.id]} />
                     {links.length > 0 && <div className="project-map-links" aria-label="Общие материалы">
                       {links.slice(0, 3).map((link) => <Link key={`${link.id}-${link.material}`} to={`/projects/${link.id}`} title={`Общий материал: ${link.material}`}>↗ {link.name}<small>{link.material}</small></Link>)}
                       {links.length > 3 && <span>И ещё {links.length - 3}</span>}

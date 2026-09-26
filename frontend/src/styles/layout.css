@@ -733,6 +733,13 @@
 .project-map-heading { display: flex; align-items: start; gap: var(--space-3); }
 .project-map-heading h2 { margin: 0; font-size: var(--text-md); }
 .project-map-heading p { margin: var(--space-1) 0 0; color: var(--muted); font-size: var(--text-xs); }
+.project-map-exam { display: grid; justify-items: start; gap: var(--space-1); margin-top: var(--space-3); }
+.project-map-exam-label { color: var(--ink-soft); font-size: var(--text-xs); }
+.project-map-exam-days { font-size: var(--text-md); line-height: 1.2; font-variant-numeric: tabular-nums; }
+.project-map-exam-days.is-danger { color: var(--tone-danger); }
+.project-map-exam-days.is-warning { color: var(--tone-warning); }
+.project-map-exam-days.is-success { color: var(--tone-success); }
+.project-map-exam small, .project-map-node-activity { color: var(--muted); font-size: var(--text-xs); }
 .project-map-index { color: var(--map-group); font-family: var(--font-mono); font-size: var(--text-sm); }
 .project-map-count { margin-left: auto; color: var(--faint); font-family: var(--font-mono); }
 .project-map-nodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); gap: var(--space-3); }
@@ -750,6 +757,7 @@
 .project-map-node-top a { overflow: hidden; color: var(--ink); font-weight: var(--weight-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .project-map-node-top a:hover { color: var(--accent); }
 .project-map-node-meta { color: var(--muted); font-size: var(--text-xs); }
+.project-map-node-activity { margin: 0; }
 .project-map-links { display: grid; gap: var(--space-1); padding-top: var(--space-2); border-top: 1px solid var(--line); }
 .project-map-links a { display: grid; overflow: hidden; color: var(--accent); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
 .project-map-links a:hover { text-decoration: underline; }
