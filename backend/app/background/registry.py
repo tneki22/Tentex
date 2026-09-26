@@ -127,6 +127,8 @@ def _progress_unit(session: Session, job: BackgroundJob) -> str:
         return "файлов"
     if job.kind in {BackgroundJobKind.PROJECT_EXPORT, BackgroundJobKind.PROJECT_IMPORT}:
         return "пакетов"
+    if job.kind == BackgroundJobKind.IMAGE_DESCRIPTIONS:
+        return "изображений"
     if job.kind not in (BackgroundJobKind.PARSE, BackgroundJobKind.TYPST_COMPILE):
         return ""
     return "минут" if _is_audio(session, job) else "страниц"
@@ -153,6 +155,8 @@ def _model_label(session: Session, job: BackgroundJob) -> str:
         return "Проверка хранилища"
     if job.kind == BackgroundJobKind.STORAGE_CLEANUP:
         return "Очистка временного"
+    if job.kind == BackgroundJobKind.IMAGE_DESCRIPTIONS:
+        return str(job.checkpoint.get("model_label") or "внешняя модель")
     if job.kind in REVIEW_REQUIRED_KINDS:
         checkpoint = job.checkpoint
         return str(
@@ -166,6 +170,10 @@ def _model_label(session: Session, job: BackgroundJob) -> str:
         # Запись читает не OCR: подпись «PP-OCRv5» у неё была бы неправдой.
         return speech.mode_label(session, job.parser_mode)
     if job.parser_mode == ParserMode.CLOUD:
+        # Модель запуска зафиксирована в снимке задачи; у старых задач снимка нет.
+        snapshot = (job.checkpoint.get("options") or {}).get("page_model") or {}
+        if snapshot.get("model_id"):
+            return str(snapshot["model_id"])
         row = session.get(AiSettings, 1)
         return (row.default_vision_model_id if row else None) or "внешняя модель"
     engine = session.get(OcrEngineConfig, "fast")

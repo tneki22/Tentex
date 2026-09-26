@@ -1,5 +1,7 @@
+import hashlib
 import json
 import re
+import struct
 from collections.abc import Iterable, Sequence
 
 import pymupdf as fitz
@@ -8,6 +10,7 @@ from app.materials.parsers import raster
 from app.materials.parsers.base import (
     IMAGE_PLACEHOLDER,
     ElementKind,
+    ImageMeta,
     ParsedElement,
     ParsedPage,
 )
@@ -30,6 +33,14 @@ MIN_REGION_SIDE_PT = 24
 # Мягкий и обычный дефис на конце строки — перенос слова, который PDF-вёрстка
 # ломает на пробел при склейке строк обратно в абзац.
 SOFT_HYPHEN_RE = re.compile(r"(\w)[-‐­]$")
+
+
+def _png_size(data: bytes) -> tuple[int, int] | None:
+    """Размер PNG из заголовка IHDR — без декодирования всего выреза."""
+    if len(data) < 24 or data[1:4] != b"PNG":
+        return None
+    width, height = struct.unpack(">II", data[16:24])
+    return int(width), int(height)
 
 
 def _normalized_bbox(
@@ -295,12 +306,18 @@ def parse_layout_page(
             text = IMAGE_PLACEHOLDER
         # Вырез оригинала нужен всему, что не показать текстом: схеме, выносной
         # формуле (её строки разметчик не собирает) и таблице.
+        image_meta: ImageMeta | None = None
         if owner and kind in {"image", "formula", "table"}:
+            crop = raster.region_image(page, bbox)
             asset_path = store_material_asset(
-                owner,
-                f"p{page_index + 1}-{kind}{index}.png",
-                raster.region_image(page, bbox),
+                owner, f"p{page_index + 1}-{kind}{index}.png", crop
             )
+            if kind == "image":
+                image_meta = ImageMeta(
+                    detection="layout",
+                    crop_hash=hashlib.sha256(crop).hexdigest(),
+                    pixel_size=_png_size(crop),
+                )
         if kind == "formula":
             formula_count += 1
         elif kind == "image":
@@ -312,6 +329,7 @@ def parse_layout_page(
                 bbox=bbox,
                 level=level,
                 asset_path=asset_path,
+                image=image_meta,
             )
         )
 

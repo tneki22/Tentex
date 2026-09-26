@@ -4,11 +4,12 @@ from dataclasses import dataclass
 from uuid import UUID
 
 import httpx
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, defer
 
 from app.bindings.search import SearchHit, search_fragments
 from app.config import settings as app_settings
+from app.materials.image_meta import DESCRIBABLE_PROCESSING
 from app.materials.naming import material_display_name
 from app.models import (
     Binding,
@@ -266,6 +267,22 @@ def _degradation_notes(
     return ["Часть источников — только поиск по словам: " + ", ".join(stale)] if stale else []
 
 
+def _undescribed_image():
+    """Изображение без проверяемого текста по явному состоянию, а не по префиксу.
+
+    Префикс `[Изображение]` пропускал короткие облачные подписи прошлых версий и
+    результат «только текст». Служебные и декоративные изображения знанием не
+    считаются и в предупреждение не попадают.
+    """
+    processing = func.json_extract(MaterialFragment.visual, "$.processing")
+    role = func.json_extract(MaterialFragment.visual, "$.role")
+    return and_(
+        MaterialFragment.element_kind == "image",
+        processing.in_(tuple(DESCRIBABLE_PROCESSING)),
+        func.coalesce(role, "unknown").not_in(("service", "decorative")),
+    )
+
+
 def _visual_notes(session: Session, results: list[RetrievalHitRead]) -> list[str]:
     """Изображения без описания на страницах самой выдачи.
 
@@ -309,10 +326,7 @@ def _visual_notes(session: Session, results: list[RetrievalHitRead]) -> list[str
         return []
     visual = session.scalars(
         select(MaterialFragment.page_id)
-        .where(
-            MaterialFragment.page_id.in_(page_by_id),
-            MaterialFragment.text.like("[Изображение]%"),
-        )
+        .where(MaterialFragment.page_id.in_(page_by_id), _undescribed_image())
         .distinct()
     ).all()
     pages: dict[UUID, set[int]] = {}
@@ -488,7 +502,7 @@ def visual_page_locators(
         .where(
             Material.id.in_(material_ids),
             MaterialPage.revision == Material.active_parse_revision,
-            MaterialFragment.text.like("[Изображение]%"),
+            _undescribed_image(),
         )
         .distinct()
         .order_by(Material.created_at, MaterialPage.page_number)

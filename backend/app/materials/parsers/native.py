@@ -1,9 +1,11 @@
 import logging
 import re
-from collections.abc import Iterator, Sequence
+from collections import Counter
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from functools import reduce
+from io import BytesIO
 from pathlib import Path
 from statistics import median
 from tempfile import NamedTemporaryFile
@@ -13,20 +15,34 @@ from docx import Document
 from docx.text.paragraph import Paragraph
 from PIL import Image
 
+from app.materials.image_candidates import XREF_REPEATED, auto_send, classify
+from app.materials.image_meta import (
+    crop_hash,
+    element_meta,
+    find_caption,
+    needs_description,
+    neighbor_context,
+    pixel_size,
+    with_description,
+)
 from app.materials.parsers import paddle_fast, raster, reading_order
 from app.materials.parsers.audio import parse_audio
 from app.materials.parsers.base import (
     IMAGE_PLACEHOLDER,
     ElementKind,
+    ImageMeta,
+    ImageProvenance,
+    ImageRequest,
     PageRecognizer,
     ParsedElement,
     ParsedPage,
     RecognitionSource,
     RegionRequest,
 )
-from app.materials.parsers.cloud_vlm import wrap_bare_latex
+from app.materials.parsers.cloud_vlm import IMAGE_PROMPT_VERSION, wrap_bare_latex
 from app.materials.parsers.pdf_layout import parse_layout_page
-from app.materials.storage import store_material_asset
+from app.materials.parsers.text_layer import TextLayerDiagnosis, diagnose
+from app.materials.storage import material_path, store_material_asset
 from app.models import ParserMode
 from app.ocr.engines import DEFAULT_QUALITY_THRESHOLD, OcrRuntimeParams
 
@@ -43,8 +59,15 @@ WRAP_TOLERANCE = 60
 ENDS_SENTENCE_RE = re.compile(r"[.!?:;][\"»)\]]?$")
 # Кегль заголовка относительно основного текста.
 HEADING_SIZE_RATIO = 1.15
-# Меньше — это логотипы, линейки и артефакты вёрстки, а не иллюстрации.
-MIN_IMAGE_SIDE = 40
+# Меньше — линейки, точки и обрезки рамок. Маленький логотип и маленькая
+# формула проходят: их различает отбор кандидатов по повтору, месту и подписи,
+# а не размер (`image_candidates`).
+MIN_IMAGE_SIDE = 8
+# Длинная сторона выреза, уходящего на описание. Больше — лишние плитки и
+# деньги без новой информации для описания схемы.
+DESCRIBE_MAX_SIDE_PX = 1536
+# Форматы, которые провайдеры принимают как есть; остальное перекодируется в PNG.
+SENDABLE_MEDIA = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
 # Виды элементов, у которых оригинальная вырезка со страницы полезна сама по
 # себе: распознанному тексту формулы или схемы верить нельзя, и просмотрщик
 # показывает рядом исходник.
@@ -182,6 +205,61 @@ def _classify(
     return "paragraph", None
 
 
+def _ocr_raster(
+    data: bytes, extension: str, page_number: int, params: OcrRuntimeParams
+) -> tuple[str, float | None] | None:
+    """Надписи внутри картинки локальным OCR; `None` — прочитать нечего или нечем."""
+    if not paddle_fast.available():
+        return None
+    with NamedTemporaryFile(suffix=f".{extension}", delete=False) as temporary:
+        temporary.write(data)
+        temporary_path = Path(temporary.name)
+    try:
+        recognized = paddle_fast.parse_image(
+            temporary_path,
+            page_number,
+            language=params.fast_language,
+            ocr_version=params.fast_model_id,
+            quality_threshold=params.quality_threshold,
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        # Исходный вырез остаётся полезным, даже если OCR этой области не
+        # справился, — но молчать об этом нельзя: иначе пропажа текста
+        # картинки выглядит как «так и было».
+        log.warning("OCR картинки не удался page=%s: %s", page_number, error)
+        return None
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    text = recognized.plain_text.strip()
+    return (text, recognized.confidence) if text else None
+
+
+def _text_only_meta(meta: ImageMeta, text: str | None, confidence: float | None,
+                    threshold: float) -> ImageMeta:
+    """Состояние после «только текст»: надписи прочитаны, пусты или сомнительны."""
+    if text is None:
+        return replace(meta, processing="text_only", reasons=(*meta.reasons, "no_text"))
+    if confidence is not None and confidence < threshold:
+        return replace(
+            meta,
+            processing="text_only",
+            review="needs_review",
+            reasons=(*meta.reasons, "ocr_low_confidence"),
+        )
+    return replace(meta, processing="text_only")
+
+
+def _image_xref(bbox: Sequence[float], boxes: Sequence[tuple[fitz.Rect, int]]) -> int | None:
+    """xref встроенного растра по его рамке на странице."""
+    rect = fitz.Rect(bbox)
+    best, best_overlap = None, 0.0
+    for box, xref in boxes:
+        overlap = (rect & box).get_area() / max(1e-6, rect.get_area())
+        if overlap > best_overlap:
+            best, best_overlap = xref, overlap
+    return best if best_overlap >= 0.8 else None
+
+
 def _image_element(
     block: dict,
     page: fitz.Page,
@@ -191,8 +269,13 @@ def _image_element(
     *,
     run_ocr: bool = False,
     params: OcrRuntimeParams | None = None,
+    repeated: bool = False,
 ) -> ParsedElement | None:
-    """Фотография или схема со страницы. Мелочь вроде логотипов пропускаем."""
+    """Фотография или схема со страницы вместе с состоянием изображения.
+
+    :param repeated: тот же растр (xref) стоит на нескольких страницах —
+        вероятный логотип или колонтитул; его не распознают и не описывают сами.
+    """
     data = block.get("image")
     if not data:
         return None
@@ -202,34 +285,26 @@ def _image_element(
         return None
     extension = str(block.get("ext") or "png").lower()
     asset_path = store_material_asset(owner, f"p{page_number}-{index}.{extension}", data)
+    size = pixel_size(data)
+    if size is None and block.get("width") and block.get("height"):
+        size = (int(block["width"]), int(block["height"]))
+    meta = ImageMeta(
+        signals=(XREF_REPEATED,) if repeated else (),
+        detection="embedded",
+        crop_hash=crop_hash(data),
+        pixel_size=size,
+    )
     text = IMAGE_PLACEHOLDER
     confidence = None
     recognition_source: RecognitionSource = "native"
-    if run_ocr and paddle_fast.available():
-        with NamedTemporaryFile(suffix=f".{extension}", delete=False) as temporary:
-            temporary.write(data)
-            temporary_path = Path(temporary.name)
-        try:
-            recognized = paddle_fast.parse_image(
-                temporary_path,
-                page_number,
-                language=params.fast_language,
-                ocr_version=params.fast_model_id,
-                quality_threshold=params.quality_threshold,
-            )
-            if recognized.plain_text.strip():
-                text = recognized.plain_text.strip()
-                confidence = recognized.confidence
-                recognition_source = "ocr"
-        except (OSError, RuntimeError, ValueError) as error:
-            # Исходный вырез остаётся полезным, даже если OCR этой области не
-            # справился, — но молчать об этом нельзя: иначе пропажа текста
-            # картинки выглядит как «так и было».
-            log.warning(
-                "OCR картинки не удался page=%s index=%s: %s", page_number, index, error
-            )
-        finally:
-            temporary_path.unlink(missing_ok=True)
+    if run_ocr and not repeated:
+        recognized = _ocr_raster(data, extension, page_number, params)
+        if recognized is not None:
+            text, confidence = recognized
+            recognition_source = "ocr"
+        meta = _text_only_meta(
+            meta, recognized[0] if recognized else None, confidence, params.quality_threshold
+        )
     return ParsedElement(
         "image",
         text,
@@ -238,6 +313,7 @@ def _image_element(
         confidence,
         asset_path=asset_path,
         recognition_source=recognition_source,
+        image=meta,
     )
 
 
@@ -248,9 +324,11 @@ def _native_pdf_page(
     *,
     ocr_images: bool = False,
     params: OcrRuntimeParams | None = None,
+    repeated_xrefs: frozenset[int] = frozenset(),
 ) -> ParsedPage:
     raw = page.get_text("dict", sort=True)
     blocks = raw.get("blocks", [])
+    xref_boxes = _xref_boxes(page) if repeated_xrefs else []
     text_blocks = [block for block in blocks if block.get("type") == 0]
     all_lines = [line for block in text_blocks for line in _block_lines(block)]
     if not all_lines:
@@ -271,6 +349,7 @@ def _native_pdf_page(
                     index,
                     run_ocr=ocr_images,
                     params=params,
+                    repeated=_image_xref(block["bbox"], xref_boxes) in repeated_xrefs,
                 )
                 if image is not None:
                     elements.append(image)
@@ -309,6 +388,33 @@ def _native_pdf_page(
         tuple(elements),
         diagnostics,
     )
+
+
+def _xref_boxes(page: fitz.Page) -> list[tuple[fitz.Rect, int]]:
+    try:
+        return [
+            (fitz.Rect(info["bbox"]), int(info["xref"]))
+            for info in page.get_image_info(xrefs=True)
+            if info.get("xref")
+        ]
+    except (RuntimeError, ValueError):
+        return []
+
+
+def repeated_image_xrefs(document: fitz.Document) -> frozenset[int]:
+    """Растры, стоящие на нескольких страницах: логотипы, колонтитулы, фон.
+
+    Читает только словари ресурсов страниц, без извлечения картинок, поэтому
+    годится и для книги в тысячу страниц. Повтор — сигнал для отбора, а не
+    решение: подпись рядом всё равно делает изображение содержательным.
+    """
+    counts: Counter[int] = Counter()
+    for page in document:
+        try:
+            counts.update({int(item[0]) for item in page.get_images(full=False)})
+        except (RuntimeError, ValueError):
+            continue
+    return frozenset(xref for xref, pages in counts.items() if pages >= 2)
 
 
 def text_layer_pages(path: Path, owner: str = "") -> Iterator[ParsedPage]:
@@ -388,10 +494,14 @@ def _page_quality(
     elements: tuple[ParsedElement, ...],
     quality_threshold: float = DEFAULT_QUALITY_THRESHOLD,
 ) -> tuple[str, float | None]:
+    # Описание изображения проверяется по своей оси (`ImageMeta.review`): его
+    # сомнительность не делает сомнительным текст страницы.
     recognized = [
         item
         for item in elements
-        if item.recognition_source in {"ocr", "vl"} and item.text.strip()
+        if item.recognition_source in {"ocr", "vl"}
+        and item.text.strip()
+        and not (item.image is not None and item.image.processing == "described")
     ]
     if not recognized:
         return "native", None
@@ -585,6 +695,48 @@ def _docx_images(
     return found
 
 
+def _docx_images_pass(
+    parsed: ParsedPage,
+    params: OcrRuntimeParams,
+    recognizer: PageRecognizer | None,
+) -> ParsedPage:
+    """Изображения DOCX по режиму запуска.
+
+    Координаты страницы DOCX условные (порядок абзацев), поэтому площадь и
+    полоса колонтитула не считаются — только пиксельный размер, повтор и подпись.
+    """
+    parsed = finalize_images(parsed, conditional_geometry=True)
+    if recognizer is not None:
+        return _describe_page_images(parsed, recognizer, params)
+    if params.images_for("fast") != "text_only":
+        return parsed
+    elements = list(parsed.elements)
+    for index, element in enumerate(elements):
+        meta = element_meta(element)
+        if meta is None or not element.asset_path or not auto_send(meta):
+            continue
+        try:
+            data = material_path(element.asset_path).read_bytes()
+        except OSError:
+            continue
+        extension = Path(element.asset_path).suffix.lstrip(".") or "png"
+        recognized = _ocr_raster(data, extension, 1, params)
+        meta = _text_only_meta(
+            meta,
+            recognized[0] if recognized else None,
+            recognized[1] if recognized else None,
+            params.quality_threshold,
+        )
+        elements[index] = replace(
+            element,
+            text=recognized[0] if recognized else element.text,
+            confidence=recognized[1] if recognized else None,
+            recognition_source="ocr" if recognized else element.recognition_source,
+            image=meta,
+        )
+    return replace(parsed, elements=tuple(elements))
+
+
 def _docx_page(path: Path, owner: str = "") -> ParsedPage:
     document = Document(path)
     numbering = _docx_numbering(document)
@@ -608,6 +760,11 @@ def _docx_page(path: Path, owner: str = "") -> ParsedPage:
                         bbox,
                         None,
                         asset_path=store_material_asset(owner, name, data),
+                        image=ImageMeta(
+                            detection="docx",
+                            crop_hash=crop_hash(data),
+                            pixel_size=pixel_size(data),
+                        ),
                     )
                 )
         if not paragraph.text.strip():
@@ -640,6 +797,34 @@ def _page_indices(
             yield page_number - 1
 
 
+def _inherit_xref_repeats(
+    parsed: ParsedPage, embedded: Sequence[ParsedElement]
+) -> ParsedPage:
+    """Повтор xref встроенного растра переходит на вырез разметчика поверх него.
+
+    Разметчик рендерит свой вырез той же картинки, а встроенный растр с сигналом
+    повтора отбрасывается как дубль. Без переноса логотип с каждой страницы
+    становился бы «уникальным» содержанием и уходил бы на платное описание.
+    """
+    repeated = [
+        element.bbox
+        for element in embedded
+        if element.kind == "image" and element.image and XREF_REPEATED in element.image.signals
+    ]
+    if not repeated:
+        return parsed
+    elements = list(parsed.elements)
+    for index, element in enumerate(elements):
+        meta = element_meta(element)
+        if meta is None or XREF_REPEATED in meta.signals:
+            continue
+        if any(_bbox_overlap(box, element.bbox) >= 0.6 for box in repeated):
+            elements[index] = replace(
+                element, image=replace(meta, signals=(*meta.signals, XREF_REPEATED))
+            )
+    return replace(parsed, elements=tuple(elements))
+
+
 def _text_layer_page(
     document: fitz.Document,
     page: fitz.Page,
@@ -647,10 +832,16 @@ def _text_layer_page(
     owner: str,
     mode: ParserMode,
     params: OcrRuntimeParams,
+    repeated_xrefs: frozenset[int] = frozenset(),
 ) -> ParsedPage:
     """Страница с готовым текстовым слоем: разметка плюс картинки со страницы."""
     legacy = _native_pdf_page(
-        page, page_index + 1, owner, ocr_images=mode == ParserMode.FAST, params=params
+        page,
+        page_index + 1,
+        owner,
+        ocr_images=mode == ParserMode.FAST and params.images_for("fast") == "text_only",
+        params=params,
+        repeated_xrefs=repeated_xrefs,
     )
     try:
         parsed = parse_layout_page(document, page_index, owner)
@@ -679,6 +870,7 @@ def _text_layer_page(
         if element.kind == "image"
         and not any(_bbox_overlap(element.bbox, box) >= 0.6 for box in layout_pictures)
     )
+    parsed = _inherit_xref_repeats(parsed, legacy.elements)
     if not images:
         return parsed
     elements = _merge_native_and_images(parsed.elements, images)
@@ -706,13 +898,17 @@ def _scanned_page(
     params: OcrRuntimeParams,
     recognizer: PageRecognizer | None,
 ) -> ParsedPage:
-    """Страница без текстового слоя: целиком во внешнюю модель или в локальный OCR."""
+    """Страница целиком во внешнюю модель или в локальный OCR."""
     image, dpi = _render_page(page, params)
     if recognizer is not None:
         parsed = recognizer.recognize_page(
             image, page_index + 1, page.rect.width, page.rect.height
         )
-        parsed = _attach_region_assets(page, parsed, owner)
+        parsed = _attach_region_assets(
+            parsed, owner, lambda box: raster.region_image(page, box), "cloud_page"
+        )
+        parsed = _missed_regions(parsed, image, owner)
+        parsed = _describe_page_images(finalize_images(parsed), recognizer, params)
         return replace(parsed, diagnostics=(*parsed.diagnostics, f"render_dpi:{dpi:.0f}"))
     with NamedTemporaryFile(suffix=".png", delete=False) as temporary:
         temporary.write(image)
@@ -726,36 +922,64 @@ def _scanned_page(
             quality_threshold=params.quality_threshold,
             owner=owner,
         )
-        return replace(parsed, diagnostics=(*parsed.diagnostics, f"render_dpi:{dpi:.0f}"))
     finally:
         temporary_path.unlink(missing_ok=True)
+    parsed = finalize_images(_ocr_unread_regions(parsed, params))
+    return replace(parsed, diagnostics=(*parsed.diagnostics, f"render_dpi:{dpi:.0f}"))
 
 
-def _attach_region_assets(page: fitz.Page, parsed: ParsedPage, owner: str) -> ParsedPage:
+def _attach_region_assets(
+    parsed: ParsedPage,
+    owner: str,
+    crop: Callable[[tuple[float, float, float, float]], bytes],
+    detection: str,
+) -> ParsedPage:
     """Вырезать со страницы то, что модель прочитала, но показать не может.
 
     Прочитав страницу целиком, внешняя модель возвращает схему или график
     одной фразой: «блок-схема конечного автомата». Самой картинки в ответе нет
     и быть не может, поэтому в материале на её месте оставалась подпись без
     изображения. Координаты у модели при этом есть — по ним страница и режется
-    локально, тем же вырезом, что уходит в модель в стратегии «Только то, что
-    не читается». Формула и таблица режутся заодно: их LaTeX и Markdown
-    просмотрщик показывает только тогда, когда они собираются, а оригинал
-    нужен всегда.
+    локально. Формула и таблица режутся заодно: их LaTeX и Markdown просмотрщик
+    показывает только тогда, когда они собираются, а оригинал нужен всегда.
+
+    Ненадёжную рамку (подставленную полосой) не режем: получился бы кусок
+    соседнего текста. Такое изображение остаётся без выреза и с причиной
+    `bbox_unreliable` уходит в очередь проверки, а не на описание.
     """
     if not owner:
         return parsed
     elements = list(parsed.elements)
     cropped = 0
     for index, element in enumerate(elements):
+        if element.kind == "image" and element.image is None:
+            # Фраза модели про картинку — подпись неизвестного качества, не описание.
+            meta = ImageMeta(
+                processing="legacy" if element.text.strip() else "unprocessed",
+                review="needs_review",
+                reasons=("page_model_caption",),
+                detection=detection,
+                provenance=ImageProvenance("parse"),
+            )
+            if not element.bbox_reliable:
+                meta = replace(meta, reasons=(*meta.reasons, "bbox_unreliable"))
+            element = elements[index] = replace(element, image=meta)
         if element.kind not in CROPPED_KINDS or element.asset_path or not element.bbox_reliable:
             continue
         name = f"p{parsed.page_number}-{element.kind}{index}.png"
-        image = raster.region_image(page, element.bbox)
-        elements[index] = replace(element, asset_path=store_material_asset(owner, name, image))
+        data = crop(element.bbox)
+        asset_path = store_material_asset(owner, name, data)
+        if element.kind == "image" and element.image is not None:
+            element = replace(
+                element,
+                image=replace(
+                    element.image, crop_hash=crop_hash(data), pixel_size=pixel_size(data)
+                ),
+            )
+        elements[index] = replace(element, asset_path=asset_path)
         cropped += 1
     if not cropped:
-        return parsed
+        return replace(parsed, elements=tuple(elements))
     return replace(
         parsed,
         elements=tuple(elements),
@@ -763,22 +987,316 @@ def _attach_region_assets(page: fitz.Page, parsed: ParsedPage, owner: str) -> Pa
     )
 
 
+def _missed_regions(parsed: ParsedPage, image: bytes, owner: str) -> ParsedPage:
+    """Найти на растре то, что модель пропустила, и сохранить кандидатами.
+
+    Проверка честная только при надёжных рамках всех элементов: иначе «не
+    покрыто» значит «модель не указала где», а не «модель не видела». Найденное
+    не описывается само — это кандидат в очередь проверки (`missed_by_model`).
+    """
+    if not owner or not parsed.elements:
+        return parsed
+    if any(not element.bbox_reliable for element in parsed.elements):
+        return replace(parsed, diagnostics=(*parsed.diagnostics, "missed_regions_unchecked"))
+    try:
+        with Image.open(BytesIO(image)) as opened:
+            page_image = opened.convert("RGB")
+    except (OSError, ValueError):
+        return parsed
+    regions = raster.unread_regions(page_image, [element.bbox for element in parsed.elements])
+    if not regions:
+        return parsed
+    added: list[ParsedElement] = []
+    for index, box in enumerate(regions):
+        data = _crop_png(page_image, box)
+        added.append(
+            ParsedElement(
+                "image",
+                IMAGE_PLACEHOLDER,
+                box,
+                asset_path=store_material_asset(
+                    owner, f"p{parsed.page_number}-missed{index}.png", data
+                ),
+                image=ImageMeta(
+                    review="needs_review",
+                    reasons=("missed_by_model",),
+                    detection="unread_area",
+                    crop_hash=crop_hash(data),
+                    pixel_size=pixel_size(data),
+                ),
+            )
+        )
+    elements = _in_reading_order((*parsed.elements, *added))
+    return replace(
+        parsed,
+        elements=elements,
+        markdown=_markdown(list(elements)),
+        diagnostics=(*parsed.diagnostics, f"missed_regions:{len(added)}"),
+    )
+
+
+def _crop_png(image: Image.Image, box: tuple[float, float, float, float]) -> bytes:
+    crop = image.crop(
+        (
+            int(box[0] * image.width),
+            int(box[1] * image.height),
+            int(box[2] * image.width),
+            int(box[3] * image.height),
+        )
+    )
+    buffer = BytesIO()
+    crop.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _ocr_unread_regions(parsed: ParsedPage, params: OcrRuntimeParams) -> ParsedPage:
+    """«Быстро» дочитывает вырезы непрочитанных областей скана.
+
+    Детектор строк пропускает крупную подпись схемы, надписи графика и
+    отдельные метки; повторный OCR выреза с увеличением их находит. Совпадающее
+    с текстом страницы не дублируется, а неуверенно прочитанная формула не
+    объявляется прочитанной — остаётся вырезом с причиной.
+    """
+    if params.images_for("fast") != "text_only" or not paddle_fast.available():
+        return parsed
+    page_text = _normalized_text(parsed.plain_text)
+    elements = list(parsed.elements)
+    changed = False
+    for index, element in enumerate(elements):
+        if element.kind != "image" or not element.asset_path or element.image is not None:
+            continue
+        try:
+            data = material_path(element.asset_path).read_bytes()
+        except OSError:
+            continue
+        meta = ImageMeta(detection="unread_area", crop_hash=crop_hash(data),
+                         pixel_size=pixel_size(data))
+        recognized = _ocr_raster(_upscaled(data), "png", parsed.page_number, params)
+        text = recognized[0] if recognized else None
+        if text and _normalized_text(text) and _normalized_text(text) in page_text:
+            text, recognized = None, None
+        meta = _text_only_meta(
+            meta, text, recognized[1] if recognized else None, params.quality_threshold
+        )
+        if text and meta.review != "needs_review":
+            elements[index] = replace(
+                element, text=text, confidence=recognized[1] if recognized else None, image=meta
+            )
+        else:
+            elements[index] = replace(element, image=meta)
+        changed = True
+    if not changed:
+        return parsed
+    return replace(parsed, elements=tuple(elements))
+
+
+def _upscaled(data: bytes, factor: int = 2) -> bytes:
+    """Мелкий вырез крупнее: детектор строк PP-OCR не видит кегль меньше 10 px."""
+    try:
+        with Image.open(BytesIO(data)) as opened:
+            if max(opened.size) >= DESCRIBE_MAX_SIDE_PX:
+                return data
+            enlarged = opened.convert("RGB").resize(
+                (opened.width * factor, opened.height * factor), Image.Resampling.LANCZOS
+            )
+    except (OSError, ValueError):
+        return data
+    buffer = BytesIO()
+    enlarged.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def finalize_images(
+    parsed: ParsedPage, *, conditional_geometry: bool = False
+) -> ParsedPage:
+    """Подписи и роль каждого изображения страницы — до любых платных вызовов."""
+    if not any(element.kind == "image" for element in parsed.elements):
+        return parsed
+    elements = list(parsed.elements)
+    for index, element in enumerate(elements):
+        if element.kind != "image":
+            continue
+        meta = element_meta(element) or ImageMeta()
+        caption = meta.caption or find_caption(elements, index)
+        element = replace(element, image=replace(meta, caption=caption))
+        elements[index] = replace(
+            element, image=classify(element, conditional_geometry=conditional_geometry)
+        )
+    return replace(parsed, elements=tuple(elements))
+
+
+def _prepared_image(data: bytes) -> tuple[bytes, str] | None:
+    """Вырез в формате и размере, который примет провайдер; `None` — не прочитать."""
+    try:
+        with Image.open(BytesIO(data)) as opened:
+            media = SENDABLE_MEDIA.get(opened.format or "")
+            if media and max(opened.size) <= DESCRIBE_MAX_SIDE_PX:
+                return data, media
+            converted = opened.convert("RGB")
+            converted.thumbnail((DESCRIBE_MAX_SIDE_PX, DESCRIBE_MAX_SIDE_PX))
+    except (OSError, ValueError, Image.DecompressionBombError):
+        return None
+    buffer = BytesIO()
+    converted.save(buffer, format="PNG")
+    return buffer.getvalue(), "image/png"
+
+
+def describe_elements(
+    elements: Sequence[ParsedElement],
+    page_number: int,
+    recognizer: PageRecognizer,
+    indexes: Sequence[int],
+    *,
+    source: str = "parse",
+    job_id: str | None = None,
+) -> tuple[list[ParsedElement], int]:
+    """Описать выбранные изображения по их сохранённым вырезам.
+
+    Общий путь для разбора и для «Описать изображения» готового материала:
+    вырез читается из хранилища, модели уходит он сам, подпись и ограниченный
+    соседний текст. Возвращает новые элементы и число отправленных вырезов.
+    """
+    result = list(elements)
+    requests: list[ImageRequest] = []
+    for index in indexes:
+        element = result[index]
+        meta = element_meta(element) or ImageMeta()
+        prepared = None
+        if element.asset_path:
+            try:
+                prepared = _prepared_image(material_path(element.asset_path).read_bytes())
+            except OSError:
+                prepared = None
+        if prepared is None:
+            reason = "asset_missing" if not element.asset_path else "unsupported_format"
+            result[index] = replace(
+                element,
+                image=replace(
+                    meta,
+                    review="needs_review" if meta.review == "unreviewed" else meta.review,
+                    reasons=tuple(dict.fromkeys((*meta.reasons, reason))),
+                ),
+            )
+            continue
+        data, media_type = prepared
+        requests.append(
+            ImageRequest(
+                index=index,
+                image=data,
+                page_number=page_number,
+                crop_hash=meta.crop_hash or crop_hash(data),
+                caption=meta.caption,
+                context=neighbor_context(result, index),
+                media_type=media_type,
+            )
+        )
+    if not requests:
+        return result, 0
+    for answer in recognizer.describe_images(requests):
+        element = result[answer.index]
+        meta = element_meta(element) or ImageMeta()
+        if answer.description is None:
+            stopped = "budget_exhausted" in answer.reasons
+            result[answer.index] = replace(
+                element,
+                image=replace(
+                    meta,
+                    processing=meta.processing if stopped else "error",
+                    review=meta.review if stopped else "needs_review",
+                    reasons=tuple(dict.fromkeys((*meta.reasons, *answer.reasons))),
+                ),
+            )
+            continue
+        result[answer.index] = with_description(
+            element,
+            answer.description,
+            review=answer.review,
+            reasons=answer.reasons,
+            role_hint=answer.role_hint,
+            provenance=ImageProvenance(
+                source,  # type: ignore[arg-type]
+                model_id=answer.model_id,
+                prompt_version=IMAGE_PROMPT_VERSION,
+                run_id=answer.run_id,
+                job_id=job_id,
+            ),
+        )
+    return result, len(requests)
+
+
+def _describe_page_images(
+    parsed: ParsedPage, recognizer: PageRecognizer, params: OcrRuntimeParams
+) -> ParsedPage:
+    """Режим изображений облачного запуска: описать, пропустить или оставить."""
+    mode = params.images_for("cloud")
+    targets = [
+        index
+        for index, element in enumerate(parsed.elements)
+        if element.kind == "image"
+        and needs_description(element_meta(element) or ImageMeta())
+        and auto_send(element_meta(element) or ImageMeta())
+    ]
+    if not targets:
+        return parsed
+    if mode == "skip":
+        elements = list(parsed.elements)
+        for index in targets:
+            meta = element_meta(elements[index]) or ImageMeta()
+            elements[index] = replace(
+                elements[index],
+                image=replace(
+                    meta,
+                    processing="skipped" if meta.processing == "unprocessed" else meta.processing,
+                    reasons=tuple(dict.fromkeys((*meta.reasons, "image_mode_skip"))),
+                ),
+            )
+        return replace(parsed, elements=tuple(elements))
+    if mode != "describe":
+        return parsed
+    elements, sent = describe_elements(parsed.elements, parsed.page_number, recognizer, targets)
+    diagnostics = (*parsed.diagnostics, f"image_descriptions:{sent}") if sent else None
+    return replace(
+        parsed, elements=tuple(elements), diagnostics=diagnostics or parsed.diagnostics
+    )
+
+
 def _recognized_regions(
-    page: fitz.Page, parsed: ParsedPage, recognizer: PageRecognizer
+    page: fitz.Page, parsed: ParsedPage, recognizer: PageRecognizer, params: OcrRuntimeParams
 ) -> ParsedPage:
     """Дочитать внешней моделью только то, что текстовый слой не объясняет.
 
     Смысл режима: текст страницы уже есть и он точен — платить за его повторное
-    распознавание незачем. Наружу уходят вырезы формул, схем и таблиц-картинок,
-    а на их место встаёт то, что модель прочитала, с пометкой источника `vl`.
+    распознавание незачем. Формулы уходят вырезами на транскрипцию. Изображения
+    — по режиму запуска: «Описывать» отдельным запросом на вырез, «Только
+    текст» вырезами на надписи, «Не распознавать» не уходят вовсе. Служебные и
+    сомнительные изображения (`image_candidates`) не уходят ни в каком режиме.
     """
+    parsed = finalize_images(parsed)
+    text_only = params.images_for("cloud") == "text_only"
     targets = [
         (index, element)
         for index, element in enumerate(parsed.elements)
-        if element.kind in {"image", "formula"}
+        if element.kind == "formula"
+        or (
+            text_only
+            and element.kind == "image"
+            and needs_description(element_meta(element) or ImageMeta())
+            and auto_send(element_meta(element) or ImageMeta())
+        )
     ]
-    if not targets:
-        return parsed
+    if targets:
+        parsed = _apply_region_answers(page, parsed, recognizer, targets, params)
+    return _describe_page_images(parsed, recognizer, params) if not text_only else parsed
+
+
+def _apply_region_answers(
+    page: fitz.Page,
+    parsed: ParsedPage,
+    recognizer: PageRecognizer,
+    targets: list[tuple[int, ParsedElement]],
+    params: OcrRuntimeParams,
+) -> ParsedPage:
+    """Транскрипция вырезов формул (и надписей картинок в «Только текст»)."""
     requests = [
         RegionRequest(index=index, kind=element.kind, image=raster.region_image(page, element.bbox))
         for index, element in targets
@@ -788,9 +1306,24 @@ def _recognized_regions(
     elements = list(parsed.elements)
     for index, element in targets:
         answer = recognized.get(index)
-        if answer is None or not answer.text.strip():
+        text = answer.text.strip() if answer is not None else ""
+        if element.kind == "image":
+            meta = _text_only_meta(
+                element_meta(element) or ImageMeta(),
+                text or None,
+                answer.confidence if answer is not None else None,
+                params.quality_threshold,
+            )
+            elements[index] = replace(
+                element,
+                text=text or element.text,
+                confidence=answer.confidence if text and answer is not None else element.confidence,
+                recognition_source="vl" if text else element.recognition_source,
+                image=meta,
+            )
             continue
-        text = answer.text.strip()
+        if answer is None or not text:
+            continue
         if answer.kind == "formula":
             # Инструкция вырезов просит LaTeX без обрамления (крупная страница
             # рядом уже даёт контекст, окружать $ там незачем) — обрамляем
@@ -817,6 +1350,20 @@ def _recognized_regions(
     )
 
 
+def _blank_page(page: fitz.Page, page_index: int) -> ParsedPage:
+    return ParsedPage(page_index + 1, page.rect.width, page.rect.height, "", "", "native", ())
+
+
+def _with_route(
+    parsed: ParsedPage, diagnosis: TextLayerDiagnosis, fallback: str | None = None
+) -> ParsedPage:
+    """Причина маршрута страницы — в её диагностику: почему слой, OCR или модель."""
+    extra = diagnosis.diagnostics()
+    if fallback:
+        extra = (*extra, f"route_fallback:{fallback}")
+    return replace(parsed, diagnostics=tuple(dict.fromkeys((*parsed.diagnostics, *extra))))
+
+
 def _pdf_pages(
     path: Path,
     mode: ParserMode,
@@ -826,18 +1373,46 @@ def _pdf_pages(
     owner: str,
     recognizer: PageRecognizer | None,
 ) -> Iterator[ParsedPage]:
-    """Постраничный разбор PDF: у каждой страницы своя ветка по наличию текста."""
+    """Постраничный разбор PDF: ветка страницы — по диагнозу её текстового слоя.
+
+    - `page` — каждая страница целиком в модель;
+    - скан без слоя — целиком в модель или в локальный OCR;
+    - частичный или испорченный слой — «Быстро» зовёт локальный OCR,
+      «Адаптивно» отдаёт страницу модели целиком, «Экономно» оставляет слой и
+      помечает страницу для проверки;
+    - пригодный слой — разметка плюс вырезы по режиму изображений.
+    """
     document = fitz.open(path)
     whole_page = mode == ParserMode.CLOUD and params.cloud_strategy == "page"
+    repeated = repeated_image_xrefs(document)
     for page_index in _page_indices(document, start_page, page_numbers):
         page = document[page_index]
-        if whole_page or not page.get_text("text").strip():
-            yield _scanned_page(page, page_index, owner, params, recognizer)
+        diagnosis = diagnose(page)
+        if diagnosis.route == "blank" and not whole_page:
+            yield _with_route(_blank_page(page, page_index), diagnosis)
             continue
-        parsed = _text_layer_page(document, page, page_index, owner, mode, params)
+        if whole_page or diagnosis.route == "scan":
+            parsed = _scanned_page(page, page_index, owner, params, recognizer)
+            yield _with_route(parsed, diagnosis, "cloud_page" if whole_page else None)
+            continue
+        if diagnosis.suspicious and mode == ParserMode.FAST:
+            parsed = _scanned_page(page, page_index, owner, params, None)
+            yield _with_route(parsed, diagnosis, "local_ocr")
+            continue
+        if diagnosis.suspicious and recognizer is not None and params.cloud_strategy == "auto":
+            parsed = _scanned_page(page, page_index, owner, params, recognizer)
+            yield _with_route(parsed, diagnosis, "cloud_page")
+            continue
+        parsed = _text_layer_page(document, page, page_index, owner, mode, params, repeated)
         if recognizer is not None:
-            parsed = _recognized_regions(page, parsed, recognizer)
-        yield parsed
+            parsed = _recognized_regions(page, parsed, recognizer, params)
+        else:
+            parsed = finalize_images(parsed)
+        if diagnosis.suspicious:
+            # «Экономно»: слой оставлен, но верить ему нельзя — страница уходит
+            # в «нужно проверить» вместе с причиной.
+            parsed = replace(parsed, quality="ocr_low")
+        yield _with_route(parsed, diagnosis)
 
 
 def _photo_page(
@@ -846,12 +1421,22 @@ def _photo_page(
     owner: str,
     recognizer: PageRecognizer | None,
 ) -> ParsedPage:
-    """Отдельная картинка (снимок страницы или скан) как единственная страница."""
+    """Отдельная картинка (снимок страницы или скан) как единственная страница.
+
+    Исходный файл и есть оригинал страницы: он не теряется, даже если модель
+    не вернула рамку для внутренней области. Вырезы внутренних схем режутся из
+    самого снимка по надёжным рамкам.
+    """
     if recognizer is not None:
         with Image.open(path) as image:
             width, height = image.size
-        return recognizer.recognize_page(path.read_bytes(), 1, float(width), float(height))
-    return paddle_fast.parse_image(
+            photo = image.convert("RGB")
+        parsed = recognizer.recognize_page(path.read_bytes(), 1, float(width), float(height))
+        parsed = _attach_region_assets(
+            parsed, owner, lambda box: _crop_png(photo, box), "cloud_page"
+        )
+        return _describe_page_images(finalize_images(parsed), recognizer, params)
+    parsed = paddle_fast.parse_image(
         path,
         1,
         language=params.fast_language,
@@ -859,6 +1444,7 @@ def _photo_page(
         quality_threshold=params.quality_threshold,
         owner=owner,
     )
+    return finalize_images(_ocr_unread_regions(parsed, params))
 
 
 def iter_pages(
@@ -889,7 +1475,7 @@ def iter_pages(
     if suffix in {".jpg", ".jpeg", ".png"}:
         yield _photo_page(path, params, owner, recognizer)
     elif suffix == ".docx":
-        yield _docx_page(path, owner)
+        yield _docx_images_pass(_docx_page(path, owner), params, recognizer)
     elif suffix in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:
         yield parse_audio(path)
     else:

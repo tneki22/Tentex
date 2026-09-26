@@ -30,6 +30,9 @@ from app.ocr.engines import (
     CLOUD_STRATEGY_HINTS,
     CLOUD_STRATEGY_TITLES,
     DEFAULT_CLOUD_STRATEGY,
+    IMAGE_MODE_HINTS,
+    IMAGE_MODE_TITLES,
+    IMAGE_MODES_BY_ENGINE,
     OCR_ENGINES,
     CloudStrategy,
     OcrRuntimeParams,
@@ -42,6 +45,7 @@ from app.ocr.schemas import (
     OcrEngineRead,
     OcrEngineWrite,
     OcrGlobalSettingsWrite,
+    OcrImageModeRead,
     OcrModelRead,
     OcrSettingsRead,
 )
@@ -281,14 +285,15 @@ def _cloud_readiness(session: Session) -> tuple[str, str, str]:
 
 
 def _model_price(
-    session: Session, provider_id: UUID | None, model_id: str | None
+    session: Session, provider_id: UUID | None, model_id: str | None, *, image: bool = False
 ) -> Decimal | None:
     if provider_id is None or model_id is None:
         return None
     row = session.get(AiModelCatalogEntry, (provider_id, model_id))
     if row is None:
         return None
-    return cloud_catalog.price_per_page(row.prompt_price_usd, row.completion_price_usd)
+    price = cloud_catalog.price_per_image if image else cloud_catalog.price_per_page
+    return price(row.prompt_price_usd, row.completion_price_usd)
 
 
 def _cloud_read(session: Session) -> OcrCloudRead:
@@ -310,6 +315,7 @@ def _cloud_read(session: Session) -> OcrCloudRead:
             for value, title in CLOUD_STRATEGY_TITLES.items()
         ],
         price_per_page_usd=_model_price(session, provider_id, model_id),
+        price_per_image_usd=_model_price(session, provider_id, model_id, image=True),
     )
 
 
@@ -432,6 +438,15 @@ def read_settings(session: Session) -> OcrSettingsRead:
         engines=engines,
         cloud=_cloud_read(session),
         speech=speech.speech_engines(session),
+        image_modes={
+            engine: [
+                OcrImageModeRead(
+                    value=mode, title=IMAGE_MODE_TITLES[mode], hint=IMAGE_MODE_HINTS[mode]
+                )
+                for mode in modes
+            ]
+            for engine, modes in IMAGE_MODES_BY_ENGINE.items()
+        },
     )
 
 

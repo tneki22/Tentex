@@ -35,6 +35,11 @@ PAGE_INPUT_TOKENS = 1850
 # Плотная страница учебника с формулами и таблицей в Markdown.
 PAGE_OUTPUT_TOKENS = 1300
 
+# Описание одного выреза: плитка-две картинки, инструкция со схемой ответа,
+# подпись и соседний текст на входе; структурное описание на выходе.
+IMAGE_INPUT_TOKENS = 1600
+IMAGE_OUTPUT_TOKENS = 900
+
 # Контекста меньше не хватит на страницу вместе со схемой ответа.
 MIN_CONTEXT_LENGTH = 32_000
 # Потолок ответа ниже этого обрежет страницу на середине формулы.
@@ -59,16 +64,24 @@ RECOMMENDED: tuple[CloudModelHint, ...] = (
         "Дёшево и уверенно читает документы: разумный выбор по умолчанию.",
     ),
     CloudModelHint(
-        "qwen/qwen3.7-flash",
-        "Ещё дешевле предыдущей, качество ниже на плотных формулах.",
+        "qwen/qwen3-vl-30b-a3b-instruct",
+        "Специализированная зрительная модель: сильна на таблицах и схемах.",
+    ),
+    CloudModelHint(
+        "openai/gpt-6-luna",
+        "Недорогая модель другого семейства; рассуждение лучше держать низким.",
     ),
     CloudModelHint(
         "google/gemini-3.8-flash",
         "Лучше всех держит формулы и сложную вёрстку, но дороже остальных.",
     ),
     CloudModelHint(
-        "qwen/qwen3-vl-30b-a3b-instruct",
-        "Специализированная зрительная модель: сильна на таблицах и схемах.",
+        "openrouter/auto",
+        "Автовыбор OpenRouter: цену заранее не знает — задайте потолок цены модели.",
+    ),
+    CloudModelHint(
+        "qwen/qwen3.7-flash",
+        "Дешевле всех, но JSON Schema не гарантирует: ответы чаще уходят на проверку.",
     ),
     CloudModelHint(
         "mistral-small-2603",
@@ -106,6 +119,15 @@ def price_per_page(
     if prompt_price_usd is None or completion_price_usd is None:
         return None
     return prompt_price_usd * PAGE_INPUT_TOKENS + completion_price_usd * PAGE_OUTPUT_TOKENS
+
+
+def price_per_image(
+    prompt_price_usd: Decimal | None, completion_price_usd: Decimal | None
+) -> Decimal | None:
+    """Во что обойдётся описание одного выреза. `None` — цена неизвестна."""
+    if prompt_price_usd is None or completion_price_usd is None:
+        return None
+    return prompt_price_usd * IMAGE_INPUT_TOKENS + completion_price_usd * IMAGE_OUTPUT_TOKENS
 
 
 def verdict(

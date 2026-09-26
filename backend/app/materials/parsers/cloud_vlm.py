@@ -19,7 +19,7 @@ import base64
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from io import BytesIO
 from typing import Literal
 
@@ -27,22 +27,45 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.ai.gateway import RETRY_BACKOFF_SECONDS, AiTextRequest, ModelGateway
+from app.ai.budget import BudgetContext
+from app.ai.gateway import RETRY_BACKOFF_SECONDS, AiResult, AiTextRequest, ModelGateway
 from app.ai.provider import OpenAICompatibleTransport
-from app.ai.schemas import AiImagePart, AiImageUrl, AiMessage, AiTextPart
+from app.ai.schemas import AiImagePart, AiImageUrl, AiMessage, AiModelSelection, AiTextPart
 from app.ai.settings import AiGatewayError
 from app.materials.parsers.base import (
+    DescribedImage,
     ElementKind,
+    ImageDescription,
+    ImageRequest,
     ParsedElement,
     ParsedPage,
     RecognizedRegion,
     RegionRequest,
 )
 from app.ocr.engines import DEFAULT_QUALITY_THRESHOLD
+from app.projects.errors import ProjectDomainError
 
 log = logging.getLogger("tentex.worker")
 
 ROLE = "material_page_recognition"
+IMAGE_ROLE = "material_image_description"
+# Версия промпта описаний: попадает в происхождение описания и в снимок задачи.
+IMAGE_PROMPT_VERSION = "image-description-v1"
+# Описание — платный этап: не больше одного автоматического повтора на вызов.
+IMAGE_RETRY_BACKOFF: tuple[float, ...] = (3.0,)
+# Ниже этой уверенности описание сохраняется, но требует проверки.
+IMAGE_REVIEW_CONFIDENCE = 0.5
+MIN_SUMMARY_CHARS = 20
+# Причина «не описано»: предел запуска исчерпан раньше, чем очередь изображений.
+BUDGET_REASON = "budget_exhausted"
+# Строка-разделитель Markdown-таблицы: без неё перечисление ячеек таблицей не считается.
+TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}", re.MULTILINE)
+# Мнение модели о роли — только сигнал: «unclear» решения не меняет.
+ROLE_HINTS: dict[str, str] = {
+    "content": "content",
+    "decorative": "decorative",
+    "service": "service",
+}
 
 # Сколько вырезов уходит одним запросом. Больше — ответ упирается в потолок
 # токенов и обрывается на середине формулы, меньше — платим за инструкцию
@@ -119,10 +142,65 @@ REGION_INSTRUCTION = """Тебе даны вырезы со страницы у�
 2. Таблицу передавай Markdown с вертикальными чертами и строкой-разделителем:
    `| № | Функция |`, ниже `|---|---------|`, ниже строки данных. В ячейке
    допустим LaTeX. Перечисление ячеек через перевод строки таблицей не считается.
-3. График, схему или фотографию описывай одной фразой по-русски: что изображено.
+3. У графика, схемы или фотографии перепиши только надписи на изображении
+   дословно, через перевод строки. Надписей нет — верни пустую строку.
+   Не описывай, что изображено.
 4. Обычный текст переписывай дословно.
 5. index в ответе — тот же, что и в подписи к вырезу; порядок ответов неважен.
 6. Нечитаемое место передавай как ⟨?⟩ и ставь confidence ниже 0.5."""
+
+
+IMAGE_INSTRUCTION = """Ты описываешь один вырез-изображение из учебного материала.
+Описание нужно для поиска и проверки человеком. Верни JSON по схеме и ничего
+кроме него. Пиши по-русски.
+
+1. Описывай только то, что видно на вырезе. Подпись и соседний текст даны для
+   ориентира: всё, что взято из них, а не увидено, пиши только в context_note.
+2. title — короткое название, до 10 слов. summary — 2–6 предложений: что
+   изображено и как части связаны. Не делай выводов, которых изображение не
+   подтверждает.
+3. visible_objects — видимые объекты. relations — связи между ними в виде
+   «A → B: что передаётся». labels — все надписи на изображении дословно.
+4. details: у графика — оси, единицы и легенда; у таблицы — строки и столбцы;
+   у схемы — узлы и связи.
+5. Таблица — table_markdown: Markdown с | и строкой-разделителем. Формула —
+   latex без $ и без окружения. Иначе оба поля — пустые строки.
+6. Нечитаемое не угадывай: перечисли такие места в unreadable и снизь confidence.
+7. crop_issue: cut_off — рисунок обрезан рамкой; extra_text — в вырез попал
+   посторонний абзац; multiple_objects — несколько независимых рисунков;
+   empty — вырез пустой; unreadable — прочитать нельзя; иначе none.
+8. content_role: content — содержательное изображение; decorative — украшение
+   или фон; service — логотип, колонтитул, служебная отметка; unclear — не понять."""
+
+
+class CloudImageDescription(BaseModel):
+    """Ответ модели про один вырез-изображение."""
+
+    kind: Literal[
+        "diagram",
+        "chart",
+        "photo",
+        "screenshot",
+        "table",
+        "formula",
+        "text",
+        "map",
+        "drawing",
+        "other",
+    ]
+    content_role: Literal["content", "decorative", "service", "unclear"]
+    crop_issue: Literal["none", "cut_off", "extra_text", "multiple_objects", "empty", "unreadable"]
+    title: str
+    summary: str
+    visible_objects: list[str]
+    relations: list[str]
+    labels: list[str]
+    unreadable: list[str]
+    details: list[str]
+    table_markdown: str
+    latex: str
+    context_note: str
+    confidence: float = Field(ge=0, le=1)
 
 
 class CloudElement(BaseModel):
@@ -325,6 +403,13 @@ class CloudRecognizer:
     # Паузы между повторами вызова. В работе — боевые из шлюза; тесты передают
     # пустую последовательность, чтобы не ждать по-настоящему.
     retry_backoff: Sequence[float] = RETRY_BACKOFF_SECONDS
+    # Снимок моделей запуска. `None` — модель роли по умолчанию (старые задачи
+    # без снимка и одноразовые проверки).
+    page_model: AiModelSelection | None = None
+    description_model: AiModelSelection | None = None
+    # Денежный и счётный предел запуска: резерв до сети, расход по `usage`.
+    budget: BudgetContext | None = None
+    image_retry_backoff: Sequence[float] = IMAGE_RETRY_BACKOFF
     # Один event loop на весь разбор материала, а не на каждый вызов модели.
     # `asyncio.run()` в `_ask` создавал и закрывал свой loop на каждой странице
     # и на каждой пачке вырезов; `AsyncOpenAI`-клиент внутри шлюза переживал
@@ -337,6 +422,12 @@ class CloudRecognizer:
     # Сколько кусков подряд не прочиталось. Считается подряд, а не всего:
     # разрозненные осечки — это свойство модели, а сплошная полоса — авария.
     _failures: int = field(default=0, init=False, repr=False, compare=False)
+    # Видимые факты по точному хешу выреза: повтор той же картинки в этом
+    # запуске не оплачивается второй раз.
+    _visible: dict[str, DescribedImage] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    _images_stopped: bool = field(default=False, init=False, repr=False, compare=False)
 
     def close(self) -> None:
         """Закрыть общий event loop. Без вызова он держит ресурсы до GC."""
@@ -403,31 +494,117 @@ class CloudRecognizer:
             )
         return parts
 
+    def describe_images(self, images: Sequence[ImageRequest]) -> list[DescribedImage]:
+        """Описать вырезы-изображения: один вызов на видимое содержание.
+
+        Вырез с уже описанным в этом запуске хешем получает те же видимые факты
+        без вызова; контекстное название у него своё — его подпись. Сорвавшийся
+        вызов не роняет разбор: изображение получает статус ошибки и остаётся
+        вырезом оригинала.
+        """
+        result: list[DescribedImage] = []
+        for request in images:
+            known = self._visible.get(request.crop_hash)
+            if known is not None:
+                result.append(_reused(known, request))
+                continue
+            if self._images_stopped:
+                result.append(DescribedImage(request.index, None, "unreviewed", (BUDGET_REASON,)))
+                continue
+            try:
+                answer = self._ask_result(
+                    self._image_parts(request),
+                    CloudImageDescription,
+                    request.page_number,
+                    role=IMAGE_ROLE,
+                    model=self.description_model,
+                    retry_backoff=self.image_retry_backoff,
+                )
+            except PageUnreadable as error:
+                result.append(
+                    DescribedImage(
+                        request.index, None, "needs_review", ("model_error",), error=str(error)
+                    )
+                )
+                continue
+            except ProjectDomainError as error:
+                if not error.code.startswith("run_budget"):
+                    raise
+                # Предел запуска исчерпан на описаниях: текст страниц важнее,
+                # поэтому разбор идёт дальше, а изображения остаются без описания
+                # и попадут в «Описать изображения» готового материала.
+                log.warning("описания изображений остановлены пределом запуска: %s", error)
+                self._images_stopped = True
+                result.append(DescribedImage(request.index, None, "unreviewed", (BUDGET_REASON,)))
+                continue
+            described = replace(
+                validate_description(answer.value, request.index),
+                run_id=str(answer.run_id),
+                model_id=answer.actual_model_id or answer.requested_model_id,
+            )
+            self._visible[request.crop_hash] = described
+            result.append(described)
+        return result
+
+    @staticmethod
+    def _image_parts(request: ImageRequest) -> list[AiTextPart | AiImagePart]:
+        """Инструкция, страница, подпись и соседний текст, затем сам вырез."""
+        lines = [f"Страница {request.page_number}."]
+        if request.caption:
+            lines.append(f"Подпись рядом с изображением: «{request.caption}».")
+        if request.context:
+            lines.append(f"Соседний текст (только для ориентира): «{request.context}».")
+        return [
+            AiTextPart(text=IMAGE_INSTRUCTION),
+            AiTextPart(text="\n".join(lines)),
+            AiImagePart(image_url=AiImageUrl(url=_data_url(request.image, request.media_type))),
+        ]
+
     def _ask[T: BaseModel](
         self,
         parts: list[AiTextPart | AiImagePart],
         response_model: type[T],
         page_number: int,
     ) -> T:
+        """Вызов роли распознавания страницы; значение ответа без учётных полей."""
+        return self._ask_result(
+            parts, response_model, page_number, role=ROLE, model=self.page_model
+        ).value
+
+    def _ask_result[T: BaseModel](
+        self,
+        parts: list[AiTextPart | AiImagePart],
+        response_model: type[T],
+        page_number: int,
+        *,
+        role: str,
+        model: AiModelSelection | None,
+        retry_backoff: Sequence[float] | None = None,
+    ) -> AiResult[T]:
         """Один вызов шлюза.
 
         `confirmed=True` не обходит лимиты: дневной и разовый потолок стоимости
-        проверяются всё равно. Он значит только, что подтверждать каждую
-        страницу отдельно некому — пользователь подтвердил разбор целиком,
-        когда выбрал режим «Облако» и запустил обработку материала.
+        проверяются всё равно, а предел запуска — через `budget`. Он значит
+        только, что подтверждать каждую страницу отдельно некому — пользователь
+        подтвердил запуск целиком, когда выбрал режим «Облако» и увидел оценку.
+        Исчерпанный предел запуска (`ProjectDomainError`) пробрасывается как есть:
+        следующий вызов упёрся бы в него же.
         """
         request = AiTextRequest(
-            role=ROLE,
+            role=role,
             messages=[AiMessage(role="user", content=parts)],
             response_model=response_model,
             source_fingerprint={"page": page_number},
+            request_model_override=model,
             confirmed=True,
+            budget_context=self.budget,
         )
         if self._loop is None:
             self._loop = asyncio.new_event_loop()
+        backoff = self.retry_backoff if retry_backoff is None else retry_backoff
         try:
             result = self._loop.run_until_complete(
-                ModelGateway(self.session, self.transport, self.retry_backoff).complete(request)
+                ModelGateway(self.session, self.transport, backoff).complete(request)
             )
         except AiGatewayError as error:
             self._failures += 1
@@ -441,7 +618,7 @@ class CloudRecognizer:
             )
             raise PageUnreadable(str(error)) from error
         self._failures = 0
-        return result.value
+        return result
 
     def _page(
         self,
@@ -505,6 +682,74 @@ class CloudRecognizer:
             tuple(dict.fromkeys(diagnostics)),
             confidence,
         )
+
+
+def validate_description(answer: CloudImageDescription, index: int) -> DescribedImage:
+    """Проверить ответ про вырез и решить, что с ним делать.
+
+    Ответ, прошедший схему, всё равно может быть непригоден: пустой, с обрезанной
+    рамкой, с таблицей без разделителя или формулой, которую KaTeX не соберёт.
+    Такое сохраняется со статусом «требует проверки», а не выдаётся за знание;
+    пустой ответ не сохраняется вовсе.
+    """
+    title = answer.title.strip()
+    summary = answer.summary.strip()
+    if not title and not summary:
+        return DescribedImage(index, None, "needs_review", ("empty_answer",), error="empty")
+    reasons: list[str] = []
+    if len(summary) < MIN_SUMMARY_CHARS:
+        reasons.append("summary_short")
+    if answer.crop_issue != "none":
+        reasons.extend(("crop_suspect", f"crop_{answer.crop_issue}"))
+    table = answer.table_markdown.strip()
+    if table and not TABLE_SEPARATOR_RE.search(table):
+        reasons.append("table_invalid")
+    latex = answer.latex.strip().strip("$").strip()
+    if latex and latex_issues(f"$${latex}$$"):
+        reasons.append("latex_invalid")
+    if answer.unreadable or UNREADABLE_MARK in summary:
+        reasons.append("unreadable_parts")
+    if answer.confidence < IMAGE_REVIEW_CONFIDENCE:
+        reasons.append("low_confidence")
+    description = ImageDescription(
+        kind=answer.kind,
+        title=title,
+        summary=summary,
+        objects=_clean(answer.visible_objects),
+        relations=_clean(answer.relations),
+        labels=_clean(answer.labels),
+        unreadable=_clean(answer.unreadable),
+        details=_clean(answer.details),
+        table_markdown="" if "table_invalid" in reasons else table,
+        latex="" if "latex_invalid" in reasons else latex,
+        context_note=answer.context_note.strip(),
+        confidence=answer.confidence,
+    )
+    return DescribedImage(
+        index,
+        description,
+        "needs_review" if reasons else "unreviewed",
+        tuple(reasons),
+        ROLE_HINTS.get(answer.content_role),
+    )
+
+
+def _clean(items: Sequence[str]) -> tuple[str, ...]:
+    return tuple(item.strip() for item in items if item.strip())
+
+
+def _reused(known: DescribedImage, request: ImageRequest) -> DescribedImage:
+    """Видимые факты повтора без вызова; контекст — собственная подпись вхождения."""
+    description = known.description
+    if description is not None:
+        note = f"Подпись: {request.caption}" if request.caption else ""
+        description = replace(description, context_note=note)
+    return replace(
+        known,
+        index=request.index,
+        description=description,
+        reasons=tuple(dict.fromkeys((*known.reasons, "reused_by_hash"))),
+    )
 
 
 def _unreadable_page(

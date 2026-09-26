@@ -16,7 +16,7 @@ import shutil
 import threading
 from collections import OrderedDict, defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -40,13 +40,20 @@ from app.bindings.service import (
 )
 from app.config import settings
 from app.db import job_write_transaction
+from app.materials import processing_plan
 from app.materials import revisions as revision_registry
 from app.materials.external import fetch_web_page, fetch_youtube_transcript
+from app.materials.image_meta import (
+    element_meta,
+    meta_from_json,
+    meta_to_json,
+    needs_description,
+)
 from app.materials.lexicon import index_text, prefix_term, query_terms
 from app.materials.naming import material_display_name, project_material_display_name
 from app.materials.outline import find_printed_outline
 from app.materials.outline_titles import GENERAL_TITLE_RE, TOPIC_TITLE_RE
-from app.materials.parsers.base import ParsedElement, ParsedPage
+from app.materials.parsers.base import ImageMeta, ParsedElement, ParsedPage
 from app.materials.parsers.native import extract_outline, inspect, parse_text_page
 from app.materials.presentation import (
     MaterialPresentationKind,
@@ -56,6 +63,7 @@ from app.materials.schemas import (
     BlockRead,
     ExamMaterialSlot,
     FragmentRead,
+    ImageCountsRead,
     LibraryExternalMaterialCreate,
     LibraryMaterialAttachWrite,
     LibraryMaterialCapabilities,
@@ -78,6 +86,7 @@ from app.materials.schemas import (
     PageRead,
     PageStateRead,
     PageTextUpdate,
+    ProcessingEstimateRead,
     ProcessingStart,
     ProcessingTaskRead,
     SourceRefreshResult,
@@ -102,6 +111,7 @@ from app.models import (
     MaterialSourceKind,
     MaterialState,
     PageQuality,
+    ParserMode,
     ProcessingStage,
     Project,
     ProjectMaterial,
@@ -701,6 +711,7 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
         storage_path=f"data/storage/{material.storage_path}",
         raster_token=raster_token(session, material_id),
         typst=typst,
+        images=image_counts(session, material),
     )
 
 
@@ -1738,6 +1749,18 @@ def start_processing_core(
     task = latest_task(session, material_id)
     if task and task.state in ACTIVE_TASK_STATES:
         raise ProjectConflictError("Разбор уже запущен", code="material_processing_active")
+    if session.scalar(
+        select(BackgroundJob.id).where(
+            BackgroundJob.material_id == material_id,
+            BackgroundJob.kind == BackgroundJobKind.IMAGE_DESCRIPTIONS,
+            BackgroundJob.state.in_(ACTIVE_TASK_STATES),
+        )
+    ):
+        # Новая ревизия разбора сделала бы ответы описаний конфликтом: пусть
+        # сначала закончится или будет отменена начатая задача.
+        raise ProjectConflictError(
+            "Идёт описание изображений этого материала", code="material_processing_active"
+        )
     if task and task.state == BackgroundJobState.FAILED:
         _discard_failed_task(session, material, task)
     # Готовность движка спрашиваем у реестра распознавания, а не у сервиса
@@ -1756,6 +1779,13 @@ def start_processing_core(
             context={"parser_mode": command.parser_mode.value},
         )
     pages = _selected_pages(session, material, command)
+    options = processing_plan.run_options(session, material, command)
+    budget = None
+    if command.parser_mode == ParserMode.CLOUD and material.source_kind != MaterialSourceKind.AUDIO:
+        # Предел суммы и вызовов проверяется до постановки: неизвестная цена
+        # без согласия и модель без картинок останавливают запуск здесь.
+        plan = processing_plan.estimate(session, material, command, pages)
+        budget = processing_plan.run_budget(command, plan)
     revision = revision_registry.max_revision(session, material_id) + 1
     scope: dict[str, Any] = {"kind": command.scope}
     if command.scope == "range":
@@ -1776,6 +1806,8 @@ def start_processing_core(
             "selected_pages": pages,
             "next_index": 0,
             "scope": scope,
+            "options": options,
+            **({"budget": budget} if budget is not None else {}),
         },
         diagnostics=[],
         pause_requested=False,
@@ -1836,6 +1868,15 @@ def control_task_core(session: Session, material_id: UUID, action: str) -> Backg
     return task
 
 
+def processing_estimate(
+    session: Session, material_id: UUID, command: ProcessingStart
+) -> ProcessingEstimateRead:
+    """Read-only оценка запуска с теми же областью и выбором, что у старта."""
+    material = material_or_404(session, material_id)
+    pages = _selected_pages(session, material, command)
+    return processing_plan.estimate(session, material, command, pages)
+
+
 def start_library_processing(
     session: Session, material_id: UUID, command: ProcessingStart
 ) -> LibraryMaterialDetailRead:
@@ -1858,7 +1899,7 @@ def control_library_task(
 
 
 def element_to_parsed(item: dict[str, Any]) -> ParsedElement:
-    return ParsedElement(
+    element = ParsedElement(
         item["kind"],
         item["text"],
         tuple(item["bbox"]),
@@ -1868,11 +1909,18 @@ def element_to_parsed(item: dict[str, Any]) -> ParsedElement:
         item.get("time_to"),
         item.get("asset_path"),
         item.get("recognition_source", "native"),
+        bool(item.get("bbox_reliable", True)),
+        meta_from_json(item["image"]) if item.get("image") else None,
     )
+    if element.kind == "image" and element.image is None:
+        # Страница разобрана до явных осей состояния: выводим их один раз здесь,
+        # а не угадываем по префиксу текста в каждом потребителе.
+        return replace(element, image=element_meta(element))
+    return element
 
 
 def element_to_json(element: ParsedElement) -> dict[str, Any]:
-    return {
+    data: dict[str, Any] = {
         "kind": element.kind,
         "text": element.text,
         "bbox": list(element.bbox),
@@ -1883,6 +1931,45 @@ def element_to_json(element: ParsedElement) -> dict[str, Any]:
         "asset_path": element.asset_path,
         "recognition_source": element.recognition_source,
     }
+    if not element.bbox_reliable:
+        data["bbox_reliable"] = False
+    meta = element_meta(element)
+    if meta is not None:
+        data["image"] = meta_to_json(meta)
+    return data
+
+
+def image_counts_of(metas: Sequence[ImageMeta]) -> ImageCountsRead:
+    """Счётчики изображений по их состоянию: всего, без описания, описано…"""
+    return ImageCountsRead(
+        total=len(metas),
+        describable=sum(needs_description(meta) for meta in metas),
+        described=sum(meta.processing == "described" for meta in metas),
+        needs_review=sum(meta.review == "needs_review" for meta in metas),
+        service=sum(meta.role in {"service", "decorative"} for meta in metas),
+    )
+
+
+def image_counts(session: Session, material: Material) -> ImageCountsRead:
+    """Счётчики карточки материала по фрагментам активной ревизии."""
+    if material.active_parse_revision <= 0:
+        return ImageCountsRead()
+    rows = session.scalars(
+        select(MaterialFragment.visual)
+        .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+        .where(
+            MaterialFragment.material_id == material.id,
+            MaterialPage.revision == material.active_parse_revision,
+            MaterialFragment.element_kind == "image",
+        )
+    ).all()
+    return image_counts_of([meta_from_json(row) if row else ImageMeta() for row in rows])
+
+
+def fragment_visual(element: ParsedElement) -> dict[str, Any] | None:
+    """Состояние изображения для строки фрагмента; у текста — None."""
+    meta = element_meta(element)
+    return meta_to_json(meta) if meta is not None else None
 
 
 def page_to_parsed(page: MaterialPage) -> ParsedPage:
@@ -2019,6 +2106,7 @@ def rebuild_structure(
                 confidence=element.confidence,
                 time_from=element.time_from,
                 time_to=element.time_to,
+                visual=fragment_visual(element),
                 degraded_structure=not has_heading.get(page_number, False),
                 quality=page.quality,
             )
@@ -2113,6 +2201,7 @@ def rebuild_checkpoint_page(session: Session, page: MaterialPage) -> None:
                 asset_path=element.asset_path,
                 time_from=element.time_from,
                 time_to=element.time_to,
+                visual=fragment_visual(element),
             )
         )
 

@@ -8,7 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import ParserMode
-from app.ocr.engines import RASTER_SCALE_OPTIONS, CloudStrategy
+from app.ocr.engines import RASTER_SCALE_OPTIONS, CloudStrategy, ImageMode
 
 RasterScale = Literal[*RASTER_SCALE_OPTIONS]
 EngineRuntime = Literal["worker", "gpu_service", "cloud"]
@@ -113,6 +113,14 @@ class OcrCloudStrategyRead(ApiModel):
     hint: str
 
 
+class OcrImageModeRead(ApiModel):
+    """Что делать с изображениями на запуске: описывать, только текст или ничего."""
+
+    value: ImageMode
+    title: str
+    hint: str
+
+
 class OcrCloudModelRead(ApiModel):
     """Кандидат в распознаватели страниц из локального каталога моделей."""
 
@@ -139,6 +147,9 @@ class OcrCloudRead(ApiModel):
     strategy: CloudStrategy
     strategies: list[OcrCloudStrategyRead]
     price_per_page_usd: Decimal | None
+    # Оценка одного описания выреза той же моделью: плитка картинки, инструкция,
+    # подпись с контекстом и потолок структурного ответа.
+    price_per_image_usd: Decimal | None = None
 
 
 class SpeechEngineRead(ApiModel):
@@ -163,3 +174,5 @@ class OcrSettingsRead(ApiModel):
     engines: list[OcrEngineRead]
     cloud: OcrCloudRead
     speech: list[SpeechEngineRead]
+    # Режимы изображений по движку (`cloud`/`fast`), первый — выбор по умолчанию.
+    image_modes: dict[str, list[OcrImageModeRead]] = {}
