@@ -25,13 +25,14 @@ from app.bindings.schemas import (
     SearchResponse,
 )
 from app.bindings.search import reuse_fragment_search
-from app.db import SessionLocal, get_session
+from app.db import SessionLocal, get_search_session, get_session
 from app.models import BindingStatus
 from app.projects.errors import ProjectDomainError
 from app.retrieval.schemas import RetrievalScope, RetrievalSearchWrite, SearchStrategy
 from app.retrieval.search import HybridRetriever
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+SearchSessionDependency = Annotated[Session, Depends(get_search_session)]
 GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["bindings"])
 
@@ -39,7 +40,7 @@ router = APIRouter(prefix="/api/projects/{project_id}", tags=["bindings"])
 @router.get("/search", response_model=SearchResponse)
 def search_materials(
     project_id: UUID,
-    session: SessionDependency,
+    session: SearchSessionDependency,
     q: str = "",
     material_id: UUID | None = None,
     node_id: UUID | None = None,

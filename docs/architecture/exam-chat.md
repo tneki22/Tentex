@@ -136,7 +136,7 @@ upgrade/downgrade сохраняют пустой `PRAGMA foreign_key_check`.
 | GET | `/projects/{project}/chat/sessions?node_id=…` | чаты темы по времени изменения |
 | POST | `/projects/{project}/chat/sessions` | новый чат для `program_node_id` |
 | GET | `/projects/{project}/chat/sessions/{chat}` | чат, черновик и полная лента |
-| PUT | `/projects/{project}/chat/sessions/{chat}/draft` | сохранённый черновик |
+| PUT | `/projects/{project}/chat/sessions/{chat}/draft` | сохранённый черновик; тот же текст не пишется и не сдвигает `updated_at` |
 | PUT | `/projects/{project}/chat/sessions/{chat}/settings` | частичный PATCH mode/persona/strictness/model_override/model_parameters/context_flags |
 | GET | `/projects/{project}/chat/sessions/{chat}/context` | manifest, fingerprint, объём и источник модели — preview перед вызовом |
 | GET | `/projects/{project}/chat/capabilities?node_id=…` | режимы, навыки и Tools с `available`/`unavailable_reason` |

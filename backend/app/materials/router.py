@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
 from app.background.schemas import BackgroundJobStartRead
-from app.db import get_session
+from app.db import get_search_session, get_session
 from app.materials import ai_cleanup, header_footer, library, outline_ai, service, typst
 from app.materials.schemas import (
     ExamCompositeDraftImportResult,
@@ -50,6 +50,7 @@ from app.projects.errors import ProjectDomainError
 from app.projects.schemas import ProgramChangeResult
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+SearchSessionDependency = Annotated[Session, Depends(get_search_session)]
 GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
 router = APIRouter(prefix="/api", tags=["materials"])
 
@@ -270,7 +271,7 @@ def restore_material_revision(
 @router.get("/materials/{material_id}/search", response_model=LibrarySearchResult)
 def search_material(
     material_id: UUID,
-    session: SessionDependency,
+    session: SearchSessionDependency,
     q: str = "",
     revision: int | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,

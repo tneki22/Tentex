@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 
 from app.config import settings
-from app.db import SessionLocal, engine, upgrade_database
+from app.db import SessionLocal, dispose_engines, upgrade_database
 from app.models import (
     BackgroundJob,
     BackgroundJobState,
@@ -158,7 +158,7 @@ def _check_database(path: Path) -> None:
 def _switch(staging: Path, rollback: Path) -> None:
     """Заменить два поколения после закрытия соединений; rollback остаётся рядом."""
     rollback.mkdir(parents=True, exist_ok=False)
-    engine.dispose()
+    dispose_engines()
     database_old = rollback / "tentex.sqlite"
     storage_old = rollback / "storage"
     if settings.database_path.exists():
@@ -174,7 +174,7 @@ def _switch(staging: Path, rollback: Path) -> None:
 
 
 def _rollback(rollback: Path) -> None:
-    engine.dispose()
+    dispose_engines()
     if settings.database_path.exists():
         settings.database_path.unlink()
     if settings.storage_dir.exists():

@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.background.schemas import BackgroundJobRead, BackgroundJobStartRead
-from app.db import get_session
+from app.db import get_search_session, get_session
 from app.models import (
     RetrievalBenchmarkCase,
     RetrievalBenchmarkRun,
@@ -37,6 +37,7 @@ from app.retrieval.schemas import (
 from app.retrieval.search import HybridRetriever
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+SearchSessionDependency = Annotated[Session, Depends(get_search_session)]
 router = APIRouter(prefix="/api", tags=["retrieval"])
 
 
@@ -160,13 +161,15 @@ def index_material(material_id: UUID, session: SessionDependency) -> BackgroundJ
 
 
 @router.post("/retrieval/search", response_model=RetrievalSearchRead)
-async def search(command: RetrievalSearchWrite, session: SessionDependency) -> RetrievalSearchRead:
+async def search(
+    command: RetrievalSearchWrite, session: SearchSessionDependency
+) -> RetrievalSearchRead:
     return await HybridRetriever().search(session, command)
 
 
 @router.post("/library/search", response_model=RetrievalSearchRead)
 async def search_library(
-    command: RetrievalSearchWrite, session: SessionDependency
+    command: RetrievalSearchWrite, session: SearchSessionDependency
 ) -> RetrievalSearchRead:
     return await HybridRetriever().search(session, command)
 

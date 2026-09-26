@@ -216,6 +216,13 @@ def get_session_detail(session: Session, project_id: UUID, chat_id: UUID) -> Cha
 
 
 def save_draft(session: Session, project_id: UUID, chat_id: UUID, text: str) -> ChatSession:
+    # Открытие чата отправляет только что загруженный черновик обратно. Тот же
+    # текст не пишем: любая запись сбрасывает кэш страниц у всех соединений API,
+    # а новый updated_at поднимал бы сессию в списке без действий пользователя.
+    _require_exam_project(session, project_id)
+    current = _require_session(session, project_id, chat_id)
+    if current.draft_text == text:
+        return current
     with project_write_transaction(session, project_id):
         _require_exam_project(session, project_id)
         chat = _require_session(session, project_id, chat_id)

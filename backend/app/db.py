@@ -7,7 +7,7 @@ from uuid import UUID
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import URL, MetaData, create_engine, event, text
+from sqlalchemy import URL, Engine, MetaData, create_engine, event, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import NullPool, QueuePool
@@ -32,33 +32,46 @@ class Base(DeclarativeBase):
 #: Кэш страниц одного постоянного соединения API. Соединение сбрасывает его
 #: само, как только другой процесс записал в WAL, поэтому устаревших данных нет.
 POOLED_CACHE_KIB = 65536
+#: Постоянные соединения поиска. Пачка GET экрана разбирает общий пул, и поиск
+#: попадал на соединение с холодным кэшем: первый поиск на нём 3 с вместо 0,3 с
+#: (чтение с bind-mount). Свой маленький пул держит индекс кусков прогретым.
+SEARCH_POOL_SIZE = 2
 
 
-def _pool_arguments() -> dict[str, object]:
+def _pool_arguments(pool_size: int) -> dict[str, object]:
     """Пул для API или новое соединение на сессию для воркера и скриптов."""
-    if settings.sqlite_pool_size == 0:
+    if pool_size == 0:
         return {"poolclass": NullPool}
     # QueuePool по умолчанию (5+10, 30 с) исчерпывался пачкой GET с экрана.
     # Большой overflow снимает этот предел: лишние соединения закрываются
     # при возврате. LIFO отдаёт последнее соединение, у которого кэш прогрет.
     return {
         "poolclass": QueuePool,
-        "pool_size": settings.sqlite_pool_size,
+        "pool_size": pool_size,
         "max_overflow": 64,
         "pool_timeout": 60,
         "pool_use_lifo": True,
     }
 
 
-engine = create_engine(
-    URL.create("sqlite+pysqlite", database=str(settings.database_path)),
-    connect_args={"autocommit": False, "check_same_thread": False, "timeout": 30},
-    **_pool_arguments(),
-)
+def _create_engine(pool_size: int) -> Engine:
+    return create_engine(
+        URL.create("sqlite+pysqlite", database=str(settings.database_path)),
+        connect_args={"autocommit": False, "check_same_thread": False, "timeout": 30},
+        **_pool_arguments(pool_size),
+    )
+
+
+engine = _create_engine(settings.sqlite_pool_size)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+search_engine = (
+    _create_engine(min(SEARCH_POOL_SIZE, settings.sqlite_pool_size))
+    if settings.sqlite_pool_size
+    else engine
+)
+SearchSessionLocal = sessionmaker(bind=search_engine, expire_on_commit=False)
 
 
-@event.listens_for(engine, "connect")
 def configure_sqlite(dbapi_connection: object, _: object) -> None:
     previous_autocommit = dbapi_connection.autocommit
     dbapi_connection.autocommit = True
@@ -83,8 +96,24 @@ def configure_sqlite(dbapi_connection: object, _: object) -> None:
         dbapi_connection.autocommit = previous_autocommit
 
 
+for _engine in {engine, search_engine}:
+    event.listen(_engine, "connect", configure_sqlite)
+
+
 def get_session() -> Iterator[Session]:
     with SessionLocal() as session:
+        yield session
+
+
+def dispose_engines() -> None:
+    """Закрыть соединения обоих пулов перед подменой файла базы."""
+    for pooled in {engine, search_engine}:
+        pooled.dispose()
+
+
+def get_search_session() -> Iterator[Session]:
+    """Сессия поисковых GET: те же данные, но соединения из пула поиска."""
+    with SearchSessionLocal() as session:
         yield session
 
 

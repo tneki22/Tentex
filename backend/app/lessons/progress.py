@@ -36,6 +36,13 @@ def save_position(
     session: Session, project_id: UUID, lesson_id: UUID, command: LessonProgressWrite
 ) -> LessonChangeResult:
     """Позиция чтения меняется часто и молча: ни ревизии, ни записи в журнал."""
+    # Открытый урок сообщает блок, с которого начался, — это уже сохранённая
+    # позиция. Её не переписываем: любая запись сбрасывает кэш страниц у всех
+    # соединений API, и соседние запросы экрана читают базу с диска.
+    _require_lessons_project(session, project_id, writable=True)
+    current = _require_lesson(session, project_id, lesson_id)
+    if current.last_block_id == command.last_block_id:
+        return _change_result(session, current)
     with project_write_transaction(session, project_id):
         _require_lessons_project(session, project_id, writable=True)
         lesson = _require_lesson(session, project_id, lesson_id)
