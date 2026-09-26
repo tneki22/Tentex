@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw
 from app.materials.parsers.base import (
     DescribedImage,
     ImageRequest,
+    PageImage,
     ParsedPage,
     RecognizedRegion,
     RegionRequest,
@@ -28,10 +29,15 @@ from app.ocr.engines import OcrRuntimeParams
 class StubRecognizer:
     """Заглушка внешней модели: запоминает, о чём её спросили."""
 
+    concurrency = 1
+
     def __init__(self) -> None:
         self.pages: list[int] = []
         self.regions: list[RegionRequest] = []
         self.described: list[ImageRequest] = []
+
+    def prefetch_pages(self, pages: Sequence[PageImage]) -> None:
+        del pages
 
     def recognize_page(
         self, image: bytes, page_number: int, width: float, height: float

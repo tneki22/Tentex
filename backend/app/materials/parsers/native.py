@@ -9,6 +9,7 @@ from io import BytesIO
 from pathlib import Path
 from statistics import median
 from tempfile import NamedTemporaryFile
+from typing import Literal
 
 import pymupdf as fitz
 from docx import Document
@@ -25,7 +26,7 @@ from app.materials.image_meta import (
     pixel_size,
     with_description,
 )
-from app.materials.parsers import paddle_fast, raster, reading_order
+from app.materials.parsers import inline_formulas, paddle_fast, raster, reading_order
 from app.materials.parsers.audio import parse_audio
 from app.materials.parsers.base import (
     IMAGE_PLACEHOLDER,
@@ -33,13 +34,17 @@ from app.materials.parsers.base import (
     ImageMeta,
     ImageProvenance,
     ImageRequest,
+    PageImage,
     PageRecognizer,
     ParsedElement,
     ParsedPage,
     RecognitionSource,
     RegionRequest,
 )
-from app.materials.parsers.cloud_vlm import IMAGE_PROMPT_VERSION, wrap_bare_latex
+from app.materials.parsers.cloud_vlm import (
+    IMAGE_PROMPT_VERSION,
+    TABLE_SEPARATOR_RE,
+)
 from app.materials.parsers.pdf_layout import parse_layout_page
 from app.materials.parsers.text_layer import TextLayerDiagnosis, diagnose
 from app.materials.storage import material_path, store_material_asset
@@ -69,6 +74,17 @@ MIN_IMAGE_SIDE = 8
 # схемы стоило бы два десятка платных вызовов на страницу. Такой растр —
 # формула: «Облако» читает их пачкой вырезов, «Быстро» хранит вырезом.
 INLINE_RASTER_MAX_PT = 24
+# Строчный растр уже порога выше — однобуквенная формула («k» в 7,7pt): его
+# пропускает не ширина, а размер в пикселях (крошку всё равно отсеет `TINY_SIDE_PX`).
+MIN_INLINE_WIDTH = 4
+# Выносная формула картинкой: низкая и вытянутая, без подписи «Рис.». Её сначала
+# читают вырезом формулы в общей пачке, и только если модель скажет «рисунок»,
+# она уходит на отдельное (и в разы более дорогое) описание.
+DISPLAY_FORMULA_MAX_PT = 60
+DISPLAY_FORMULA_MIN_ASPECT = 3.0
+# Качество JPEG страницы для модели: ниже на мелком кегле скана появляются
+# ореолы вокруг букв, выше файл растёт без пользы для чтения.
+MODEL_JPEG_QUALITY = 90
 # Длинная сторона выреза, уходящего на описание. Больше — лишние плитки и
 # деньги без новой информации для описания схемы.
 DESCRIBE_MAX_SIDE_PX = 1536
@@ -287,18 +303,20 @@ def _image_element(
         return None
     params = params or OcrRuntimeParams()
     x0, top, x1, bottom = block["bbox"]
-    if (x1 - x0) < MIN_IMAGE_SIDE or (bottom - top) < MIN_IMAGE_SIDE:
-        return None
-    extension = str(block.get("ext") or "png").lower()
-    asset_path = store_material_asset(owner, f"p{page_number}-{index}.{extension}", data)
-    bbox = _normalized_bbox((x0, top, x1, bottom), page.rect.width, page.rect.height)
     size = pixel_size(data)
     if size is None and block.get("width") and block.get("height"):
         size = (int(block["width"]), int(block["height"]))
     # Крошка в пару пикселей — значок или точка, а не формула: её решает отбор
     # кандидатов (`tiny` → украшение).
     crumb = size is not None and min(size) < TINY_SIDE_PX
-    if (bottom - top) <= INLINE_RASTER_MAX_PT and not crumb:
+    inline = (bottom - top) <= INLINE_RASTER_MAX_PT and not crumb
+    min_width = MIN_INLINE_WIDTH if inline else MIN_IMAGE_SIDE
+    if (x1 - x0) < min_width or (bottom - top) < MIN_IMAGE_SIDE:
+        return None
+    extension = str(block.get("ext") or "png").lower()
+    asset_path = store_material_asset(owner, f"p{page_number}-{index}.{extension}", data)
+    bbox = _normalized_bbox((x0, top, x1, bottom), page.rect.width, page.rect.height)
+    if inline:
         return ParsedElement(
             "formula", IMAGE_PLACEHOLDER, bbox, asset_path=asset_path, recognition_source="native"
         )
@@ -900,10 +918,20 @@ def _text_layer_page(
     )
 
 
-def _render_page(page: fitz.Page, params: OcrRuntimeParams) -> tuple[bytes, float]:
-    """Растр страницы под распознавание и разрешение, с которым он снят."""
+def _render_page(
+    page: fitz.Page, params: OcrRuntimeParams, *, for_model: bool = False
+) -> tuple[bytes, float]:
+    """Растр страницы под распознавание и разрешение, с которым он снят.
+
+    Модели уходит JPEG: токены она считает по пикселям, а не по байтам, а PNG
+    страницы в 300 dpi весит 3–5 МБ (в запросе ещё и base64) и кодируется почти
+    две секунды. JPEG той же геометрии — около мегабайта и втрое быстрее, а на
+    замере прочитан не хуже. Локальному OCR остаётся PNG без потерь.
+    """
     scale, dpi = raster.render_scale(page, params.raster_scale)
     pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+    if for_model:
+        return pixmap.tobytes("jpg", jpg_quality=MODEL_JPEG_QUALITY), dpi
     return pixmap.tobytes("png"), dpi
 
 
@@ -913,9 +941,13 @@ def _scanned_page(
     owner: str,
     params: OcrRuntimeParams,
     recognizer: PageRecognizer | None,
+    rendered: tuple[bytes, float] | None = None,
 ) -> ParsedPage:
-    """Страница целиком во внешнюю модель или в локальный OCR."""
-    image, dpi = _render_page(page, params)
+    """Страница целиком во внешнюю модель или в локальный OCR.
+
+    :param rendered: растр, уже снятый для чтения наперёд, — второй раз не рендерим.
+    """
+    image, dpi = rendered or _render_page(page, params, for_model=recognizer is not None)
     if recognizer is not None:
         parsed = recognizer.recognize_page(
             image, page_index + 1, page.rect.width, page.rect.height
@@ -1282,27 +1314,78 @@ def _recognized_regions(
     """Дочитать внешней моделью только то, что текстовый слой не объясняет.
 
     Смысл режима: текст страницы уже есть и он точен — платить за его повторное
-    распознавание незачем. Формулы уходят вырезами на транскрипцию. Изображения
+    распознавание незачем. Формулы уходят вырезами на транскрипцию, а таблица
+    слоя с формулами-картинками внутри — одним вырезом целиком. Изображения
     — по режиму запуска: «Описывать» отдельным запросом на вырез, «Только
     текст» вырезами на надписи, «Не распознавать» не уходят вовсе. Служебные и
     сомнительные изображения (`image_candidates`) не уходят ни в каком режиме.
     """
     parsed = finalize_images(parsed)
-    text_only = params.images_for("cloud") == "text_only"
-    targets = [
-        (index, element)
+    mode = params.images_for("cloud")
+    text_only = mode == "text_only"
+    rasters = [
+        index
         for index, element in enumerate(parsed.elements)
-        if element.kind == "formula"
-        or (
-            text_only
-            and element.kind == "image"
-            and needs_description(element_meta(element) or ImageMeta())
-            and auto_send(element_meta(element) or ImageMeta())
-        )
+        if element.kind == "formula" and element.text == IMAGE_PLACEHOLDER
     ]
+    tables = inline_formulas.formulas_in_tables(parsed.elements, rasters)
+    in_tables = {index for _, inner in tables.values() for index in inner}
+    sendable = {
+        index
+        for index, element in enumerate(parsed.elements)
+        if element.kind == "image"
+        and needs_description(element_meta(element) or ImageMeta())
+        and auto_send(element_meta(element) or ImageMeta())
+    }
+    shaped = (
+        {index for index in sendable if _formula_shaped(parsed.elements[index], page)}
+        if mode != "skip"
+        else set()
+    )
+    targets: list[tuple[int, ParsedElement]] = []
+    for index, element in enumerate(parsed.elements):
+        if index in tables:
+            # Вырез — по рамке таблицы вместе с приросшими строками формул.
+            targets.append((index, replace(element, bbox=tables[index][0])))
+        elif index in shaped:
+            targets.append((index, replace(element, kind="formula")))
+        elif (element.kind == "formula" and index not in in_tables) or (
+            text_only and index in sendable
+        ):
+            targets.append((index, element))
     if targets:
-        parsed = _apply_region_answers(page, parsed, recognizer, targets, params)
+        parsed = _apply_region_answers(
+            page, parsed, recognizer, targets, params, rasters,
+            {index: inner for index, (_, inner) in tables.items()}, shaped,
+        )
     return _describe_page_images(parsed, recognizer, params) if not text_only else parsed
+
+
+def _formula_shaped(element: ParsedElement, page: fitz.Page) -> bool:
+    """Изображение, похожее на выносную формулу: низкое, вытянутое, без подписи."""
+    meta = element_meta(element) or ImageMeta()
+    if meta.caption:
+        return False
+    width = (element.bbox[2] - element.bbox[0]) * page.rect.width
+    height = (element.bbox[3] - element.bbox[1]) * page.rect.height
+    return 0 < height <= DISPLAY_FORMULA_MAX_PT and width / height >= DISPLAY_FORMULA_MIN_ASPECT
+
+
+def _display_formula(text: str) -> str:
+    """Ответ про вырез формулы — выносная формула.
+
+    Инструкция вырезов просит LaTeX без обрамления, и так приходит даже простое
+    `P_n(k)`: без `$$` оно показалось бы строкой с подчёркиванием, а не формулой.
+    """
+    return text if "$" in text else f"$${text}$$"
+
+
+def _page_words(page: fitz.Page) -> list[inline_formulas.Word]:
+    width, height = page.rect.width, page.rect.height
+    return [
+        inline_formulas.Word((x0 / width, y0 / height, x1 / width, y1 / height), word)
+        for x0, y0, x1, y1, word, *_ in page.get_text("words")
+    ]
 
 
 def _apply_region_answers(
@@ -1311,8 +1394,20 @@ def _apply_region_answers(
     recognizer: PageRecognizer,
     targets: list[tuple[int, ParsedElement]],
     params: OcrRuntimeParams,
+    rasters: Sequence[int] = (),
+    tables: dict[int, list[int]] | None = None,
+    shaped: set[int] | None = None,
 ) -> ParsedPage:
-    """Транскрипция вырезов формул (и надписей картинок в «Только текст»)."""
+    """Транскрипция вырезов формул и таблиц (и надписей картинок в «Только текст»).
+
+    После ответов формулы-картинки внутри строки встают в свои абзацы, номер
+    формулы, прочитанный отдельно, — в её `\\tag{}`, а формулы внутри таблицы,
+    прочитанной целиком, уходят вместе с ней. Изображение, похожее на формулу,
+    становится формулой, только если модель так и ответила; иначе оно остаётся
+    изображением и идёт на описание.
+    """
+    tables = tables or {}
+    shaped = shaped or set()
     requests = [
         RegionRequest(index=index, kind=element.kind, image=raster.region_image(page, element.bbox))
         for index, element in targets
@@ -1320,9 +1415,22 @@ def _apply_region_answers(
     answers = recognizer.recognize_regions(requests, parsed.page_number)
     recognized = {answer.index: answer for answer in answers}
     elements = list(parsed.elements)
+    gone: set[int] = set()
     for index, element in targets:
         answer = recognized.get(index)
         text = answer.text.strip() if answer is not None else ""
+        if index in shaped:
+            if answer is not None and answer.kind == "formula" and text:
+                elements[index] = replace(
+                    element, text=_display_formula(text), confidence=answer.confidence,
+                    recognition_source="vl", image=None,
+                )
+                continue
+            # Не формула: в «Описывать» её ждёт описание, в «Только текст» —
+            # надписи из этого же ответа.
+            element = parsed.elements[index]
+            if params.images_for("cloud") != "text_only":
+                continue
         if element.kind == "image":
             meta = _text_only_meta(
                 element_meta(element) or ImageMeta(),
@@ -1340,12 +1448,13 @@ def _apply_region_answers(
             continue
         if answer is None or not text:
             continue
-        if answer.kind == "formula":
-            # Инструкция вырезов просит LaTeX без обрамления (крупная страница
-            # рядом уже даёт контекст, окружать $ там незачем) — обрамляем
-            # здесь сами, иначе формула вернётся в текст сырым LaTeX и KaTeX
-            # её не отрисует.
-            text = wrap_bare_latex(text)
+        if index in tables:
+            if answer.kind != "table" or not TABLE_SEPARATOR_RE.search(text):
+                # Таблица не собралась: остаётся слой, а формулы внутри — вырезами.
+                continue
+            gone.update(tables[index])
+        elif answer.kind == "formula":
+            text = _display_formula(text)
         elements[index] = replace(
             element,
             kind=answer.kind,
@@ -1353,8 +1462,21 @@ def _apply_region_answers(
             confidence=answer.confidence,
             recognition_source="vl",
         )
-    updated = tuple(elements)
+    inline = [
+        index
+        for index in rasters
+        if index not in gone and elements[index].text != IMAGE_PLACEHOLDER
+    ]
+    elements, spliced = inline_formulas.splice_inline(elements, _page_words(page), inline)
+    elements, tags = inline_formulas.merge_equation_tags(elements, gone | spliced)
+    updated = tuple(
+        item for index, item in enumerate(elements) if index not in gone | spliced | tags
+    )
     quality, confidence = _page_quality(updated)
+    diagnostics = [f"cloud_regions:{len(requests)}"]
+    diagnostics += [f"table_regions:{len(tables)}"] if tables else []
+    diagnostics += [f"inline_formulas:{len(spliced)}"] if spliced else []
+    diagnostics += [f"formula_tags:{len(tags)}"] if tags else []
     return replace(
         parsed,
         elements=updated,
@@ -1362,12 +1484,59 @@ def _apply_region_answers(
         plain_text="\n".join(item.text for item in updated if item.kind != "image"),
         quality=quality,
         confidence=confidence,
-        diagnostics=(*parsed.diagnostics, f"cloud_regions:{len(requests)}"),
+        diagnostics=(*parsed.diagnostics, *diagnostics),
     )
 
 
 def _blank_page(page: fitz.Page, page_index: int) -> ParsedPage:
     return ParsedPage(page_index + 1, page.rect.width, page.rect.height, "", "", "native", ())
+
+
+PageRoute = Literal["blank", "scan", "local_ocr", "cloud_page", "layer"]
+# Ветки, на которых страница целиком уходит во внешнюю модель.
+CLOUD_PAGE_ROUTES = frozenset({"scan", "cloud_page"})
+
+
+def _page_route(
+    diagnosis: TextLayerDiagnosis, mode: ParserMode, params: OcrRuntimeParams,
+    cloud: bool, whole_page: bool,
+) -> PageRoute:
+    """Ветка разбора страницы по диагнозу слоя, режиму и стратегии запуска."""
+    if diagnosis.route == "blank" and not whole_page:
+        return "blank"
+    if whole_page or diagnosis.route == "scan":
+        return "scan"
+    if diagnosis.suspicious and mode == ParserMode.FAST:
+        return "local_ocr"
+    if diagnosis.suspicious and cloud and params.cloud_strategy == "auto":
+        return "cloud_page"
+    return "layer"
+
+
+def _prefetch_pages(
+    document: fitz.Document,
+    upcoming: Sequence[int],
+    routes: dict[int, tuple[TextLayerDiagnosis, PageRoute]],
+    rendered: dict[int, tuple[bytes, float]],
+    recognizer: PageRecognizer,
+    params: OcrRuntimeParams,
+) -> None:
+    """Отдать модели наперёд страницы, которые целиком уйдут в неё ближайшими.
+
+    Окно — `recognizer.concurrency` страниц подряд; растры сохраняются, чтобы
+    не рендерить их второй раз, когда очередь дойдёт до страницы.
+    """
+    batch: list[PageImage] = []
+    for page_index in upcoming:
+        if routes[page_index][1] not in CLOUD_PAGE_ROUTES or page_index in rendered:
+            continue
+        page = document[page_index]
+        rendered[page_index] = _render_page(page, params, for_model=True)
+        batch.append(
+            PageImage(rendered[page_index][0], page_index + 1, page.rect.width, page.rect.height)
+        )
+    if len(batch) > 1:
+        recognizer.prefetch_pages(batch)
 
 
 def _with_route(
@@ -1397,27 +1566,47 @@ def _pdf_pages(
       «Адаптивно» отдаёт страницу модели целиком, «Экономно» оставляет слой и
       помечает страницу для проверки;
     - пригодный слой — разметка плюс вырезы по режиму изображений.
+
+    Страницы, которые целиком уходят в модель, читаются наперёд окном
+    (`_prefetch_pages`): порядок и чекпоинты остаются постраничными.
     """
     document = fitz.open(path)
     whole_page = mode == ParserMode.CLOUD and params.cloud_strategy == "page"
     repeated = repeated_image_xrefs(document)
-    for page_index in _page_indices(document, start_page, page_numbers):
+    indices = list(_page_indices(document, start_page, page_numbers))
+    window = max(1, recognizer.concurrency) if recognizer is not None else 1
+    routes: dict[int, tuple[TextLayerDiagnosis, PageRoute]] = {}
+    rendered: dict[int, tuple[bytes, float]] = {}
+    for position, page_index in enumerate(indices):
+        # Диагноз дешёвый (текстовый слой без растра), поэтому окно чтения
+        # наперёд знает маршрут следующих страниц заранее.
+        upcoming = indices[position : position + window]
+        for ahead in upcoming:
+            if ahead not in routes:
+                found = diagnose(document[ahead])
+                routes[ahead] = (
+                    found, _page_route(found, mode, params, recognizer is not None, whole_page)
+                )
+        diagnosis, route = routes[page_index]
         page = document[page_index]
-        diagnosis = diagnose(page)
-        if diagnosis.route == "blank" and not whole_page:
+        if recognizer is not None and route in CLOUD_PAGE_ROUTES:
+            if page_index not in rendered:
+                _prefetch_pages(document, upcoming, routes, rendered, recognizer, params)
+            parsed = _scanned_page(page, page_index, owner, params, recognizer,
+                                   rendered.pop(page_index, None))
+            fallback = "cloud_page" if whole_page or route == "cloud_page" else None
+            yield _with_route(parsed, diagnosis, fallback)
+            continue
+        if route == "blank":
             yield _with_route(_blank_page(page, page_index), diagnosis)
             continue
-        if whole_page or diagnosis.route == "scan":
+        if route == "scan":
             parsed = _scanned_page(page, page_index, owner, params, recognizer)
-            yield _with_route(parsed, diagnosis, "cloud_page" if whole_page else None)
+            yield _with_route(parsed, diagnosis)
             continue
-        if diagnosis.suspicious and mode == ParserMode.FAST:
+        if route == "local_ocr":
             parsed = _scanned_page(page, page_index, owner, params, None)
             yield _with_route(parsed, diagnosis, "local_ocr")
-            continue
-        if diagnosis.suspicious and recognizer is not None and params.cloud_strategy == "auto":
-            parsed = _scanned_page(page, page_index, owner, params, recognizer)
-            yield _with_route(parsed, diagnosis, "cloud_page")
             continue
         parsed = _text_layer_page(document, page, page_index, owner, mode, params, repeated)
         if recognizer is not None:

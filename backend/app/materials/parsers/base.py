@@ -173,6 +173,16 @@ class DescribedImage:
     error: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PageImage:
+    """Растр страницы, отправляемый модели целиком."""
+
+    image: bytes
+    page_number: int
+    width: float
+    height: float
+
+
 class PageRecognizer(Protocol):
     """Порт распознавания страницы внешней моделью.
 
@@ -181,10 +191,19 @@ class PageRecognizer(Protocol):
     `native.py` остаётся свободен от импорта пакета `app.ai`.
     """
 
+    # Сколько страниц разбор может отдать наперёд одним `prefetch_pages`.
+    concurrency: int
+
     def recognize_page(
         self, image: bytes, page_number: int, width: float, height: float
     ) -> ParsedPage:
         """Прочитать страницу целиком: разметка, порядок чтения и формулы."""
+
+    def prefetch_pages(self, pages: Sequence[PageImage]) -> None:
+        """Прочитать страницы наперёд; `recognize_page` потом отдаст готовое.
+
+        Только ускорение: реализация вправе ничего не делать.
+        """
 
     def recognize_regions(
         self, regions: Sequence[RegionRequest], page_number: int

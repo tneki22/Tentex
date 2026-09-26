@@ -25,7 +25,7 @@ from app.ai.provider import FakeTransport, ProviderCompletion, ProviderUsage
 from app.materials import image_descriptions, library
 from app.materials.image_candidates import XREF_REPEATED, auto_send, classify
 from app.materials.image_meta import with_description
-from app.materials.parsers import native, text_layer
+from app.materials.parsers import cloud_vlm, native, text_layer
 from app.materials.parsers.base import (
     IMAGE_PLACEHOLDER,
     MODEL_DESCRIPTION_MARK,
@@ -34,6 +34,7 @@ from app.materials.parsers.base import (
     ImageMeta,
     ImageProvenance,
     ImageRequest,
+    PageImage,
     ParsedElement,
     ParsedPage,
     RecognizedRegion,
@@ -155,10 +156,15 @@ def test_replacement_and_private_use_glyphs_lower_the_layer_quality() -> None:
 class DescribingRecognizer:
     """Заглушка модели, которая описывает каждый присланный вырез."""
 
+    concurrency = 1
+
     def __init__(self) -> None:
         self.pages: list[int] = []
         self.regions: list[RegionRequest] = []
         self.described: list[ImageRequest] = []
+
+    def prefetch_pages(self, pages: Sequence[PageImage]) -> None:
+        del pages
 
     def recognize_page(
         self, image: bytes, page_number: int, width: float, height: float
@@ -775,3 +781,122 @@ def test_an_unknown_target_is_refused_before_the_job_exists(
     assert caught.value.code == "image_target_invalid"
     session.rollback()
     assert session.scalar(select(BackgroundJob.id)) is None
+
+
+# ── Одновременные вызовы ────────────────────────────────────────────────────
+
+
+class SlowTransport(FakeTransport):
+    """Транспорт, который отвечает с задержкой и помнит, сколько вызовов шло разом."""
+
+    def __init__(self, answer: object, failing: set[int] | None = None) -> None:
+        super().__init__()
+        self.answer = answer
+        self.failing = failing or set()
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def complete(self, **kwargs: object) -> ProviderCompletion:
+        import asyncio
+
+        self.complete_calls += 1
+        number = self.complete_calls
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(0.02)
+        finally:
+            self.in_flight -= 1
+        if number in self.failing:
+            from app.ai.provider import ProviderError
+
+            raise ProviderError("ai_invalid_credentials", "ключ отозван")
+        content = self.answer(kwargs) if callable(self.answer) else self.answer
+        return ProviderCompletion(
+            content=json.dumps(content, ensure_ascii=False),
+            actual_model_id=VISION_MODEL,
+            usage=ProviderUsage(input_tokens=1000, output_tokens=200),
+        )
+
+
+def _page_answer(request: dict[str, object]) -> dict[str, object]:
+    """Ответ страницы, в котором видно, какой растр пришёл."""
+    messages = request["messages"]
+    url = next(
+        part["image_url"]["url"]
+        for part in messages[0]["content"]  # type: ignore[index]
+        if part["type"] == "image_url"
+    )
+    return {
+        "elements": [
+            {"kind": "paragraph", "text": f"растр {len(url)}", "bbox": [0.1, 0.1, 0.9, 0.2],
+             "level": None, "confidence": 0.95}
+        ],
+        "page_confidence": 0.95,
+    }
+
+
+def test_pages_read_ahead_go_out_together_and_come_back_in_order(
+    session: Session, vision_model: str
+) -> None:
+    del vision_model
+    session.rollback()
+    transport = SlowTransport(_page_answer)
+    recognizer = CloudRecognizer(session, transport=transport, retry_backoff=(), concurrency=3)
+    images = [_png((200 + 10 * number, 280), seed=number) for number in range(3)]
+
+    try:
+        recognizer.prefetch_pages(
+            [PageImage(image, number + 1, 595, 842) for number, image in enumerate(images)]
+        )
+        pages = [
+            recognizer.recognize_page(image, number + 1, 595, 842)
+            for number, image in enumerate(images)
+        ]
+    finally:
+        recognizer.close()
+
+    assert transport.complete_calls == 3
+    assert transport.max_in_flight == 3
+    expected = [f"растр {len(cloud_vlm._data_url(image))}" for image in images]
+    assert [page.plain_text for page in pages] == expected
+
+
+def test_a_page_read_ahead_raises_its_error_only_on_its_turn(
+    session: Session, vision_model: str
+) -> None:
+    del vision_model
+    session.rollback()
+    transport = SlowTransport(_page_answer, failing={2})
+    recognizer = CloudRecognizer(session, transport=transport, retry_backoff=(), concurrency=2)
+    images = [_png((220, 300), seed=11), _png((230, 300), seed=12)]
+
+    try:
+        recognizer.prefetch_pages([PageImage(images[0], 1, 595, 842),
+                                   PageImage(images[1], 2, 595, 842)])
+        first = recognizer.recognize_page(images[0], 1, 595, 842)
+        with pytest.raises(Exception, match="ключ"):
+            recognizer.recognize_page(images[1], 2, 595, 842)
+    finally:
+        recognizer.close()
+
+    assert first.plain_text.startswith("растр")
+
+
+def test_region_batches_of_a_page_go_out_together(session: Session, vision_model: str) -> None:
+    del vision_model
+    session.rollback()
+    transport = SlowTransport(
+        {"regions": [{"index": 0, "kind": "formula", "content": "x", "confidence": 0.9}]}
+    )
+    recognizer = CloudRecognizer(session, transport=transport, retry_backoff=(), concurrency=4)
+    regions = [RegionRequest(index, "formula", _png((80, 30), seed=index)) for index in range(13)]
+
+    try:
+        answers = recognizer.recognize_regions(regions, 1)
+    finally:
+        recognizer.close()
+
+    assert transport.complete_calls == 3
+    assert transport.max_in_flight == 3
+    assert [answer.index for answer in answers] == [0]

@@ -18,10 +18,10 @@ import asyncio
 import base64
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass, field, replace
 from io import BytesIO
-from typing import Literal
+from typing import Any, Literal
 
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -37,6 +37,7 @@ from app.materials.parsers.base import (
     ElementKind,
     ImageDescription,
     ImageRequest,
+    PageImage,
     ParsedElement,
     ParsedPage,
     RecognizedRegion,
@@ -71,10 +72,17 @@ ROLE_HINTS: dict[str, str] = {
 # токенов и обрывается на середине формулы, меньше — платим за инструкцию
 # столько же раз, сколько на странице формул.
 MAX_REGIONS_PER_REQUEST = 6
+# Сколько вызовов одного разбора идут к модели одновременно: пачки вырезов и
+# описания страницы, страницы-сканы наперёд. Время разбора — это ожидание
+# ответа, а не работа процессора; четыре запроса разом не упираются в лимиты
+# запросов OpenRouter и не держат лишних резервов предела запуска.
+DEFAULT_CONCURRENCY = 4
 
 # Метка нечитаемого места: модель ставит её вместо догадки, а мы по ней
 # опускаем уверенность элемента, даже если сама модель этого не сделала.
 UNREADABLE_MARK = "⟨?⟩"
+# Первые байты JPEG: страница для модели рендерится в JPEG, вырезы — в PNG.
+JPEG_SIGNATURE = bytes((0xFF, 0xD8, 0xFF))
 # Потолок уверенности для элемента с оговоркой: дальше страница уходит в
 # «требует проверки», а не в готовый материал.
 SUSPECT_CONFIDENCE = 0.4
@@ -318,8 +326,10 @@ def wrap_bare_latex(text: str) -> str:
     return f"$${text}$$"
 
 
-def _data_url(image: bytes, media_type: str = "image/png") -> str:
-    return f"data:{media_type};base64,{base64.b64encode(image).decode()}"
+def _data_url(image: bytes, media_type: str | None = None) -> str:
+    """`data:`-URL картинки; тип без подсказки — по сигнатуре (JPEG или PNG)."""
+    kind = media_type or ("image/jpeg" if image.startswith(JPEG_SIGNATURE) else "image/png")
+    return f"data:{kind};base64,{base64.b64encode(image).decode()}"
 
 
 def _pixel_size(image: bytes) -> tuple[float, float]:
@@ -410,6 +420,8 @@ class CloudRecognizer:
     # Денежный и счётный предел запуска: резерв до сети, расход по `usage`.
     budget: BudgetContext | None = None
     image_retry_backoff: Sequence[float] = IMAGE_RETRY_BACKOFF
+    # Одновременных вызовов модели; 1 — строго по очереди.
+    concurrency: int = DEFAULT_CONCURRENCY
     # Один event loop на весь разбор материала, а не на каждый вызов модели.
     # `asyncio.run()` в `_ask` создавал и закрывал свой loop на каждой странице
     # и на каждой пачке вырезов; `AsyncOpenAI`-клиент внутри шлюза переживал
@@ -428,46 +440,98 @@ class CloudRecognizer:
         default_factory=dict, init=False, repr=False, compare=False
     )
     _images_stopped: bool = field(default=False, init=False, repr=False, compare=False)
+    # Страницы, прочитанные наперёд (`prefetch_pages`): ответ или исключение,
+    # которое поднимется, только когда разбор дойдёт до этой страницы.
+    _prefetched: dict[int, ParsedPage | BaseException] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    _slots: asyncio.Semaphore | None = field(default=None, init=False, repr=False, compare=False)
 
     def close(self) -> None:
         """Закрыть общий event loop. Без вызова он держит ресурсы до GC."""
         if self._loop is not None:
             self._loop.close()
             self._loop = None
+            self._slots = None
 
     def recognize_page(
         self, image: bytes, page_number: int, width: float, height: float
     ) -> ParsedPage:
         """Прочитать страницу целиком: разметка, порядок чтения и формулы."""
+        ready = self._prefetched.pop(page_number, None)
+        if ready is None:
+            return self._run(self._page_async(image, page_number, width, height))
+        if isinstance(ready, BaseException):
+            raise ready
+        return ready
+
+    def prefetch_pages(self, pages: Sequence[PageImage]) -> None:
+        """Прочитать несколько страниц разом, пока разбор занят предыдущими.
+
+        Скан книги — это сотни одинаковых вызовов подряд, и почти всё время
+        разбора уходит на ожидание ответа. Ответы складываются по номеру
+        страницы и отдаются `recognize_page` в обычном порядке; ошибка страницы
+        (исчерпанный предел, отказ ключа) поднимается тоже только на ней, так
+        что страницы до неё сохраняются как раньше. Прочитанные наперёд, но не
+        сохранённые из-за паузы страницы не пропадают: при продолжении их отдаст
+        кэш шлюза по содержимому.
+        """
+        todo = [page for page in pages if page.page_number not in self._prefetched]
+        outcomes = self._gather(
+            [
+                self._page_async(page.image, page.page_number, page.width, page.height)
+                for page in todo
+            ]
+        )
+        for page, outcome in zip(todo, outcomes, strict=True):
+            self._prefetched[page.page_number] = outcome
+
+    async def _page_async(
+        self, image: bytes, page_number: int, width: float, height: float
+    ) -> ParsedPage:
         try:
-            answer = self._ask(
+            answer = await self._ask_async(
                 [
                     AiTextPart(text=PAGE_INSTRUCTION),
                     AiImagePart(image_url=AiImageUrl(url=_data_url(image))),
                 ],
                 CloudPage,
                 page_number,
+                role=ROLE,
+                model=self.page_model,
             )
         except PageUnreadable as error:
             return _unreadable_page(page_number, width, height, str(error))
-        return self._page(answer, page_number, width, height, _pixel_size(image))
+        return self._page(answer.value, page_number, width, height, _pixel_size(image))
 
     def recognize_regions(
         self, regions: Sequence[RegionRequest], page_number: int
     ) -> list[RecognizedRegion]:
         """Прочитать вырезы страницы, не трогая уже готовый текстовый слой.
 
-        Пачка, на которой модель сорвалась, просто пропускается: текст страницы
-        уже прочитан из файла и от этого не страдает, а формулы останутся
-        вырезами оригинала — ровно как в режиме «Быстро».
+        Пачки уходят одновременно. Пачка, на которой модель сорвалась, просто
+        пропускается: текст страницы уже прочитан из файла и от этого не
+        страдает, а формулы останутся вырезами оригинала — ровно как в «Быстро».
         """
+        batches = [
+            regions[start : start + MAX_REGIONS_PER_REQUEST]
+            for start in range(0, len(regions), MAX_REGIONS_PER_REQUEST)
+        ]
+        answers = self._gather(
+            [
+                self._ask_async(
+                    self._region_parts(batch), CloudRegions, page_number,
+                    role=ROLE, model=self.page_model,
+                )
+                for batch in batches
+            ]
+        )
         result: list[RecognizedRegion] = []
-        for start in range(0, len(regions), MAX_REGIONS_PER_REQUEST):
-            batch = regions[start : start + MAX_REGIONS_PER_REQUEST]
-            try:
-                answer = self._ask(self._region_parts(batch), CloudRegions, page_number)
-            except PageUnreadable:
+        for batch, answer in zip(batches, answers, strict=True):
+            if isinstance(answer, PageUnreadable):
                 continue
+            if isinstance(answer, BaseException):
+                raise answer
             known = {region.index for region in batch}
             result.extend(
                 RecognizedRegion(
@@ -476,7 +540,7 @@ class CloudRecognizer:
                     text=item.content,
                     confidence=item.confidence,
                 )
-                for item in answer.regions
+                for item in answer.value.regions
                 if item.index in known
             )
         return result
@@ -497,54 +561,64 @@ class CloudRecognizer:
     def describe_images(self, images: Sequence[ImageRequest]) -> list[DescribedImage]:
         """Описать вырезы-изображения: один вызов на видимое содержание.
 
-        Вырез с уже описанным в этом запуске хешем получает те же видимые факты
-        без вызова; контекстное название у него своё — его подпись. Сорвавшийся
-        вызов не роняет разбор: изображение получает статус ошибки и остаётся
-        вырезом оригинала.
+        Новые вырезы описываются одновременно. Вырез с уже описанным в этом
+        запуске хешем получает те же видимые факты без вызова; контекстное
+        название у него своё — его подпись. Сорвавшийся вызов не роняет разбор:
+        изображение получает статус ошибки и остаётся вырезом оригинала.
         """
+        first: dict[str, ImageRequest] = {}
+        for request in images:
+            if request.crop_hash not in self._visible:
+                first.setdefault(request.crop_hash, request)
+        outcomes: dict[str, DescribedImage] = {}
+        if first and not self._images_stopped:
+            answers = self._gather([self._describe_async(request) for request in first.values()])
+            for request, answer in zip(first.values(), answers, strict=True):
+                if isinstance(answer, BaseException):
+                    raise answer
+                outcomes[request.crop_hash] = answer
+                if answer.description is not None:
+                    self._visible[request.crop_hash] = answer
         result: list[DescribedImage] = []
         for request in images:
-            known = self._visible.get(request.crop_hash)
-            if known is not None:
-                result.append(_reused(known, request))
-                continue
-            if self._images_stopped:
+            if first.get(request.crop_hash) is request and request.crop_hash in outcomes:
+                result.append(outcomes[request.crop_hash])
+            elif request.crop_hash in self._visible:
+                result.append(_reused(self._visible[request.crop_hash], request))
+            elif request.crop_hash in outcomes:
+                result.append(replace(outcomes[request.crop_hash], index=request.index))
+            else:
                 result.append(DescribedImage(request.index, None, "unreviewed", (BUDGET_REASON,)))
-                continue
-            try:
-                answer = self._ask_result(
-                    self._image_parts(request),
-                    CloudImageDescription,
-                    request.page_number,
-                    role=IMAGE_ROLE,
-                    model=self.description_model,
-                    retry_backoff=self.image_retry_backoff,
-                )
-            except PageUnreadable as error:
-                result.append(
-                    DescribedImage(
-                        request.index, None, "needs_review", ("model_error",), error=str(error)
-                    )
-                )
-                continue
-            except ProjectDomainError as error:
-                if not error.code.startswith("run_budget"):
-                    raise
-                # Предел запуска исчерпан на описаниях: текст страниц важнее,
-                # поэтому разбор идёт дальше, а изображения остаются без описания
-                # и попадут в «Описать изображения» готового материала.
-                log.warning("описания изображений остановлены пределом запуска: %s", error)
-                self._images_stopped = True
-                result.append(DescribedImage(request.index, None, "unreviewed", (BUDGET_REASON,)))
-                continue
-            described = replace(
-                validate_description(answer.value, request.index),
-                run_id=str(answer.run_id),
-                model_id=answer.actual_model_id or answer.requested_model_id,
-            )
-            self._visible[request.crop_hash] = described
-            result.append(described)
         return result
+
+    async def _describe_async(self, request: ImageRequest) -> DescribedImage:
+        try:
+            answer = await self._ask_async(
+                self._image_parts(request),
+                CloudImageDescription,
+                request.page_number,
+                role=IMAGE_ROLE,
+                model=self.description_model,
+                retry_backoff=self.image_retry_backoff,
+            )
+        except PageUnreadable as error:
+            return DescribedImage(
+                request.index, None, "needs_review", ("model_error",), error=str(error)
+            )
+        except ProjectDomainError as error:
+            if not error.code.startswith("run_budget"):
+                raise
+            # Предел запуска исчерпан на описаниях: текст страниц важнее,
+            # поэтому разбор идёт дальше, а изображения остаются без описания
+            # и попадут в «Описать изображения» готового материала.
+            log.warning("описания изображений остановлены пределом запуска: %s", error)
+            self._images_stopped = True
+            return DescribedImage(request.index, None, "unreviewed", (BUDGET_REASON,))
+        return replace(
+            validate_description(answer.value, request.index),
+            run_id=str(answer.run_id),
+            model_id=answer.actual_model_id or answer.requested_model_id,
+        )
 
     @staticmethod
     def _image_parts(request: ImageRequest) -> list[AiTextPart | AiImagePart]:
@@ -560,18 +634,29 @@ class CloudRecognizer:
             AiImagePart(image_url=AiImageUrl(url=_data_url(request.image, request.media_type))),
         ]
 
-    def _ask[T: BaseModel](
-        self,
-        parts: list[AiTextPart | AiImagePart],
-        response_model: type[T],
-        page_number: int,
-    ) -> T:
-        """Вызов роли распознавания страницы; значение ответа без учётных полей."""
-        return self._ask_result(
-            parts, response_model, page_number, role=ROLE, model=self.page_model
-        ).value
+    def _run[R](self, work: Coroutine[Any, Any, R]) -> R:
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+        return self._loop.run_until_complete(work)
 
-    def _ask_result[T: BaseModel](
+    def _gather[R](
+        self, works: Sequence[Coroutine[Any, Any, R]]
+    ) -> list[R | BaseException]:
+        """Выполнить вызовы одновременно; исключение каждого — на его месте в ответе.
+
+        Сессия БД одна на все вызовы, и это безопасно: работа с ней синхронная и
+        идёт между точками ожидания сети, так что два вызова в ней не
+        пересекаются. Одновременность ограничена `concurrency`.
+        """
+
+        async def everything() -> list[R | BaseException]:
+            return await asyncio.gather(*works, return_exceptions=True)
+
+        if not works:
+            return []
+        return self._run(everything())
+
+    async def _ask_async[T: BaseModel](
         self,
         parts: list[AiTextPart | AiImagePart],
         response_model: type[T],
@@ -599,13 +684,14 @@ class CloudRecognizer:
             confirmed=True,
             budget_context=self.budget,
         )
-        if self._loop is None:
-            self._loop = asyncio.new_event_loop()
+        if self._slots is None:
+            self._slots = asyncio.Semaphore(max(1, self.concurrency))
         backoff = self.retry_backoff if retry_backoff is None else retry_backoff
         try:
-            result = self._loop.run_until_complete(
-                ModelGateway(self.session, self.transport, backoff).complete(request)
-            )
+            async with self._slots:
+                result = await ModelGateway(self.session, self.transport, backoff).complete(
+                    request
+                )
         except AiGatewayError as error:
             self._failures += 1
             if error.code not in SURVIVABLE_CODES or self._failures >= MAX_CONSECUTIVE_FAILURES:
