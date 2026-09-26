@@ -3192,6 +3192,13 @@
 .ai-repair-subpoint-list input {
   flex: 1;
 }
+.ai-repair-subpoint-number {
+  flex: none;
+  min-width: var(--space-7);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
 
 .ai-repair-ticket-list {
   display: grid;
@@ -5792,6 +5799,11 @@ button.wizard-back-projects {
 
 .wizard-review-list,
 .wizard-review-list ol { margin: 0; padding: 0; list-style: none; }
+.wizard-review-list { max-height: 32rem; overflow-y: auto; }
+.wizard-review-list ol {
+  margin-left: var(--space-5);
+  border-left: 1px solid var(--line);
+}
 
 .wizard-review-row {
   display: flex;
@@ -5803,13 +5815,15 @@ button.wizard-back-projects {
 }
 
 .wizard-review-list > li:first-child > .wizard-review-row { border-top: 0; }
-.wizard-review-number { flex: none; width: var(--space-5); color: var(--faint); font-size: var(--text-xs); }
+.wizard-review-number { flex: none; min-width: var(--space-7); color: var(--accent); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .wizard-review-list > .is-ticket > .wizard-review-row { background: var(--paper-strong); font-weight: var(--weight-semibold); }
-.wizard-review-list ol { padding-left: var(--space-8); background: var(--surface-sunken); }
-.wizard-review-list ol .wizard-review-row { padding-left: var(--space-4); }
+.wizard-review-list ol .wizard-review-row { padding-left: var(--space-3); }
+.wizard-review-list .is-subpoint > .wizard-review-row { background: var(--surface-sunken); }
+.wizard-review-list .is-subpoint .wizard-review-text > span { color: var(--ink-soft); }
 
 .wizard-review-kind {
   flex: none;
+  min-width: var(--space-8);
   color: var(--muted);
   font-size: var(--text-xs);
 }

@@ -95,6 +95,29 @@ def test_internal_numbered_list_cannot_move_alignment_backwards() -> None:
     assert internal.id in {fragment.id for fragment in tenth.fragments}
 
 
+def test_numbered_subpoint_targets_child_without_shifting_later_questions() -> None:
+    nodes = _nodes(11)
+    nodes[0].title = "Инкапсуляция данных в сети"
+    child = ProgramNode(
+        id=uuid4(), project_id=nodes[0].project_id, parent_id=nodes[0].id,
+        node_type=NodeType.SUBPOINT, sort_order=0, title="Что такое PDU",
+        is_in_current_program=True, needs_material=False, is_archived=False,
+    )
+    nodes.insert(1, child)
+    nodes[2].title = "Стек TCP/IP"
+    rows = [
+        (_fragment("1. Инкапсуляция данных в сети", 0), 1),
+        (_fragment("Данные проходят по уровням.", 1), 1),
+        (_fragment("1.1. Что такое PDU", 2), 1),
+        (_fragment("PDU — единица данных уровня.", 3), 1),
+        (_fragment("2. Стек TCP/IP", 4), 2),
+        (_fragment("Уровни TCP/IP.", 5), 2),
+    ]
+    result = detect_sections(nodes, rows)
+    assert {node.id for node in nodes[:3]} <= set(result.linked_node_ids)
+    assert result.sections[1].node_ids == (child.id,)
+
+
 def test_restarted_numbering_falls_back_to_text_match() -> None:
     """Второй раздел файла нумерует ответы заново — номер указывает не туда, но текст точен."""
     nodes = _nodes(11)

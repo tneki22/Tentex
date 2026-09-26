@@ -64,7 +64,9 @@ def test_only_one_level_of_subpoints_is_recognized() -> None:
     # Строка «1.1.1 …» не совпадает со строгим маркером «N.M» (два числа,
     # разделённых одной точкой) — второй уровень не выделяется отдельным узлом.
     assert parsed.subpoints == 1
-    assert _titles_by_type(parsed, NodeType.SUBPOINT) == ["Подпункт"]
+    assert _titles_by_type(parsed, NodeType.SUBPOINT) == [
+        "Подпункт 1.1.1 Второй уровень не поддерживается"
+    ]
     combined_text = " ".join(node.title for node in parsed.nodes)
     assert "Второй уровень не поддерживается" in combined_text
 
@@ -77,6 +79,32 @@ def test_top_level_counts_exclude_subpoints() -> None:
     )
 
     assert (parsed.questions, parsed.tasks, parsed.subpoints) == (3, 0, 2)
+
+
+def test_wrapped_subpoint_stays_under_parent_and_skips_pdf_page_number() -> None:
+    parsed = parse_exam_list(
+        "1\nСети — вопросы\n1. Основной вопрос\n1.1. Длинный подпункт\n"
+        "на следующей строке\n2. Второй вопрос\n2\nпродолжение второго вопроса",
+        ExamKind.QUESTION,
+    )
+    assert (parsed.questions, parsed.subpoints) == (2, 1)
+    assert parsed.nodes[1].parent_index == 0
+    assert parsed.nodes[1].title == "Длинный подпункт на следующей строке"
+    assert parsed.nodes[2].title == "Второй вопрос продолжение второго вопроса"
+
+
+def test_ticket_pdf_preamble_does_not_become_a_ticket() -> None:
+    from app.models import ExamFormat
+    from app.projects.importer import parse_exam_program
+
+    parsed = parse_exam_program(
+        "1\nКомпьютерные сети — экзаменационные\nбилеты\n"
+        "5 билетов, по два вопроса.\nБилет 1. Модели\n"
+        "1. Первый вопрос\n2. Второй вопрос",
+        ExamFormat.TICKETS,
+    )
+    assert (parsed.tickets, parsed.questions) == (1, 2)
+    assert parsed.nodes[0].title == "Билет 1: Модели"
 
 
 def test_task_kind_list_is_independent_of_question_numbering() -> None:

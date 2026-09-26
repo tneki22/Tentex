@@ -2,13 +2,19 @@ from uuid import UUID
 
 import pytest
 from conftest import link_material, make_material
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    BackgroundJob,
+    BackgroundJobKind,
     GoalPurpose,
     GoalScope,
     Project,
+    ProjectMaterial,
+    SourceRole,
     StartingLevel,
+    StudyFormat,
     TargetOutcome,
     TemplateKey,
 )
@@ -70,6 +76,26 @@ def test_exam_activation_still_requires_study_format(session: Session) -> None:
 
     with pytest.raises(ProjectConflictError, match="заполните паспорт цели"):
         service.activate_wizard_draft(session, project_id, revision)
+
+
+def test_exam_activation_queues_ready_answers_after_program(session: Session) -> None:
+    project_id, revision = _save_draft(
+        session, TemplateKey.EXAM, _passport(study_format=StudyFormat.THEORY)
+    )
+    material = make_material(session, "e02")
+    session.add(ProjectMaterial(
+        project_id=project_id, material_id=material.id, source_role=SourceRole.REFERENCE,
+        priority=0, affects_program=False, purposes=["reference_answers"],
+    ))
+    session.commit()
+
+    service.activate_wizard_draft(session, project_id, revision)
+    jobs = list(session.scalars(select(BackgroundJob).where(
+        BackgroundJob.project_id == project_id,
+        BackgroundJob.kind == BackgroundJobKind.LINK_ANSWERS,
+    )))
+    assert len(jobs) == 1
+    assert jobs[0].material_id == material.id
 
 
 def test_goal_scope_requires_a_goal_before_activation(session: Session) -> None:

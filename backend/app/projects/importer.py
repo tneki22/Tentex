@@ -3,7 +3,7 @@ from collections import defaultdict
 from dataclasses import dataclass, replace
 
 from app.models import ExamFormat, ExamKind, NodeType
-from app.projects.numbered_series import select_numbered_series
+from app.projects.numbered_series import numbered_item, select_numbered_series
 
 ITEM_RE = re.compile(
     r"^\s*(?:(?:\d+(?:\.\d+)*[.)])\s*|(?:\d+(?:\.\d+)*)\s+|[-—*•]\s+)(.+?)\s*$"
@@ -22,7 +22,7 @@ SUBPOINT_RE = re.compile(
 # номер пункта). Пробел перед номером остаётся обязательным якорем от ложных резов.
 INLINE_ITEM_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+(?=\d{1,4}[.)](?!\d))")
 TICKET_RE = re.compile(
-    r"^\s*Билет\s*(?:№|#)?\s*(\d+)?\s*(?:[.:—-]\s*)?(.*?)\s*$",
+    r"^\s*Билет\s*(?:№|#)?\s*(\d+)\s*(?:[.:—-]\s*)?(.*?)\s*$",
     re.IGNORECASE,
 )
 QUESTION_HEADER_RE = re.compile(r"^\s*Вопросы\s*:??\s*$", re.IGNORECASE)
@@ -209,20 +209,11 @@ def parse_exam_list(
         raise ExamImportError("Вставьте хотя бы один вопрос или задачу")
     lines = _split_inline_items(lines)
 
-    subpoint_lines: list[tuple[int, int, int, str]] = []
     filtered_lines: list[str] = []
     index_map: list[int] = []
     for original_index, line in enumerate(lines):
         match = SUBPOINT_RE.match(line)
         if match:
-            subpoint_lines.append(
-                (
-                    original_index,
-                    int(match.group("parent")),
-                    int(match.group("child")),
-                    match.group("text").strip(),
-                )
-            )
             continue
         filtered_lines.append(line)
         index_map.append(original_index)
@@ -247,60 +238,41 @@ def parse_exam_list(
             has_duplicates=bool(duplicates),
         )
 
+    # Строим дерево по исходному порядку: перенос строки после «3.1» должен
+    # продолжать подпункт, а не соседний основной вопрос.
     nodes: list[ParsedNode] = []
-    top_positions: list[tuple[int, int, int]] = []  # (исходная строка, индекс узла, номер)
-    for item in selection.items:
-        original_index = index_map[item.source_index]
-        kind, title = _kind_and_title(item.text, default_kind)
-        nodes.append(
-            ParsedNode(
-                parent_index=None,
-                node_type=NodeType.TOPIC,
-                exam_kind=kind,
-                title=title,
-                position=len(nodes),
-            )
-        )
-        top_positions.append((original_index, len(nodes) - 1, item.number))
-
     warnings = list(selection.warnings)
-    top_ptr = 0
-    parent_node_index: int | None = None
-    parent_number: int | None = None
-    last_node_index: int | None = None
-    sibling_count = 0
-    last_child_number = 0
-
-    for original_index, parent, child, text in subpoint_lines:
-        while top_ptr < len(top_positions) and top_positions[top_ptr][0] < original_index:
-            _, parent_node_index, parent_number = top_positions[top_ptr]
-            last_node_index = parent_node_index
-            sibling_count = 0
-            last_child_number = 0
-            top_ptr += 1
-
-        if parent_node_index is not None and parent == parent_number and child > last_child_number:
-            nodes.append(
-                ParsedNode(
-                    parent_index=parent_node_index,
-                    node_type=NodeType.SUBPOINT,
-                    exam_kind=nodes[parent_node_index].exam_kind,
-                    title=text,
-                    position=sibling_count,
-                )
-            )
-            sibling_count += 1
-            last_child_number = child
-            last_node_index = len(nodes) - 1
-        elif last_node_index is not None:
-            nodes[last_node_index].title = f"{nodes[last_node_index].title} {text}".strip()
-            shown_parent = parent_number if parent_number is not None else "—"
-            warnings.append(
-                f"Подпункт «{parent}.{child}» не продолжает пункт {shown_parent} "
-                "и сохранён как часть текста"
-            )
-        else:
-            warnings.append(f"Подпункт «{parent}.{child}» встретился до первого пункта и пропущен")
+    starts = [index_map[item.source_index] for item in selection.items]
+    for position, item in enumerate(selection.items):
+        start = starts[position]
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        marker = numbered_item(lines[start], start)
+        assert marker is not None
+        kind, title = _kind_and_title(marker.text, default_kind)
+        parent_index = len(nodes)
+        nodes.append(ParsedNode(None, NodeType.TOPIC, kind, title, position))
+        last_index = parent_index
+        last_child_number = 0
+        for line in lines[start + 1 : end]:
+            if re.fullmatch(r"\d{1,4}", line):
+                continue  # печатный номер страницы PDF
+            subpoint = SUBPOINT_RE.match(line)
+            if subpoint:
+                child = int(subpoint.group("child"))
+                parent = int(subpoint.group("parent"))
+                text = subpoint.group("text").strip()
+                if parent == item.number and child > last_child_number:
+                    nodes.append(ParsedNode(parent_index, NodeType.SUBPOINT, kind, text, child - 1))
+                    last_index = len(nodes) - 1
+                    last_child_number = child
+                else:
+                    nodes[last_index].title = f"{nodes[last_index].title} {text}".strip()
+                    warnings.append(
+                        f"Подпункт «{parent}.{child}» не продолжает пункт {item.number} "
+                        "и сохранён как часть текста"
+                    )
+            elif numbered_item(line, 0) is None:
+                nodes[last_index].title = f"{nodes[last_index].title} {line}".strip()
 
     questions, tasks, subpoints = count_exam_nodes(nodes)
     duplicates = _duplicate_positions(nodes)
@@ -344,7 +316,9 @@ def _parse_tickets(lines: list[str]) -> list[ParsedNode]:
             continue
 
         if ticket_index is None:
-            raise ExamImportError("Для формата билетов нужны заголовки «Билет 1», «Билет № 2»")
+            continue  # титульный лист и вводный текст перед первым билетом
+        if re.fullmatch(r"\d{1,4}", line):
+            continue
 
         marker = ITEM_RE.match(line)
         if marker:
