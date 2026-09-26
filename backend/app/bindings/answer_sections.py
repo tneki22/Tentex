@@ -95,6 +95,35 @@ def _number_targets(nodes: list[ProgramNode]) -> dict[tuple[int, int | None], in
     return targets
 
 
+def _trust_heading_numbering(
+    rows: list[tuple[MaterialFragment, int]],
+    targets: dict[tuple[int, int | None], int],
+) -> bool:
+    """Доверять номеру при перефразированном заголовке лишь для цельной серии.
+
+    Разрыв или повтор нумерации обычно означает внутренний список ответа либо
+    другой раздел документа. Точное совпадение текста и без номера сохранится.
+    """
+    numbers: list[tuple[int, int | None]] = []
+    for fragment, _page in rows:
+        if fragment.element_kind != "heading":
+            continue
+        match = NUMBER_RE.match(fragment.text)
+        if match:
+            numbers.append((int(match.group(1)), int(match.group(2)) if match.group(2) else None))
+    if len(numbers) < 2 or any(number not in targets for number in numbers):
+        return False
+    for previous, current in zip(numbers, numbers[1:], strict=False):
+        root, child = previous
+        next_root, next_child = current
+        if next_child is None and next_root == root + 1:
+            continue
+        if next_root == root and next_child is not None and next_child == (child or 0) + 1:
+            continue
+        return False
+    return True
+
+
 def _joined_title(
     rows: list[tuple[MaterialFragment, int]], anchor: int, end: int
 ) -> str:
@@ -169,6 +198,7 @@ def _candidate_for_anchor(
     resolved: dict[str, UUID],
     question_signatures: tuple[frozenset[str], ...],
     number_targets: dict[tuple[int, int | None], int],
+    trusted_numbering: bool,
 ) -> _Candidate | None:
     fragment = rows[anchor][0]
     if fragment.element_kind not in TEXT_KINDS or not fragment.text.strip():
@@ -187,6 +217,8 @@ def _candidate_for_anchor(
     choices: list[_Candidate] = []
     limit = min(len(rows), anchor + MAX_HEADER_FRAGMENTS)
     for end in range(anchor + 1, limit + 1):
+        if fragment.element_kind == "heading" and end > anchor + 1:
+            break  # следующий абзац — тело ответа, а не продолжение явного заголовка
         if end > anchor + 1 and _number(rows[end - 1][0].text) is not None:
             break
         title = _joined_title(rows, anchor, end)
@@ -228,7 +260,8 @@ def _candidate_for_anchor(
                         else ReferenceAnswerMatchMethod.NUMBERED_ORDER
                     ),
                     ranked,
-                    score >= NUMBERED_CONFIDENCE,
+                    score >= NUMBERED_CONFIDENCE
+                    or (fragment.element_kind == "heading" and trusted_numbering),
                 )
             )
             if score < NUMBERED_CONFIDENCE and ranked:
@@ -343,6 +376,7 @@ def detect_sections(
     node_index = {node.id: position for position, node in enumerate(nodes)}
     question_signatures = tuple(_surface_signature(node.title) for node in nodes)
     number_targets = _number_targets(nodes)
+    trusted_numbering = _trust_heading_numbering(rows, number_targets)
     candidates = [
         candidate
         for anchor in range(len(rows))
@@ -356,6 +390,7 @@ def detect_sections(
                 resolved,
                 question_signatures,
                 number_targets,
+                trusted_numbering,
             )
         )
         is not None
@@ -452,7 +487,8 @@ def section_for_resolution(
     index = HeadingIndex((node.id, node.title) for node in nodes)
     question_signatures = tuple(_surface_signature(node.title) for node in nodes)
     candidate = _candidate_for_anchor(
-        rows, anchor, nodes, index, node_index, {}, question_signatures, _number_targets(nodes)
+        rows, anchor, nodes, index, node_index, {}, question_signatures,
+        _number_targets(nodes), _trust_heading_numbering(rows, _number_targets(nodes)),
     )
     if candidate is None:
         return None

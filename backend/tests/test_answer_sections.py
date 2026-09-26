@@ -118,6 +118,20 @@ def test_numbered_subpoint_targets_child_without_shifting_later_questions() -> N
     assert result.sections[1].node_ids == (child.id,)
 
 
+def test_numbered_heading_recovers_paraphrase_without_eating_answer_body() -> None:
+    nodes = _nodes(11)
+    nodes[0].title = "Чем отличаются концентратор, коммутатор и маршрутизатор?"
+    heading = _fragment("1. Hub, switch и router: различия", 0, "heading")
+    answer = _fragment("Концентратор посылает сигнал всем портам.", 1)
+    next_heading = _fragment("2. Вопрос программы 2", 2, "heading")
+    result = detect_sections(nodes, [(heading, 1), (answer, 1), (next_heading, 2)])
+
+    assert len(result.sections) == 2
+    assert result.sections[0].node_ids == (nodes[0].id,)
+    assert result.sections[0].header_fragment_ids == frozenset({heading.id})
+    assert answer in result.sections[0].fragments
+
+
 def test_restarted_numbering_falls_back_to_text_match() -> None:
     """Второй раздел файла нумерует ответы заново — номер указывает не туда, но текст точен."""
     nodes = _nodes(11)

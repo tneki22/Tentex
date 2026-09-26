@@ -878,13 +878,6 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     if ((form.format === "unknown" || form.hasTheory) && materialsFor("study_source").length === 0) {
       throw new Error("Добавьте хотя бы один учебный материал");
     }
-    // Ответы начинают разбираться после готовой программы. Если разбор
-    // завершится до активации, сервер поставит сопоставление в очередь сам.
-    for (const material of answerMaterials) {
-      if (material.status === "ready_to_process") {
-        await startMaterialProcessing(controller.detail!.project.id, material.id, "fast");
-      }
-    }
     await projectMaterials.refresh();
     await controller.queueSave(command(4, nextWarnings, nextDuplicatesResolution, nextDuplicatesResolvedKey));
     changeStep(4);
@@ -1174,12 +1167,6 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
 
     if (form.hasTheory && materialsFor("study_source").length === 0) {
       throw new Error("Добавьте хотя бы один учебный материал");
-    }
-    for (const key of (["questionAnswers", "taskAnswers"] as const)) {
-      const material = materialBySlot[key];
-      if (material?.status === "ready_to_process") {
-        await startMaterialProcessing(projectId, material.id, "fast");
-      }
     }
   }
 
