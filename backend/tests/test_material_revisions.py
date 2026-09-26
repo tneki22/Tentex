@@ -48,6 +48,43 @@ def test_recorded_revision_is_readable_and_unique(session: Session) -> None:
     assert error.value.code == "material_revision_exists"
 
 
+def test_library_uses_counts_of_active_revision(session: Session) -> None:
+    material = make_material(session, "a11")
+    first = add_page_with_fragments(
+        session, material, page_number=1, revision=1, fragments=["Заголовок", "Текст"]
+    )
+    heading = session.get(MaterialFragment, first.fragment_ids[0])
+    assert heading is not None
+    heading.structure_level = 1
+    material.active_parse_revision = 1
+    session.commit()
+    revision_registry.record_revision(
+        session, material.id, 1, origin=MaterialRevisionOrigin.IMPORTED
+    )
+    session.commit()
+
+    old = revision_registry.get_revision(session, material.id, 1)
+    assert old is not None
+    assert old.summary["block_count"] == 1
+    assert old.summary["fragment_count"] == 2
+    assert old.summary["has_headings"] is True
+
+    add_page_with_fragments(
+        session, material, page_number=1, revision=2, fragments=["Новый текст"]
+    )
+    material.active_parse_revision = 2
+    session.commit()
+    revision_registry.record_revision(
+        session, material.id, 2, origin=MaterialRevisionOrigin.PARSE
+    )
+    session.commit()
+
+    listed = next(
+        item for item in library.list_library_materials(session) if item.id == material.id
+    )
+    assert (listed.block_count, listed.fragment_count, listed.has_outline) == (1, 1, False)
+
+
 def test_deleting_material_removes_its_revisions(session: Session) -> None:
     material = make_material(session, "a2")
     revision_registry.record_revision(

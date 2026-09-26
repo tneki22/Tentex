@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai import catalog, settings
@@ -26,6 +26,7 @@ from app.ai.schemas import (
     AiProviderTestRead,
     AiProviderWrite,
     AiRoleWrite,
+    AiRunPageRead,
     AiRunRead,
     AiSettingsRead,
     AiUsageGroup,
@@ -159,8 +160,7 @@ def put_ai_role(role: str, command: AiRoleWrite, session: SessionDependency) -> 
     return settings.update_role(session, role, command)
 
 
-def _filtered_runs(
-    session: Session,
+def _runs_query(
     project_id: UUID | None,
     provider_id: UUID | None,
     model_id: str | None,
@@ -168,10 +168,9 @@ def _filtered_runs(
     run_status: str | None,
     from_: datetime | None,
     to: datetime | None,
-    limit: int | None = None,
     job_id: UUID | None = None,
-) -> list[AiRun]:
-    query = select(AiRun).order_by(AiRun.created_at.desc())
+):
+    query = select(AiRun)
     if project_id is not None:
         query = query.where(AiRun.project_id == project_id)
     if job_id is not None:
@@ -188,9 +187,61 @@ def _filtered_runs(
         query = query.where(AiRun.created_at >= from_)
     if to is not None:
         query = query.where(AiRun.created_at <= to)
+    return query
+
+
+def _filtered_runs(
+    session: Session,
+    project_id: UUID | None,
+    provider_id: UUID | None,
+    model_id: str | None,
+    role: str | None,
+    run_status: str | None,
+    from_: datetime | None,
+    to: datetime | None,
+    limit: int | None = None,
+    job_id: UUID | None = None,
+) -> list[AiRun]:
+    query = _runs_query(
+        project_id, provider_id, model_id, role, run_status, from_, to, job_id
+    ).order_by(AiRun.created_at.desc())
     if limit is not None:
         query = query.limit(limit)
     return list(session.scalars(query))
+
+
+@router.get("/runs-page", response_model=AiRunPageRead)
+def list_ai_runs_page(
+    session: SessionDependency,
+    provider_id: UUID | None = None,
+    model_id: str | None = None,
+    role: str | None = None,
+    run_status: Annotated[str | None, Query(alias="status")] = None,
+    from_: Annotated[datetime | None, Query(alias="from")] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AiRunPageRead:
+    """Вернуть страницу истории и суммы по всему отфильтрованному периоду."""
+    query = _runs_query(
+        None, provider_id, model_id, role, run_status, from_, None
+    )
+    filtered = query.subquery()
+    total, input_tokens, output_tokens, actual_cost = session.execute(
+        select(
+            func.count(),
+            func.coalesce(func.sum(filtered.c.input_tokens), 0),
+            func.coalesce(func.sum(filtered.c.output_tokens), 0),
+            func.coalesce(func.sum(filtered.c.actual_cost_usd), 0),
+        ).select_from(filtered)
+    ).one()
+    rows = session.scalars(query.order_by(AiRun.created_at.desc()).offset(offset).limit(limit))
+    return AiRunPageRead(
+        items=[AiRunRead.model_validate(row) for row in rows],
+        total=total,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        actual_cost_usd=actual_cost,
+    )
 
 
 @router.get("/runs", response_model=list[AiRunRead])

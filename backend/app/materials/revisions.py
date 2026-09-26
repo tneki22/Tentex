@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     Material,
+    MaterialBlock,
+    MaterialFragment,
     MaterialPage,
     MaterialRevision,
     MaterialRevisionOrigin,
@@ -31,6 +33,31 @@ ORIGIN_LABEL: dict[MaterialRevisionOrigin, str] = {
     MaterialRevisionOrigin.SOURCE_REFRESH: "Обновление снимка",
     MaterialRevisionOrigin.RESTORE: "Восстановление версии",
 }
+
+
+def revision_content_summary(session: Session, material_id: UUID, revision: int) -> dict[str, Any]:
+    """Счётчики неизменяемой ревизии; Библиотека читает их без обхода фрагментов."""
+    block_count = session.scalar(
+        select(func.count()).select_from(MaterialBlock).where(
+            MaterialBlock.material_id == material_id, MaterialBlock.revision == revision
+        )
+    ) or 0
+    active_fragments = (
+        select(MaterialFragment.id)
+        .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+        .where(MaterialFragment.material_id == material_id, MaterialPage.revision == revision)
+    )
+    fragment_count = session.scalar(
+        select(func.count()).select_from(active_fragments.subquery())
+    ) or 0
+    has_headings = session.scalar(
+        active_fragments.where(MaterialFragment.structure_level.is_not(None)).limit(1)
+    ) is not None
+    return {
+        "block_count": block_count,
+        "fragment_count": fragment_count,
+        "has_headings": has_headings,
+    }
 
 
 def record_revision(
@@ -71,7 +98,7 @@ def record_revision(
         source_storage_path=source_storage_path,
         source_hash=source_hash,
         scope=scope or {},
-        summary=summary or {},
+        summary=(summary or {}) | revision_content_summary(session, material_id, revision),
         created_at=utc_now(),
     )
     session.add(row)

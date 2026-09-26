@@ -128,6 +128,8 @@ const TAB_ICONS = {
 } satisfies Record<WorkspaceTab, typeof BookOpen>;
 
 const WORKSPACE_TABS: WorkspaceTab[] = ["answer", "source", "lesson", "conspect", "history", "chat", "summary"];
+// Быстрое пролистывание вопросов не должно запускать отдельный FTS для каждого.
+const SOURCE_SEARCH_DEBOUNCE_MS = 200;
 
 function isWorkspaceTab(value: string | null): value is WorkspaceTab {
   return value !== null && (WORKSPACE_TABS as string[]).includes(value);
@@ -420,6 +422,7 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
   const selected = selectedNode && isStudyNode(selectedNode) ? selectedNode : null;
   const [answeringForTracking, setAnsweringForTracking] = useState(false);
   const focusedTab = layout.groups.find(group => group.id === activeGroupId)?.active_tab;
+  const sourceTabActive = layout.groups.some((group) => group.active_tab === "source");
   const trackingKind = focusedTab === "chat" ? (answeringForTracking ? "answer" : "chat") : focusedTab === "conspect" ? "conspect" : focusedTab === "source" ? "material" : "reading";
   const study = useWorkspaceStudyTracking(projectId, selected?.id ?? null, trackingKind, !detached && Boolean(selected) && detail?.project.workspace_variant === "exam" && (detail?.project.status === "active" || detail?.project.status === "draft"));
   const tracking = study.tracking;
@@ -552,9 +555,6 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
     setSourceBindings([]);
     setHiddenPlaces(new Set());
     setPreviewKey(null);
-    // В экзаменационном режиме сохраняем прежний автопоиск. В учебниковом
-    // сначала открывается опубликованная опора; BM25 запускается только человеком.
-    if (!textbook) void runSourceSearch(selected.id, selected.title);
     const controller = new AbortController();
     setSourceBindingsLoading(true);
     listBindings(projectId, { nodeId: selected.id }, controller.signal)
@@ -562,7 +562,22 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
       .catch(() => undefined)
       .finally(() => { if (!controller.signal.aborted) setSourceBindingsLoading(false); });
     return () => controller.abort();
-  }, [projectId, selected?.id, selected?.title, runSourceSearch, textbook]);
+  }, [projectId, selected?.id, selected?.title]);
+
+  // Поиск по всему проекту дорогой; запускать его для скрытой вкладки при
+  // каждом выборе вопроса незачем. Привязки продолжают загружаться сразу.
+  useEffect(() => {
+    if (!selected || textbook || !sourceTabActive) return;
+    // Короткая задержка не даёт запустить несколько тяжёлых поисков при
+    // быстром пролистывании вопросов. Отмена fetch не отменяет серверный FTS.
+    const timer = window.setTimeout(() => {
+      void runSourceSearch(selected.id, selected.title);
+    }, SOURCE_SEARCH_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      sourceSearchRef.current?.abort();
+    };
+  }, [selected?.id, selected?.title, textbook, sourceTabActive, runSourceSearch]);
 
 
   /** Привязки вопроса и выдача — один источник правды на вкладку и на окно

@@ -97,6 +97,7 @@ from app.models import (
     MaterialBlock,
     MaterialFragment,
     MaterialPage,
+    MaterialRevision,
     MaterialRevisionOrigin,
     MaterialSourceKind,
     MaterialState,
@@ -447,10 +448,34 @@ EMPTY_LIBRARY_AGGREGATE = LibraryAggregate(
 
 
 def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID, LibraryAggregate]:
-    """Четыре запроса на всю библиотеку разом вместо четырёх на каждый материал (Р7, аудит N+1)."""
+    """Текущие ревизии дают готовые счётчики; качество страниц остаётся живым."""
     material_ids = [material.id for material in materials]
     if not material_ids:
         return {}
+
+    revision_summaries = {
+        material_id: summary
+        for material_id, summary in session.execute(
+            select(MaterialRevision.material_id, MaterialRevision.summary)
+            .join(Material, Material.id == MaterialRevision.material_id)
+            .where(
+                MaterialRevision.material_id.in_(material_ids),
+                MaterialRevision.revision == Material.active_parse_revision,
+            )
+        )
+    }
+    cached = {
+        material_id: summary
+        for material_id, summary in revision_summaries.items()
+        if isinstance(summary, dict)
+        and type(summary.get("block_count")) is int
+        and type(summary.get("fragment_count")) is int
+        and type(summary.get("has_headings")) is bool
+    }
+    fallback_ids = [
+        material.id for material in materials
+        if material.active_parse_revision > 0 and material.id not in cached
+    ]
 
     quality_counts: dict[UUID, dict[PageQuality, int]] = defaultdict(dict)
     for material_id, quality, reviewed_at, count in session.execute(
@@ -481,7 +506,7 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
             select(MaterialBlock.material_id, func.count())
             .join(Material, Material.id == MaterialBlock.material_id)
             .where(
-                MaterialBlock.material_id.in_(material_ids),
+                MaterialBlock.material_id.in_(fallback_ids),
                 MaterialBlock.revision == Material.active_parse_revision,
             )
             .group_by(MaterialBlock.material_id)
@@ -494,7 +519,7 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
             .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
             .join(Material, Material.id == MaterialFragment.material_id)
             .where(
-                MaterialFragment.material_id.in_(material_ids),
+                MaterialFragment.material_id.in_(fallback_ids),
                 MaterialPage.revision == Material.active_parse_revision,
             )
             .group_by(MaterialFragment.material_id)
@@ -511,7 +536,7 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
             .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
             .join(Material, Material.id == MaterialFragment.material_id)
             .where(
-                MaterialFragment.material_id.in_(material_ids),
+                MaterialFragment.material_id.in_(fallback_ids),
                 MaterialPage.revision == Material.active_parse_revision,
                 MaterialFragment.structure_level.is_not(None),
             )
@@ -531,9 +556,18 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
     return {
         material.id: LibraryAggregate(
             quality_counts=quality_counts.get(material.id, {}),
-            block_count=block_counts.get(material.id, 0),
-            fragment_count=fragment_counts.get(material.id, 0),
-            has_headings=material.id in materials_with_headings,
+            block_count=(
+                cached[material.id]["block_count"]
+                if material.id in cached else block_counts.get(material.id, 0)
+            ),
+            fragment_count=(
+                cached[material.id]["fragment_count"]
+                if material.id in cached else fragment_counts.get(material.id, 0)
+            ),
+            has_headings=(
+                cached[material.id]["has_headings"]
+                if material.id in cached else material.id in materials_with_headings
+            ),
             usage=usage_by_material.get(material.id, []),
         )
         for material in materials

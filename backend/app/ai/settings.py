@@ -538,9 +538,14 @@ def provider_read(session: Session, row: AiProviderConnection, model_count: int)
 
 def _today_usage(session: Session) -> AiTodayUsage:
     start = datetime.combine(date.today(), time.min)
-    rows = list(session.scalars(select(AiRun).where(AiRun.created_at >= start)))
+    # Обзору нужны только числовые поля; payload и JSON журнала не читаем.
+    rows = list(session.execute(select(
+        AiRun.status, AiRun.input_tokens, AiRun.output_tokens,
+        AiRun.actual_cost_usd, AiRun.actual_cost_rub,
+    ).where(AiRun.created_at >= start)))
     succeeded = [row for row in rows if row.status == "succeeded"]
     return AiTodayUsage(
+        run_count=len(rows),
         input_tokens=sum(row.input_tokens or 0 for row in succeeded),
         output_tokens=sum(row.output_tokens or 0 for row in succeeded),
         actual_cost_usd=sum(

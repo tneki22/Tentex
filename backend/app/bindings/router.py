@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Iterator
 from typing import Annotated
@@ -35,7 +36,7 @@ router = APIRouter(prefix="/api/projects/{project_id}", tags=["bindings"])
 
 
 @router.get("/search", response_model=SearchResponse)
-async def search_materials(
+def search_materials(
     project_id: UUID,
     session: SessionDependency,
     q: str = "",
@@ -45,6 +46,7 @@ async def search_materials(
     strategy: SearchStrategy = SearchStrategy.HYBRID,
     scope: RetrievalScope | None = None,
 ) -> SearchResponse:
+    """Найти кандидатов, не занимая event loop коротких запросов проекта."""
     lexical = service.search_project_materials(
         session, project_id, q, material_id=material_id, node_id=node_id, limit=limit
     )
@@ -53,17 +55,22 @@ async def search_materials(
     retrieval_scope = scope or (
         RetrievalScope.TOPIC_PROJECT if node_id is not None else RetrievalScope.PROJECT
     )
-    hybrid = await HybridRetriever().search(
-        session,
-        RetrievalSearchWrite(
-            query=q,
-            strategy=strategy,
-            scope=retrieval_scope,
-            project_id=project_id,
-            node_id=node_id,
-            material_ids=[material_id] if material_id else [],
-            limit=limit,
-        ),
+    # FTS, сборка фрагментов и часть hybrid retrieval синхронны. FastAPI
+    # исполняет обычный def в пуле потоков; отдельный event loop оставляет
+    # эти операции вне основного цикла, где ждут короткие запросы ответа/чата.
+    hybrid = asyncio.run(
+        HybridRetriever().search(
+            session,
+            RetrievalSearchWrite(
+                query=q,
+                strategy=strategy,
+                scope=retrieval_scope,
+                project_id=project_id,
+                node_id=node_id,
+                material_ids=[material_id] if material_id else [],
+                limit=limit,
+            ),
+        )
     )
     by_block = {
         hit.locator.block_id: hit for hit in hybrid.results if hit.locator.block_id is not None
