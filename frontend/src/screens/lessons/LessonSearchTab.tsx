@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Plus, Search } from "lucide-react";
 import type { FoundPage, LessonBlockCommand } from "../../api/lessons";
 import { searchProjectMaterials } from "../../api/search";
@@ -31,6 +31,8 @@ export function useMaterialSearch(
   projectId: string,
   topicId: string | undefined,
   topicTitle: string,
+  /** Вкладка «Поиск» открыта: только тогда выдача по названию темы нужна. */
+  active: boolean,
 ): MaterialSearchState {
   const [query, setQuery] = useState(topicTitle);
   const [places, setPlaces] = useState<SourcePlace[]>([]);
@@ -61,11 +63,25 @@ export function useMaterialSearch(
     setPlaces([]);
     setTerms([]);
     setSearched(false);
-    if (!topicTitle) return;
-    const controller = new AbortController();
-    void search(topicTitle, controller.signal);
-    return () => controller.abort();
   }, [topicTitle, search]);
+
+  // Гибридный поиск по проекту стоит сотни миллисекунд сервера и не
+  // отменяется вместе с fetch. Раньше он шёл при каждой смене темы, хотя панель
+  // открывается на «Предложено»; теперь — один раз на тему при открытой вкладке.
+  const autoSearched = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${topicId ?? ""}|${topicTitle}`;
+    if (!active || !topicTitle || autoSearched.current === key) return;
+    autoSearched.current = key;
+    const controller = new AbortController();
+    let finished = false;
+    void search(topicTitle, controller.signal).finally(() => { finished = true; });
+    return () => {
+      controller.abort();
+      // Прерванный уходом с вкладки поиск повторится при возвращении.
+      if (!finished) autoSearched.current = null;
+    };
+  }, [active, topicId, topicTitle, search]);
 
   const run = useCallback((value: string) => { void search(value); }, [search]);
   return useMemo(

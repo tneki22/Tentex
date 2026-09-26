@@ -27,6 +27,11 @@ export function useCoverage(projectId: string | undefined) {
     if (!projectId) return;
     setError("");
     try {
+      // Список проблем не зависит от Обзора: идёт параллельно, а не вторым
+      // кругом. Запуск ждёт Обзор — только там известен его id. Пустой catch
+      // лишь гасит «необработанный» отказ, если раньше упадёт Обзор.
+      const issuesRequest = getCoverageIssues(projectId, ISSUE_PAGE, signal);
+      issuesRequest.catch(() => undefined);
       const nextOverview = await getCoverageOverview(projectId, signal);
       if (signal?.aborted) return;
       setOverview(nextOverview);
@@ -34,7 +39,7 @@ export function useCoverage(projectId: string | undefined) {
         nextOverview.latest_run_id
           ? getCoverageRun(projectId, nextOverview.latest_run_id, signal)
           : Promise.resolve(null),
-        getCoverageIssues(projectId, ISSUE_PAGE, signal),
+        issuesRequest,
       ]);
       if (signal?.aborted) return;
       setRun(nextRun);
