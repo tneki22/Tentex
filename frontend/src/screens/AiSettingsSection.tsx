@@ -380,8 +380,8 @@ function ProvidersPanel({
 }) {
   const [editing, setEditing] = useState<string | "new" | null>(null);
   const [label, setLabel] = useState("");
-  const [profile, setProfile] = useState<AiProviderWrite["catalog_profile"]>("openrouter");
-  const [baseUrl, setBaseUrl] = useState("https://openrouter.ai/api/v1");
+  const [profile, setProfile] = useState<AiProviderWrite["catalog_profile"]>("openai_compatible");
+  const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<Note | null>(null);
@@ -391,8 +391,8 @@ function ProvidersPanel({
   function openEditor(provider?: AiProviderRead) {
     setEditing(provider?.id ?? "new");
     setLabel(provider?.label ?? "");
-    setProfile(provider?.catalog_profile ?? "openrouter");
-    setBaseUrl(provider?.base_url ?? "https://openrouter.ai/api/v1");
+    setProfile(provider?.catalog_profile ?? "openai_compatible");
+    setBaseUrl(provider?.base_url ?? "");
     setApiKey("");
     setNote(null);
   }
