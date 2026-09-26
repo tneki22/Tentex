@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "description": "Закреплённый набор для проверки изображений (план docs/superpowers/plans/2026-09-26-image-recognition-and-descriptions.md). Платные прогоны — только по этим ID и только на изолированной копии БД.",
+  "expect_keys": "page_calls — целые страницы в модель; describe — запросы описаний (min, max) в режиме «Описывать»; offline не знает ответа модели страниц, поэтому у сканов describe = 0",
+  "cases": [
+    {
+      "id": "bench-v2-p19",
+      "set": "dev",
+      "source": "tentex-ocr-bench/tentex_ocr_bench_v2_24p.pdf",
+      "pages": [19],
+      "why": "нативная страница без изображений: ни одного облачного вызова в экономной и адаптивной стратегиях",
+      "expect": {"economy": {"page_calls": 0, "describe": [0, 0]}, "auto": {"page_calls": 0, "describe": [0, 0]}}
+    },
+    {
+      "id": "clean-p2",
+      "set": "dev",
+      "source": "tentex-ocr-bench/clean_master.pdf",
+      "pages": [2],
+      "why": "нативный текст с рисунком и таблицей с формулами: рисунок описывается вырезом, текст бесплатно",
+      "expect": {"economy": {"page_calls": 0, "describe": [1, 3]}, "auto": {"page_calls": 0, "describe": [1, 3]}}
+    },
+    {
+      "id": "clean-p5",
+      "set": "dev",
+      "source": "tentex-ocr-bench/clean_master.pdf",
+      "pages": [5],
+      "why": "столбчатая диаграмма и таблица на нативной странице",
+      "expect": {"economy": {"page_calls": 0, "describe": [1, 3]}, "auto": {"page_calls": 0, "describe": [1, 3]}}
+    },
+    {
+      "id": "clean-p6",
+      "set": "dev",
+      "source": "tentex-ocr-bench/clean_master.pdf",
+      "pages": [6],
+      "why": "граф и таблица смежности: связи вершин должны попасть в описание",
+      "expect": {"economy": {"page_calls": 0, "describe": [1, 3]}, "auto": {"page_calls": 0, "describe": [1, 3]}}
+    },
+    {
+      "id": "bench-v2-p2",
+      "set": "dev",
+      "source": "tentex-ocr-bench/tentex_ocr_bench_v2_24p.pdf",
+      "pages": [2],
+      "why": "скан с рисунком и таблицей: страница целиком, затем описание рисунка по рамке модели",
+      "expect": {"economy": {"page_calls": 1}, "auto": {"page_calls": 1}}
+    },
+    {
+      "id": "bench-v2-p9",
+      "set": "dev",
+      "source": "tentex-ocr-bench/tentex_ocr_bench_v2_24p.pdf",
+      "pages": [9],
+      "why": "сильно испорченный скан: одна страница, без выдуманного текста",
+      "expect": {"economy": {"page_calls": 1}, "auto": {"page_calls": 1}}
+    },
+    {
+      "id": "synthetic-repeated-logo",
+      "set": "dev",
+      "source": "synthetic:repeated-logo",
+      "pages": [1, 2, 3],
+      "why": "логотип в верхнем поле каждой страницы и одна схема в теле: логотип — 0 вызовов, схема — 1",
+      "expect": {"economy": {"page_calls": 0, "describe": [1, 1]}, "auto": {"page_calls": 0, "describe": [1, 1]}}
+    },
+    {
+      "id": "synthetic-partial-layer",
+      "set": "dev",
+      "source": "synthetic:partial-layer",
+      "pages": [1],
+      "why": "скан с одной строкой в слое: «Адаптивно» — страница целиком, «Экономно» — 0 вызовов и ocr_low",
+      "expect": {"economy": {"page_calls": 0, "describe": [0, 0]}, "auto": {"page_calls": 1}}
+    },
+    {
+      "id": "synthetic-mojibake",
+      "set": "dev",
+      "source": "synthetic:mojibake",
+      "pages": [1],
+      "why": "cp1251, прочитанная как Latin-1: слой испорчен",
+      "expect": {"economy": {"page_calls": 0}, "auto": {"page_calls": 1}}
+    },
+    {
+      "id": "synthetic-small-legend",
+      "set": "dev",
+      "source": "synthetic:small-legend",
+      "pages": [1],
+      "why": "маленькая легенда с подписью «Рис. 1» уходит на описание, крошка-значок — нет",
+      "expect": {"economy": {"page_calls": 0, "describe": [1, 1]}, "auto": {"page_calls": 0, "describe": [1, 1]}}
+    },
+    {
+      "id": "bench-v2-p23",
+      "set": "control",
+      "source": "tentex-ocr-bench/tentex_ocr_bench_v2_24p.pdf",
+      "pages": [23],
+      "why": "задачник: вложенные пункты и таблица знаков — контроль после подгонки правил",
+      "expect": {"economy": {"page_calls": 1}, "auto": {"page_calls": 1}}
+    },
+    {
+      "id": "bench-v2-p12-13",
+      "set": "control",
+      "source": "tentex-ocr-bench/tentex_ocr_bench_v2_24p.pdf",
+      "pages": [12, 13],
+      "why": "телефонные фото страниц: регресс маршрута фото, не фото-как-элемент",
+      "expect": {"economy": {"page_calls": 2}, "auto": {"page_calls": 2}}
+    }
+  ]
+}

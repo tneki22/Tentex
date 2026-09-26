@@ -33,6 +33,7 @@ const IMAGE_REASON_LABEL: Record<string, string> = {
   crop_empty: "вырез пустой",
   crop_unreadable: "не читается",
   tiny: "слишком мелкое",
+  page_scan: "скан целой страницы — его читают страницей, а не описанием",
   model_error: "модель не ответила",
   budget_exhausted: "не хватило предела запуска",
   low_confidence: "модель не уверена",

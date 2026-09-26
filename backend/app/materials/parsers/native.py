@@ -15,7 +15,7 @@ from docx import Document
 from docx.text.paragraph import Paragraph
 from PIL import Image
 
-from app.materials.image_candidates import XREF_REPEATED, auto_send, classify
+from app.materials.image_candidates import TINY_SIDE_PX, XREF_REPEATED, auto_send, classify
 from app.materials.image_meta import (
     crop_hash,
     element_meta,
@@ -63,6 +63,12 @@ HEADING_SIZE_RATIO = 1.15
 # формула проходят: их различает отбор кандидатов по повтору, месту и подписи,
 # а не размер (`image_candidates`).
 MIN_IMAGE_SIDE = 8
+# Растр высотой в строку текста — формула или слово, вставленные картинкой
+# (методички, где LaTeX сохранён в PNG: 29 таких растров на странице). Порог
+# 40pt раньше молча выбрасывал их вместе с формулами, а описание каждого как
+# схемы стоило бы два десятка платных вызовов на страницу. Такой растр —
+# формула: «Облако» читает их пачкой вырезов, «Быстро» хранит вырезом.
+INLINE_RASTER_MAX_PT = 24
 # Длинная сторона выреза, уходящего на описание. Больше — лишние плитки и
 # деньги без новой информации для описания схемы.
 DESCRIBE_MAX_SIDE_PX = 1536
@@ -285,9 +291,17 @@ def _image_element(
         return None
     extension = str(block.get("ext") or "png").lower()
     asset_path = store_material_asset(owner, f"p{page_number}-{index}.{extension}", data)
+    bbox = _normalized_bbox((x0, top, x1, bottom), page.rect.width, page.rect.height)
     size = pixel_size(data)
     if size is None and block.get("width") and block.get("height"):
         size = (int(block["width"]), int(block["height"]))
+    # Крошка в пару пикселей — значок или точка, а не формула: её решает отбор
+    # кандидатов (`tiny` → украшение).
+    crumb = size is not None and min(size) < TINY_SIDE_PX
+    if (bottom - top) <= INLINE_RASTER_MAX_PT and not crumb:
+        return ParsedElement(
+            "formula", IMAGE_PLACEHOLDER, bbox, asset_path=asset_path, recognition_source="native"
+        )
     meta = ImageMeta(
         signals=(XREF_REPEATED,) if repeated else (),
         detection="embedded",
@@ -308,7 +322,7 @@ def _image_element(
     return ParsedElement(
         "image",
         text,
-        _normalized_bbox((x0, top, x1, bottom), page.rect.width, page.rect.height),
+        bbox,
         None,
         confidence,
         asset_path=asset_path,
@@ -862,12 +876,14 @@ def _text_layer_page(
     # из текстового слоя. На одной и той же иллюстрации это два описания одного
     # объекта: без проверки перекрытия страница получала бы двойной фрагмент.
     layout_pictures = tuple(
-        element.bbox for element in parsed.elements if element.kind == "image"
+        element.bbox for element in parsed.elements if element.kind in {"image", "formula"}
     )
+    # Встроенные растры: картинки и формулы высотой в строку (у них есть вырез,
+    # а у текстовых формул слоя — нет). Разметчик их строк не видит.
     images = tuple(
         element
         for element in legacy.elements
-        if element.kind == "image"
+        if (element.kind == "image" or (element.kind == "formula" and element.asset_path))
         and not any(_bbox_overlap(element.bbox, box) >= 0.6 for box in layout_pictures)
     )
     parsed = _inherit_xref_repeats(parsed, legacy.elements)

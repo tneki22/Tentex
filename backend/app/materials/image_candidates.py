@@ -30,6 +30,9 @@ from app.materials.image_meta import element_meta
 from app.materials.parsers.base import ImageMeta, ParsedElement
 
 SMALL_AREA = 0.02
+# Растр почти на весь лист — скан страницы, а не рисунок: его читают страницей
+# целиком, а описание дало бы пересказ вместо текста.
+PAGE_SCAN_AREA = 0.7
 SMALL_SIDE_PX = 64
 TINY_SIDE_PX = 16
 # Полоса колонтитула: центр изображения выше или ниже этой доли листа.
@@ -51,6 +54,7 @@ DOUBTFUL_REASONS = frozenset(
         "unsupported_format",
         "missed_by_model",
         "crop_suspect",
+        "page_scan",
     }
 )
 # Решения человека и проверенные исходы правило не переписывает.
@@ -60,7 +64,7 @@ LOCKED_REVIEWS = frozenset({"manual", "verified"})
 # классификация сохраняет как есть.
 OWN_REASONS = frozenset(
     {"tiny", "repeated_margin", "repeated_margin_large", "repeated_body", "asset_missing",
-     "bbox_unreliable"}
+     "bbox_unreliable", "page_scan"}
 )
 
 _ASSET_DIGEST_RE = re.compile(r"-([0-9a-f]{16})\.[A-Za-z0-9]+$")
@@ -86,8 +90,11 @@ def element_signals(
     signals: list[str] = []
     x0, y0, x1, y1 = element.bbox
     if not conditional_geometry and element.bbox_reliable:
-        if (x1 - x0) * (y1 - y0) < SMALL_AREA:
+        area = (x1 - x0) * (y1 - y0)
+        if area < SMALL_AREA:
             signals.append("small_area")
+        elif area >= PAGE_SCAN_AREA:
+            signals.append("page_sized")
         center = (y0 + y1) / 2
         if center <= MARGIN_ZONE or center >= 1 - MARGIN_ZONE:
             signals.append("margin")
@@ -134,6 +141,8 @@ def classify(
         reasons.append("asset_missing")
     if not element.bbox_reliable and not conditional_geometry:
         reasons.append("bbox_unreliable")
+    if "page_sized" in signals and "caption" not in signals:
+        reasons.append("page_scan")
     # Подпись рядом делает изображение содержательным при любом размере и повторе.
     if "caption" not in signals:
         if "tiny" in signals:

@@ -290,6 +290,36 @@ def test_a_repeated_margin_logo_is_not_described_but_a_unique_diagram_is(
     assert logos and all(not auto_send(item.image) for item in logos)
 
 
+def test_a_line_high_raster_is_read_as_a_formula_not_described(tmp_path: Path) -> None:
+    """Формула, вставленная PNG высотой в строку, уходит пачкой вырезов, а не на описание."""
+    document, page = _page_with(PROSE)
+    page.insert_image(fitz.Rect(150, 420, 350, 434), stream=_png((400, 28), seed=6))
+    recognizer = DescribingRecognizer()
+
+    pages = _parse(
+        _save(document, tmp_path / "inline.pdf"), ParserMode.CLOUD, recognizer,
+        image_mode="describe",
+    )
+
+    assert recognizer.described == []
+    assert [region.kind for region in recognizer.regions] == ["formula"]
+    assert any(item.kind == "formula" for item in pages[0].elements)
+
+
+def test_economy_does_not_describe_a_page_scan_under_a_thin_layer(tmp_path: Path) -> None:
+    document, _ = _page_with(PAGE_LINE, _png((600, 840)))
+    recognizer = DescribingRecognizer()
+
+    pages = _parse(
+        _save(document, tmp_path / "partial.pdf"), ParserMode.CLOUD, recognizer,
+        cloud_strategy="economy", image_mode="describe",
+    )
+
+    assert recognizer.described == []
+    images = [item for item in pages[0].elements if item.kind == "image"]
+    assert images and "page_scan" in images[0].image.reasons
+
+
 def test_skip_mode_marks_images_without_calling_the_model(tmp_path: Path) -> None:
     document, page = _page_with(PROSE)
     page.insert_image(fitz.Rect(80, 450, 520, 720), stream=_png((500, 300), seed=3))
