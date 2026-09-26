@@ -1,6 +1,7 @@
 import { ProjectApiError, request, type ProgramChangeResult } from "./projects";
 import type { AiPreflight, AiUsage } from "./ai";
 import type { BackgroundJobStartRead } from "./backgroundJobs";
+import type { OcrCloudStrategy, OcrImageMode } from "./ocr";
 
 export type MaterialPurpose = "exam_structure" | "reference_answers" | "study_source";
 export type ExamMaterialSlot =
@@ -100,6 +101,69 @@ export interface MaterialFragmentRead {
   /** Границы сегмента у расшифровки аудио и субтитров; у остальных — null. */
   time_from: number | null;
   time_to: number | null;
+  /** Состояние изображения: роль, обработка, проверка и описание модели. */
+  visual?: ImageVisualRead | null;
+}
+
+/** Метка, с которой начинается текст описанного изображения: цитата сама говорит,
+ *  что это описание модели, а не текст книги. Держать в синхроне с бэкендом. */
+export const MODEL_DESCRIPTION_MARK = "[Описание изображения, сделано моделью]";
+
+export type ImageRole = "content" | "service" | "decorative" | "unknown";
+export type ImageProcessing =
+  | "unprocessed"
+  | "text_only"
+  | "described"
+  | "legacy"
+  | "skipped"
+  | "error";
+export type ImageReview = "unreviewed" | "needs_review" | "verified" | "manual";
+
+export interface ImageDescriptionRead {
+  kind: string;
+  title: string;
+  summary: string;
+  objects: string[];
+  relations: string[];
+  labels: string[];
+  unreadable: string[];
+  details: string[];
+  table_markdown: string;
+  latex: string;
+  context_note: string;
+  confidence: number | null;
+}
+
+/** Три явные оси изображения вместо догадки по тексту фрагмента. */
+export interface ImageVisualRead {
+  role: ImageRole;
+  processing: ImageProcessing;
+  review: ImageReview;
+  reasons: string[];
+  signals: string[];
+  detection: string;
+  crop_hash: string | null;
+  pixel_size: [number, number] | null;
+  caption: string | null;
+  description: ImageDescriptionRead | null;
+  provenance: {
+    source: string;
+    model_id: string | null;
+    provider_id: string | null;
+    prompt_version: string | null;
+    run_id: string | null;
+    job_id: string | null;
+  } | null;
+}
+
+/** Счётчики изображений активной версии для карточки материала. */
+export interface ImageCountsRead {
+  total: number;
+  /** Без проверяемого текста и не исключены — число N у «Описать изображения». */
+  describable: number;
+  described: number;
+  needs_review: number;
+  service: number;
 }
 
 export interface MaterialBlockRead {
@@ -198,7 +262,8 @@ export type RevisionOrigin =
   | "manual_edit"
   | "ai_cleanup"
   | "source_refresh"
-  | "restore";
+  | "restore"
+  | "image_descriptions";
 
 export type ProcessingScope = "all" | "needs_review" | "range";
 
@@ -274,6 +339,7 @@ export interface LibraryMaterialDetailRead extends LibraryMaterialRead {
   /** Метка растра страниц: меняется только вместе с самим файлом материала. */
   raster_token: string;
   typst: TypstMaterialRead | null;
+  images: ImageCountsRead;
 }
 
 export interface TypstIssueRead {
@@ -930,18 +996,146 @@ export const restoreMaterialRevision = (
   { method: "POST" },
 );
 
+export interface LibraryProcessingCommand {
+  parser_mode: ParserMode;
+  scope: ProcessingScope;
+  page_from?: number | null;
+  page_to?: number | null;
+  /** Выбор на этот запуск; без поля — значения из «Распознавания». */
+  cloud_strategy?: OcrCloudStrategy | null;
+  image_mode?: OcrImageMode | null;
+  description_provider_id?: string | null;
+  description_model_id?: string | null;
+  /** Потолок суммы запуска, обычно верхняя оценка. */
+  max_cost_usd?: string | null;
+  confirm_unknown_price?: boolean;
+}
+
+/** Оценка облачного запуска до старта: страницы, запросы и верхняя цена. */
+export interface ProcessingEstimateRead {
+  parser_mode: ParserMode;
+  cloud_strategy: OcrCloudStrategy;
+  image_mode: OcrImageMode;
+  pages: number;
+  whole_pages: number;
+  text_pages: number;
+  suspicious_pages: number;
+  image_candidates: number;
+  requests_upper: number;
+  page_model_id: string | null;
+  description_model_id: string | null;
+  price_known: boolean;
+  cost_typical_usd: string | null;
+  cost_upper_usd: string | null;
+  /** Оценка по выборке страниц, а не по каждой. */
+  sampled: boolean;
+  notes: string[];
+}
+
 export const startLibraryProcessing = (
   materialId: string,
-  command: {
-    parser_mode: ParserMode;
-    scope: ProcessingScope;
-    page_from?: number | null;
-    page_to?: number | null;
-  },
+  command: LibraryProcessingCommand,
 ): Promise<LibraryMaterialDetailRead> => request(`${libraryPath(materialId)}/processing`, {
   method: "POST",
   body: JSON.stringify(command),
 });
+
+export const estimateLibraryProcessing = (
+  materialId: string,
+  command: LibraryProcessingCommand,
+  signal?: AbortSignal,
+): Promise<ProcessingEstimateRead> => request(`${libraryPath(materialId)}/processing-estimate`, {
+  method: "POST",
+  body: JSON.stringify(command),
+  signal,
+});
+
+export interface ImageCandidateRead {
+  /** «страница:индекс элемента» — так цель называется в запросах. */
+  id: string;
+  page_number: number;
+  element_index: number;
+  fragment_id: string | null;
+  bbox: number[];
+  has_asset: boolean;
+  role: ImageRole;
+  processing: ImageProcessing;
+  review: ImageReview;
+  reasons: string[];
+  signals: string[];
+  caption: string | null;
+  crop_hash: string | null;
+  text: string;
+  selectable: boolean;
+}
+
+/** Изображения активной версии: уйдут по умолчанию, сомнительные и исключённые. */
+export interface ImageInventoryRead {
+  material_id: string;
+  revision: number;
+  targets: ImageCandidateRead[];
+  doubtful: ImageCandidateRead[];
+  excluded: ImageCandidateRead[];
+  model_id: string | null;
+  provider_id: string | null;
+  provider_label: string;
+  price_known: boolean;
+  cost_per_image_typical_usd: string | null;
+  cost_per_image_upper_usd: string | null;
+  active_job_id: string | null;
+  vector_index_stale: boolean;
+}
+
+export interface ImageDescriptionEstimateRead {
+  target_count: number;
+  requests: number;
+  reused_by_hash: number;
+  model_id: string | null;
+  price_known: boolean;
+  cost_typical_usd: string | null;
+  cost_upper_usd: string | null;
+}
+
+export interface ImageDescriptionCommand {
+  target_ids: string[];
+  provider_id?: string | null;
+  model_id?: string | null;
+}
+
+export const getImageInventory = (
+  materialId: string,
+  model?: { provider_id: string; model_id: string } | null,
+  signal?: AbortSignal,
+): Promise<ImageInventoryRead> => {
+  const params = new URLSearchParams();
+  if (model) {
+    params.set("provider_id", model.provider_id);
+    params.set("model_id", model.model_id);
+  }
+  const query = params.size ? `?${params.toString()}` : "";
+  return request(`${libraryPath(materialId)}/image-descriptions${query}`, { signal });
+};
+
+export const estimateImageDescriptions = (
+  materialId: string,
+  command: ImageDescriptionCommand,
+  signal?: AbortSignal,
+): Promise<ImageDescriptionEstimateRead> => request(
+  `${libraryPath(materialId)}/image-descriptions/estimate`,
+  { method: "POST", body: JSON.stringify(command), signal },
+);
+
+export const startImageDescriptions = (
+  materialId: string,
+  command: ImageDescriptionCommand & {
+    expected_revision: number;
+    max_cost_usd?: string | null;
+    confirm_unknown_price?: boolean;
+  },
+): Promise<{ job_id: string; requests: number }> => request(
+  `${libraryPath(materialId)}/image-descriptions`,
+  { method: "POST", body: JSON.stringify(command) },
+);
 
 export const controlLibraryProcessing = (
   materialId: string,

@@ -68,7 +68,16 @@ export interface OcrEngineRead {
 }
 
 /** Как режим «Облако» делит работу между текстовым слоем файла и внешней моделью. */
-export type OcrCloudStrategy = "auto" | "page";
+export type OcrCloudStrategy = "economy" | "auto" | "page";
+
+/** Что запуск делает с изображениями: описывает, читает только надписи или пропускает. */
+export type OcrImageMode = "describe" | "text_only" | "skip";
+
+export interface OcrImageModeRead {
+  value: OcrImageMode;
+  title: string;
+  hint: string;
+}
 
 export interface OcrCloudStrategyRead {
   value: OcrCloudStrategy;
@@ -98,6 +107,8 @@ export interface OcrCloudRead {
   strategy: OcrCloudStrategy;
   strategies: OcrCloudStrategyRead[];
   price_per_page_usd: string | null;
+  /** Типичная цена описания одного выреза той же моделью. */
+  price_per_image_usd: string | null;
 }
 
 export interface OcrCloudSettingsWrite {
@@ -127,6 +138,8 @@ export interface OcrSettingsRead {
   engines: OcrEngineRead[];
   cloud: OcrCloudRead;
   speech: SpeechEngineRead[];
+  /** Режимы изображений по движку (`cloud`, `fast`); первый — выбор по умолчанию. */
+  image_modes: Partial<Record<ParserMode, OcrImageModeRead[]>>;
 }
 
 export interface OcrGlobalSettingsWrite {

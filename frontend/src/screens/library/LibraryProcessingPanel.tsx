@@ -1,25 +1,41 @@
-import { Clock3, FileUp, Pencil, Play, RotateCcw, ScanLine, Settings2, Sparkles } from "lucide-react";
+import {
+  Clock3,
+  FileUp,
+  ImageIcon,
+  Pencil,
+  Play,
+  RotateCcw,
+  ScanLine,
+  Settings2,
+  Sparkles,
+} from "lucide-react";
 import { hasYoutubeTimestamps } from "./youtubeTranscript";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import type {
-  LibraryMaterialDetailRead,
-  MaterialPageRead,
-  ParserMode,
-  ProcessingScope,
+import {
+  estimateLibraryProcessing,
+  type LibraryMaterialDetailRead,
+  type LibraryProcessingCommand,
+  type MaterialPageRead,
+  type ParserMode,
+  type ProcessingEstimateRead,
+  type ProcessingScope,
 } from "../../api/materials";
 import {
   getOcrSettings,
-  updateOcrCloudSettings,
   type OcrCloudStrategy,
+  type OcrImageMode,
   type OcrSettingsRead,
 } from "../../api/ocr";
 import { getMaterialPresentation } from "../../components/domain/material-viewer";
 import { TaskRow } from "../../components/domain";
 import type { BackgroundTask } from "../../components/domain";
 import { estimateEtaSeconds } from "../../hooks/backgroundTaskEta";
+import { ImageDescriptionsDialog } from "./ImageDescriptionsDialog";
+import { usdLabel } from "./imageLabels";
 import {
   Button,
+  Checkbox,
   Disclosure,
   ErrorState,
   Field,
@@ -53,6 +69,14 @@ const DIAGNOSTIC_LABEL: Record<string, string> = {
   unbalanced_inline_math: "У формул в тексте не сошлись знаки $",
   unbalanced_braces: "В формулах не сошлись фигурные скобки",
   unbalanced_environment: "В формулах не закрыто окружение LaTeX",
+  "route:partial": "Часть страниц — скан с тонким текстовым слоем",
+  "route:broken": "У части страниц испорчен текстовый слой",
+  "route:scan": "Есть страницы без текстового слоя",
+  "route_fallback:local_ocr": "Страницы с ненадёжным слоем прочитаны локальным OCR",
+  "route_fallback:cloud_page": "Страницы с ненадёжным слоем отданы модели целиком",
+  text_layer_garbled: "В текстовом слое есть нечитаемые символы — сверяйтесь с оригиналом",
+  text_layer_mojibake: "Текстовый слой в неверной кодировке — сверяйтесь с оригиналом",
+  text_layer_partial: "Текстовый слой покрывает страницу лишь частично",
 };
 
 /** Счётчики страницы (`tables:3`) — здесь они про весь материал, и число
@@ -65,11 +89,22 @@ const DIAGNOSTIC_PRESENCE: Record<string, string> = {
   cloud_regions: "Часть страниц уходила во внешнюю модель вырезами",
   cloud_crops: "Картинки и формулы сохранены вырезками со страницы",
   bbox_missing: "Модель указала координаты не у всех элементов",
+  image_descriptions: "Часть изображений описана моделью",
+  missed_regions: "Модель пропустила участки страницы — они сохранены вырезами",
 };
 
 // Отметки для отладки конвейера, а не для человека: разрешение растра, число
 // элементов, факт применения разметчика. Их место в логе.
-const TECHNICAL_DIAGNOSTICS = new Set(["render_dpi", "structure_elements", "layout_markdown"]);
+const TECHNICAL_DIAGNOSTICS = new Set([
+  "render_dpi",
+  "structure_elements",
+  "layout_markdown",
+  "route",
+  "text_chars",
+  "text_quality",
+  "raster_share",
+  "pictures",
+]);
 
 /** Чем расшифрована запись: значение — модель, и в ней бывают двоеточия (`:free`). */
 const ASR_SOURCE_LABEL: Record<string, string> = {
@@ -83,6 +118,7 @@ function diagnosticText(item: string): string | null {
   const key = colon === -1 ? item : item.slice(0, colon);
   const value = colon === -1 ? undefined : item.slice(colon + 1);
   if (key in ASR_SOURCE_LABEL && value) return `${ASR_SOURCE_LABEL[key]}: ${value}`;
+  if (item in DIAGNOSTIC_LABEL) return DIAGNOSTIC_LABEL[item];
   if (TECHNICAL_DIAGNOSTICS.has(key)) return null;
   if (value !== undefined && key in DIAGNOSTIC_PRESENCE) {
     // Ноль — это не факт, а его отсутствие: строку такое не заслуживает.
@@ -102,13 +138,6 @@ function durationLabel(pages: number, mode: ParserMode): string {
   return `≈ ${hours} ч ${minutes % 60} мин`;
 }
 
-/** Доллары ценой в тысячные доли: `0.0042` бесполезно, `0,004` — читаемо. */
-function priceLabel(usd: number): string {
-  if (usd >= 1) return `${usd.toFixed(2)} $`;
-  if (usd >= 0.01) return `${usd.toFixed(3)} $`;
-  return "меньше цента";
-}
-
 function projectCountLabel(count: number): string {
   const mod100 = count % 100;
   const mod10 = count % 10;
@@ -122,12 +151,7 @@ interface LibraryProcessingPanelProps {
   page: MaterialPageRead | null;
   busy: boolean;
   readOnly: boolean;
-  onStart: (command: {
-    parser_mode: ParserMode;
-    scope: ProcessingScope;
-    page_from?: number;
-    page_to?: number;
-  }) => void;
+  onStart: (command: LibraryProcessingCommand) => void;
   onControl: (action: "pause" | "resume" | "retry" | "cancel") => void;
   /** Поставить сборку: с разрешением на загрузку пакетов и, если её ещё нет, с точкой входа. */
   onTypstBuild: (downloadPackages: boolean, entrypoint?: string) => void;
@@ -139,6 +163,8 @@ interface LibraryProcessingPanelProps {
   onFindHeaderFooter: () => void;
   onConfirmPageReview: () => void;
   onIndexMaterial: () => void;
+  /** Поставлено описание изображений: перечитать карточку и задачи. */
+  onImagesQueued?: () => void;
 }
 
 export function LibraryProcessingPanel({
@@ -156,6 +182,7 @@ export function LibraryProcessingPanel({
   onFindHeaderFooter,
   onConfirmPageReview,
   onIndexMaterial,
+  onImagesQueued,
 }: LibraryProcessingPanelProps) {
   const presentation = getMaterialPresentation(material.presentation_kind);
   // У записи нет страниц и OCR: два своих способа — Whisper на процессоре и
@@ -210,19 +237,18 @@ export function LibraryProcessingPanel({
     (item) => item.mode === (material.parser_mode ?? mode),
   )?.model_label;
 
-  /** Стратегия — общая настройка режима «Облако», а не поле этого запуска:
-   *  сохраняем сразу, чтобы выбор здесь и в Параметрах не разъезжался. */
-  function chooseStrategy(next: OcrCloudStrategy) {
-    if (!cloud || cloud.strategy === next) return;
-    setOcr({ ...ocr!, cloud: { ...cloud, strategy: next } });
-    void updateOcrCloudSettings({
-      provider_id: cloud.provider_id,
-      model_id: cloud.model_id,
-      strategy: next,
-    })
-      .then(setOcr)
-      .catch(() => undefined);
-  }
+  // Стратегия и режим изображений — выбор этого запуска: значения из
+  // «Распознавания» только подставляются, а сам запуск снимает их в задачу.
+  const [strategy, setStrategy] = useState<OcrCloudStrategy | null>(null);
+  const [imageMode, setImageMode] = useState<OcrImageMode | null>(null);
+  const runStrategy = strategy ?? cloud?.strategy ?? "auto";
+  const imageModes = mode && !isAudio ? (ocr?.image_modes?.[mode] ?? []) : [];
+  const runImageMode = imageModes.some((item) => item.value === imageMode)
+    ? imageMode
+    : (imageModes[0]?.value ?? null);
+  const [estimate, setEstimate] = useState<ProcessingEstimateRead | null>(null);
+  const [confirmUnknown, setConfirmUnknown] = useState(false);
+  const [imagesOpen, setImagesOpen] = useState(false);
 
   // Сколько страниц уйдёт в работу при выбранной области запуска — от этого
   // считаются и время, и деньги.
@@ -231,7 +257,48 @@ export function LibraryProcessingPanel({
     : processingScope === "needs_review"
       ? reviewPages
       : pageCount;
-  const pagePrice = cloud?.price_per_page_usd ? Number(cloud.price_per_page_usd) : null;
+
+  const rangeInvalid = scope === "range"
+    && (range.from < 1 || range.to > pageCount || range.from > range.to);
+
+  function runCommand(): LibraryProcessingCommand | null {
+    if (!mode) return null;
+    const base: LibraryProcessingCommand = processingScope === "range"
+      ? { parser_mode: mode, scope: processingScope, page_from: range.from, page_to: range.to }
+      : { parser_mode: mode, scope: canScope ? processingScope : "all" };
+    if (isAudio) return base;
+    return {
+      ...base,
+      cloud_strategy: mode === "cloud" ? runStrategy : null,
+      image_mode: runImageMode,
+    };
+  }
+
+  // Облачный запуск оценивает сервер по самим страницам: сколько уйдёт
+  // целиком, сколько изображений, и верхнюю цену с потолком ответа. Эта же
+  // верхняя цена становится пределом запуска.
+  const estimateKey = mode === "cloud" && !isAudio && !rangeInvalid && material.capabilities.can_run_ocr
+    ? JSON.stringify(runCommand())
+    : null;
+  useEffect(() => {
+    setEstimate(null);
+    setConfirmUnknown(false);
+    if (!estimateKey || readOnly) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void estimateLibraryProcessing(material.id, JSON.parse(estimateKey), controller.signal)
+        .then((value) => {
+          if (!controller.signal.aborted) setEstimate(value);
+        })
+        .catch(() => undefined);
+    }, 300);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [estimateKey, material.id, material.active_parse_revision, readOnly]);
+  const priceBlocked = mode === "cloud" && estimate !== null && !estimate.price_known
+    && !confirmUnknown;
 
   // Досылка недостающего файла: путь известен заранее, выбор — только сам файл.
   const missingFileInput = useRef<HTMLInputElement>(null);
@@ -267,9 +334,6 @@ export function LibraryProcessingPanel({
     )],
     [material.diagnostics, prepared],
   );
-
-  const rangeInvalid = scope === "range"
-    && (range.from < 1 || range.to > pageCount || range.from > range.to);
 
   if (material.presentation_kind === "typst") {
     const issues = material.typst?.issues ?? [];
@@ -519,15 +583,32 @@ export function LibraryProcessingPanel({
                     className="cloud-strategies"
                     label="Что отдавать модели"
                     layout="rows"
-                    value={cloud.strategy}
+                    value={runStrategy}
                     options={cloud.strategies.map((item) => ({
                       value: item.value,
                       title: item.title,
                       description: item.hint,
                     }))}
-                    onChange={(next) => chooseStrategy(next as OcrCloudStrategy)}
+                    onChange={(next) => setStrategy(next as OcrCloudStrategy)}
                   />
                 </div>
+              )}
+
+              {!isAudio && imageModes.length > 1 && (
+                <Field label="Изображения" hint="Что делать с рисунками и схемами в этом запуске">
+                  <RadioCards
+                    className="image-modes"
+                    label="Изображения"
+                    layout="rows"
+                    value={runImageMode}
+                    options={imageModes.map((item) => ({
+                      value: item.value,
+                      title: item.title,
+                      description: item.hint,
+                    }))}
+                    onChange={(next) => setImageMode(next as OcrImageMode)}
+                  />
+                </Field>
               )}
             </>
           ) : (
@@ -614,23 +695,41 @@ export function LibraryProcessingPanel({
           {!isAudio && mode && !rangeInvalid && plannedPages > 0 && (
             <p className="inspector-estimate">
               {plannedPages} стр. · {durationLabel(plannedPages, mode)}
-              {mode === "cloud" && (
-                pagePrice === null
-                  ? " · цена модели неизвестна"
-                  : cloud?.strategy === "page"
-                    ? ` · ${priceLabel(pagePrice * plannedPages)}`
-                    : ` · не дороже ${priceLabel(pagePrice * plannedPages)}: наружу уходят только вырезы`
+              {mode === "cloud" && estimate && (
+                estimate.price_known
+                  ? ` · до ${estimate.requests_upper} запр. · обычно ${usdLabel(estimate.cost_typical_usd)}, не дороже ${usdLabel(estimate.cost_upper_usd)}`
+                  : ` · до ${estimate.requests_upper} запр. · цена модели неизвестна`
               )}
+              {mode === "cloud" && !estimate && estimateKey && " · считаем стоимость…"}
             </p>
+          )}
+          {mode === "cloud" && estimate && estimate.notes.length > 0 && (
+            <ul className="inspector-list">
+              {estimate.notes.map((note) => <li key={note}>{note}</li>)}
+            </ul>
+          )}
+          {mode === "cloud" && estimate && !estimate.price_known && (
+            <Checkbox
+              checked={confirmUnknown}
+              onCheckedChange={setConfirmUnknown}
+              label="Запустить без оценки цены"
+              disabled={busy}
+            />
           )}
 
           <Button
-            disabled={busy || !mode || !selectedMode?.available || rangeInvalid}
-            onClick={() => mode && onStart(
-              processingScope === "range"
-                ? { parser_mode: mode, scope: processingScope, page_from: range.from, page_to: range.to }
-                : { parser_mode: mode, scope: canScope ? processingScope : "all" },
-            )}
+            disabled={busy || !mode || !selectedMode?.available || rangeInvalid || priceBlocked}
+            onClick={() => {
+              const command = runCommand();
+              if (!command) return;
+              onStart(mode === "cloud" && estimate
+                ? {
+                  ...command,
+                  max_cost_usd: estimate.cost_upper_usd,
+                  confirm_unknown_price: confirmUnknown,
+                }
+                : command);
+            }}
           >
             {prepared
               ? (
@@ -684,6 +783,35 @@ export function LibraryProcessingPanel({
               )}
             </div>
           )}
+        </section>
+      )}
+
+      {prepared && !isAudio && material.images.total > 0 && (
+        <section className="inspector-section">
+          <h4>Изображения</h4>
+          <p className="inspector-note">
+            Всего {material.images.total}
+            {material.images.described > 0 ? ` · описано ${material.images.described}` : ""}
+            {material.images.needs_review > 0 ? ` · на проверку ${material.images.needs_review}` : ""}
+            {material.images.service > 0 ? ` · служебных ${material.images.service}` : ""}
+          </p>
+          {!readOnly && material.images.describable > 0 && (
+            <div className="inspector-actions">
+              <Button
+                variant="secondary"
+                disabled={busy || Boolean(running)}
+                onClick={() => setImagesOpen(true)}
+              >
+                <ImageIcon size={14} aria-hidden="true" /> Описать изображения ({material.images.describable})
+              </Button>
+            </div>
+          )}
+          <ImageDescriptionsDialog
+            open={imagesOpen}
+            material={{ id: material.id, display_name: material.display_name }}
+            onOpenChange={setImagesOpen}
+            onStarted={() => onImagesQueued?.()}
+          />
         </section>
       )}
 

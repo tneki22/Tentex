@@ -5,6 +5,7 @@ import type {
   MaterialPageRead,
   RecognitionSource,
 } from "../../../api/materials";
+import { MODEL_DESCRIPTION_MARK } from "../../../api/materials";
 import { QualityBadge } from "../QualityBadge";
 
 interface StructuredPageProps {
@@ -134,7 +135,12 @@ function FragmentBody({
   preserveLayout?: boolean;
 }) {
   if (fragment.element_kind === "image") {
-    const transcript = fragment.text.trim();
+    // Описание модели показывается своим заголовком и без служебной метки:
+    // что это не текст книги, сообщает заголовок блока.
+    const described = fragment.visual?.processing === "described";
+    const transcript = described
+      ? fragment.text.replace(MODEL_DESCRIPTION_MARK, "").trim()
+      : fragment.text.trim();
     const hasTranscript = fragment.recognition_source !== "native"
       && transcript.length > 0
       && !/^\[?(изображение|image)\]?$/iu.test(transcript);
@@ -158,9 +164,16 @@ function FragmentBody({
         />
         {hasTranscript && (
           <details className="structured-transcript">
-            <summary>Распознанный текст</summary>
-            <p className="structured-transcript-note">Может содержать ошибки, особенно в формулах.</p>
-            <p>{renderInlineMath(transcript, terms)}</p>
+            <summary>
+              {described ? "Описание модели" : "Распознанный текст"}
+              {described && fragment.visual?.review === "needs_review" ? " · требует проверки" : ""}
+            </summary>
+            <p className="structured-transcript-note">
+              {described
+                ? "Сделано моделью по вырезу — сверяйтесь с изображением."
+                : "Может содержать ошибки, особенно в формулах."}
+            </p>
+            <p className="structured-transcript-text">{renderInlineMath(transcript, terms)}</p>
           </details>
         )}
       </figure>
