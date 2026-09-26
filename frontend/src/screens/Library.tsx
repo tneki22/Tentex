@@ -45,7 +45,7 @@ import {
 import { cancelBackgroundJob, listBackgroundJobs, type BackgroundJobRead } from "../api/backgroundJobs";
 import { ProjectApiError } from "../api/projects";
 import { QualityBadge } from "../components/domain";
-import { PageNumberInput } from "../components/domain/material-viewer";
+import { PageHighlights, PageNumberInput } from "../components/domain/material-viewer";
 import {
   Button,
   Checkbox,
@@ -171,6 +171,12 @@ function pageLabel(count: number | null): string {
   return `${count} ${plural(count, "страница", "страницы", "страниц")}`;
 }
 
+/** « · стр. 286» или « · стр. 286–287»: найденный кусок бывает на двух страницах. */
+function pagesLabel(from: number | null, to: number | null): string {
+  if (!from) return "";
+  return to && to !== from ? ` · стр. ${from}–${to}` : ` · стр. ${from}`;
+}
+
 function readFilters(params: URLSearchParams): LibraryFilterState {
   return {
     q: params.get("q") ?? "",
@@ -197,6 +203,7 @@ export function Library() {
   const [contentQuery, setContentQuery] = useState(initialContentCache.query);
   const [contentStrategy, setContentStrategy] = useState<SearchStrategy>(initialContentCache.strategy);
   const [contentHits, setContentHits] = useState<RetrievalHitRead[]>(initialContentCache.hits);
+  const [expandedHits, setExpandedHits] = useState<ReadonlySet<string>>(new Set());
   const [contentReasons, setContentReasons] = useState<string[]>(initialContentCache.reasons);
   const [contentHistory, setContentHistory] = useState<string[]>(initialContentCache.history);
   const [contentMaterialIds, setContentMaterialIds] = useState<string[]>(initialContentCache.materialIds);
@@ -407,6 +414,19 @@ export function Library() {
       setPreview({ hit, material: null, page: null, error: caught instanceof Error ? caught.message : "Не удалось открыть страницу" });
     }
   }
+
+  function toggleExpandedHit(chunkId: string) {
+    setExpandedHits((current) => {
+      const next = new Set(current);
+      if (next.has(chunkId)) next.delete(chunkId); else next.add(chunkId);
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    /* У текстового материала найденное может быть ниже первого экрана страницы. */
+    document.querySelector(".library-search-preview-text mark")?.scrollIntoView({ block: "nearest" });
+  }, [preview?.page?.id]);
 
   async function changePreviewPage(pageNumber: number) {
     if (!preview?.material) return;
@@ -787,12 +807,15 @@ export function Library() {
                           {hit.signals.length === 2 ? "слова + смысл" : hit.signals[0] === "semantic" ? "по смыслу" : "по словам"}
                         </StatusBadge>
                       </span>
-                      <small>{hit.locator.block_title ?? hit.locator.typst_path ?? "Фрагмент материала"}{hit.locator.page_from ? ` · стр. ${hit.locator.page_from}` : ""}</small>
-                      <span>{hit.text}</span>
+                      <small>{hit.locator.block_title ?? hit.locator.typst_path ?? "Фрагмент материала"}{pagesLabel(hit.locator.page_from, hit.locator.page_to)}</small>
+                      <span className={expandedHits.has(hit.locator.chunk_id) ? "is-expanded" : undefined}>{hit.text}</span>
                       {hit.warning && <em>{hit.warning}</em>}
                       <div className="lib-content-result-actions">
                         <Button variant="secondary" onClick={() => navigate(`/library/${hit.locator.material_id}${hit.locator.page_from ? `?page=${hit.locator.page_from}` : ""}`)}>Открыть страницу файла</Button>
                         <Button variant="ghost" onClick={() => void openPreview(hit)}>Предпросмотр</Button>
+                        <Button variant="ghost" aria-expanded={expandedHits.has(hit.locator.chunk_id)} onClick={() => toggleExpandedHit(hit.locator.chunk_id)}>
+                          {expandedHits.has(hit.locator.chunk_id) ? "Свернуть" : "Показать целиком"}
+                        </Button>
                       </div>
                     </article>
                   ))}
@@ -1128,9 +1151,29 @@ export function Library() {
                 />
                 <Button variant="ghost" disabled={previewPageLoading || preview.page.page_number >= (preview.material.page_count ?? 1)} onClick={() => void changePreviewPage(preview.page!.page_number + 1)}>Вперёд</Button>
               </div>
-              {(preview.material.presentation_kind === "pdf" || preview.material.presentation_kind === "image" || preview.material.presentation_kind === "typst")
-                ? <img src={libraryPageImageUrl(preview.material.id, preview.page.page_number, preview.material.raster_token)} alt={`Страница ${preview.page.page_number}`} />
-                : <pre>{preview.page.markdown || preview.page.text}</pre>}
+              {(() => {
+                /* Выделяются фрагменты найденного куска, лежащие на открытой странице:
+                   кусок бывает на двух страницах, и листание не теряет выделение. */
+                const found = new Set(preview.hit.locator.fragment_ids);
+                const hitFragments = preview.page.fragments.filter((fragment) => found.has(fragment.id));
+                if (preview.material.presentation_kind === "pdf" || preview.material.presentation_kind === "image" || preview.material.presentation_kind === "typst") {
+                  return (
+                    <PageHighlights
+                      pageUrl={libraryPageImageUrl(preview.material.id, preview.page.page_number, preview.material.raster_token)}
+                      boxes={hitFragments.map((fragment) => fragment.bbox).filter((bbox) => bbox.length === 4 && bbox[2] > bbox[0] && bbox[3] > bbox[1])}
+                      alt={`Страница ${preview.page.page_number}`}
+                    />
+                  );
+                }
+                if (preview.page.fragments.length === 0) return <pre>{preview.page.markdown || preview.page.text}</pre>;
+                return (
+                  <div className="library-search-preview-text">
+                    {preview.page.fragments.map((fragment) => found.has(fragment.id)
+                      ? <mark key={fragment.id}>{fragment.text}</mark>
+                      : <p key={fragment.id}>{fragment.text}</p>)}
+                  </div>
+                );
+              })()}
             </section>
           </div>
         )}

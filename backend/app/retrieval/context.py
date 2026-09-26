@@ -30,9 +30,10 @@ class ContextAssembler:
         token_budget: int = 6_000,
         neighbor_window: int = 1,
     ) -> AssembledContext:
-        candidates: list[RetrievalHitRead] = []
+        # Сначала все найденные места, потом их соседи: иначе соседи первых
+        # мест съедали бюджет, и найденные ниже места в контекст не попадали.
+        candidates: list[RetrievalHitRead] = list(result.results)
         for hit in result.results:
-            candidates.append(hit)
             if result.index_id is None or neighbor_window <= 0:
                 continue
             chunk = session.get(RetrievalChunk, hit.locator.chunk_id)

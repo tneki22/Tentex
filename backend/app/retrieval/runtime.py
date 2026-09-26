@@ -128,6 +128,9 @@ def internal_embeddings(command: InternalEmbeddingWrite) -> dict[str, object]:
         mask = encoded["attention_mask"]
         if command.pooling == "cls":
             pooled = hidden[:, 0]
+        elif command.pooling == "last_token" and bool(mask[:, -1].all()):
+            # Токенизатор Qwen3 дополняет слева: последний токен у всех на месте -1.
+            pooled = hidden[:, -1]
         elif command.pooling == "last_token":
             indices = mask.sum(dim=1).sub(1).clamp_min(0)
             pooled = hidden[torch.arange(hidden.shape[0]), indices]

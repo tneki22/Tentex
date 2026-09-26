@@ -8,6 +8,7 @@
 export { DocumentSearchField } from "./DocumentSearchField";
 export { DocumentStage } from "./DocumentStage";
 export { PageFlow } from "./PageFlow";
+export { PageHighlights } from "./PageHighlights";
 export { PageRegion } from "./PageRegion";
 export { PdfOutline } from "./PdfOutline";
 export { StructuredPage, MarkdownTable, highlight } from "./StructuredPage";
