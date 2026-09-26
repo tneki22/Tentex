@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
@@ -33,7 +34,14 @@ from app.ai.settings import (
 )
 from app.config import settings
 from app.db import get_session
-from app.models import AiModelCatalogEntry, AiProviderConnection, AiRoleSetting, AiSettings
+from app.models import (
+    AiModelCatalogEntry,
+    AiProviderConnection,
+    AiRoleSetting,
+    AiRun,
+    AiSettings,
+    utc_now,
+)
 from app.projects.errors import ProjectDomainError
 
 
@@ -152,6 +160,44 @@ def test_http_never_returns_secret(session: Session, ai_config: str) -> None:
     row = session.get(AiProviderConnection, UUID(provider["id"]))
     assert row is not None and row.api_key_ciphertext is not None
     assert decrypt_secret(row.api_key_ciphertext) == "rotated-secret"
+
+
+def test_run_history_page_filters_and_summarizes_all_matching_rows(session: Session) -> None:
+    for index, (role, status) in enumerate(
+        [("exam_chat", "succeeded"), ("lesson", "failed"), ("exam_chat", "succeeded")]
+    ):
+        session.add(AiRun(
+            provider_label_snapshot="Test",
+            role=role,
+            modality="text",
+            status=status,
+            requested_model_id="test/model",
+            prompt_version="test",
+            request_hash=f"history-{index}",
+            context_manifest=[],
+            estimated_input_tokens=10,
+            estimated_output_tokens=10,
+            input_tokens=index + 1,
+            output_tokens=index + 2,
+            actual_cost_usd=Decimal("0.25"),
+            created_at=utc_now(),
+        ))
+    session.commit()
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+
+    first = client.get("/api/settings/ai/runs-page?limit=2").json()
+    second = client.get("/api/settings/ai/runs-page?limit=2&offset=2").json()
+    assert first["total"] == 3
+    assert len(first["items"]) == 2
+    assert len(second["items"]) == 1
+    assert first["actual_cost_usd"] == "0.750000000000"
+    filtered = client.get("/api/settings/ai/runs-page?role=exam_chat&status=succeeded").json()
+    assert filtered["total"] == 2
+    assert filtered["input_tokens"] == 4
+    assert filtered["output_tokens"] == 6
 
 
 def test_empty_key_on_put_keeps_existing_key(session: Session, ai_config: str) -> None:

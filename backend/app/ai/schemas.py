@@ -159,6 +159,7 @@ class AiRoleRead(ApiModel):
 
 
 class AiTodayUsage(ApiModel):
+    run_count: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
     actual_cost_usd: Decimal = Decimal("0")
@@ -302,6 +303,16 @@ class AiRunRead(ApiModel):
     error_code: str | None
     created_at: datetime
     completed_at: datetime | None
+
+
+class AiRunPageRead(ApiModel):
+    """Страница журнала с общими показателями совпавших запросов."""
+
+    items: list[AiRunRead]
+    total: int
+    input_tokens: int
+    output_tokens: int
+    actual_cost_usd: Decimal
 
 
 class AiUsageGroup(ApiModel):
