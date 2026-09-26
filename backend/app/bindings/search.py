@@ -25,7 +25,7 @@ from uuid import UUID
 
 from sqlalchemy import select, text
 from sqlalchemy.engine import Connection
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.materials.lexicon import (
     index_text,
@@ -301,12 +301,16 @@ def search_fragments(
         rank_by_fragment_id[fragment_id] = rank
         ranked_order.append(fragment_id)
 
+    # Только номер страницы и материал без оглавления: строка страницы хранит весь её
+    # текст и markdown, а `outline` учебника — сотни пунктов. Всё это приходило в
+    # каждой из 150 строк и через bind-mount с Windows стоило 2–4 с на запрос.
     fragment_rows = session.execute(
-        select(MaterialFragment, MaterialPage, MaterialBlock, Material)
+        select(MaterialFragment, MaterialPage.page_number, MaterialBlock, Material)
         .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
         .join(MaterialBlock, MaterialBlock.id == MaterialFragment.block_id)
         .join(Material, Material.id == MaterialFragment.material_id)
         .where(MaterialFragment.id.in_(ranked_order))
+        .options(defer(Material.outline), defer(Material.diagnostics))
     ).all()
     by_fragment_id = {row[0].id: row for row in fragment_rows}
 
@@ -317,7 +321,7 @@ def search_fragments(
         row = by_fragment_id.get(fragment_id)
         if row is None:
             continue
-        fragment, page, block, material = row
+        fragment, page_number, block, material = row
         rank = rank_by_fragment_id[fragment_id]
         group = groups.get(block.id)
         if group is None:
@@ -333,13 +337,13 @@ def search_fragments(
             groups[block.id] = group
             group_order.append(block.id)
         group["fragment_ids"].append(fragment_id)
-        group["page_numbers"].append(page.page_number)
+        group["page_numbers"].append(page_number)
         if rank < group["best_rank"]:
             group["best_rank"] = rank
             group["best_fragment"] = fragment
-        by_page = group["pages"].get(page.page_number)
+        by_page = group["pages"].get(page_number)
         if by_page is None:
-            group["pages"][page.page_number] = {
+            group["pages"][page_number] = {
                 "fragment_ids": [fragment_id],
                 "best_rank": rank,
                 "best_fragment": fragment,

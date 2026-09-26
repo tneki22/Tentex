@@ -285,33 +285,48 @@ def _visual_notes(session: Session, results: list[RetrievalHitRead]) -> list[str
     ]
     if not ranges:
         return []
-    rows = session.execute(
-        select(Material, MaterialPage.page_number)
-        .join(MaterialPage, MaterialPage.material_id == Material.id)
-        .join(MaterialFragment, MaterialFragment.page_id == MaterialPage.id)
-        .where(
-            or_(
-                *(
-                    and_(
-                        MaterialPage.material_id == material_id,
-                        MaterialPage.page_number.between(page_from, page_to),
+    # Два узких запроса вместо общего JOIN: сначала страницы выдачи по индексу
+    # (материал, ревизия, номер), затем фрагменты только этих страниц.
+    revisions = current_revisions(session, {material_id for material_id, _, _ in ranges})
+    page_by_id = {
+        page_id: (material_id, page_number)
+        for page_id, material_id, page_number in session.execute(
+            select(MaterialPage.id, MaterialPage.material_id, MaterialPage.page_number).where(
+                or_(
+                    *(
+                        and_(
+                            MaterialPage.material_id == material_id,
+                            MaterialPage.revision == revisions.get(material_id, 0),
+                            MaterialPage.page_number.between(page_from, page_to),
+                        )
+                        for material_id, page_from, page_to in ranges
                     )
-                    for material_id, page_from, page_to in ranges
                 )
-            ),
-            MaterialPage.revision == Material.active_parse_revision,
+            )
+        ).tuples()
+    }
+    if not page_by_id:
+        return []
+    visual = session.scalars(
+        select(MaterialFragment.page_id)
+        .where(
+            MaterialFragment.page_id.in_(page_by_id),
             MaterialFragment.text.like("[Изображение]%"),
         )
         .distinct()
-        .order_by(Material.created_at, MaterialPage.page_number)
     ).all()
-    if not rows:
+    pages: dict[UUID, set[int]] = {}
+    for page_id in visual:
+        material_id, page_number = page_by_id[page_id]
+        pages.setdefault(material_id, set()).add(page_number)
+    if not pages:
         return []
-    pages: dict[str, list[int]] = {}
-    for material, page_number in rows:
-        pages.setdefault(material_display_name(material), []).append(page_number)
+    order = list(dict.fromkeys(material_id for material_id, _, _ in ranges))
     preview = "; ".join(
-        f"{name}, стр. {', '.join(map(str, numbers))}" for name, numbers in pages.items()
+        f"{material_display_name(session.get(Material, material_id))}, "
+        f"стр. {', '.join(map(str, sorted(pages[material_id])))}"
+        for material_id in order
+        if material_id in pages
     )
     return ["На найденных страницах есть изображения без описания: " + preview]
 
