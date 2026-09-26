@@ -658,9 +658,11 @@
 
 /* --- Дашборд «Проекты» --- */
 
+/* Крупные карточки держатся до трёх в ряд: минимальная ширина колонки
+   растёт вместе с окном, поэтому широкий монитор не протискивает четвёртую. */
 .dash-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(max(min(100%, 320px), calc((100% - 2 * var(--space-4)) / 3)), 1fr));
   gap: var(--space-4);
 }
 
@@ -878,6 +880,9 @@
   flex: 1;
   margin: 0;
   min-width: 0;
+  /* Запас справа равен сдвигу типа при наведении (--space-8 + --space-1):
+     длинное название обрезается чуть раньше, а не прячется под значком. */
+  padding-right: calc(var(--space-8) + var(--space-1));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

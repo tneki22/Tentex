@@ -390,11 +390,7 @@ export function Projects() {
 
   const active = [...projects]
     .filter((project) => project.status === "active")
-    .sort((left, right) => {
-      const leftActivity = stats[left.id]?.last_activity_at ?? "";
-      const rightActivity = stats[right.id]?.last_activity_at ?? "";
-      return rightActivity.localeCompare(leftActivity) || left.sort_order - right.sort_order;
-    });
+    .sort((left, right) => left.sort_order - right.sort_order);
   const visibleActive = active.filter((project) => typeFilter === "all" || projectType(project) === typeFilter);
   const inactive = projects.filter((project) => project.status !== "active");
 
