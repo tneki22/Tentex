@@ -10,12 +10,15 @@ from app.materials.storage import material_path, remove_storage_dir_if_empty
 from app.models import (
     Activity,
     Attempt,
+    BackgroundJob,
+    BackgroundJobKind,
     ChatSession,
     ConspectImage,
     GoalPassport,
     GoalScope,
     Lesson,
     Material,
+    MaterialState,
     ProgramNode,
     Project,
     ProjectMaterial,
@@ -325,6 +328,24 @@ def activate_wizard_draft(
         project.status_changed_at = now
         project.updated_at = now
         session.execute(delete(WizardDraft).where(WizardDraft.project_id == project_id))
+        if project.workspace_variant == WorkspaceVariant.EXAM:
+            # Ответы могли разобрать ещё в мастере. Тогда автопривязка в воркере
+            # пропустила черновик; запускаем её только после активации и импорта.
+            for link, material in session.execute(
+                select(ProjectMaterial, Material)
+                .join(Material, Material.id == ProjectMaterial.material_id)
+                .where(
+                    ProjectMaterial.project_id == project_id,
+                    Material.status == MaterialState.READY,
+                )
+            ):
+                if MaterialPurpose.REFERENCE_ANSWERS.value in (link.purposes or []):
+                    session.add(BackgroundJob(
+                        kind=BackgroundJobKind.LINK_ANSWERS,
+                        project_id=project_id,
+                        material_id=material.id,
+                        checkpoint={},
+                    ))
         session.flush()
         return _project_detail(session, project_id)
 

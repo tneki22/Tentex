@@ -406,7 +406,10 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
   const { job: preparationJob } = useBackgroundJob(preparationJobId);
   const initializedKey = useRef<string | null>(null);
   const projectMaterials = useProjectMaterials(controller.detail?.project.id);
-  const programItemCount = (controller.detail?.program.nodes ?? []).filter((node) => node.node_type !== "section").length;
+  const programItemCount = (controller.detail?.program.nodes ?? []).filter((node) =>
+    node.is_in_current_program && !node.is_archived
+    && (form.format === "tickets" ? node.exam_kind === "ticket" : node.node_type === "topic")
+  ).length;
 
   useEffect(() => {
     const abort = new AbortController();
@@ -875,6 +878,13 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     if ((form.format === "unknown" || form.hasTheory) && materialsFor("study_source").length === 0) {
       throw new Error("Добавьте хотя бы один учебный материал");
     }
+    // Ответы начинают разбираться после готовой программы. Если разбор
+    // завершится до активации, сервер поставит сопоставление в очередь сам.
+    for (const material of answerMaterials) {
+      if (material.status === "ready_to_process") {
+        await startMaterialProcessing(controller.detail!.project.id, material.id, "fast");
+      }
+    }
     await projectMaterials.refresh();
     await controller.queueSave(command(4, nextWarnings, nextDuplicatesResolution, nextDuplicatesResolvedKey));
     changeStep(4);
@@ -1164,6 +1174,12 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
 
     if (form.hasTheory && materialsFor("study_source").length === 0) {
       throw new Error("Добавьте хотя бы один учебный материал");
+    }
+    for (const key of (["questionAnswers", "taskAnswers"] as const)) {
+      const material = materialBySlot[key];
+      if (material?.status === "ready_to_process") {
+        await startMaterialProcessing(projectId, material.id, "fast");
+      }
     }
   }
 
@@ -1807,7 +1823,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
             ) : (
               <>
                 <p>{form.format === "tickets" ? "Билеты" : form.format === "questions_tasks" ? "Вопросы и задачи" : "Вопросы"} уже сохранены в проекте.</p>
-                {form.hasAnswers && <p>Файлы ответов сохранены. Подготовить их текст и привязать ответы можно в разделе «Материалы».</p>}
+                {form.hasAnswers && <p>После создания проекта ответы будут обработаны и сопоставлены с вопросами. Результат можно проверить в разделе «Материалы → Ответы».</p>}
                 {!form.hasAnswers && <p>Готовые ответы можно добавить позже в разделе «Материалы → Ответы» и привязать к вопросам.</p>}
                 {form.hasTheory && <p>Учебные материалы сохранены. Подготовить их текст можно в разделе «Материалы».</p>}
               </>
@@ -1947,17 +1963,18 @@ function ReviewProgramTree({
   }
   for (const siblings of childrenByParent.values()) siblings.sort((left, right) => left.sort_order - right.sort_order);
 
-  function renderNodes(parentId: string | null) {
+  function renderNodes(parentId: string | null, prefix = "") {
     return (childrenByParent.get(parentId) ?? []).map((node, index) => {
       const children = childrenByParent.get(node.id) ?? [];
+      const number = `${prefix}${index + 1}`;
       return (
-        <li key={node.id} className={node.exam_kind === "ticket" ? "is-ticket" : ""}>
+        <li key={node.id} className={`is-${node.node_type}${node.exam_kind === "ticket" ? " is-ticket" : ""}`}>
           <div className="wizard-review-row">
-            <span className="wizard-review-number">{index + 1}</span>
-            {node.exam_kind && <span className="wizard-review-kind">{node.exam_kind === "task" ? "задача" : node.exam_kind === "question" ? "вопрос" : "билет"}</span>}
+            <span className="wizard-review-number">{number}</span>
+            <span className="wizard-review-kind">{node.node_type === "subpoint" ? "подпункт" : node.exam_kind === "task" ? "задача" : node.exam_kind === "ticket" ? "билет" : "вопрос"}</span>
             <EditableProgramNodeText node={node} onSave={onRename} />
           </div>
-          {children.length > 0 && <ol>{renderNodes(node.id)}</ol>}
+          {children.length > 0 && <ol>{renderNodes(node.id, `${number}.`)}</ol>}
         </li>
       );
     });
