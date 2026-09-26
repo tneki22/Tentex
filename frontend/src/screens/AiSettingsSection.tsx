@@ -1186,8 +1186,24 @@ function UsagePanel({ settings, enabled }: { settings: AiSettingsRead; enabled: 
   const [data, setData] = useState<AiRunPageRead | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Журнал нужен, когда раздел выбран в навигации или просто прокручен в
+  // окно: подсветка навигации не всегда доходит до последнего раздела, и
+  // заглушка «Загружаем» оставалась навсегда. Увиденный раздел не забывается,
+  // чтобы прокрутка мимо не отменяла и не повторяла запрос.
+  const panelRef = useRef<HTMLElement>(null);
+  const [seen, setSeen] = useState(false);
+  const wanted = enabled || seen;
   useEffect(() => {
-    if (!enabled) return;
+    const node = panelRef.current;
+    if (seen || !node) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setSeen(true);
+    }, { rootMargin: "200px 0px" });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [seen]);
+  useEffect(() => {
+    if (!wanted) return;
     const controller = new AbortController();
     const since = new Date();
     since.setDate(since.getDate() - 30);
@@ -1204,7 +1220,7 @@ function UsagePanel({ settings, enabled }: { settings: AiSettingsRead; enabled: 
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [enabled, provider, model, role, status, page]);
+  }, [wanted, provider, model, role, status, page]);
 
   // Один model_id может быть добавлен у нескольких провайдеров; значение Select уникально.
   const providerModels = Array.from(new Map(
@@ -1219,7 +1235,7 @@ function UsagePanel({ settings, enabled }: { settings: AiSettingsRead; enabled: 
     setPage(1);
   }
 
-  return <section className="ai-settings-group is-first"><header className="ai-group-head"><div><h2>Использование</h2><p>История запросов к ИИ: какая функция работала, сколько токенов потратила и сколько это стоило.</p></div></header>{error && <ErrorState message={error} />}{loading && <LoadingState label="Загружаем историю ИИ" />}<div className="ai-usage-summary"><div><span>Запросов</span><strong>{data?.total ?? "…"}</strong></div><div><span>Стоимость</span><strong>{money(data?.actual_cost_usd ?? null)}</strong></div><div><span>Входные токены</span><strong>{(data?.input_tokens ?? 0).toLocaleString("ru-RU")}</strong></div><div><span>Выходные токены</span><strong>{(data?.output_tokens ?? 0).toLocaleString("ru-RU")}</strong></div></div><div className="ai-filter-row">
+  return <section ref={panelRef} className="ai-settings-group is-first"><header className="ai-group-head"><div><h2>Использование</h2><p>История запросов к ИИ: какая функция работала, сколько токенов потратила и сколько это стоило.</p></div></header>{error && <ErrorState message={error} />}{wanted && loading && <LoadingState label="Загружаем историю ИИ" />}<div className="ai-usage-summary"><div><span>Запросов</span><strong>{data?.total ?? "…"}</strong></div><div><span>Стоимость</span><strong>{money(data?.actual_cost_usd ?? null)}</strong></div><div><span>Входные токены</span><strong>{(data?.input_tokens ?? 0).toLocaleString("ru-RU")}</strong></div><div><span>Выходные токены</span><strong>{(data?.output_tokens ?? 0).toLocaleString("ru-RU")}</strong></div></div><div className="ai-filter-row">
     <Select ariaLabel="Фильтр по провайдеру" value={provider || null} emptyOption="Все провайдеры" onValueChange={(value) => { setFilter(setProvider, value ?? ""); setModel(""); }} options={settings.providers.map((item) => ({ value: item.id, label: item.label }))} />
     <Select ariaLabel="Фильтр по модели" value={model || null} emptyOption="Все модели" onValueChange={(value) => setFilter(setModel, value ?? "")} options={providerModels.map((item) => ({ value: item.model_id, label: item.display_name, description: item.model_id }))} />
     <Select ariaLabel="Фильтр по функции" value={role || null} emptyOption="Все функции" onValueChange={(value) => setFilter(setRole, value ?? "")} options={settings.roles.map((item) => ({ value: item.role, label: item.title }))} />
