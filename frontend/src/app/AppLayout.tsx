@@ -290,6 +290,9 @@ export function AppLayout() {
   useEffect(() => {
     let active = true;
     const loadBackgroundJobs = () => {
+      // Скрытая вкладка (в том числе отделённое окно зоны) не опрашивает
+      // сервер: список обновится, как только её снова покажут.
+      if (document.hidden) return;
       // Активные, готовые предложения и ошибки загружаются вместе. Последние
       // две корзины остаются до явного удаления пользователем.
       void listBackgroundJobs({ activeOnly: true, pendingReview: true, failedOnly: true }).then((jobs) => {
@@ -298,9 +301,11 @@ export function AppLayout() {
     };
     loadBackgroundJobs();
     const timer = window.setInterval(loadBackgroundJobs, BACKGROUND_POLL_MS);
+    document.addEventListener("visibilitychange", loadBackgroundJobs);
     return () => {
       active = false;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", loadBackgroundJobs);
     };
   }, []);
 

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Iterator
 from typing import Annotated
@@ -23,21 +24,23 @@ from app.bindings.schemas import (
     ReindexResult,
     SearchResponse,
 )
-from app.db import SessionLocal, get_session
+from app.bindings.search import reuse_fragment_search
+from app.db import SessionLocal, get_search_session, get_session
 from app.models import BindingStatus
 from app.projects.errors import ProjectDomainError
 from app.retrieval.schemas import RetrievalScope, RetrievalSearchWrite, SearchStrategy
 from app.retrieval.search import HybridRetriever
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+SearchSessionDependency = Annotated[Session, Depends(get_search_session)]
 GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["bindings"])
 
 
 @router.get("/search", response_model=SearchResponse)
-async def search_materials(
+def search_materials(
     project_id: UUID,
-    session: SessionDependency,
+    session: SearchSessionDependency,
     q: str = "",
     material_id: UUID | None = None,
     node_id: UUID | None = None,
@@ -45,26 +48,34 @@ async def search_materials(
     strategy: SearchStrategy = SearchStrategy.HYBRID,
     scope: RetrievalScope | None = None,
 ) -> SearchResponse:
-    lexical = service.search_project_materials(
-        session, project_id, q, material_id=material_id, node_id=node_id, limit=limit
-    )
-    if strategy == SearchStrategy.LEXICAL or not q.strip():
-        return lexical.model_copy(update={"strategy": SearchStrategy.LEXICAL.value})
-    retrieval_scope = scope or (
-        RetrievalScope.TOPIC_PROJECT if node_id is not None else RetrievalScope.PROJECT
-    )
-    hybrid = await HybridRetriever().search(
-        session,
-        RetrievalSearchWrite(
-            query=q,
-            strategy=strategy,
-            scope=retrieval_scope,
-            project_id=project_id,
-            node_id=node_id,
-            material_ids=[material_id] if material_id else [],
-            limit=limit,
-        ),
-    )
+    """Найти кандидатов, не занимая event loop коротких запросов проекта."""
+    with reuse_fragment_search():
+        lexical = service.search_project_materials(
+            session, project_id, q, material_id=material_id, node_id=node_id, limit=limit
+        )
+        if strategy == SearchStrategy.LEXICAL or not q.strip():
+            return lexical.model_copy(update={"strategy": SearchStrategy.LEXICAL.value})
+        retrieval_scope = scope or (
+            RetrievalScope.TOPIC_PROJECT if node_id is not None else RetrievalScope.PROJECT
+        )
+        # FTS, сборка фрагментов и часть hybrid retrieval синхронны. FastAPI
+        # исполняет обычный def в пуле потоков; отдельный event loop оставляет
+        # эти операции вне основного цикла, где ждут короткие запросы ответа/чата.
+        # asyncio.run копирует контекст, поэтому гибрид видит ту же выдачу BM25.
+        hybrid = asyncio.run(
+            HybridRetriever().search(
+                session,
+                RetrievalSearchWrite(
+                    query=q,
+                    strategy=strategy,
+                    scope=retrieval_scope,
+                    project_id=project_id,
+                    node_id=node_id,
+                    material_ids=[material_id] if material_id else [],
+                    limit=limit,
+                ),
+            )
+        )
     by_block = {
         hit.locator.block_id: hit for hit in hybrid.results if hit.locator.block_id is not None
     }

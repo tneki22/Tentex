@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     worker_cloud_concurrency: int = Field(default=2, ge=1, le=32)
     worker_ai_concurrency: int = Field(default=8, ge=1, le=32)
     retrieval_model_url: str = "http://retrieval-model:8010"
+    # Постоянные SQLite-соединения API. 0 — новое соединение на каждую сессию:
+    # так работает воркер, чтобы после восстановления копии ни одно соединение
+    # не держало подменённый файл. У API пул сохраняет кэш страниц между
+    # запросами; на bind mount с Windows повторное чтение из кэша в десятки раз
+    # быстрее чтения с диска. `restore` сам закрывает пул перед подменой.
+    sqlite_pool_size: int = Field(default=0, ge=0, le=32)
     # Локальный SearXNG чата «Поиск в интернете». В Docker api ходит в сервис
     # `searxng`; при запуске бэкенда на хосте — в порт, проброшенный на localhost.
     searxng_url: str = "http://localhost:8888"

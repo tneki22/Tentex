@@ -1,17 +1,26 @@
-import type { PropsWithChildren, ReactNode } from "react";
-import { Tooltip as RadixTooltip } from "radix-ui";
+import { useState, type PropsWithChildren, type ReactNode } from "react";
+import { Slot, Tooltip as RadixTooltip } from "radix-ui";
 
 interface TooltipProps {
   /** Короткая подпись. Длинному тексту место в тексте экрана, а не в подсказке. */
   label: ReactNode;
   side?: "top" | "right" | "bottom" | "left";
+  /**
+   * Подключить Radix только при первом наведении. Для меток в длинных списках
+   * (строка на каждую тему программы): сотни Root/Trigger заметно замедляют
+   * рендер. Только для нефокусируемых меток — их подпись и так в `aria-label`,
+   * а наведение пересоздаёт элемент под курсором.
+   */
+  lazy?: boolean;
 }
 
 /**
  * Подсказка для того, что подписать негде: иконка в свёрнутой панели,
  * сокращённая метрика. Не носитель смысла — дублирует уже понятное.
  */
-export function Tooltip({ label, side = "right", children }: PropsWithChildren<TooltipProps>) {
+export function Tooltip({ label, side = "right", lazy = false, children }: PropsWithChildren<TooltipProps>) {
+  const [armed, setArmed] = useState(!lazy);
+  if (!armed) return <Slot.Root onPointerEnter={() => setArmed(true)}>{children}</Slot.Root>;
   return (
     <RadixTooltip.Root>
       <RadixTooltip.Trigger asChild>{children}</RadixTooltip.Trigger>

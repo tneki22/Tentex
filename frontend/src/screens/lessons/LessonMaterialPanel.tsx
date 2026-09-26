@@ -55,7 +55,7 @@ export function LessonMaterialPanel({
   const materials = useProjectMaterials(projectId);
   const studyTopic = topic && topic.node_type !== "section" ? topic : null;
   const ranges = useTopicRanges(projectId, studyTopic?.id ?? null, refreshKey);
-  const search = useMaterialSearch(projectId, studyTopic?.id, studyTopic?.title ?? "");
+  const search = useMaterialSearch(projectId, studyTopic?.id, studyTopic?.title ?? "", tab === "search");
 
   return (
     <div className="lessons-material-panel">

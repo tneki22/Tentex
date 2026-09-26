@@ -152,6 +152,7 @@ export interface AiRoleRead {
 }
 
 export interface AiTodayUsage {
+  run_count: number;
   input_tokens: number;
   output_tokens: number;
   actual_cost_usd: DecimalValue;
@@ -267,6 +268,14 @@ export interface AiRunRead {
   error_code: string | null;
   created_at: string;
   completed_at: string | null;
+}
+
+export interface AiRunPageRead {
+  items: AiRunRead[];
+  total: number;
+  input_tokens: number;
+  output_tokens: number;
+  actual_cost_usd: DecimalValue;
 }
 
 export interface AiUsageRead {
@@ -443,6 +452,8 @@ function filterQuery(filters: {
   to?: string;
   groupBy?: "role" | "provider" | "model";
   jobId?: string;
+  limit?: number;
+  offset?: number;
 }): string {
   const query = new URLSearchParams();
   if (filters.projectId) query.set("project_id", filters.projectId);
@@ -454,6 +465,8 @@ function filterQuery(filters: {
   if (filters.to) query.set("to", filters.to);
   if (filters.groupBy) query.set("group_by", filters.groupBy);
   if (filters.jobId) query.set("job_id", filters.jobId);
+  if (filters.limit) query.set("limit", String(filters.limit));
+  if (filters.offset) query.set("offset", String(filters.offset));
   const value = query.toString();
   return value ? `?${value}` : "";
 }
@@ -461,6 +474,10 @@ function filterQuery(filters: {
 export const listAiRuns = (
   filters: Parameters<typeof filterQuery>[0] = {}, signal?: AbortSignal,
 ): Promise<AiRunRead[]> => request(`${AI_PATH}/runs${filterQuery(filters)}`, { signal });
+
+export const listAiRunsPage = (
+  filters: Parameters<typeof filterQuery>[0] = {}, signal?: AbortSignal,
+): Promise<AiRunPageRead> => request(`${AI_PATH}/runs-page${filterQuery(filters)}`, { signal });
 
 export const getAiUsage = (
   filters: Parameters<typeof filterQuery>[0] = {}, signal?: AbortSignal,

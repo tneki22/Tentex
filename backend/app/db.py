@@ -7,10 +7,10 @@ from uuid import UUID
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import URL, MetaData, create_engine, event, text
+from sqlalchemy import URL, Engine, MetaData, create_engine, event, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import NullPool, QueuePool
 
 from app.config import BACKEND_ROOT, settings
 
@@ -29,20 +29,49 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-engine = create_engine(
-    URL.create("sqlite+pysqlite", database=str(settings.database_path)),
-    connect_args={"autocommit": False, "check_same_thread": False, "timeout": 30},
-    # SQLAlchemy-пул рассчитан на дорогие сетевые соединения. Для SQLite
-    # соединение — это просто open() файла, а WAL и busy_timeout уже решают
-    # конкуренцию на уровне самого SQLite. С QueuePool по умолчанию (5+10)
-    # пачка параллельных запросов с экрана (~6 GET разом) исчерпывала пул и
-    # часть запросов падала с sqlalchemy.exc.TimeoutError после 30с ожидания.
-    poolclass=NullPool,
-)
+#: Кэш страниц одного постоянного соединения API. Соединение сбрасывает его
+#: само, как только другой процесс записал в WAL, поэтому устаревших данных нет.
+POOLED_CACHE_KIB = 65536
+#: Постоянные соединения поиска. Пачка GET экрана разбирает общий пул, и поиск
+#: попадал на соединение с холодным кэшем: первый поиск на нём 3 с вместо 0,3 с
+#: (чтение с bind-mount). Свой маленький пул держит индекс кусков прогретым.
+SEARCH_POOL_SIZE = 2
+
+
+def _pool_arguments(pool_size: int) -> dict[str, object]:
+    """Пул для API или новое соединение на сессию для воркера и скриптов."""
+    if pool_size == 0:
+        return {"poolclass": NullPool}
+    # QueuePool по умолчанию (5+10, 30 с) исчерпывался пачкой GET с экрана.
+    # Большой overflow снимает этот предел: лишние соединения закрываются
+    # при возврате. LIFO отдаёт последнее соединение, у которого кэш прогрет.
+    return {
+        "poolclass": QueuePool,
+        "pool_size": pool_size,
+        "max_overflow": 64,
+        "pool_timeout": 60,
+        "pool_use_lifo": True,
+    }
+
+
+def _create_engine(pool_size: int) -> Engine:
+    return create_engine(
+        URL.create("sqlite+pysqlite", database=str(settings.database_path)),
+        connect_args={"autocommit": False, "check_same_thread": False, "timeout": 30},
+        **_pool_arguments(pool_size),
+    )
+
+
+engine = _create_engine(settings.sqlite_pool_size)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+search_engine = (
+    _create_engine(min(SEARCH_POOL_SIZE, settings.sqlite_pool_size))
+    if settings.sqlite_pool_size
+    else engine
+)
+SearchSessionLocal = sessionmaker(bind=search_engine, expire_on_commit=False)
 
 
-@event.listens_for(engine, "connect")
 def configure_sqlite(dbapi_connection: object, _: object) -> None:
     previous_autocommit = dbapi_connection.autocommit
     dbapi_connection.autocommit = True
@@ -59,14 +88,32 @@ def configure_sqlite(dbapi_connection: object, _: object) -> None:
             # и роняет параллельные запросы с "disk I/O error".
             # Обычный файловый ввод-вывод работает.
             cursor.execute("PRAGMA mmap_size=0")
+            if settings.sqlite_pool_size:
+                cursor.execute(f"PRAGMA cache_size=-{POOLED_CACHE_KIB}")
         finally:
             cursor.close()
     finally:
         dbapi_connection.autocommit = previous_autocommit
 
 
+for _engine in {engine, search_engine}:
+    event.listen(_engine, "connect", configure_sqlite)
+
+
 def get_session() -> Iterator[Session]:
     with SessionLocal() as session:
+        yield session
+
+
+def dispose_engines() -> None:
+    """Закрыть соединения обоих пулов перед подменой файла базы."""
+    for pooled in {engine, search_engine}:
+        pooled.dispose()
+
+
+def get_search_session() -> Iterator[Session]:
+    """Сессия поисковых GET: те же данные, но соединения из пула поиска."""
+    with SearchSessionLocal() as session:
         yield session
 
 

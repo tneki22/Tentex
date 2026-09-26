@@ -7,7 +7,7 @@ import socket
 import tempfile
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread, get_native_id
 from typing import Literal
@@ -125,6 +125,28 @@ def _lane_condition(lane: WorkerLane):
     )
 
 
+def _has_claimable(session: Session, lane: WorkerLane | None, now: datetime) -> bool:
+    """Есть ли что брать, по одному чтению без резервирования writer.
+
+    Простаивающий воркер опрашивает полосы несколько раз в секунду; каждая
+    попытка под `job_write_transaction` держала writer SQLite ~30 мс, и запись
+    API в это время ждала. Чтение ничего не решает: сам захват ниже по-прежнему
+    перепроверяет строку под writer, а пропущенная задача берётся следующим опросом.
+    """
+    queued = BackgroundJob.state == BackgroundJobState.QUEUED
+    if lane is not None:
+        queued = and_(queued, _lane_condition(lane))
+    expired = and_(
+        BackgroundJob.state == BackgroundJobState.RUNNING,
+        BackgroundJob.lease_expires_at < now,
+    )
+    found = session.scalar(select(BackgroundJob.id).where(or_(queued, expired)).limit(1))
+    # Закрыть снимок чтения так же, как `job_write_transaction`: commit, а не
+    # rollback, чтобы не потерять несохранённое вызывающей стороны.
+    session.commit()
+    return found is not None
+
+
 def claim_job(
     session: Session, worker_id: str, lane: WorkerLane | None = None
 ) -> BackgroundJob | None:
@@ -137,6 +159,8 @@ def claim_job(
     if storage_maintenance.active():
         return None
     now = utc_now()
+    if not _has_claimable(session, lane, now):
+        return None
     with job_write_transaction(session):
         expired = list(
             session.scalars(

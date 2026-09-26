@@ -13,6 +13,9 @@ services:
       TENTEX_DATA_DIR: /data
       TENTEX_RETRIEVAL_MODEL_URL: http://retrieval-model:8010
       TENTEX_SEARXNG_URL: http://searxng:8080
+      # Постоянные соединения держат кэш страниц: чтение базы с bind mount
+      # медленное. У воркера пула нет — см. `sqlite_pool_size` в config.py.
+      TENTEX_SQLITE_POOL_SIZE: "8"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
       interval: 10s

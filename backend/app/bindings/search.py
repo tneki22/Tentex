@@ -19,13 +19,15 @@
 `snippet()` не умеет подсвечивать колонку, по которой не было совпадения.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import select, text
 from sqlalchemy.engine import Connection
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.materials.lexicon import (
     index_text,
@@ -41,6 +43,25 @@ from app.models import Material, MaterialBlock, MaterialFragment, MaterialPage, 
 
 RESULT_LIMIT = 50
 _RAW_HIT_MULTIPLIER = 4
+
+#: Выдача BM25 одного HTTP-запроса. Поиск кандидатов в проекте сначала строит
+#: выдачу по словам, затем гибридный поиск повторяет MATCH по материалам своей
+#: области. Когда набор материалов совпадает (поиск без темы), второй MATCH не
+#: нужен: в пределах одного снимка базы результат одинаковый. У темы экзамена
+#: область шире (ещё файл ответов), и ключ честно не совпадает.
+_REQUEST_OUTCOMES: ContextVar[dict[tuple, "SearchOutcome"] | None] = ContextVar(
+    "fragment_search_outcomes", default=None
+)
+
+
+@contextmanager
+def reuse_fragment_search() -> Iterator[None]:
+    """Не повторять одинаковый BM25-поиск внутри одного запроса."""
+    token = _REQUEST_OUTCOMES.set({})
+    try:
+        yield
+    finally:
+        _REQUEST_OUTCOMES.reset(token)
 
 #: Длинная формулировка не улучшает выдачу, но раздувает выражение MATCH.
 _MAX_QUERY_TERMS = 12
@@ -279,6 +300,25 @@ def search_fragments(
     if not (terms or prefix) or not material_ids:
         return empty
     material_hex = [material_id.hex for material_id in material_ids]
+    outcomes = _REQUEST_OUTCOMES.get()
+    key = (tuple(sorted(material_hex)), query, limit)
+    if outcomes is not None and key in outcomes:
+        return outcomes[key]
+    outcome = _search_fragments(session, material_hex, terms, prefix, limit)
+    if outcomes is not None:
+        outcomes[key] = outcome
+    return outcome
+
+
+def _search_fragments(
+    session: Session,
+    material_hex: list[str],
+    terms: list[str],
+    prefix: str | None,
+    limit: int,
+) -> SearchOutcome:
+    """MATCH по материалам и группировка найденных фрагментов по блокам."""
+    empty = SearchOutcome(terms=terms, prefix=prefix, hits=[])
     placeholders = ", ".join(f":m{index}" for index in range(len(material_hex)))
     params: dict[str, object] = {f"m{index}": value for index, value in enumerate(material_hex)}
     params["q"] = _match_expression(terms, prefix)
@@ -301,12 +341,17 @@ def search_fragments(
         rank_by_fragment_id[fragment_id] = rank
         ranked_order.append(fragment_id)
 
+    # От страницы нужен только номер: её text, markdown и elements в разы
+    # тяжелее фрагмента и на bind mount удваивали время выдачи. Оглавление
+    # материала (у учебника ~120 КБ JSON) иначе читалось и разбиралось заново
+    # в каждой из сотен строк выдачи.
     fragment_rows = session.execute(
-        select(MaterialFragment, MaterialPage, MaterialBlock, Material)
+        select(MaterialFragment, MaterialPage.page_number, MaterialBlock, Material)
         .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
         .join(MaterialBlock, MaterialBlock.id == MaterialFragment.block_id)
         .join(Material, Material.id == MaterialFragment.material_id)
         .where(MaterialFragment.id.in_(ranked_order))
+        .options(defer(Material.outline), defer(Material.diagnostics))
     ).all()
     by_fragment_id = {row[0].id: row for row in fragment_rows}
 
@@ -317,7 +362,7 @@ def search_fragments(
         row = by_fragment_id.get(fragment_id)
         if row is None:
             continue
-        fragment, page, block, material = row
+        fragment, page_number, block, material = row
         rank = rank_by_fragment_id[fragment_id]
         group = groups.get(block.id)
         if group is None:
@@ -333,13 +378,13 @@ def search_fragments(
             groups[block.id] = group
             group_order.append(block.id)
         group["fragment_ids"].append(fragment_id)
-        group["page_numbers"].append(page.page_number)
+        group["page_numbers"].append(page_number)
         if rank < group["best_rank"]:
             group["best_rank"] = rank
             group["best_fragment"] = fragment
-        by_page = group["pages"].get(page.page_number)
+        by_page = group["pages"].get(page_number)
         if by_page is None:
-            group["pages"][page.page_number] = {
+            group["pages"][page_number] = {
                 "fragment_ids": [fragment_id],
                 "best_rank": rank,
                 "best_fragment": fragment,
