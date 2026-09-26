@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from uuid import UUID
 
 import httpx
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session, defer
 
 from app.bindings.search import SearchHit, search_fragments
 from app.config import settings as app_settings
@@ -75,24 +75,10 @@ class HybridRetriever:
         reasons: list[str] = []
         pseudo_by_id: dict[UUID, SearchHit] = {}
 
-        chunks = (
-            list(
-                session.scalars(
-                    select(RetrievalChunk).where(
-                        RetrievalChunk.index_id == active.id,
-                        RetrievalChunk.material_id.in_(scope.material_ids),
-                    )
-                )
-            )
-            if active is not None
-            else []
-        )
-        chunk_by_id = {chunk.id: chunk for chunk in chunks}
-
         lexical_ids: list[UUID] = []
         if command.strategy != SearchStrategy.SEMANTIC:
             hits = _lexical_candidates(session, scope, command.query, preset.lexical_candidates)
-            lexical_ids = _lexical_ids(hits, chunks, pseudo_by_id)
+            lexical_ids = _lexical_ids(session, active, hits, pseudo_by_id)
 
         semantic_ids: list[UUID] = []
         if command.strategy != SearchStrategy.LEXICAL:
@@ -102,11 +88,12 @@ class HybridRetriever:
             # Чистый semantic-запрос без индекса возвращает не пустоту, а BM25:
             # это явно названная деградация, а не отсутствие ответа.
             hits = _lexical_candidates(session, scope, command.query, preset.lexical_candidates)
-            lexical_ids = _lexical_ids(hits, chunks, pseudo_by_id)
+            lexical_ids = _lexical_ids(session, active, hits, pseudo_by_id)
             reasons.append("Semantic-поиск заменён поиском по словам")
 
         reasons.extend(_degradation_notes(session, active, scope))
         ranking = _ranking(command.strategy, lexical_ids, semantic_ids, preset, expert)
+        chunk_by_id = _load_chunks(session, [item_id for item_id, _, _ in ranking])
 
         if preset.rerank_depth and ranking:
             try:
@@ -130,7 +117,6 @@ class HybridRetriever:
             results=self._read_ranking(
                 session, ranking, chunk_by_id, pseudo_by_id,
                 limit=min(command.limit, preset.final_results),
-                active=active,
             ),
         )
 
@@ -185,15 +171,8 @@ class HybridRetriever:
         pseudo_by_id: dict[UUID, SearchHit],
         *,
         limit: int,
-        active: RetrievalIndex | None,
     ) -> list[RetrievalHitRead]:
         """Прочитать выбранные места: куски индекса, иначе — исходный фрагмент BM25."""
-        missing_ids = [item_id for item_id, _, _ in ranking if item_id not in chunk_by_id]
-        if active is not None and missing_ids:
-            for chunk in session.scalars(
-                select(RetrievalChunk).where(RetrievalChunk.id.in_(missing_ids))
-            ):
-                chunk_by_id[chunk.id] = chunk
         results: list[RetrievalHitRead] = []
         for item_id, score, signals in ranking:
             chunk = chunk_by_id.get(item_id)
@@ -217,27 +196,93 @@ def _lexical_candidates(
 
 
 def _lexical_ids(
+    session: Session,
+    active: RetrievalIndex | None,
     hits: list[SearchHit],
-    chunks: list[RetrievalChunk],
     pseudo_by_id: dict[UUID, SearchHit],
 ) -> list[UUID]:
-    """Перевести найденные фрагменты в id кусков активного индекса.
+    """Перевести найденные BM25 фрагменты в куски активного индекса.
 
-    Блока нет в индексе — например, материал переиндексируется прямо сейчас, —
-    и место остаётся в выдаче под id своего фрагмента, а сам фрагмент попадает в
-    `pseudo_by_id`. Так BM25 продолжает отвечать и без готового индекса.
+    Место — кусок, в котором лежит найденный фрагмент, а не первый кусок его
+    блока: иначе совпадение в середине длинного раздела показывало его начало.
+    Фрагмент есть в поиске по словам, но не попал в куски проиндексированного
+    материала — это колонтитул или номер страницы, такое место не выдаётся.
+    Материала нет в индексе — например, он переиндексируется прямо сейчас, —
+    и место остаётся под id своего фрагмента в `pseudo_by_id`: BM25 продолжает
+    отвечать и без готового индекса.
     """
-    first_by_block = {
-        chunk.block_id: chunk.id for chunk in reversed(chunks) if chunk.block_id is not None
-    }
+    chunk_by_fragment, indexed_materials = _chunk_lookup(session, active, hits)
     ids: list[UUID] = []
     for hit in hits:
-        chunk_id = first_by_block.get(hit.block_id)
+        chunk_id = next(
+            (
+                chunk_by_fragment[str(fragment_id)]
+                for fragment_id in hit.fragment_ids
+                if str(fragment_id) in chunk_by_fragment
+            ),
+            None,
+        )
         if chunk_id is None:
+            if hit.material_id in indexed_materials:
+                continue
             chunk_id = hit.fragment_ids[0]
             pseudo_by_id[chunk_id] = hit
-        ids.append(chunk_id)
+        if chunk_id not in ids:
+            ids.append(chunk_id)
     return ids
+
+
+def _chunk_lookup(
+    session: Session, active: RetrievalIndex | None, hits: list[SearchHit]
+) -> tuple[dict[str, UUID], set[UUID]]:
+    """Кусок по id фрагмента и материалы, чья текущая ревизия есть в индексе."""
+    if active is None or not hits:
+        return {}, set()
+    fragment_ids = sorted({str(item) for hit in hits for item in hit.fragment_ids})
+    material_ids = sorted({hit.material_id.hex for hit in hits})
+    fragment_params = {f"f{number}": item for number, item in enumerate(fragment_ids)}
+    material_params = {f"m{number}": item for number, item in enumerate(material_ids)}
+    current_revision = (
+        "retrieval_chunks.revision = (SELECT active_parse_revision FROM materials "
+        "WHERE materials.id = retrieval_chunks.material_id)"
+    )
+    rows = session.execute(
+        text(
+            "SELECT retrieval_chunks.id, item.value FROM retrieval_chunks, "
+            "json_each(retrieval_chunks.fragment_ids) AS item "
+            f"WHERE retrieval_chunks.index_id = :index_id AND {current_revision} "
+            f"AND item.value IN ({', '.join(f':{key}' for key in fragment_params)}) "
+            "ORDER BY retrieval_chunks.sort_order"
+        ),
+        {"index_id": active.id.hex, **fragment_params},
+    ).all()
+    chunk_by_fragment: dict[str, UUID] = {}
+    for chunk_hex, fragment_id in rows:
+        # Из-за перекрытия фрагмент бывает в двух кусках: выдаётся первый.
+        chunk_by_fragment.setdefault(fragment_id, UUID(hex=chunk_hex))
+    indexed = session.execute(
+        text(
+            "SELECT DISTINCT material_id FROM retrieval_chunks "
+            f"WHERE index_id = :index_id AND {current_revision} "
+            f"AND material_id IN ({', '.join(f':{key}' for key in material_params)})"
+        ),
+        {"index_id": active.id.hex, **material_params},
+    ).all()
+    return chunk_by_fragment, {UUID(hex=row[0]) for row in indexed}
+
+
+def _load_chunks(session: Session, chunk_ids: list[UUID]) -> dict[UUID, RetrievalChunk]:
+    """Прочитать только куски из выдачи, без векторов: их может быть тысячи в области."""
+    if not chunk_ids:
+        return {}
+    return {
+        chunk.id: chunk
+        for chunk in session.scalars(
+            select(RetrievalChunk)
+            .options(defer(RetrievalChunk.embedding))
+            .where(RetrievalChunk.id.in_(chunk_ids))
+        )
+    }
 
 
 def _degradation_notes(

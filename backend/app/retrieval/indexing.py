@@ -508,7 +508,8 @@ def process_index_job(session: Session, detached_job: BackgroundJob) -> None:
                     _stop_index_build(session, job_id, index_id, action)
                     return
                 batch = drafts[start : start + batch_size]
-                vectors = asyncio.run(backend.embed_documents([draft.text for draft in batch]))
+                texts = [draft.embedding_text for draft in batch]
+                vectors = asyncio.run(backend.embed_documents(texts))
                 if dimension is None and vectors:
                     dimension = len(vectors[0])
                 for draft, vector in zip(batch, vectors, strict=True):
@@ -583,7 +584,7 @@ def _process_incremental(
             _cancel_incremental_reindex(session, job_id)
             return
         batch = drafts[start : start + batch_size]
-        vectors = asyncio.run(backend.embed_documents([draft.text for draft in batch]))
+        vectors = asyncio.run(backend.embed_documents([draft.embedding_text for draft in batch]))
         embedded.extend(zip(batch, vectors, strict=True))
 
     def apply(inner: Session, job: BackgroundJob) -> None:

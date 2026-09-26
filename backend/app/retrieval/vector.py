@@ -66,8 +66,16 @@ class SqliteVecIndex:
             if not block_ids:
                 return []
             block_placeholders = ", ".join(f":b{number}" for number in range(len(block_ids)))
+            merged_placeholders = ", ".join(f":j{number}" for number in range(len(block_ids)))
             params.update({f"b{number}": item.hex for number, item in enumerate(block_ids)})
-            block_filter = f"AND block_id IN ({block_placeholders}) "
+            params.update({f"j{number}": str(item) for number, item in enumerate(block_ids)})
+            # Кусок из нескольких блоков хранит их в `locator.block_ids`: он
+            # относится к теме, если к ней привязан любой из его блоков.
+            block_filter = (
+                f"AND (block_id IN ({block_placeholders}) OR EXISTS (SELECT 1 FROM "
+                "json_each(retrieval_chunks.locator, '$.block_ids') AS merged "
+                f"WHERE merged.value IN ({merged_placeholders}))) "
+            )
         try:
             rows = session.execute(
                 text(

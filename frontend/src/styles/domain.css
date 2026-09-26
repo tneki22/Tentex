@@ -1400,3 +1400,16 @@
   color: var(--muted);
   font-size: var(--text-xs);
 }
+
+/* Страница с выделенными фрагментами: обёртка равна картинке, поэтому доли bbox
+   отсчитываются от листа, а не от полей вокруг него. */
+.page-highlights { position: relative; width: fit-content; max-width: 100%; }
+.page-highlights img { display: block; max-width: 100%; height: auto; background: var(--surface-sunken); }
+/* Тот же вид, что у найденного места в предпросмотре источников (`is-found`). */
+.page-highlights-mark {
+  position: absolute;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  background: var(--accent-wash);
+  pointer-events: none;
+}

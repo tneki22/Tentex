@@ -590,3 +590,152 @@ def test_first_tested_profile_becomes_default_for_index_build(
     session.expire_all()
     row = session.get(RetrievalSettings, 1)
     assert row is not None and row.default_profile_id == first.id
+
+
+def _paragraph(seed: str, words: int) -> str:
+    return " ".join(f"{seed}{number}" for number in range(words)) + "."
+
+
+def _section(index: int, title: str, texts: list[str], *, heading_only: bool = False):
+    from app.retrieval.chunking import Section
+
+    atoms = [ChunkAtom(title, heading=True, section=index)] if heading_only else [
+        ChunkAtom(text, uuid4(), section=index) for text in texts
+    ]
+    return Section(block_id=uuid4(), title=title, atoms=atoms, heading_only=heading_only)
+
+
+def test_heading_only_section_joins_its_text_instead_of_becoming_a_chunk() -> None:
+    """Заголовок родительского раздела раньше был отдельным куском из двух слов."""
+    from app.retrieval.chunking import pack_sections
+
+    sections = [
+        _section(0, "Введение", [_paragraph("вводный", 150)]),
+        _section(1, "Сети OTN", [], heading_only=True),
+        _section(2, "Причины создания", [_paragraph("причина", 120)]),
+    ]
+
+    chunks = pack_sections(sections, target_tokens=200, max_tokens=260, overlap_tokens=20)
+
+    assert [chunk[0].text for chunk in chunks] == [sections[0].atoms[0].text, "Сети OTN"]
+    assert chunks[1][1].section == 2
+
+
+def test_small_sections_merge_and_large_section_splits_without_tiny_tail() -> None:
+    from app.retrieval.chunking import count_tokens, pack_sections
+
+    sections = [
+        _section(0, "17.1", [_paragraph("тупик", 20)]),
+        _section(1, "17.2", [_paragraph("обход", 25)]),
+        _section(
+            2,
+            "Большой раздел",
+            [_paragraph(f"абзац{number}", 60) for number in range(9)],
+        ),
+    ]
+
+    chunks = pack_sections(sections, target_tokens=200, max_tokens=260, overlap_tokens=20)
+    sizes = [sum(count_tokens(atom.text) for atom in chunk) for chunk in chunks]
+
+    assert {atom.section for atom in chunks[0]} >= {0, 1}
+    assert max(sizes) <= 260
+    assert min(sizes) >= 100
+
+
+def test_material_chunks_drop_running_headers_and_page_numbers(session: Session) -> None:
+    material = make_material(session, "93")
+    block_id = None
+    for page_number in range(1, 6):
+        block_id = add_page_with_fragments(
+            session,
+            material,
+            page_number=page_number,
+            revision=1,
+            block_title="Раздел 1",
+            block_id=block_id,
+            fragments=[
+                str(100 + page_number),
+                "Часть II. Технологии физического уровня",
+                _paragraph(f"содержание{page_number}_", 40),
+            ],
+        ).block_id
+
+    chunks = material_chunks(session, material, target_tokens=100, max_tokens=160, overlap_tokens=0)
+    text = "\n".join(chunk.text for chunk in chunks)
+
+    assert "Технологии физического уровня" not in text
+    assert "101" not in text.split()
+    assert "содержание1_0" in text
+    assert chunks[0].embedding_text.startswith("Методичка — Раздел 1")
+
+
+def test_lexical_hit_opens_the_chunk_that_contains_the_found_fragment(session: Session) -> None:
+    """Совпадение в середине раздела раньше показывало первый кусок его блока."""
+    import asyncio
+
+    from app.bindings.search import reindex_material
+    from app.retrieval.schemas import RetrievalSearchWrite, SearchStrategy
+    from app.retrieval.search import HybridRetriever
+
+    material = make_material(session, "94")
+    page = add_page_with_fragments(
+        session,
+        material,
+        page_number=1,
+        revision=1,
+        block_title="Транзакции",
+        fragments=[
+            "Транзакции и журнал упреждающей записи.",
+            "Взаимоблокировка возникает при встречном захвате блокировок.",
+            "Колонтитул с блокировкой",
+        ],
+    )
+    reindex_material(session, material.id)
+    session.commit()
+    index = _index(session, _profile(session))
+    index.state = RetrievalIndexState.ACTIVE
+    session.add(RetrievalSettings(id=1, active_index_id=index.id))
+    first, second = uuid4(), uuid4()
+    for order, (chunk_id, fragment_id) in enumerate(
+        [(first, page.fragment_ids[0]), (second, page.fragment_ids[1])]
+    ):
+        session.add(RetrievalChunk(
+            id=chunk_id, index_id=index.id, material_id=material.id, revision=1,
+            block_id=page.block_id, kind=RetrievalChunkKind.TEXT, sort_order=order,
+            text=f"кусок {order}", token_count=2, content_hash=str(order).rjust(64, "0"),
+            fragment_ids=[str(fragment_id)],
+        ))
+    session.commit()
+
+    result = asyncio.run(HybridRetriever().search(session, RetrievalSearchWrite(
+        query="блокировка",
+        strategy=SearchStrategy.LEXICAL,
+        scope=RetrievalScope.SELECTED_MATERIALS,
+        material_ids=[material.id],
+    )))
+
+    assert [hit.locator.chunk_id for hit in result.results] == [second]
+
+
+def test_known_embedding_models_get_their_query_and_document_templates(
+    session: Session,
+) -> None:
+    from app.retrieval.schemas import EmbeddingProfileWrite
+    from app.retrieval.settings import create_profile
+
+    e5 = create_profile(session, EmbeddingProfileWrite(
+        label="E5", backend_kind=EmbeddingBackendKind.LOCAL_HF,
+        model_id="intfloat/multilingual-e5-base",
+    ))
+    qwen = create_profile(session, EmbeddingProfileWrite(
+        label="Qwen", backend_kind=EmbeddingBackendKind.LOCAL_HF,
+        model_id="Qwen/Qwen3-Embedding-0.6B",
+    ))
+    manual = create_profile(session, EmbeddingProfileWrite(
+        label="Manual", backend_kind=EmbeddingBackendKind.LOCAL_HF,
+        model_id="intfloat/multilingual-e5-small", query_template="q {text}",
+    ))
+
+    assert (e5.query_template, e5.document_template) == ("query: {text}", "passage: {text}")
+    assert qwen.pooling == "last_token" and qwen.query_template.startswith("Instruct: ")
+    assert (manual.query_template, manual.document_template) == ("q {text}", "{text}")

@@ -17,6 +17,7 @@ from app.models import (
 )
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.retrieval.embeddings import backend_for_profile
+from app.retrieval.recipes import DEFAULT_TEMPLATE, model_recipe
 from app.retrieval.schemas import (
     EmbeddingProfileRead,
     EmbeddingProfileWrite,
@@ -32,7 +33,15 @@ def create_profile(session: Session, command: EmbeddingProfileWrite) -> Embeddin
                 "Профиль с таким названием уже существует",
                 code="retrieval_profile_label_exists",
             )
-        profile = EmbeddingProfile(id=uuid4(), **command.model_dump())
+        values = command.model_dump()
+        recipe = model_recipe(command.model_id)
+        untouched = DEFAULT_TEMPLATE == command.query_template == command.document_template
+        if recipe is not None and untouched:
+            values["query_template"] = recipe.query_template
+            values["document_template"] = recipe.document_template
+            if command.pooling == "mean":
+                values["pooling"] = recipe.pooling
+        profile = EmbeddingProfile(id=uuid4(), **values)
         profile.installed = profile.backend_kind == EmbeddingBackendKind.OPENAI_COMPATIBLE
         session.add(profile)
     return EmbeddingProfileRead.model_validate(profile)

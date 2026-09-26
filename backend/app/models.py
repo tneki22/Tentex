@@ -1140,9 +1140,10 @@ class RetrievalIndex(Base):
     preset: Mapped[RetrievalPreset] = mapped_column(
         enum_type(RetrievalPreset, "retrieval_preset"), default=RetrievalPreset.BALANCED
     )
-    chunk_target_tokens: Mapped[int] = mapped_column(Integer, default=384)
-    chunk_max_tokens: Mapped[int] = mapped_column(Integer, default=480)
-    chunk_overlap_tokens: Mapped[int] = mapped_column(Integer, default=64)
+    # Те же значения, что `retrieval.chunking.DEFAULT_*`: импорт оттуда был бы циклом.
+    chunk_target_tokens: Mapped[int] = mapped_column(Integer, default=280)
+    chunk_max_tokens: Mapped[int] = mapped_column(Integer, default=360)
+    chunk_overlap_tokens: Mapped[int] = mapped_column(Integer, default=48)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     # `done` живёт у фоновой задачи и исчезает из экрана после завершения.
     # Индексу нужен собственный счётчик, чтобы честно показать сохранённый

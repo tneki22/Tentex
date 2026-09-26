@@ -11,6 +11,11 @@ from app.models import (
     RetrievalIndexState,
     RetrievalPreset,
 )
+from app.retrieval.chunking import (
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_OVERLAP_TOKENS,
+    DEFAULT_TARGET_TOKENS,
+)
 
 
 class ApiModel(BaseModel):
@@ -136,9 +141,9 @@ class EmbeddingProfileRead(EmbeddingProfileWrite):
 class RetrievalIndexBuildWrite(ApiModel):
     profile_id: UUID
     preset: RetrievalPreset = RetrievalPreset.BALANCED
-    chunk_target_tokens: int = Field(default=384, ge=64, le=2_048)
-    chunk_max_tokens: int = Field(default=480, ge=64, le=4_096)
-    chunk_overlap_tokens: int = Field(default=64, ge=0, le=512)
+    chunk_target_tokens: int = Field(default=DEFAULT_TARGET_TOKENS, ge=64, le=2_048)
+    chunk_max_tokens: int = Field(default=DEFAULT_MAX_TOKENS, ge=64, le=4_096)
+    chunk_overlap_tokens: int = Field(default=DEFAULT_OVERLAP_TOKENS, ge=0, le=512)
     material_ids: list[UUID] = Field(default_factory=list, max_length=500)
     cloud_consent: bool = False
 
