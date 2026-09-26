@@ -5,7 +5,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.db import project_write_transaction
-from app.materials.schemas import MaterialPurpose
+from app.materials.schemas import MaterialPurpose, ProcessingStart
 from app.materials.storage import material_path, remove_storage_dir_if_empty
 from app.models import (
     Activity,
@@ -19,6 +19,7 @@ from app.models import (
     Lesson,
     Material,
     MaterialState,
+    ParserMode,
     ProgramNode,
     Project,
     ProjectMaterial,
@@ -329,6 +330,8 @@ def activate_wizard_draft(
         project.updated_at = now
         session.execute(delete(WizardDraft).where(WizardDraft.project_id == project_id))
         if project.workspace_variant == WorkspaceVariant.EXAM:
+            from app.materials import library
+
             # Ответы могли разобрать ещё в мастере. Тогда автопривязка в воркере
             # пропустила черновик; запускаем её только после активации и импорта.
             for link, material in session.execute(
@@ -336,16 +339,23 @@ def activate_wizard_draft(
                 .join(Material, Material.id == ProjectMaterial.material_id)
                 .where(
                     ProjectMaterial.project_id == project_id,
-                    Material.status == MaterialState.READY,
                 )
             ):
-                if MaterialPurpose.REFERENCE_ANSWERS.value in (link.purposes or []):
+                if MaterialPurpose.REFERENCE_ANSWERS.value not in (link.purposes or []):
+                    continue
+                if material.status == MaterialState.READY:
                     session.add(BackgroundJob(
                         kind=BackgroundJobKind.LINK_ANSWERS,
                         project_id=project_id,
                         material_id=material.id,
                         checkpoint={},
                     ))
+                elif material.status == MaterialState.READY_TO_PROCESS:
+                    # Постановка задачи быстрая, а OCR начнётся уже после commit:
+                    # длинная обработка не блокирует создание проекта.
+                    library.start_processing_core(
+                        session, material.id, ProcessingStart(parser_mode=ParserMode.FAST)
+                    )
         session.flush()
         return _project_detail(session, project_id)
 
