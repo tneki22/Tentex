@@ -137,7 +137,7 @@
 
 .library-search-preview { width: min(1100px, calc(100vw - 48px)); max-width: none; }
 .library-search-preview-grid { display: grid; grid-template-columns: minmax(12rem, 0.35fr) minmax(0, 1fr); gap: var(--space-4); min-height: 30rem; }
-.library-search-preview-outline { display: grid; align-content: start; gap: var(--space-1); max-height: 32rem; overflow: auto; padding-right: var(--space-2); }
+.library-search-preview-outline { display: grid; align-content: start; gap: var(--space-1); max-height: min(72vh, 60rem); overflow: auto; padding-right: var(--space-2); }
 .library-search-preview-outline button { display: grid; gap: 2px; padding: var(--space-2); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink-soft); text-align: left; cursor: pointer; font: inherit; }
 .library-search-preview-outline button:hover { background: var(--surface-hover); color: var(--accent); }
 .library-search-preview-outline small { color: var(--muted); font-size: var(--text-xs); }
@@ -147,9 +147,10 @@
 .library-search-preview-toolbar .viewer-page-input input { width: 4rem; }
 .library-search-preview-toolbar[aria-busy="true"] { opacity: .72; }
 .library-search-preview-page .page-highlights { justify-self: center; }
-.library-search-preview-page .page-highlights img { max-height: 32rem; outline: 1px solid var(--line); }
+/* Лист должен читаться без перехода в файл: высота от экрана, а не прежние 32rem. */
+.library-search-preview-page .page-highlights img { max-height: min(72vh, 60rem); outline: 1px solid var(--line); }
 .library-search-preview-page pre { overflow: auto; margin: 0; padding: var(--space-4); border-radius: var(--radius-md); background: var(--surface-sunken); white-space: pre-wrap; }
-.library-search-preview-text { display: grid; gap: var(--space-2); max-height: 32rem; overflow: auto; padding: var(--space-4); border-radius: var(--radius-md); background: var(--surface-sunken); line-height: var(--leading-relaxed); }
+.library-search-preview-text { display: grid; gap: var(--space-2); max-height: min(72vh, 60rem); overflow: auto; padding: var(--space-4); border-radius: var(--radius-md); background: var(--surface-sunken); line-height: var(--leading-relaxed); }
 .library-search-preview-text p { margin: 0; color: var(--ink-soft); }
 .library-search-preview-text mark { display: block; margin-inline: calc(-1 * var(--space-2)); padding: var(--space-1) var(--space-2); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); background: var(--accent-wash-strong); color: var(--ink); }
 .library-search-preview-empty { display: grid; gap: var(--space-2); padding: var(--space-8); color: var(--muted); text-align: center; }
