@@ -304,6 +304,14 @@
   gap: var(--space-2);
 }
 
+.retrieval-model-list .retrieval-model-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ink);
+}
+
 .retrieval-neutral-note {
   margin: 0;
   padding: var(--space-3) var(--space-4);

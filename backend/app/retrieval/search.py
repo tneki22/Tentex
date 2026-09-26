@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 import httpx
-from sqlalchemy import select, text
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, defer
 
 from app.bindings.search import SearchHit, search_fragments
@@ -37,6 +37,7 @@ from app.retrieval.schemas import (
     RetrievalSearchWrite,
     SearchStrategy,
 )
+from app.retrieval.snapshot import current_revisions, forget_snapshot, index_snapshot
 from app.retrieval.vector import SqliteVecIndex, reciprocal_rank_fusion
 
 
@@ -93,7 +94,9 @@ class HybridRetriever:
 
         reasons.extend(_degradation_notes(session, active, scope))
         ranking = _ranking(command.strategy, lexical_ids, semantic_ids, preset, expert)
-        chunk_by_id = _load_chunks(session, [item_id for item_id, _, _ in ranking])
+        chunk_by_id = _load_chunks(
+            session, active, [item_id for item_id, _, _ in ranking], pseudo_by_id
+        )
 
         if preset.rerank_depth and ranking:
             try:
@@ -108,16 +111,18 @@ class HybridRetriever:
             except Exception as error:  # noqa: BLE001 — RRF remains a valid result
                 reasons.append(f"Reranker недоступен; сохранён порядок RRF: {error}")
 
+        results = self._read_ranking(
+            session, ranking, chunk_by_id, pseudo_by_id,
+            limit=min(command.limit, preset.final_results),
+        )
+        reasons.extend(_visual_notes(session, results))
         return RetrievalSearchRead(
             query=command.query,
             strategy=command.strategy,
             index_id=active.id if active else None,
             degraded=bool(reasons),
             degradation_reasons=reasons,
-            results=self._read_ranking(
-                session, ranking, chunk_by_id, pseudo_by_id,
-                limit=min(command.limit, preset.final_results),
-            ),
+            results=results,
         )
 
     def _active_index(
@@ -211,19 +216,13 @@ def _lexical_ids(
     и место остаётся под id своего фрагмента в `pseudo_by_id`: BM25 продолжает
     отвечать и без готового индекса.
     """
-    chunk_by_fragment, indexed_materials = _chunk_lookup(session, active, hits)
+    snapshot = index_snapshot(session, active.id) if active is not None and hits else None
+    revisions = current_revisions(session, {hit.material_id for hit in hits}) if snapshot else {}
     ids: list[UUID] = []
     for hit in hits:
-        chunk_id = next(
-            (
-                chunk_by_fragment[str(fragment_id)]
-                for fragment_id in hit.fragment_ids
-                if str(fragment_id) in chunk_by_fragment
-            ),
-            None,
-        )
+        chunk_id = snapshot.chunk_for(hit.fragment_ids, revisions) if snapshot else None
         if chunk_id is None:
-            if hit.material_id in indexed_materials:
+            if snapshot and snapshot.indexed(hit.material_id, revisions.get(hit.material_id)):
                 continue
             chunk_id = hit.fragment_ids[0]
             pseudo_by_id[chunk_id] = hit
@@ -232,50 +231,16 @@ def _lexical_ids(
     return ids
 
 
-def _chunk_lookup(
-    session: Session, active: RetrievalIndex | None, hits: list[SearchHit]
-) -> tuple[dict[str, UUID], set[UUID]]:
-    """Кусок по id фрагмента и материалы, чья текущая ревизия есть в индексе."""
-    if active is None or not hits:
-        return {}, set()
-    fragment_ids = sorted({str(item) for hit in hits for item in hit.fragment_ids})
-    material_ids = sorted({hit.material_id.hex for hit in hits})
-    fragment_params = {f"f{number}": item for number, item in enumerate(fragment_ids)}
-    material_params = {f"m{number}": item for number, item in enumerate(material_ids)}
-    current_revision = (
-        "retrieval_chunks.revision = (SELECT active_parse_revision FROM materials "
-        "WHERE materials.id = retrieval_chunks.material_id)"
-    )
-    rows = session.execute(
-        text(
-            "SELECT retrieval_chunks.id, item.value FROM retrieval_chunks, "
-            "json_each(retrieval_chunks.fragment_ids) AS item "
-            f"WHERE retrieval_chunks.index_id = :index_id AND {current_revision} "
-            f"AND item.value IN ({', '.join(f':{key}' for key in fragment_params)}) "
-            "ORDER BY retrieval_chunks.sort_order"
-        ),
-        {"index_id": active.id.hex, **fragment_params},
-    ).all()
-    chunk_by_fragment: dict[str, UUID] = {}
-    for chunk_hex, fragment_id in rows:
-        # Из-за перекрытия фрагмент бывает в двух кусках: выдаётся первый.
-        chunk_by_fragment.setdefault(fragment_id, UUID(hex=chunk_hex))
-    indexed = session.execute(
-        text(
-            "SELECT DISTINCT material_id FROM retrieval_chunks "
-            f"WHERE index_id = :index_id AND {current_revision} "
-            f"AND material_id IN ({', '.join(f':{key}' for key in material_params)})"
-        ),
-        {"index_id": active.id.hex, **material_params},
-    ).all()
-    return chunk_by_fragment, {UUID(hex=row[0]) for row in indexed}
-
-
-def _load_chunks(session: Session, chunk_ids: list[UUID]) -> dict[UUID, RetrievalChunk]:
+def _load_chunks(
+    session: Session,
+    active: RetrievalIndex | None,
+    chunk_ids: list[UUID],
+    pseudo_by_id: dict[UUID, SearchHit],
+) -> dict[UUID, RetrievalChunk]:
     """Прочитать только куски из выдачи, без векторов: их может быть тысячи в области."""
     if not chunk_ids:
         return {}
-    return {
+    chunks = {
         chunk.id: chunk
         for chunk in session.scalars(
             select(RetrievalChunk)
@@ -283,23 +248,72 @@ def _load_chunks(session: Session, chunk_ids: list[UUID]) -> dict[UUID, Retrieva
             .where(RetrievalChunk.id.in_(chunk_ids))
         )
     }
+    if active is not None and any(
+        item not in chunks and item not in pseudo_by_id for item in chunk_ids
+    ):
+        # Снимок указал на уже заменённый кусок: следующий запрос соберёт его заново.
+        forget_snapshot(active.id)
+    return chunks
 
 
 def _degradation_notes(
     session: Session, active: RetrievalIndex | None, scope: ScopeFilter
 ) -> list[str]:
-    """Нейтральные причины неполноты: устаревшие ревизии и визуальные страницы."""
-    notes: list[str] = []
-    if active is not None:
-        stale = _stale_material_names(session, active, scope.material_ids)
-        if stale:
-            notes.append("Часть источников — только поиск по словам: " + ", ".join(stale))
-    visual = visual_page_locators(session, scope.material_ids)
-    if visual:
-        preview = ", ".join(f"{name}, стр. {page}" for name, page in visual[:5])
-        suffix = "" if len(visual) <= 5 else f" и ещё {len(visual) - 5}"
-        notes.append("Визуальные страницы не проверены vision-моделью: " + preview + suffix)
-    return notes
+    """Нейтральная причина неполноты: материалы, чья ревизия новее индекса."""
+    if active is None:
+        return []
+    stale = _stale_material_names(session, active, scope.material_ids)
+    return ["Часть источников — только поиск по словам: " + ", ".join(stale)] if stale else []
+
+
+def _visual_notes(session: Session, results: list[RetrievalHitRead]) -> list[str]:
+    """Изображения без описания на страницах самой выдачи.
+
+    Список всех таких страниц области был длинным и бесполезным — сотни страниц
+    учебника, — и его запрос сканировал все фрагменты базы. Важны только
+    картинки рядом с найденным: их текст не прочитан, и ответ не должен
+    считать эти страницы проверенными.
+    """
+    ranges = [
+        (
+            hit.locator.material_id,
+            hit.locator.page_from,
+            hit.locator.page_to or hit.locator.page_from,
+        )
+        for hit in results
+        if hit.locator.page_from is not None
+    ]
+    if not ranges:
+        return []
+    rows = session.execute(
+        select(Material, MaterialPage.page_number)
+        .join(MaterialPage, MaterialPage.material_id == Material.id)
+        .join(MaterialFragment, MaterialFragment.page_id == MaterialPage.id)
+        .where(
+            or_(
+                *(
+                    and_(
+                        MaterialPage.material_id == material_id,
+                        MaterialPage.page_number.between(page_from, page_to),
+                    )
+                    for material_id, page_from, page_to in ranges
+                )
+            ),
+            MaterialPage.revision == Material.active_parse_revision,
+            MaterialFragment.text.like("[Изображение]%"),
+        )
+        .distinct()
+        .order_by(Material.created_at, MaterialPage.page_number)
+    ).all()
+    if not rows:
+        return []
+    pages: dict[str, list[int]] = {}
+    for material, page_number in rows:
+        pages.setdefault(material_display_name(material), []).append(page_number)
+    preview = "; ".join(
+        f"{name}, стр. {', '.join(map(str, numbers))}" for name, numbers in pages.items()
+    )
+    return ["На найденных страницах есть изображения без описания: " + preview]
 
 
 def _ranking(

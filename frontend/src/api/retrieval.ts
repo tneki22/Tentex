@@ -6,6 +6,8 @@ export type RetrievalPreset = "fast" | "balanced" | "accurate";
 export type RetrievalIndexState = "building" | "ready" | "active" | "failed";
 export type SearchStrategy = "lexical" | "semantic" | "hybrid";
 export type RetrievalScope = "linked_topic" | "topic_project" | "project" | "selected_materials";
+/** Что Tentex знает о модели: `verified` — прогнана на контрольных запросах. */
+export type ModelSupport = "verified" | "recipe" | "short_window" | "not_embedding" | "unknown";
 
 export interface EmbeddingProfileRead {
   id: string;
@@ -25,6 +27,7 @@ export interface EmbeddingProfileRead {
   test_error: string | null;
   created_at: string;
   updated_at: string;
+  support: ModelSupport;
 }
 
 export interface RetrievalIndexRead {
@@ -65,6 +68,7 @@ export interface LocalModelRead {
   installed: boolean;
   installing: boolean;
   recommended_for: string;
+  support: ModelSupport;
 }
 
 export interface RetrievalHitRead {

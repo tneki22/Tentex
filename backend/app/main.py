@@ -27,6 +27,7 @@ from app.projects.demo import seed_demo_project
 from app.projects.errors import ProjectDomainError
 from app.projects.router import router as projects_router
 from app.retrieval.router import router as retrieval_router
+from app.retrieval.snapshot import warm_active_snapshot
 from app.storage import maintenance as storage_maintenance
 from app.storage.restore import recover_interrupted_restore
 from app.storage.router import router as storage_router
@@ -53,6 +54,7 @@ async def lifespan(_: FastAPI):
             # версиях seed может дозаполнить новые fixture-данные существующего
             # примера, но не воскресит проект, который пользователь удалил.
             seed_demo_project(session, create_if_missing=not database_existed)
+    warm_active_snapshot()
     yield
 
 
