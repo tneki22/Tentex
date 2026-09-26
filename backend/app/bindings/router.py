@@ -24,6 +24,7 @@ from app.bindings.schemas import (
     ReindexResult,
     SearchResponse,
 )
+from app.bindings.search import reuse_fragment_search
 from app.db import SessionLocal, get_session
 from app.models import BindingStatus
 from app.projects.errors import ProjectDomainError
@@ -47,31 +48,33 @@ def search_materials(
     scope: RetrievalScope | None = None,
 ) -> SearchResponse:
     """Найти кандидатов, не занимая event loop коротких запросов проекта."""
-    lexical = service.search_project_materials(
-        session, project_id, q, material_id=material_id, node_id=node_id, limit=limit
-    )
-    if strategy == SearchStrategy.LEXICAL or not q.strip():
-        return lexical.model_copy(update={"strategy": SearchStrategy.LEXICAL.value})
-    retrieval_scope = scope or (
-        RetrievalScope.TOPIC_PROJECT if node_id is not None else RetrievalScope.PROJECT
-    )
-    # FTS, сборка фрагментов и часть hybrid retrieval синхронны. FastAPI
-    # исполняет обычный def в пуле потоков; отдельный event loop оставляет
-    # эти операции вне основного цикла, где ждут короткие запросы ответа/чата.
-    hybrid = asyncio.run(
-        HybridRetriever().search(
-            session,
-            RetrievalSearchWrite(
-                query=q,
-                strategy=strategy,
-                scope=retrieval_scope,
-                project_id=project_id,
-                node_id=node_id,
-                material_ids=[material_id] if material_id else [],
-                limit=limit,
-            ),
+    with reuse_fragment_search():
+        lexical = service.search_project_materials(
+            session, project_id, q, material_id=material_id, node_id=node_id, limit=limit
         )
-    )
+        if strategy == SearchStrategy.LEXICAL or not q.strip():
+            return lexical.model_copy(update={"strategy": SearchStrategy.LEXICAL.value})
+        retrieval_scope = scope or (
+            RetrievalScope.TOPIC_PROJECT if node_id is not None else RetrievalScope.PROJECT
+        )
+        # FTS, сборка фрагментов и часть hybrid retrieval синхронны. FastAPI
+        # исполняет обычный def в пуле потоков; отдельный event loop оставляет
+        # эти операции вне основного цикла, где ждут короткие запросы ответа/чата.
+        # asyncio.run копирует контекст, поэтому гибрид видит ту же выдачу BM25.
+        hybrid = asyncio.run(
+            HybridRetriever().search(
+                session,
+                RetrievalSearchWrite(
+                    query=q,
+                    strategy=strategy,
+                    scope=retrieval_scope,
+                    project_id=project_id,
+                    node_id=node_id,
+                    material_ids=[material_id] if material_id else [],
+                    limit=limit,
+                ),
+            )
+        )
     by_block = {
         hit.locator.block_id: hit for hit in hybrid.results if hit.locator.block_id is not None
     }

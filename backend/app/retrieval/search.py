@@ -242,29 +242,40 @@ def _chunk_lookup(
     material_ids = sorted({hit.material_id.hex for hit in hits})
     fragment_params = {f"f{number}": item for number, item in enumerate(fragment_ids)}
     material_params = {f"m{number}": item for number, item in enumerate(material_ids)}
+    material_list = ", ".join(f":{key}" for key in material_params)
     current_revision = (
         "retrieval_chunks.revision = (SELECT active_parse_revision FROM materials "
         "WHERE materials.id = retrieval_chunks.material_id)"
     )
+    # Материалы и ревизия сужают поиск до кусков найденных материалов, а
+    # покрывающий индекс отдаёт fragment_ids без чтения текста и вектора.
+    # Порядок кусков восстанавливается в Python: ORDER BY уводил SQLite на
+    # индекс (index_id, sort_order) и полное чтение строк.
     rows = session.execute(
         text(
-            "SELECT retrieval_chunks.id, item.value FROM retrieval_chunks, "
-            "json_each(retrieval_chunks.fragment_ids) AS item "
-            f"WHERE retrieval_chunks.index_id = :index_id AND {current_revision} "
-            f"AND item.value IN ({', '.join(f':{key}' for key in fragment_params)}) "
-            "ORDER BY retrieval_chunks.sort_order"
+            "SELECT retrieval_chunks.id, retrieval_chunks.sort_order, item.value "
+            "FROM retrieval_chunks, json_each(retrieval_chunks.fragment_ids) AS item "
+            "WHERE retrieval_chunks.index_id = :index_id "
+            f"AND retrieval_chunks.material_id IN ({material_list}) "
+            f"AND {current_revision} "
+            f"AND item.value IN ({', '.join(f':{key}' for key in fragment_params)})"
         ),
-        {"index_id": active.id.hex, **fragment_params},
+        {"index_id": active.id.hex, **material_params, **fragment_params},
     ).all()
     chunk_by_fragment: dict[str, UUID] = {}
-    for chunk_hex, fragment_id in rows:
+    for chunk_hex, _, fragment_id in sorted(rows, key=lambda row: row[1]):
         # Из-за перекрытия фрагмент бывает в двух кусках: выдаётся первый.
         chunk_by_fragment.setdefault(fragment_id, UUID(hex=chunk_hex))
+    # EXISTS останавливается на первом куске текущей ревизии; DISTINCT по
+    # кускам читал строки всех кусков материала вместе с их текстом.
     indexed = session.execute(
         text(
-            "SELECT DISTINCT material_id FROM retrieval_chunks "
-            f"WHERE index_id = :index_id AND {current_revision} "
-            f"AND material_id IN ({', '.join(f':{key}' for key in material_params)})"
+            "SELECT materials.id FROM materials "
+            f"WHERE materials.id IN ({material_list}) "
+            "AND EXISTS (SELECT 1 FROM retrieval_chunks "
+            "WHERE retrieval_chunks.index_id = :index_id "
+            "AND retrieval_chunks.material_id = materials.id "
+            "AND retrieval_chunks.revision = materials.active_parse_revision)"
         ),
         {"index_id": active.id.hex, **material_params},
     ).all()

@@ -10,7 +10,7 @@ from alembic.config import Config
 from sqlalchemy import URL, MetaData, create_engine, event, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import NullPool, QueuePool
 
 from app.config import BACKEND_ROOT, settings
 
@@ -29,15 +29,31 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
+#: Кэш страниц одного постоянного соединения API. Соединение сбрасывает его
+#: само, как только другой процесс записал в WAL, поэтому устаревших данных нет.
+POOLED_CACHE_KIB = 65536
+
+
+def _pool_arguments() -> dict[str, object]:
+    """Пул для API или новое соединение на сессию для воркера и скриптов."""
+    if settings.sqlite_pool_size == 0:
+        return {"poolclass": NullPool}
+    # QueuePool по умолчанию (5+10, 30 с) исчерпывался пачкой GET с экрана.
+    # Большой overflow снимает этот предел: лишние соединения закрываются
+    # при возврате. LIFO отдаёт последнее соединение, у которого кэш прогрет.
+    return {
+        "poolclass": QueuePool,
+        "pool_size": settings.sqlite_pool_size,
+        "max_overflow": 64,
+        "pool_timeout": 60,
+        "pool_use_lifo": True,
+    }
+
+
 engine = create_engine(
     URL.create("sqlite+pysqlite", database=str(settings.database_path)),
     connect_args={"autocommit": False, "check_same_thread": False, "timeout": 30},
-    # SQLAlchemy-пул рассчитан на дорогие сетевые соединения. Для SQLite
-    # соединение — это просто open() файла, а WAL и busy_timeout уже решают
-    # конкуренцию на уровне самого SQLite. С QueuePool по умолчанию (5+10)
-    # пачка параллельных запросов с экрана (~6 GET разом) исчерпывала пул и
-    # часть запросов падала с sqlalchemy.exc.TimeoutError после 30с ожидания.
-    poolclass=NullPool,
+    **_pool_arguments(),
 )
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
@@ -59,6 +75,8 @@ def configure_sqlite(dbapi_connection: object, _: object) -> None:
             # и роняет параллельные запросы с "disk I/O error".
             # Обычный файловый ввод-вывод работает.
             cursor.execute("PRAGMA mmap_size=0")
+            if settings.sqlite_pool_size:
+                cursor.execute(f"PRAGMA cache_size=-{POOLED_CACHE_KIB}")
         finally:
             cursor.close()
     finally:
