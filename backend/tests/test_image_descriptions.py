@@ -437,6 +437,16 @@ def test_the_models_opinion_about_decoration_goes_to_review() -> None:
     assert element.text == IMAGE_PLACEHOLDER
 
 
+def test_reclassifying_the_revision_keeps_the_models_verdict_and_review_reasons() -> None:
+    """Пересчёт повторов после разбора не стирает мнение модели и причины проверки."""
+    decorative = classify(_described(_answer(content_role="decorative")))
+    doubtful = classify(_described(_answer(confidence=0.3)))
+
+    assert decorative.role == "decorative"
+    assert "model_role_decorative" in decorative.reasons
+    assert "low_confidence" in doubtful.reasons
+
+
 # ── Вызовы модели и предел запуска ──────────────────────────────────────────
 
 
@@ -565,19 +575,25 @@ def test_an_answer_without_usage_stays_spent_at_the_reserve(session: Session) ->
 # ── «Описать изображения» готового материала ────────────────────────────────
 
 
-def _ready_material(session: Session, *, images: int = 2) -> UUID:
-    """Готовый материал с одной страницей: абзац и `images` уникальных схем."""
+def _ready_material(session: Session, *, images: int = 2, legacy: bool = False) -> UUID:
+    """Готовый материал с одной страницей: абзац и `images` уникальных схем.
+
+    :param legacy: изображения без явного состояния — как у материалов,
+        разобранных до появления осей роли и обработки.
+    """
     material = make_material(session, "abc123")
     elements = [ParsedElement("paragraph", PROSE[:200], (0.1, 0.05, 0.9, 0.15))]
     for number in range(images):
         data = _png((400, 300), seed=10 + number)
         path = store_material_asset(material.sha256, f"p1-{number}.png", data)
         top = 0.2 + number * 0.35
+        meta = None if legacy else ImageMeta(
+            role="content", crop_hash=native.crop_hash(data), pixel_size=(400, 300)
+        )
         elements.append(
             ParsedElement(
                 "image", IMAGE_PLACEHOLDER, (0.1, top, 0.9, top + 0.3), asset_path=path,
-                image=ImageMeta(role="content", crop_hash=native.crop_hash(data),
-                                pixel_size=(400, 300)),
+                image=meta,
             )
         )
     session.add(
@@ -659,6 +675,20 @@ def test_describing_a_ready_material_publishes_one_revision(
             session, material_id, ImageDescriptionStart(expected_revision=2, target_ids=["1:1"])
         )
     assert caught.value.code == "image_target_invalid"
+
+
+def test_images_parsed_before_explicit_state_are_classified_in_the_inventory(
+    session: Session, vision_model: str
+) -> None:
+    """Старый материал: уникальные схемы уходят по умолчанию, а не в «сомнительные»."""
+    del vision_model
+    material_id = _ready_material(session, legacy=True)
+    session.rollback()
+
+    listed = image_descriptions.inventory(session, material_id)
+
+    assert [item.id for item in listed.targets] == ["1:1", "1:2"]
+    assert listed.doubtful == []
 
 
 def test_a_material_changed_during_the_run_gets_no_revision(

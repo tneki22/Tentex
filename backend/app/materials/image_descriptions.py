@@ -104,23 +104,21 @@ def _header_footer_images(pages: list[MaterialPage]) -> set[tuple[int, int]]:
     return result
 
 
-def refresh_image_roles(session: Session, material_id: UUID, revision: int) -> int:
-    """Пересчитать роль изображений по всей ревизии; вернуть число изменённых.
+def _classified(pages: list[MaterialPage]) -> dict[int, tuple[list[ParsedElement], bool]]:
+    """Элементы страниц с ролью изображений по всей ревизии и флаг «страница изменилась».
 
-    Повтор виден только по нескольким страницам сразу, поэтому решение
-    уточняется после того, как все страницы ревизии на месте. Изображение,
-    ставшее служебным или декоративным, перестаёт индексироваться как знание:
-    текст — заглушка, описание остаётся в состоянии для проверки человеком.
+    Инвентарь зовёт это без сохранения: у страниц, разобранных до явных осей
+    (или переписанных с выведенным состоянием), роль иначе осталась бы
+    «не ясна», и всё уходило бы в «сомнительные».
     """
-    pages = _revision_pages(session, material_id, revision)
     parsed = {page.page_number: [library.element_to_parsed(item) for item in page.elements]
               for page in pages}
     if not any(item.kind == "image" for elements in parsed.values() for item in elements):
-        return 0
+        return {number: (elements, False) for number, elements in parsed.items()}
     counts = repeat_counts(parsed.items())
     margins = _header_footer_images(pages) if len(pages) >= 3 else set()
     conditional = all(page.width == 1 and page.height == 1 for page in pages)
-    changed = 0
+    result: dict[int, tuple[list[ParsedElement], bool]] = {}
     for page in pages:
         elements = parsed[page.page_number]
         updated = False
@@ -141,6 +139,23 @@ def refresh_image_roles(session: Session, material_id: UUID, revision: int) -> i
                 text = IMAGE_PLACEHOLDER
             elements[index] = replace(element, image=meta, text=text)
             updated = True
+        result[page.page_number] = (elements, updated)
+    return result
+
+
+def refresh_image_roles(session: Session, material_id: UUID, revision: int) -> int:
+    """Пересчитать роль изображений по всей ревизии; вернуть число изменённых страниц.
+
+    Повтор виден только по нескольким страницам сразу, поэтому решение
+    уточняется после того, как все страницы ревизии на месте. Изображение,
+    ставшее служебным или декоративным, перестаёт индексироваться как знание:
+    текст — заглушка, описание остаётся в состоянии для проверки человеком.
+    """
+    pages = _revision_pages(session, material_id, revision)
+    classified = _classified(pages)
+    changed = 0
+    for page in pages:
+        elements, updated = classified[page.page_number]
         if updated:
             page.elements = [library.element_to_json(item) for item in elements]
             changed += 1
@@ -262,8 +277,10 @@ def inventory(
     targets: list[ImageCandidateRead] = []
     doubtful: list[ImageCandidateRead] = []
     excluded: list[ImageCandidateRead] = []
-    for page in _revision_pages(session, material_id, material.active_parse_revision):
-        elements = [library.element_to_parsed(item) for item in page.elements]
+    pages = _revision_pages(session, material_id, material.active_parse_revision)
+    classified = _classified(pages)
+    for page in pages:
+        elements = classified[page.page_number][0]
         if not any(item.kind == "image" for item in elements):
             continue
         fragment_ids = iter(_fragment_ids(session, page))
@@ -305,16 +322,15 @@ def _resolve_targets(
 ) -> list[dict[str, Any]]:
     """Явный список кандидатов → цели задачи; неизвестный или исключённый — ошибка."""
     wanted = list(dict.fromkeys(target_ids))
-    pages = {
-        page.page_number: page
-        for page in _revision_pages(session, material.id, material.active_parse_revision)
-    }
+    revision_pages = _revision_pages(session, material.id, material.active_parse_revision)
+    classified = _classified(revision_pages)
+    pages = {page.page_number: page for page in revision_pages}
     result: list[dict[str, Any]] = []
     for target_id in wanted:
         try:
             page_text, index_text = target_id.split(":", 1)
             page = pages[int(page_text)]
-            element = library.element_to_parsed(page.elements[int(index_text)])
+            element = classified[page.page_number][0][int(index_text)]
         except (KeyError, ValueError, IndexError) as error:
             raise ProjectDomainError(
                 "Изображение не найдено в текущей версии материала",

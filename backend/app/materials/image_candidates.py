@@ -55,6 +55,13 @@ DOUBTFUL_REASONS = frozenset(
 )
 # Решения человека и проверенные исходы правило не переписывает.
 LOCKED_REVIEWS = frozenset({"manual", "verified"})
+# Причины, которые правило выводит само и пересчитывает при каждом вызове.
+# Остальные (проверка ответа модели, подпись прошлой версии) — чужие, их
+# классификация сохраняет как есть.
+OWN_REASONS = frozenset(
+    {"tiny", "repeated_margin", "repeated_margin_large", "repeated_body", "asset_missing",
+     "bbox_unreliable"}
+)
 
 _ASSET_DIGEST_RE = re.compile(r"-([0-9a-f]{16})\.[A-Za-z0-9]+$")
 
@@ -115,9 +122,14 @@ def classify(
     if header_footer:
         signals.add("header_footer")
     small = bool(signals & {"small_area", "small_pixels", "tiny"})
-    reasons = [reason for reason in meta.reasons if reason in DOUBTFUL_REASONS]
+    reasons = [reason for reason in meta.reasons if reason not in OWN_REASONS]
     role = "content"
     review = meta.review
+    # Модель сочла изображение украшением или служебным — это уже вопрос к
+    # человеку, и правило по размеру и повторам его не отменяет.
+    model_role = meta.role in {"decorative", "service"} and any(
+        reason.startswith("model_role_") for reason in meta.reasons
+    )
     if not element.asset_path:
         reasons.append("asset_missing")
     if not element.bbox_reliable and not conditional_geometry:
@@ -135,6 +147,8 @@ def classify(
             role, reasons = "unknown", [*reasons, "repeated_body"]
     if role == "content" and any(reason in DOUBTFUL_REASONS for reason in reasons):
         role = "unknown"
+    if model_role:
+        role = meta.role
     if any(reason in DOUBTFUL_REASONS for reason in reasons) and review == "unreviewed":
         review = "needs_review"
     return replace(
