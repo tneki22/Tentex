@@ -1234,10 +1234,10 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
   if (loading) return <div className="screen"><LoadingState label="Загружаем рабочую область" placement="page" /></div>;
   if (loadError) {
     const notFound = loadError instanceof ProjectApiError && loadError.status === 404;
-    return <div className="screen"><ErrorState title={notFound ? "Проект не найден" : undefined} message={notFound ? "Проверьте адрес или вернитесь к списку проектов." : loadError instanceof Error ? loadError.message : "Не удалось загрузить проект"} /><Button onClick={() => void load()}>Повторить загрузку</Button><Link className="secondary-button" to="/projects">К проектам</Link></div>;
+    return <div className="screen screen-error-state"><ErrorState title={notFound ? "Проект не найден" : undefined} message={notFound ? "Проверьте адрес или вернитесь к списку проектов." : loadError instanceof Error ? loadError.message : "Не удалось загрузить проект"} /><Button onClick={() => void load()}>Повторить загрузку</Button><Link className="secondary-button" to="/projects">К проектам</Link></div>;
   }
   if (!detail) return null;
-  if (treeResult.error) return <div className="screen"><ErrorState title="Программа повреждена" message={treeResult.error} /></div>;
+  if (treeResult.error) return <div className="screen screen-error-state"><ErrorState title="Программа повреждена" message={treeResult.error} /></div>;
 
   const deadline = daysUntil(detail.project.deadline);
   const sectionTopics = selectedNode?.node_type === "section"

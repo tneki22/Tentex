@@ -214,7 +214,7 @@ export function Lessons() {
 
   if (error) {
     const notFound = error instanceof ProjectApiError && error.status === 404;
-    return <div className="screen"><ErrorState title={notFound ? "Проект не найден" : "Уроки не загрузились"} message={errorText(error, "Не удалось загрузить проект")} /><Button variant="secondary" onClick={() => setAttempt((value) => value + 1)}>Повторить</Button><Link className="secondary-button" to="/projects">К проектам</Link></div>;
+    return <div className="screen screen-error-state"><ErrorState title={notFound ? "Проект не найден" : "Уроки не загрузились"} message={errorText(error, "Не удалось загрузить проект")} /><Button variant="secondary" onClick={() => setAttempt((value) => value + 1)}>Повторить</Button><Link className="secondary-button" to="/projects">К проектам</Link></div>;
   }
   if (!detail) return <div className="screen"><LoadingState label="Загружаем проект" placement="page" /></div>;
 
