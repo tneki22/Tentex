@@ -130,6 +130,27 @@ def test_fast_ocr_groups_wrapped_numbered_question_without_making_heading(
     )
 
 
+def test_fast_ocr_rebuilds_engine_when_cpu_threads_change(monkeypatch) -> None:
+    """При смене потоков движок пересоздаётся, при прежних — переиспользуется."""
+    import sys
+    from types import SimpleNamespace
+
+    created: list[int] = []
+
+    class Engine:
+        def __init__(self, **kwargs):
+            created.append(kwargs["cpu_threads"])
+
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=Engine))
+    monkeypatch.setattr(paddle_fast, "_engine", None)
+    monkeypatch.setattr(paddle_fast, "_engine_key", None)
+
+    first = paddle_fast._get_engine(cpu_threads=3)
+    assert paddle_fast._get_engine(cpu_threads=3) is first
+    assert paddle_fast._get_engine(cpu_threads=6) is not first
+    assert created == [3, 6]
+
+
 def test_page_quality_threshold_is_configurable() -> None:
     elements = (
         ParsedElement(

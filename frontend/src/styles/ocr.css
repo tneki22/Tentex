@@ -82,6 +82,26 @@
 }
 
 /* Плитки режимов на «Обзоре». */
+.ocr-cpu-setting {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--line);
+}
+
+.ocr-cpu-setting strong,
+.ocr-cpu-setting small {
+  display: block;
+}
+
+.ocr-cpu-setting small {
+  max-width: 68ch;
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
 .ocr-engine-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));

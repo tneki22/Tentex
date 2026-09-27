@@ -21,6 +21,7 @@ from PIL import Image
 from app.materials.parsers import raster, reading_order
 from app.materials.parsers.base import IMAGE_PLACEHOLDER, ParsedElement, ParsedPage
 from app.materials.storage import store_material_asset
+from app.ocr.engines import cpu_threads_for
 
 log = logging.getLogger("tentex.worker")
 
@@ -41,7 +42,7 @@ MAX_WRAP_GAP_RATIO = 0.9
 MIN_WRAP_GAP_RATIO = -0.3
 
 _engine: Any = None
-_engine_key: tuple[str, str] | None = None
+_engine_key: tuple[str, str, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,9 +62,15 @@ def available() -> bool:
     return True
 
 
-def _get_engine(language: str = DEFAULT_LANGUAGE, ocr_version: str = DEFAULT_OCR_VERSION) -> Any:
+def _get_engine(
+    language: str = DEFAULT_LANGUAGE,
+    ocr_version: str = DEFAULT_OCR_VERSION,
+    cpu_threads: int | None = None,
+) -> Any:
+    """Кэш движка учитывает потоки: новый профиль действует со следующей задачи."""
     global _engine, _engine_key
-    key = (language, ocr_version)
+    threads = cpu_threads or cpu_threads_for("balanced")
+    key = (language, ocr_version, threads)
     if _engine is None or _engine_key != key:
         from paddleocr import PaddleOCR
 
@@ -73,6 +80,7 @@ def _get_engine(language: str = DEFAULT_LANGUAGE, ocr_version: str = DEFAULT_OCR
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
+            cpu_threads=threads,
         )
         _engine_key = key
     return _engine
@@ -266,6 +274,7 @@ def parse_image(
     *,
     language: str = DEFAULT_LANGUAGE,
     ocr_version: str = DEFAULT_OCR_VERSION,
+    cpu_threads: int | None = None,
     quality_threshold: float = DEFAULT_QUALITY_THRESHOLD,
     owner: str = "",
 ) -> ParsedPage:
@@ -276,7 +285,7 @@ def parse_image(
     """
     image = Image.open(path)
     width, height = image.size
-    results = list(_get_engine(language, ocr_version).predict(str(path)))
+    results = list(_get_engine(language, ocr_version, cpu_threads).predict(str(path)))
     if not results:
         return ParsedPage(page_number, width, height, "", "", "ocr_low", (), ("empty_ocr",), 0.0)
     data = _payload(results[0])

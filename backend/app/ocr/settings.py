@@ -36,6 +36,8 @@ from app.ocr.engines import (
     OCR_ENGINES,
     CloudStrategy,
     OcrRuntimeParams,
+    available_cpu_count,
+    cpu_threads_for,
 )
 from app.ocr.schemas import (
     OcrCloudModelRead,
@@ -78,6 +80,7 @@ def runtime_params(session: Session) -> OcrRuntimeParams:
     return OcrRuntimeParams(
         quality_threshold=row.quality_threshold if row else defaults.quality_threshold,
         raster_scale=row.raster_scale if row else defaults.raster_scale,
+        cpu_profile=row.cpu_profile if row else defaults.cpu_profile,
         fast_language=defaults.fast_language,
         fast_model_id=(fast.model_id if fast and fast.model_id else defaults.fast_model_id),
         cloud_strategy=_cloud_strategy(session),
@@ -97,6 +100,7 @@ def update_global_settings(session: Session, command: OcrGlobalSettingsWrite) ->
         row.default_mode = command.default_mode
         row.quality_threshold = command.quality_threshold
         row.raster_scale = command.raster_scale
+        row.cpu_profile = command.cpu_profile
         row.updated_at = utc_now()
     return read_settings(session)
 
@@ -435,6 +439,12 @@ def read_settings(session: Session) -> OcrSettingsRead:
         default_mode=row.default_mode,
         quality_threshold=row.quality_threshold,
         raster_scale=row.raster_scale,
+        cpu_profile=row.cpu_profile,
+        cpu_available=available_cpu_count(),
+        cpu_threads_by_profile={
+            profile: cpu_threads_for(profile)
+            for profile in ("gentle", "balanced", "maximum")
+        },
         engines=engines,
         cloud=_cloud_read(session),
         speech=speech.speech_engines(session),
