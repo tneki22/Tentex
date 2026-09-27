@@ -11,8 +11,47 @@ import { Button, ConfirmDialog, StatusBadge } from "../../components/ui";
 /** Чем сделана версия: не только название режима, но и чем он читал страницу. */
 const REVISION_MODE_LABEL: Record<ParserMode, string> = {
   fast: "Быстро · локальный OCR",
-  cloud: "Облако · внешняя модель",
+  cloud: "Облако",
 };
+
+/** Модель берётся из снимка параметров конкретного запуска, не из текущих настроек. */
+function revisionModeText(revision: MaterialRevisionRead): string {
+  if (!revision.parser_mode) return "Ручная или восстановленная версия";
+  if (revision.parser_mode === "fast") return REVISION_MODE_LABEL.fast;
+  const options = revision.scope.options as
+    | {
+        page_model?: { model_id?: unknown } | null;
+        cloud_strategy?: unknown;
+        image_mode?: unknown;
+      }
+    | undefined;
+  const modelId = options?.page_model?.model_id;
+  const parts = [
+    "Облако",
+    ...(typeof modelId === "string" && modelId.trim() ? [modelId] : []),
+  ];
+  const strategyLabels: Record<string, string> = {
+    economy: "Экономно",
+    auto: "Адаптивно",
+    page: "Каждую страницу",
+  };
+  const imageLabels: Record<string, string> = {
+    describe: "фото: описывать",
+    text_only: "фото: только текст",
+    skip: "фото пропущены",
+  };
+  if (typeof options?.cloud_strategy === "string" && strategyLabels[options.cloud_strategy]) {
+    parts.push(strategyLabels[options.cloud_strategy]);
+  }
+  if (typeof options?.image_mode === "string" && imageLabels[options.image_mode]) {
+    parts.push(imageLabels[options.image_mode]);
+  }
+  const images = revision.summary.images as { described?: unknown } | undefined;
+  if (typeof images?.described === "number") {
+    parts.push(`в версии описано фото: ${images.described}`);
+  }
+  return parts.join(" · ");
+}
 
 const ORIGIN_LABEL: Record<RevisionOrigin, string> = {
   imported: "Первичная обработка",
@@ -128,7 +167,7 @@ export function MaterialRevisionPanel({
           const isOpen = (selected ?? current) === revision.revision;
           const isCompared = revision.revision === compared;
           const mode = revision.parser_mode
-            ? REVISION_MODE_LABEL[revision.parser_mode]
+            ? revisionModeText(revision)
             : "Ручная или восстановленная версия";
           const partial = isPartialRerun(revision);
           return (
