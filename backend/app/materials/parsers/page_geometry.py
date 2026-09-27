@@ -40,6 +40,8 @@ MIN_WORD_MATCH = 0.4
 # Строка слоя пропущена моделью, если в её ответе нет такой доли слов строки.
 MISSED_WORD_SHARE = 0.6
 MIN_MISSED_TOKENS = 3
+# Кластер путей — рисунок, если кривых и косых линий в нём хотя бы столько.
+FIGURE_PATH_SHARE = 0.3
 # Куски одного рисунка у модели стоят вплотную или налезают друг на друга.
 SPLIT_IMAGE_GAP = 0.02
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]+", re.IGNORECASE)
@@ -128,16 +130,22 @@ def _x_overlap(first: Box, second: Box) -> float:
     return overlap / width if width > 0 else 0.0
 
 
-def _figure_path(drawing: dict) -> bool:
-    """Путь рисунка, а не сетки: кривая или косая линия."""
-    for item in drawing.get("items", ()):
-        if item[0] == "c":
-            return True
-        if item[0] == "l":
-            start, end = item[1], item[2]
-            if abs(start.x - end.x) > 1 and abs(start.y - end.y) > 1:
-                return True
-    return False
+def _figure_share(drawings: Sequence[dict]) -> float:
+    """Доля элементов рисунка среди путей кластера: кривые и косые линии.
+
+    Сетка таблицы — прямые по осям, но в таблице истинности бывают перечёркнутые
+    крестом ячейки: пара косых линий на полсотни прямых таблицу рисунком не делает.
+    """
+    total = figure = 0
+    for drawing in drawings:
+        for item in drawing.get("items", ()):
+            total += 1
+            if item[0] == "c":
+                figure += 1
+            elif item[0] == "l":
+                start, end = item[1], item[2]
+                figure += abs(start.x - end.x) > 1 and abs(start.y - end.y) > 1
+    return figure / total if total else 0.0
 
 
 def _drawing_clusters(page: fitz.Page) -> tuple[list[Box], list[Box]]:
@@ -154,7 +162,7 @@ def _drawing_clusters(page: fitz.Page) -> tuple[list[Box], list[Box]]:
         if rect.width < MIN_FIGURE_SIDE_PT or rect.height < MIN_FIGURE_SIDE_PT:
             continue
         inside = [drawing for drawing in drawings if fitz.Rect(drawing["rect"]).intersects(rect)]
-        target = figures if any(_figure_path(drawing) for drawing in inside) else grids
+        target = figures if _figure_share(inside) >= FIGURE_PATH_SHARE else grids
         target.append(_normalized(rect, page))
     return figures, grids
 
@@ -413,15 +421,15 @@ def _missed_from_layer(
                 image=ImageMeta(detection="layer_figure", signals=("missed_by_model",)),
             )
         )
-    formulas = [_expanded(element.bbox) for element in elements if element.kind == "formula"]
+    # Вокруг любого элемента модели — полоса её ошибки: формула, которую модель
+    # прочитала в абзаце, таблице или со сдвигом на строку, уже в ответе, и её
+    # вырез рядом был бы дублем. Ячейки таблицы и надписи схемы — забота их самих.
+    nearby = [_expanded(box) for box in boxes]
     for index, zone in enumerate(geometry.zones):
         if index in used_zones or not zone.standalone:
             continue
-        if any(_inside(_center(zone.box), box) for box in boxes):
-            continue
-        # Формула модели рядом, пусть и с рамкой не того размера (зона склеила
-        # два этажа, модель вернула их по отдельности), — зона уже прочитана.
-        if any(_intersection(zone.box, box) > 0 for box in formulas):
+        center = _center(zone.box)
+        if any(_inside(center, box) for box in (*nearby, *geometry.grids, *geometry.figures)):
             continue
         added.append(ParsedElement("formula", IMAGE_PLACEHOLDER, zone.box))
     spoken = Counter(token for element in elements for token in _tokens(element.text))

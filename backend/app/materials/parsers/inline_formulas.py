@@ -30,6 +30,10 @@ SAME_LINE_OVERLAP = 0.5
 # Запас по вертикали к рамке абзаца: разметка даёт её тоньше строк текста
 # (середина строки, а не высота букв), и без запаса слово у края в абзац не попадёт.
 HOST_SLACK = 0.008
+# Запас по горизонтали при поиске абзаца-хозяина: формула в конце строки
+# стоит правее рамки абзаца, потому что разметка обрезает строку по последнему
+# видимому слову, а невидимые глифы формулы для неё пробелы.
+HOST_SLACK_X = 0.05
 # Номер формулы, который разметка вырезала отдельно от самой формулы:
 # `\tag{3.2}` от модели или «(3.2)» из текстового слоя.
 TAG_ONLY_RE = re.compile(
@@ -85,7 +89,10 @@ def _within(box: Box, host: Box) -> bool:
 
 def _host(elements: Sequence[ParsedElement], box: Box) -> int | None:
     for index, element in enumerate(elements):
-        if element.kind in HOST_KINDS and _within(box, element.bbox):
+        if element.kind not in HOST_KINDS:
+            continue
+        x0, y0, x1, y1 = element.bbox
+        if _within(box, (x0 - HOST_SLACK_X, y0, x1 + HOST_SLACK_X, y1)):
             return index
     return None
 
