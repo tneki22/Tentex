@@ -75,6 +75,7 @@ import {
 import type { ChatMessageRead } from "../api/chat";
 import { useBindings } from "../hooks/useBindings";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
+import { ProjectFileUploadStatus } from "./materials/ProjectFileUploadStatus";
 import { usePendingReviewJob } from "../hooks/usePendingReviewJob";
 import { AiGroupingDialog } from "./AiGroupingDialog";
 import { AiImportRepairDialog } from "./AiImportRepairDialog";
@@ -978,6 +979,7 @@ export function Program() {
               event.target.value = "";
             }}
           />
+          {materials.uploadStatus && <ProjectFileUploadStatus {...materials.uploadStatus} />}
           {examMaterials.length === 0 ? (
             <section className="program-import-empty">
               <Upload size={24} aria-hidden="true" />

@@ -720,6 +720,7 @@ export function CoverageMap() {
         projectId={projectId}
         answersMaterial={answersMaterial}
         busy={store.busy || busy || answerMatch.isRunning}
+        uploadStatus={store.uploadStatus}
         onUploadFile={(file) => void uploadAnswersFile(file)}
         onPickFromLibrary={() => { setSourceOpen(false); setLibraryOpen(true); }}
         onImportText={() => { setSourceOpen(false); setImportResult(null); setImportOpen(true); }}

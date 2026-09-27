@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { FileText, LibraryBig, Upload } from "lucide-react";
 import type { MaterialRead, MaterialState } from "../../api/materials";
 import { Button, Dialog, LoadingState, Progress } from "../../components/ui";
+import { ProjectFileUploadStatus } from "../materials/ProjectFileUploadStatus";
 
 const STATUS_COPY: Record<MaterialState, string> = {
   ready_to_process: "Файл добавлен, но текст ещё не подготовлен.",
@@ -21,6 +22,7 @@ interface AnswerSourceDialogProps {
   /** Файл эталонных ответов проекта; их всегда не больше одного. */
   answersMaterial: MaterialRead | null;
   busy: boolean;
+  uploadStatus: { name: string; progress: number } | null;
   onUploadFile: (file: File) => void;
   onPickFromLibrary: () => void;
   onImportText: () => void;
@@ -40,6 +42,7 @@ export function AnswerSourceDialog({
   projectId,
   answersMaterial,
   busy,
+  uploadStatus,
   onUploadFile,
   onPickFromLibrary,
   onImportText,
@@ -66,6 +69,7 @@ export function AnswerSourceDialog({
       className="answer-source-dialog"
       footer={<Button variant="ghost" onClick={() => onOpenChange(false)}>Закрыть</Button>}
     >
+      {uploadStatus && <ProjectFileUploadStatus {...uploadStatus} />}
       {pending && answersMaterial ? (
         <div className="answer-source-status">
           <p><b>{answersMaterial.display_name}</b></p>

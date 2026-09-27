@@ -505,26 +505,6 @@ const projectMaterialsPath = (projectId: string): string =>
 const materialPath = (projectId: string, materialId: string): string =>
   `${projectMaterialsPath(projectId)}/${encodeURIComponent(materialId)}`;
 
-async function uploadResponse(response: Response): Promise<MaterialRead> {
-  const payload: unknown = await response.json().catch(() => null);
-  if (!response.ok) {
-    const record = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
-    const detail = typeof record.detail === "string"
-      ? record.detail
-      : `Загрузка завершилась с ошибкой ${response.status}`;
-    const context = record.context && typeof record.context === "object"
-      ? record.context as Record<string, unknown>
-      : {};
-    throw new ProjectApiError(
-      response.status,
-      detail,
-      typeof record.code === "string" ? record.code : null,
-      context,
-    );
-  }
-  return payload as MaterialRead;
-}
-
 /** POST через XHR вместо fetch: только у него есть событие прогресса отправки —
  *  для стомегабайтных файлов индикатор нужен, иначе окно выглядит зависшим. */
 function uploadFormWithProgress<T>(
@@ -576,17 +556,14 @@ export async function uploadMaterial(
   sourceRole: SourceRole,
   purposes: MaterialPurpose[],
   examSlot?: ExamMaterialSlot | null,
+  onProgress?: (percent: number) => void,
 ): Promise<MaterialRead> {
   const form = new FormData();
   form.set("file", file);
   form.set("source_role", sourceRole);
   form.set("purposes", purposes.join(","));
   if (examSlot) form.set("exam_slot", examSlot);
-  return uploadResponse(await fetch(projectMaterialsPath(projectId), {
-    method: "POST",
-    headers: { Accept: "application/json" },
-    body: form,
-  }));
+  return uploadFormWithProgress<MaterialRead>(projectMaterialsPath(projectId), form, onProgress);
 }
 
 export const createTextMaterial = (

@@ -25,6 +25,7 @@ import { buildProgramTree, flattenProgramTree } from "./programTree";
 import { ProgramReviewList } from "./ProgramReviewList";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
 import { TextbookSourceCard } from "./TextbookSourceCard";
+import { ProjectFileUploadStatus } from "./materials/ProjectFileUploadStatus";
 import {
   TextbookOutlineReview,
 } from "./TextbookOutlineReview";
@@ -302,9 +303,9 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
       {step === 1 && (
         <section className="textbook-step">
           <p className="wizard-step-intro">Добавьте материалы и подготовьте их текст. Tentex сам определит страницы, которым нужен OCR.</p>
-          <input ref={materialInput} className="materials-file-input" type="file" multiple tabIndex={-1} aria-hidden="true" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.mp3,.wav,.m4a,.ogg,.flac" onChange={(event) => { Array.from(event.target.files ?? []).forEach((file) => void addMaterial(file)); event.target.value = ""; }} />
-          <div onDragOver={(event: DragEvent<HTMLDivElement>) => event.preventDefault()} onDrop={(event: DragEvent<HTMLDivElement>) => { event.preventDefault(); Array.from(event.dataTransfer.files).forEach((file) => void addMaterial(file)); }}>
-            <Card className="textbook-dropzone">
+          <input ref={materialInput} className="materials-file-input" type="file" multiple disabled={materials.busy} tabIndex={-1} aria-hidden="true" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.mp3,.wav,.m4a,.ogg,.flac" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void (async () => { for (const file of files) await addMaterial(file); })(); }} />
+          <div onDragOver={(event: DragEvent<HTMLDivElement>) => event.preventDefault()} onDrop={(event: DragEvent<HTMLDivElement>) => { event.preventDefault(); if (materials.busy) return; const files = Array.from(event.dataTransfer.files); void (async () => { for (const file of files) await addMaterial(file); })(); }}>
+            <Card className={`textbook-dropzone${materials.uploadStatus ? " is-uploading" : ""}`}>
               <UploadCloud size={24} aria-hidden="true" />
               <span><b>Перетащите учебники, методички, конспекты, статьи или аудио</b><small>PDF, DOCX, TXT, MD, изображения и аудио. До 200 МБ на файл.</small></span>
               <div className="material-entry-actions">
@@ -313,6 +314,7 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
               </div>
             </Card>
           </div>
+          {materials.uploadStatus && <ProjectFileUploadStatus {...materials.uploadStatus} />}
 
           <div className="textbook-source-list">
             {materials.loading && <LoadingState label="Загружаем источники" />}

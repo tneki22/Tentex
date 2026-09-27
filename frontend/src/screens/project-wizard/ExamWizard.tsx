@@ -767,14 +767,16 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     setLibrarySlot(slot ?? null);
   }
 
-  async function addFiles(purpose: MaterialPurpose, files: File[]) {
+  async function addFiles(purpose: MaterialPurpose, files: File[], onProgress: (name: string, percent: number) => void) {
     const draft = await controller.ensureDraft();
     const existingStudyCount = materialsFor("study_source").length;
     for (const [index, file] of files.entries()) {
       const sourceRole = purpose === "study_source" && existingStudyCount + index === 0
         ? "main"
         : purpose === "study_source" ? "additional" : "reference";
-      const material = await uploadMaterial(draft.project.id, file, sourceRole, [purpose]);
+      onProgress(file.name, 0);
+      const material = await uploadMaterial(draft.project.id, file, sourceRole, [purpose], null,
+        (percent) => onProgress(file.name, percent));
       if (purpose === "exam_structure" && material.status === "ready_to_process") {
         await startMaterialProcessing(draft.project.id, material.id, "fast");
       }
@@ -900,12 +902,14 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
     return unslotted.length === 1 ? unslotted : [];
   }
 
-  async function addSlotFiles(key: SlotKey, files: File[]) {
+  async function addSlotFiles(key: SlotKey, files: File[], onProgress: (name: string, percent: number) => void) {
     const draft = await controller.ensureDraft();
     const purpose = SLOT_PURPOSE[key];
     const slotValue = SLOT_VALUE[key];
     for (const file of files) {
-      const material = await uploadMaterial(draft.project.id, file, "reference", [purpose], slotValue);
+      onProgress(file.name, 0);
+      const material = await uploadMaterial(draft.project.id, file, "reference", [purpose], slotValue,
+        (percent) => onProgress(file.name, percent));
       if (purpose === "exam_structure" && material.status === "ready_to_process") {
         await startMaterialProcessing(draft.project.id, material.id, "fast");
       }
@@ -1397,7 +1401,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                     materials={materialsForSlot("questionList")}
                     text={form.questionList.text}
                     onTextChange={(text) => slotText("questionList", text)}
-                    onFiles={(files) => addSlotFiles("questionList", files)}
+                    onFiles={(files, onProgress) => addSlotFiles("questionList", files, onProgress)}
                     onChooseLibrary={() => openLibraryPicker("exam_structure", "questionList")}
                     onRemove={removeMaterial}
                     onRetry={retryMaterial}
@@ -1415,7 +1419,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                     materials={materialsForSlot("questionAnswers")}
                     text={form.questionAnswers.text}
                     onTextChange={(text) => slotText("questionAnswers", text)}
-                    onFiles={(files) => addSlotFiles("questionAnswers", files)}
+                    onFiles={(files, onProgress) => addSlotFiles("questionAnswers", files, onProgress)}
                     onChooseLibrary={() => openLibraryPicker("reference_answers", "questionAnswers")}
                     onRemove={removeMaterial}
                     onRetry={retryMaterial}
@@ -1433,7 +1437,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                     materials={materialsForSlot("taskList")}
                     text={form.taskList.text}
                     onTextChange={(text) => slotText("taskList", text)}
-                    onFiles={(files) => addSlotFiles("taskList", files)}
+                    onFiles={(files, onProgress) => addSlotFiles("taskList", files, onProgress)}
                     onChooseLibrary={() => openLibraryPicker("exam_structure", "taskList")}
                     onRemove={removeMaterial}
                     onRetry={retryMaterial}
@@ -1451,7 +1455,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                     materials={materialsForSlot("taskAnswers")}
                     text={form.taskAnswers.text}
                     onTextChange={(text) => slotText("taskAnswers", text)}
-                    onFiles={(files) => addSlotFiles("taskAnswers", files)}
+                    onFiles={(files, onProgress) => addSlotFiles("taskAnswers", files, onProgress)}
                     onChooseLibrary={() => openLibraryPicker("reference_answers", "taskAnswers")}
                     onRemove={removeMaterial}
                     onRetry={retryMaterial}
@@ -1468,7 +1472,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                     multiple
                     text=""
                     onTextChange={() => undefined}
-                    onFiles={(files) => addFiles("study_source", files)}
+                    onFiles={(files, onProgress) => addFiles("study_source", files, onProgress)}
                     onChooseLibrary={() => openLibraryPicker("study_source")}
                     onRemove={removeMaterial}
                     onRetry={retryMaterial}
@@ -1495,7 +1499,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                     materials={materialsFor("exam_structure")}
                     text={form.rawText}
                     onTextChange={(rawText) => setForm((current) => ({ ...current, rawText }))}
-                    onFiles={(files) => addFiles("exam_structure", files)}
+                    onFiles={(files, onProgress) => addFiles("exam_structure", files, onProgress)}
                     onChooseLibrary={() => openLibraryPicker("exam_structure")}
                     onRemove={removeMaterial}
                     onRetry={retryMaterial}
@@ -1532,7 +1536,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                     materials={materialsFor("reference_answers")}
                     text={form.answersText}
                     onTextChange={(answersText) => setForm((current) => ({ ...current, answersText }))}
-                    onFiles={(files) => addFiles("reference_answers", files)}
+                    onFiles={(files, onProgress) => addFiles("reference_answers", files, onProgress)}
                     onChooseLibrary={() => openLibraryPicker("reference_answers")}
                     onRemove={removeMaterial}
                     onRetry={retryMaterial}
@@ -1549,7 +1553,7 @@ export function ExamWizard({ controller, requestedStep, onStepChange, onActivate
                     multiple
                     text=""
                     onTextChange={() => undefined}
-                    onFiles={(files) => addFiles("study_source", files)}
+                    onFiles={(files, onProgress) => addFiles("study_source", files, onProgress)}
                     onChooseLibrary={() => openLibraryPicker("study_source")}
                     onRemove={removeMaterial}
                     onRetry={retryMaterial}

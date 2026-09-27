@@ -21,6 +21,7 @@ export function useProjectMaterials(projectId: string | undefined) {
   const [materials, setMaterials] = useState<MaterialRead[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<{ name: string; progress: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Опрос раз в 1200 мс и явные refresh() (после привязки из Библиотеки и
   // т.п.) могут завершиться не в том порядке, в котором были запущены:
@@ -83,6 +84,7 @@ export function useProjectMaterials(projectId: string | undefined) {
     materials,
     loading,
     busy,
+    uploadStatus,
     error,
     refresh,
     upload: (
@@ -90,9 +92,13 @@ export function useProjectMaterials(projectId: string | undefined) {
       sourceRole: SourceRole,
       purposes: MaterialPurpose[],
       examSlot?: ExamMaterialSlot | null,
-    ) => projectId
-      ? mutate(() => uploadMaterial(projectId, file, sourceRole, purposes, examSlot))
-      : null,
+    ) => {
+      if (!projectId) return null;
+      setUploadStatus({ name: file.name, progress: 0 });
+      return mutate(() => uploadMaterial(projectId, file, sourceRole, purposes, examSlot,
+        (progress) => setUploadStatus({ name: file.name, progress })))
+        .finally(() => setUploadStatus(null));
+    },
     createText: (command: {
       name: string;
       text: string;

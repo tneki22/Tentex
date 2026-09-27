@@ -91,6 +91,7 @@ import { useViewerFullscreen } from "../hooks/useViewerFullscreen";
 import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTreeNode } from "./programTree";
 import { AiCleanupPanel } from "./AiCleanupPanel";
 import { MaterialFileTab } from "./materials/MaterialFileTab";
+import { ProjectFileUploadStatus } from "./materials/ProjectFileUploadStatus";
 import { MaterialProcessingPanels } from "./materials/MaterialProcessingPanels";
 import { MaterialsWebSearch, type MaterialsWebSearchHandle } from "./materials/MaterialsWebSearch";
 import { DocumentSearchField, PageNumberInput, StructuredPage } from "../components/domain/material-viewer";
@@ -325,6 +326,7 @@ function MaterialOverview({
 function AddMaterialDialog({
   open,
   busy,
+  uploadStatus,
   answersMaterial,
   onOpenChange,
   onFile,
@@ -334,6 +336,7 @@ function AddMaterialDialog({
 }: {
   open: boolean;
   busy: boolean;
+  uploadStatus: { name: string; progress: number } | null;
   /** Уже загруженные эталонные ответы: второй такой файл проект не держит. */
   answersMaterial: MaterialRead | null;
   onOpenChange: (open: boolean) => void;
@@ -404,6 +407,7 @@ function AddMaterialDialog({
           event.target.value = "";
         }}
       />
+      {uploadStatus && <ProjectFileUploadStatus {...uploadStatus} />}
       {textMode ? (
         <div className="materials-text-form">
           <label>Название<input value={name} onChange={(event) => setName(event.target.value)} /></label>
@@ -2177,6 +2181,7 @@ function MaterialSurface() {
       <AddMaterialDialog
         open={addOpen}
         busy={store.busy}
+        uploadStatus={store.uploadStatus}
         answersMaterial={answersMaterial}
         onOpenChange={setAddOpen}
         onFile={(file, role, purposes) => void addFile(file, role, purposes)}

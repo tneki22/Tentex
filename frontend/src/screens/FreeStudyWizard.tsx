@@ -7,6 +7,7 @@ import type { GoalPassportWrite, ModuleKey, ProjectDetail, StartingLevel } from 
 import type { WizardDraftController } from "../hooks/useWizardDraft";
 import { useAiRoleAvailability } from "../hooks/useAiRoleAvailability";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
+import { ProjectFileUploadStatus } from "./materials/ProjectFileUploadStatus";
 import {
   LibraryMaterialPickerDialog,
   MaterialSuggestionList,
@@ -467,9 +468,10 @@ export function FreeStudyWizard({
           <input ref={fileInput} className="materials-file-input" type="file" tabIndex={-1} aria-hidden="true" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.mp3,.wav,.m4a,.ogg,.flac" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void addFile(file); }} />
           <div className="free-study-material-actions">
             <Button variant="secondary" onClick={() => setLibraryOpen(true)}><LibraryBig size={15} />Вся Библиотека</Button>
-            <Button variant="secondary" onClick={() => fileInput.current?.click()}><UploadCloud size={15} />Загрузить файл</Button>
+            <Button variant="secondary" disabled={materials.busy} onClick={() => fileInput.current?.click()}><UploadCloud size={15} />Загрузить файл</Button>
             <Button variant="secondary" onClick={() => setLinkOpen((open) => !open)}><Link2 size={15} />Добавить ссылку</Button>
           </div>
+          {materials.uploadStatus && <ProjectFileUploadStatus {...materials.uploadStatus} />}
           {linkOpen && <Card className="free-study-link-card"><Field label="Веб-страница или YouTube" hint="Прямая ссылка на PDF пока не поддерживается"><input type="url" value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)} placeholder="https://example.org/article" /></Field><Button disabled={busy || !linkUrl.trim()} onClick={() => void addLink()}>Добавить</Button></Card>}
 
           {materials.materials.length > 0 && <h2 className="free-study-section-title">В проекте</h2>}
