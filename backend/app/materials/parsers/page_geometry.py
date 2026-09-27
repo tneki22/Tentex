@@ -24,6 +24,7 @@ from difflib import SequenceMatcher
 
 import pymupdf as fitz
 
+from app.materials.image_candidates import PAGE_SCAN_AREA
 from app.materials.parsers.base import IMAGE_PLACEHOLDER, ImageMeta, ParsedElement, ParsedPage
 from app.materials.parsers.formula_zones import FormulaZone, readable
 
@@ -167,7 +168,13 @@ def _drawing_clusters(page: fitz.Page) -> tuple[list[Box], list[Box]]:
     return figures, grids
 
 
-def _embedded_figures(page: fitz.Page) -> list[Box]:
+def _embedded_figures(page: fitz.Page, words: Sequence[_Word]) -> list[Box]:
+    """Встроенные растры-рисунки без подложки скана.
+
+    У скана с текстовым слоем вся страница — один растр, а слова слоя лежат
+    поверх него. Рисунком он не считается: иначе модель его «пропустила», и
+    копия всего листа вставлялась вырезом в середину распознанного текста.
+    """
     try:
         infos = page.get_image_info()
     except (RuntimeError, ValueError):
@@ -175,9 +182,19 @@ def _embedded_figures(page: fitz.Page) -> list[Box]:
     boxes: list[Box] = []
     for info in infos:
         rect = fitz.Rect(info.get("bbox", (0, 0, 0, 0))) & page.rect
-        if rect.width >= MIN_FIGURE_SIDE_PT and rect.height >= MIN_FIGURE_SIDE_PT:
-            boxes.append(_normalized(rect, page))
+        if rect.width < MIN_FIGURE_SIDE_PT or rect.height < MIN_FIGURE_SIDE_PT:
+            continue
+        box = _normalized(rect, page)
+        if _area(box) >= PAGE_SCAN_AREA and _is_backdrop(box, words):
+            continue
+        boxes.append(box)
     return boxes
+
+
+def _is_backdrop(box: Box, words: Sequence[_Word]) -> bool:
+    """Большая часть слов слоя стоит на растре — это подложка, а не рисунок."""
+    covered = sum(1 for word in words if _inside(_center(word.box), box))
+    return bool(words) and covered >= 0.5 * len(words)
 
 
 def _distinct(boxes: Sequence[Box]) -> list[Box]:
@@ -220,7 +237,7 @@ def page_geometry(page: fitz.Page, zones: Sequence[FormulaZone]) -> PageGeometry
     return PageGeometry(
         tuple(words),
         tuple(lines),
-        tuple(_distinct([*_embedded_figures(page), *vector])),
+        tuple(_distinct([*_embedded_figures(page, words), *vector])),
         tuple(grids),
         tuple(zones),
     )

@@ -111,6 +111,21 @@ def test_model_boxes_snap_to_words_figures_and_missed_lines_come_from_layer(tmp_
     assert snapped.elements[-1] is added[0]
 
 
+def test_scan_backdrop_under_text_layer_is_not_a_figure(tmp_path) -> None:
+    document = _document(tmp_path)
+    page = document[0]
+    page.insert_image(page.rect, stream=_figure_png(), overlay=False, keep_proportion=False)
+
+    geometry = page_geometry.page_geometry(page, [])
+    snapped = page_geometry.snap_to_layer(_answer(), geometry)
+
+    assert geometry.figures == (_box(*FIGURE),), "скан листа — подложка, не рисунок"
+    assert not any(
+        element.image is not None and element.image.detection == "layer_figure"
+        for element in snapped.elements
+    )
+
+
 def test_whole_page_route_uses_layer_geometry_instead_of_ink_guesses(tmp_path) -> None:
     document = _document(tmp_path)
     page = document[0]
