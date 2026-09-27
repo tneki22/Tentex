@@ -4,6 +4,7 @@ import { cancelBackgroundJob } from "../../../api/backgroundJobs";
 import type {
   ChatContextFlags,
   ChatContextPreview,
+  ChatMessageRead,
   ChatKnowledgePolicy,
   ChatOperation,
   ChatRetrievalScope,
@@ -23,6 +24,8 @@ import type { ChipDef } from "./ContextChips";
 import { ContextChips } from "./ContextChips";
 import { SkillPalette } from "./SkillPalette";
 import type { PaletteCommandDef } from "./skills";
+import { ChatConfirmDialog } from "./ChatConfirmDialog";
+import { retrievalSources } from "./payload";
 import { useExamChat } from "./useExamChat";
 
 /** Кнопки операций учебного чата. Операция уходит полем, а не словами в тексте. */
@@ -38,7 +41,10 @@ const OPERATIONS: Array<{ key: Exclude<ChatOperation, "discuss">; label: string 
 const EXAM_MODEL_CAPABILITIES = ["streaming", "structured_output"];
 
 /** Шесть чипов экзаменационного чата — вопрос/профиль/ответ/материал/попытки/история раздела. */
-function buildExamContextChips(preview: ChatContextPreview | null): ChipDef[] | null {
+function buildExamContextChips(
+  preview: ChatContextPreview | null,
+  search: { enabled: boolean; count: number } | null,
+): ChipDef[] | null {
   if (!preview) return null;
   const byKind = new Map(preview.manifest.map((entry) => [entry.kind, entry]));
   const fragmentEntries = preview.manifest.filter((entry) => entry.kind === "fragment");
@@ -65,10 +71,17 @@ function buildExamContextChips(preview: ChatContextPreview | null): ChipDef[] | 
       reason: reference?.reason ?? null,
     },
     {
-      key: "fragments", icon: ListChecks, title: `Материал · ${fragmentCount}`, flagKey: "fragments",
+      // Только привязки темы; найденное поиском — отдельный чип ниже.
+      key: "fragments", icon: ListChecks, title: `Привязанные материалы · ${fragmentCount}`, flagKey: "fragments",
       included: fragmentCount > 0, bytes: fragmentEntries.reduce((sum, e) => sum + e.bytes, 0),
       count: fragmentCount, reason: fragmentEntries.length === 0 ? null : (fragmentEntries[0]?.reason ?? null),
     },
+    ...(search ? [{
+      key: "retrieval", icon: Search, title: `Поиск по материалам · ${search.count}`, flagKey: "retrieval",
+      included: search.enabled, bytes: 0, count: search.count,
+      reason: search.enabled ? null : "excluded_by_user",
+      description: "Места из материалов, найденные под вопрос. Число — сколько вошло в последний ответ.",
+    }] : []),
     {
       key: "attempts", icon: History, title: "Попытки", flagKey: "attempts",
       included: false, bytes: 0, count: null, reason: attempts?.reason ?? "not_implemented",
@@ -90,6 +103,12 @@ interface ExamChatPanelProps {
   takeAnswerSeconds?: () => number;
   studyOnly?: boolean;
   projectChat?: boolean;
+}
+
+/** Сколько найденных мест вошло в последний ответ модели. */
+function lastSourceCount(messages: ChatMessageRead[]): number {
+  const last = [...messages].reverse().find((message) => message.role === "examiner" && message.payload_kind === "none");
+  return last ? retrievalSources(last).length : 0;
 }
 
 function nextOrdinal(messages: { payload_kind: string }[]): number {
@@ -315,7 +334,10 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
 
           <ContextChips
             label="Контекст и поиск"
-            chips={buildExamContextChips(chat.contextPreview)}
+            chips={buildExamContextChips(chat.contextPreview, chat.session.mode === "study" ? {
+              enabled: chat.session.context_flags.retrieval ?? true,
+              count: lastSourceCount(chat.messages),
+            } : null)}
             contextFlags={chat.session.context_flags}
             onToggleFlag={(key, value) => void chat.updateSettings({
               context_flags: { [key]: value } as Partial<ChatContextFlags>,
@@ -431,6 +453,12 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
           )}
         </>
       )}
+
+      <ChatConfirmDialog
+        confirmation={chat.confirmation}
+        onConfirm={chat.confirmSend}
+        onCancel={chat.cancelConfirmation}
+      />
 
       <SkillPalette
         open={paletteOpen}

@@ -147,6 +147,14 @@ class ChatMessageWrite(ApiModel):
     #: Явная операция вместо префикса в тексте: слова «Сравнить источники» не
     #: попадают в поисковый запрос и не портят выдачу.
     operation: ChatOperation = "discuss"
+    #: ID хода от клиента: повтор с тем же ID не создаёт вторую реплику.
+    client_turn_id: str | None = Field(default=None, min_length=8, max_length=64)
+    #: `request_hash` из оценки, которую пользователь подтвердил.
+    confirmed_request_hash: str | None = Field(default=None, max_length=128)
+    #: Предел входа на этот ход (локальная оценка токенов); None — предел чата.
+    context_budget_tokens: int | None = Field(default=None, ge=1_000, le=2_000_000)
+    #: Запомнить `context_budget_tokens` как предел этого чата.
+    remember_budget: bool = False
 
 
 class ChatAnswerWrite(ApiModel):

@@ -20,6 +20,34 @@ export interface ChatSendOptions {
   knowledgePolicy: ChatKnowledgePolicy;
   materialIds?: string[];
   operation?: ChatOperation;
+  /** ID хода: повтор с ним не создаёт вторую реплику. */
+  turnId?: string;
+  /** `request_hash` оценки, которую пользователь подтвердил. */
+  confirmedRequestHash?: string;
+  contextBudgetTokens?: number;
+  rememberBudget?: boolean;
+}
+
+/** Что показать в окне подтверждения хода — `context` ошибки `ai_confirmation_required`. */
+export interface ChatConfirmationDetails {
+  request_hash: string;
+  reasons: string[];
+  model_id: string;
+  provider_label: string;
+  estimated_input_tokens: number;
+  estimated_output_tokens: number;
+  estimated_cost_usd: string | null;
+  estimated_cost_rub: string | null;
+  max_cost_usd: string | null;
+  max_cost_rub: string | null;
+  budget: { limit: number; needed: number; maximum: number | null };
+  manifest: Array<{ kind: string; title: string; tokens: number; included: boolean; truncated: boolean; reason: string | null }>;
+  expanded: {
+    request_hash: string;
+    budget_tokens: number;
+    estimated_cost_usd: string | null;
+    estimated_cost_rub: string | null;
+  } | null;
 }
 export type ChatToolRunState = "queued" | "running" | "succeeded" | "failed";
 export type AttemptOutcome = "passed" | "partial" | "failed" | "unscored";
@@ -29,6 +57,7 @@ export const CONTEXT_FLAG_KEYS = [
   "profile",
   "reference",
   "fragments",
+  "retrieval",
   "attempts",
   "section_memory",
 ] as const;
@@ -579,13 +608,20 @@ export async function* streamMessage(
         retrieval_material_ids: retrieval.materialIds ?? [],
         knowledge_policy: retrieval.knowledgePolicy,
         operation: retrieval.operation ?? "discuss",
+        client_turn_id: retrieval.turnId ?? null,
+        confirmed_request_hash: retrieval.confirmedRequestHash ?? null,
+        context_budget_tokens: retrieval.contextBudgetTokens ?? null,
+        remember_budget: retrieval.rememberBudget ?? false,
       }),
       signal,
     },
   );
   if (!response.ok || !response.body) {
-    const payload = await response.json().catch(() => null) as { detail?: string; code?: string } | null;
-    throw new ProjectApiError(response.status, payload?.detail ?? "Ответ не получен", payload?.code ?? null);
+    const payload = await response.json().catch(() => null) as
+      { detail?: string; code?: string; context?: Record<string, unknown> } | null;
+    throw new ProjectApiError(
+      response.status, payload?.detail ?? "Ответ не получен", payload?.code ?? null, payload?.context ?? {},
+    );
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

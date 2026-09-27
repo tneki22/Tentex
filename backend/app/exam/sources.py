@@ -6,14 +6,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models import ChatMessage, ChatMessageRole
+from app.models import ChatMessage, ChatMessageRole, RetrievalChunk
 from app.projects.errors import ProjectDomainError
+from app.retrieval.citations import CITATION_GROUP
 from app.retrieval.context import ContextAssembler
 from app.retrieval.schemas import (
     RetrievalHitRead,
@@ -152,6 +154,7 @@ def source_entry(number: int, hit: RetrievalHitRead, also_in: list[str]) -> dict
         "line_to": locator.line_to,
         "block_title": locator.block_title,
         "chunk_id": str(locator.chunk_id),
+        "fragment_ids": [str(item) for item in locator.fragment_ids],
         "text": hit.text,
         "quality": hit.quality.value if hit.quality else None,
         "warning": hit.warning,
@@ -225,3 +228,107 @@ async def find_sources(
         for number, hit in enumerate(assembled.sources, start=1)
     ]
     return FoundSources(entries=entries, notes=notes)
+
+
+# ------------------------------------------------------------ стабильные S-ID
+
+#: Пометка снимка ответа: его S-ID — номера всего чата, а не одного хода.
+STABLE_IDS = "stable"
+SOURCE_ID = re.compile(r"\bS(\d+)\b")
+
+
+@dataclass
+class SourceIds:
+    """Номера источников чата: один кусок — один S-ID во всех ходах.
+
+    Прежде S1 каждого хода был своим, и «что в S3?» или старая ссылка в
+    истории указывали на другое место. Номера восстанавливаются из снимков
+    прежних ответов; отдельной таблицы не нужно.
+    """
+
+    by_chunk: dict[str, str] = field(default_factory=dict)
+    #: Последний снимок каждого S-ID — для вопроса о номере, которого нет в выдаче.
+    latest: dict[str, dict[str, Any]] = field(default_factory=dict)
+    next_number: int = 1
+
+    @classmethod
+    def from_history(cls, messages: list[ChatMessage]) -> SourceIds:
+        ids = cls()
+        for message in messages:
+            snapshot = message.context_snapshot or {}
+            if snapshot.get("source_ids") != STABLE_IDS:
+                continue
+            for entry in snapshot.get("retrieval_sources") or []:
+                source_id = str(entry.get("id", ""))
+                match = SOURCE_ID.fullmatch(source_id)
+                if not match:
+                    continue
+                ids.by_chunk.setdefault(str(entry.get("chunk_id")), source_id)
+                ids.latest[source_id] = entry
+                ids.next_number = max(ids.next_number, int(match.group(1)) + 1)
+        return ids
+
+    def assign(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Выдать выдаче номера чата: известный кусок — прежний, новый — следующий."""
+        assigned = []
+        for entry in entries:
+            chunk_id = str(entry.get("chunk_id"))
+            source_id = self.by_chunk.get(chunk_id)
+            if source_id is None:
+                source_id = f"S{self.next_number}"
+                self.next_number += 1
+                self.by_chunk[chunk_id] = source_id
+            assigned.append({**entry, "id": source_id})
+        return assigned
+
+    def mentioned(
+        self, session: Session, text: str, present: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Источники, о которых спрашивают по номеру, но которых нет в выдаче.
+
+        Кусок ещё в индексе — его текст берётся заново; кусок заменён новой
+        ревизией материала — остаётся текст снимка с пометкой о старой версии.
+        """
+        have = {entry["id"] for entry in present}
+        extra = []
+        for number in dict.fromkeys(SOURCE_ID.findall(text)):
+            source_id = f"S{number}"
+            entry = self.latest.get(source_id)
+            if entry is None or source_id in have:
+                continue
+            chunk = _chunk(session, entry.get("chunk_id"))
+            if chunk is not None:
+                extra.append({**entry, "text": chunk.text, "stale": False})
+            else:
+                extra.append({**entry, "stale": True})
+        return extra
+
+
+def _chunk(session: Session, chunk_id: object) -> RetrievalChunk | None:
+    try:
+        return session.get(RetrievalChunk, UUID(str(chunk_id)))
+    except ValueError:
+        return None
+
+
+def legacy_citations(message: ChatMessage) -> str:
+    """Текст старого ответа, где S-ID ходовые: ссылки заменяются названием и локатором.
+
+    Иначе модель видела бы в истории [S3] прошлого хода и путала его с S3 новой
+    выдачи.
+    """
+    snapshot = message.context_snapshot or {}
+    if snapshot.get("source_ids") == STABLE_IDS:
+        return message.text
+    labels = {
+        str(entry.get("id")): ", ".join(
+            part for part in (entry.get("material"), entry.get("locator")) if part
+        ) or "источник"
+        for entry in snapshot.get("retrieval_sources") or []
+    }
+
+    def label(match: re.Match[str]) -> str:
+        ids = [item.strip() for item in re.split(r"[,;]", match.group(1))]
+        return "[" + "; ".join(labels.get(item, "источник") for item in ids) + "]"
+
+    return CITATION_GROUP.sub(label, message.text)

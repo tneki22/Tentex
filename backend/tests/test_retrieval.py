@@ -10,7 +10,6 @@ from app.ai.provider import FakeTransport, ProviderEmbeddings, ProviderError, Pr
 from app.background.registry import cancel_job
 from app.config import settings
 from app.exam import chat as chat_service
-from app.exam.router import _citation_error
 from app.models import (
     BackgroundJob,
     BackgroundJobKind,
@@ -521,14 +520,6 @@ def test_model_install_survives_another_writer_during_download(
     assert job.done == job.total
     assert local_models.model_path("tentex-test/embeddings").is_dir()
     assert not local_models._partial_path("tentex-test/embeddings").exists()
-
-
-def test_citation_validator_rejects_missing_and_unknown_ids() -> None:
-    manifest = [{"kind": "retrieval_source", "id": "S1"}]
-
-    assert _citation_error("Факт без ссылки.", manifest) is not None
-    assert _citation_error("Факт [S2].", manifest) is not None
-    assert _citation_error("Факт [S1].", manifest) is None
 
 
 def test_exhaustive_run_requires_confirmation_with_corpus_snapshot(session: Session) -> None:

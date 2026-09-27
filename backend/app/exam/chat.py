@@ -13,7 +13,6 @@ from app.chat import common as chat_common
 from app.db import project_write_transaction
 from app.exam.context import (
     CONTEXT_FLAG_KEYS,
-    ChatContext,
     build_context,
     section_scope,
 )
@@ -314,23 +313,67 @@ def append_message(session: Session, chat: ChatSession, **fields: Any) -> ChatMe
         return _append_message_row(session, chat, **fields)
 
 
-def start_turn(
-    session: Session, project_id: UUID, chat_id: UUID, text: str, *, skill: str | None = None
-) -> tuple[ChatSession, ChatContext, UUID]:
-    """Validate, build the reply context and record the user's turn — one transaction."""
+def require_turn_session(session: Session, project_id: UUID, chat_id: UUID) -> ChatSession:
+    """Чат для нового хода: проект экзаменационный или свободный, сессия его."""
+    _require_exam_project(session, project_id)
+    return _require_session(session, project_id, chat_id)
+
+
+def find_turn(
+    session: Session, chat_id: UUID, client_turn_id: str
+) -> tuple[ChatMessage, ChatMessage | None] | None:
+    """Прежний ход с этим ID: реплика пользователя и завершённый ответ на неё, если есть."""
+    user = session.scalar(
+        select(ChatMessage).where(
+            ChatMessage.session_id == chat_id,
+            ChatMessage.client_turn_id == client_turn_id,
+        )
+    )
+    if user is None:
+        return None
+    # Ответ хода — завершённый ответ до следующего вопроса: после упавшей
+    # попытки повтор дописывает новый ответ ниже неудачного.
+    for message in session.scalars(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == chat_id, ChatMessage.sequence > user.sequence)
+        .order_by(ChatMessage.sequence)
+    ):
+        if message.role == ChatMessageRole.USER:
+            break
+        if (
+            message.role == ChatMessageRole.EXAMINER
+            and message.stream_state == ChatStreamState.COMPLETE
+        ):
+            return user, message
+    return user, None
+
+
+def record_turn(
+    session: Session,
+    project_id: UUID,
+    chat_id: UUID,
+    text: str,
+    *,
+    skill: str | None,
+    client_turn_id: str | None,
+    snapshot: dict[str, Any],
+    remember_budget: int | None = None,
+) -> UUID:
+    """Записать реплику пользователя — только после подготовки и подтверждения хода."""
     with project_write_transaction(session, project_id):
-        _require_exam_project(session, project_id)
-        chat = _require_session(session, project_id, chat_id)
-        ctx = build_context(session, chat, for_judge=False)
+        chat = require_turn_session(session, project_id, chat_id)
+        if remember_budget is not None:
+            chat.context_budget_tokens = remember_budget
         user_message = _append_message_row(
             session,
             chat,
             role=ChatMessageRole.USER,
             text=text,
             skill=skill,
-            context_snapshot=ctx.snapshot,
+            client_turn_id=client_turn_id,
+            context_snapshot=snapshot,
         )
-    return chat, ctx, user_message.id
+    return user_message.id
 
 
 def finish_turn(
@@ -342,6 +385,7 @@ def finish_turn(
     text: str,
     stream_state: ChatStreamState,
     ai_run_id: UUID | None,
+    skill: str | None = None,
     context_snapshot: dict[str, Any] | None = None,
 ) -> ChatMessage:
     with project_write_transaction(session, project_id):
@@ -355,6 +399,7 @@ def finish_turn(
             text=text,
             stream_state=stream_state,
             ai_run_id=ai_run_id,
+            skill=skill,
             context_snapshot=context_snapshot or {},
         )
 

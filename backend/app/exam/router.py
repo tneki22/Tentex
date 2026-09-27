@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from decimal import Decimal
@@ -15,13 +14,12 @@ from sqlalchemy.orm import Session
 
 from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import AiTextRequest, ModelGateway
-from app.ai.schemas import AiMessage, AiModelSelection
+from app.ai.schemas import AiMessage
 from app.chat_tools.executor import run_tool
 from app.db import SessionLocal, get_session
 from app.exam import attempts as attempt_service
 from app.exam import chat as chat_service
-from app.exam.context import ChatContext
-from app.exam.prompts import build_chat_reply_prompt
+from app.exam.reply import ChatConfirmationRequired, TurnOptions, prepare_reply
 from app.exam.schemas import (
     AttemptDetailRead,
     AttemptRead,
@@ -44,17 +42,16 @@ from app.exam.schemas import (
     SelfAssessmentWrite,
     ToolRunCreateWrite,
 )
-from app.exam.sources import FoundSources, ensure_scope_has_places, find_sources
+from app.exam.sources import STABLE_IDS, ensure_scope_has_places
 from app.models import (
     AiRun,
     ChatMessage,
-    ChatMessageRole,
     ChatMode,
-    ChatSession,
     ChatStreamState,
     Grade,
 )
 from app.projects.errors import ProjectDomainError
+from app.retrieval.citations import citation_error
 
 SessionDependency = Annotated[Session, Depends(get_session)]
 GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
@@ -137,87 +134,6 @@ def post_tool_run(
     return ChatToolRunRead.model_validate(run)
 
 
-def _history_messages(tail: list[ChatMessage]) -> list[AiMessage]:
-    messages: list[AiMessage] = []
-    for item in tail:
-        if not item.text.strip():
-            continue
-        if item.role == ChatMessageRole.USER:
-            messages.append(AiMessage(role="user", content=item.text))
-        elif item.role == ChatMessageRole.EXAMINER:
-            messages.append(AiMessage(role="assistant", content=item.text))
-    return messages
-
-
-def _model_override(chat: ChatSession) -> AiModelSelection | None:
-    if not chat.model_override:
-        return None
-    return AiModelSelection(
-        provider_id=chat.model_override["provider_id"],
-        model_id=chat.model_override["model_id"],
-    )
-
-
-def _reply_request(
-    chat: ChatSession,
-    ctx: ChatContext,
-    user_text: str,
-    retrieval_sources: list[dict[str, object]] | None = None,
-    knowledge_policy: str = "sources_only",
-    retrieval_notes: list[str] | None = None,
-    operation: str = "discuss",
-) -> AiTextRequest:
-    grounding = [f"Вопрос: {ctx.question}"]
-    grounding.append(
-        "<knowledge_policy>Только переданные источники.</knowledge_policy>"
-        if knowledge_policy == "sources_only"
-        else "<knowledge_policy>Общие знания модели разрешены, но вынеси их в отдельный "
-        "раздел «Дополнение модели» без фиктивных цитат.</knowledge_policy>"
-    )
-    if ctx.profile:
-        grounding.append(
-            f"<profile_data>\n{json.dumps(ctx.profile, ensure_ascii=False)}\n</profile_data>"
-        )
-    if ctx.reference_text is not None:
-        grounding.append(f"<reference_data>\n{ctx.reference_text}\n</reference_data>")
-    for fragment in ctx.fragments:
-        heading = f'material="{fragment.material_name}" page="{fragment.page_number}"'
-        grounding.append(f"<fragment_data {heading}>\n{fragment.text}\n</fragment_data>")
-    for source in retrieval_sources or []:
-        also_in = source.get("also_in") or []
-        # Тот же текст в других материалах — одно место: модель узнаёт, что
-        # источники здесь совпадают, а не видит два одинаковых S-ID.
-        also = f' also_in="{"; ".join(also_in)}"' if also_in else ""
-        grounding.append(
-            f'<retrieval_source id="{source["id"]}" material="{source["material"]}" '
-            f'locator="{source["locator"]}"{also}>\n{source["text"]}\n</retrieval_source>'
-        )
-    for note in retrieval_notes or []:
-        grounding.append(f"<retrieval_note>{note}</retrieval_note>")
-    messages = [
-        AiMessage(
-            role="system",
-            content=build_chat_reply_prompt(
-                chat.persona, chat.strictness, chat.mode,
-                chat.model_parameters.get("max_output_tokens") if chat.model_parameters else None,
-                operation,
-            ),
-        ),
-        AiMessage(role="user", content="\n\n".join(grounding)),
-        *_history_messages(ctx.tail),
-        AiMessage(role="user", content=user_text),
-    ]
-    return AiTextRequest(
-        role="exam_chat_reply",
-        messages=messages,
-        project_id=chat.project_id,
-        context_manifest=[*ctx.manifest, *(retrieval_sources or [])],
-        request_model_override=_model_override(chat),
-        parameters=chat.model_parameters or {},
-        source_fingerprint={"chat_id": str(chat.id)},
-    )
-
-
 @router.post("/projects/{project_id}/chat/sessions/{session_id}/messages")
 async def post_chat_message(
     project_id: UUID,
@@ -226,47 +142,103 @@ async def post_chat_message(
     session: SessionDependency,
     gateway: GatewayDependency,
 ) -> StreamingResponse:
-    existing = session.get(ChatSession, session_id)
-    if existing is not None and existing.mode == ChatMode.STUDY:
-        ensure_scope_has_places(
-            session, project_id, existing.program_node_id, command.retrieval_scope
-        )
-    chat, ctx, user_message_id = chat_service.start_turn(
-        session, project_id, session_id, command.text, skill=command.operation
+    """Ход чата: подготовка → при нужде подтверждение → запись реплики → поток.
+
+    Реплика пользователя пишется только после подготовки и подтверждения:
+    отказ или отмена не оставляют в ленте вопроса без ответа. Тот же
+    `client_turn_id` повторяет ход, не создавая вторую реплику.
+    """
+    chat = chat_service.require_turn_session(session, project_id, session_id)
+    options = TurnOptions(
+        text=command.text,
+        operation=command.operation,
+        scope=command.retrieval_scope,
+        material_ids=command.retrieval_material_ids,
+        knowledge_policy=command.knowledge_policy,
     )
-    found = FoundSources(entries=[], notes=[])
+    previous = (
+        chat_service.find_turn(session, chat.id, command.client_turn_id)
+        if command.client_turn_id
+        else None
+    )
+    if previous is not None:
+        user, answer = previous
+        if answer is not None:
+            return _stream(_replay(user, answer))
+        options = TurnOptions.from_message(user, options)
     if chat.mode == ChatMode.STUDY:
-        found = await find_sources(
-            session,
-            project_id=project_id,
-            node_id=chat.program_node_id,
-            text=command.text,
-            tail=ctx.tail,
-            scope=command.retrieval_scope,
-            material_ids=command.retrieval_material_ids,
-            operation=command.operation,
-        )
-    request = _reply_request(
-        chat,
-        ctx,
-        command.text,
-        found.entries,
-        command.knowledge_policy,
-        found.notes,
-        command.operation,
+        ensure_scope_has_places(session, project_id, chat.program_node_id, options.scope)
+
+    before = previous[0].sequence if previous is not None else None
+    prepared = await prepare_reply(
+        session, gateway, chat, options,
+        budget_tokens=command.context_budget_tokens, before_sequence=before,
     )
-    # Локальная проверка (роль/модель/ключ настроены) без сети — падает здесь
-    # обычным ProjectDomainError, до того как клиент увидит поток.
-    await gateway.preflight(request)
+    budget = prepared.budget
+    if command.context_budget_tokens and budget.maximum and budget.limit > budget.maximum:
+        raise ProjectDomainError(
+            "Такой объём не помещается в окно выбранной модели",
+            status=422,
+            code="chat_context_budget_too_large",
+            context={"maximum": budget.maximum},
+        )
+    if prepared.reasons and command.confirmed_request_hash != prepared.preflight.request_hash:
+        expanded = None
+        if budget.over and (budget.maximum is None or budget.needed <= budget.maximum):
+            expanded = await prepare_reply(
+                session, gateway, chat, options,
+                budget_tokens=budget.needed, before_sequence=before,
+            )
+        raise ChatConfirmationRequired(prepared, expanded)
+
+    if previous is not None:
+        user_message_id = previous[0].id
+    else:
+        user_message_id = chat_service.record_turn(
+            session,
+            project_id,
+            chat.id,
+            options.text,
+            skill=options.operation,
+            client_turn_id=command.client_turn_id,
+            snapshot=prepared.user_snapshot,
+            remember_budget=command.context_budget_tokens if command.remember_budget else None,
+        )
+    request = replace(prepared.request, confirmed=True)
+    return _stream(
+        _events(project_id, session_id, request, user_message_id, prepared.sources, options)
+    )
+
+
+def _stream(frames: AsyncIterator[str]) -> StreamingResponse:
     return StreamingResponse(
-        _events(project_id, session_id, request, user_message_id),
+        frames,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-def _retrieval_manifest(request: AiTextRequest) -> list[dict[str, Any]]:
-    return [item for item in request.context_manifest if item.get("kind") == "retrieval_source"]
+async def _replay(user: ChatMessage, answer: ChatMessage) -> AsyncIterator[str]:
+    """Ход уже отвечен — повтор отдаёт сохранённый ответ, не вызывая модель."""
+    sources = (answer.context_snapshot or {}).get("retrieval_sources", [])
+    yield _frame(
+        "started",
+        {
+            "message_id": str(answer.id),
+            "user_message_id": str(user.id),
+            "run_id": str(answer.ai_run_id) if answer.ai_run_id else None,
+            "sources": sources,
+        },
+    )
+    yield _frame(
+        "completed",
+        {
+            "message_id": str(answer.id),
+            "message": ChatMessageRead.model_validate(answer).model_dump(mode="json"),
+            "usage": {},
+            "cached": True,
+        },
+    )
 
 
 def _frame(event: str, payload: dict[str, Any]) -> str:
@@ -274,12 +246,18 @@ def _frame(event: str, payload: dict[str, Any]) -> str:
 
 
 async def _events(
-    project_id: UUID, chat_id: UUID, request: AiTextRequest, user_message_id: UUID
+    project_id: UUID,
+    chat_id: UUID,
+    request: AiTextRequest,
+    user_message_id: UUID,
+    sources: list[dict[str, Any]],
+    options: TurnOptions,
 ) -> AsyncIterator[str]:
     # Зависимость get_session закрывается до отправки тела StreamingResponse
     # (FastAPI ≥ 0.106), поэтому поток открывает свою сессию — тот же случай,
     # что воркер разбора, а не обход правила из tentex-api.
     message_id = uuid4()
+    allowed = {str(source["id"]) for source in sources}
     with SessionLocal() as db:
         chunks: list[str] = []
         run_id: UUID | None = None
@@ -295,7 +273,12 @@ async def _events(
                 text="".join(chunks),
                 stream_state=stream_state,
                 ai_run_id=run_id,
-                context_snapshot={"retrieval_sources": _retrieval_manifest(request)},
+                skill=options.operation,
+                context_snapshot={
+                    "retrieval_sources": sources,
+                    "source_ids": STABLE_IDS,
+                    "turn": options.snapshot(),
+                },
             )
             saved = True
             return message
@@ -315,7 +298,7 @@ async def _events(
                                 "message_id": str(message_id),
                                 "user_message_id": str(user_message_id),
                                 "run_id": str(run_id),
-                                "sources": _retrieval_manifest(request),
+                                "sources": sources,
                             },
                         )
                     elif event.kind == "delta":
@@ -323,10 +306,10 @@ async def _events(
                         yield _frame("delta", {"text": event.delta})
                     elif event.kind == "completed":
                         completed_usage = event.usage.model_dump(mode="json") if event.usage else {}
-                citation_error = _citation_error("".join(chunks), request.context_manifest)
-                if citation_error and citation_attempt == 0:
+                problem = citation_error("".join(chunks), allowed)
+                if problem and citation_attempt == 0:
                     chunks.clear()
-                    yield _frame("reset", {"reason": citation_error})
+                    yield _frame("reset", {"reason": problem})
                     current_request = replace(
                         request,
                         messages=[
@@ -334,17 +317,19 @@ async def _events(
                             AiMessage(
                                 role="user",
                                 content=(
-                                    "Исправь ответ: используй хотя бы одну цитату и только "
-                                    "разрешённые ID источников. Не комментируй исправление."
+                                    "Исправь ответ: используй только разрешённые ID "
+                                    "источников"
+                                    + (" и хотя бы одну цитату" if allowed else "")
+                                    + ". Не комментируй исправление."
                                 ),
                             ),
                         ],
                     )
                     continue
-                if citation_error:
+                if problem:
                     yield _frame(
                         "error",
-                        {"code": "chat_invalid_citations", "detail": citation_error},
+                        {"code": "chat_invalid_citations", "detail": problem, "context": {}},
                     )
                     _save(ChatStreamState.FAILED)
                     break
@@ -375,23 +360,6 @@ async def _events(
         finally:
             if not saved:
                 _save(ChatStreamState.FAILED)
-
-
-def _citation_error(text: str, manifest: list[dict[str, Any]]) -> str | None:
-    allowed = {
-        str(item["id"])
-        for item in manifest
-        if item.get("kind") == "retrieval_source" and item.get("id")
-    }
-    if not allowed:
-        return None
-    used = set(re.findall(r"\[(S\d+)]", text))
-    unknown = used - allowed
-    if unknown:
-        return "Ответ сослался на неизвестные источники: " + ", ".join(sorted(unknown))
-    if not used:
-        return "Ответ по найденным источникам не содержит проверяемых цитат"
-    return None
 
 
 @router.post(

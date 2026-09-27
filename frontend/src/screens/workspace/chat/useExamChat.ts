@@ -16,6 +16,7 @@ import {
   type AttemptOutcome,
   type ChatCapabilities,
   type ChatContextPreview,
+  type ChatConfirmationDetails,
   type ChatSendOptions,
   type ChatMessageRead,
   type ChatSessionDetail,
@@ -32,6 +33,13 @@ export interface StreamFailure {
   retryText?: string;
   /** Область, политика и операция хода: «Повторить» отправляет тот же ход. */
   retrieval?: ChatSendOptions;
+}
+
+/** Ход, ждущий подтверждения цены или объёма контекста. */
+export interface PendingConfirmation {
+  text: string;
+  options: ChatSendOptions;
+  details: ChatConfirmationDetails;
 }
 
 interface UseExamChatOptions {
@@ -66,6 +74,7 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
   const [preparing, setPreparing] = useState(false);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [failure, setFailure] = useState<StreamFailure | null>(null);
+  const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [settingsError, setSettingsError] = useState("");
   const [sessionsReloadKey, setSessionsReloadKey] = useState(0);
@@ -264,9 +273,17 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
     requestAnimationFrame(() => flushDelta(messageId));
   }
 
-  async function sendMessage(retryText?: string, retrieval?: ChatSendOptions) {
+  async function sendMessage(retryText?: string, sendOptions?: ChatSendOptions) {
     const text = (retryText ?? draft).trim();
     if (!activeSessionId || !text || streamingMessageId || preparing) return;
+    // Повтор и подтверждение приходят с тем же ID хода: сервер не создаст
+    // вторую реплику пользователя.
+    const retrieval: ChatSendOptions = {
+      scope: "topic_project",
+      knowledgePolicy: "sources_only",
+      ...sendOptions,
+      turnId: sendOptions?.turnId ?? crypto.randomUUID(),
+    };
     const controller = new AbortController();
     abortRef.current = controller;
     setFailure(null);
@@ -350,6 +367,10 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
           removeMessage(userId);
           setDraft((current) => current || text);
         }
+        if (error instanceof ProjectApiError && error.code === "ai_confirmation_required") {
+          setConfirmation({ text, options: retrieval, details: error.context as unknown as ChatConfirmationDetails });
+          return;
+        }
         setFailure(error instanceof ProjectApiError
           ? { code: error.code ?? "unknown", detail: error.message, retryText: text, retrieval }
           : { code: "unknown", detail: "Ответ не получен", retryText: text, retrieval });
@@ -359,6 +380,23 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
       setStreamingMessageId(null);
       abortRef.current = null;
     }
+  }
+
+  /**
+   * Отправить подтверждённый ход. `expanded` — с пределом, при котором ничего
+   * не сокращается; иначе — сокращённым, как показала оценка.
+   */
+  function confirmSend(expanded: boolean, remember: boolean) {
+    if (!confirmation) return;
+    const { text, options, details } = confirmation;
+    setConfirmation(null);
+    const wider = expanded && details.expanded ? details.expanded : null;
+    void sendMessage(text, {
+      ...options,
+      confirmedRequestHash: wider ? wider.request_hash : details.request_hash,
+      contextBudgetTokens: wider ? wider.budget_tokens : options.contextBudgetTokens,
+      rememberBudget: Boolean(wider) && remember,
+    });
   }
 
   function stopMessage() {
@@ -484,6 +522,9 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
     streamingMessageId,
     sending: preparing || streamingMessageId !== null,
     failure,
+    confirmation,
+    confirmSend,
+    cancelConfirmation: () => setConfirmation(null),
     submittingAnswer,
     settingsError,
     sendMessage,

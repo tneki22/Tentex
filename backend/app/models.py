@@ -49,6 +49,7 @@ def default_context_flags() -> dict[str, bool]:
         "profile": True,
         "reference": True,
         "fragments": True,
+        "retrieval": True,
         "attempts": False,
         "section_memory": False,
     }
@@ -2112,6 +2113,8 @@ class ChatSession(Base):
     # Отдельно от снимка выбора: его читают валидация чата и судья.
     model_parameters: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     context_flags: Mapped[dict[str, Any]] = mapped_column(JSON, default=default_context_flags)
+    # Запомненный предел входа учебного ответа, токены; None — предел по умолчанию.
+    context_budget_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     draft_text: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
@@ -2124,6 +2127,13 @@ class ChatMessage(Base):
     __table_args__ = (
         UniqueConstraint("session_id", "sequence", name="uq_chat_messages_session_id_sequence"),
         CheckConstraint("sequence >= 1", name="sequence_positive"),
+        # Один ход пользователя — одна реплика: повтор после сбоя её не дублирует.
+        Index(
+            "uq_chat_messages_session_client_turn",
+            "session_id",
+            "client_turn_id",
+            unique=True,
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -2144,6 +2154,8 @@ class ChatMessage(Base):
     # Какая серверная операция создала сообщение: null — обычная реплика,
     # иначе ключ навыка или Tool (AI-CHATS.md §13).
     skill: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: Идентификатор хода от клиента; есть только у реплики пользователя.
+    client_turn_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ai_run_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True
     )

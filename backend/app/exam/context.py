@@ -34,7 +34,9 @@ CONTEXT_CHARS = 12_000
 # Ключи ChatSession.context_flags — AI-CHATS.md §21.4. attempts и
 # section_memory зарегистрированы в модели заранее, но контекст их пока не
 # заполняет: соответствующая часть не существует до итерации 2.
-CONTEXT_FLAG_KEYS = frozenset({"profile", "reference", "fragments", "attempts", "section_memory"})
+CONTEXT_FLAG_KEYS = frozenset(
+    {"profile", "reference", "fragments", "retrieval", "attempts", "section_memory"}
+)
 
 TARGET_OUTCOME_LABELS = {
     TargetOutcome.AWARENESS: "иметь общее представление",

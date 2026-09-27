@@ -88,6 +88,7 @@ def append_message_row(
     attempt_id: UUID | None = None,
     grade_attempt_id: UUID | None = None,
     message_id: UUID | None = None,
+    client_turn_id: str | None = None,
 ) -> ChatMessage:
     """Raw insert, no transaction of its own — caller must already be inside one.
 
@@ -114,6 +115,7 @@ def append_message_row(
         payload=payload or {},
         context_snapshot=context_snapshot or {},
         skill=skill,
+        client_turn_id=client_turn_id,
         ai_run_id=ai_run_id,
         attempt_id=attempt_id,
         grade_attempt_id=grade_attempt_id,
