@@ -2,6 +2,7 @@ import type {
   AnswerFormPayload,
   AttemptOutcome,
   ChatMessageRead,
+  ChatRetrievalSource,
   GradeMethod,
   GradeUsageRead,
   MaterialSearchResultItem,
@@ -297,4 +298,23 @@ export function parsePayload(message: ChatMessageRead): ParsedPayload {
   }
   if (message.payload_kind === "none") return { kind: "none" };
   return { kind: "unknown" };
+}
+
+/**
+ * Источники ответа из снимка сообщения. Старые записи могут не иметь части
+ * полей или хранить мусор — такие элементы пропускаются, а не роняют ленту.
+ */
+export function retrievalSources(message: ChatMessageRead): ChatRetrievalSource[] {
+  const raw = message.context_snapshot.retrieval_sources;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((item): item is ChatRetrievalSource => {
+    if (!item || typeof item !== "object") return false;
+    const record = item as Record<string, unknown>;
+    return typeof record.id === "string" && typeof record.material === "string" && typeof record.text === "string";
+  }).map((item) => ({
+    ...item,
+    material_id: typeof item.material_id === "string" ? item.material_id : "",
+    locator: typeof item.locator === "string" ? item.locator : "",
+    page: typeof item.page === "number" ? item.page : null,
+  }));
 }

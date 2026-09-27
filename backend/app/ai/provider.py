@@ -625,6 +625,7 @@ class FakeTransport:
         self.complete_requests: list[dict[str, object]] = []
         self.transcribe_requests: list[dict[str, object]] = []
         self.embed_requests: list[dict[str, object]] = []
+        self.stream_requests: list[dict[str, object]] = []
 
     async def list_models(self) -> list[ProviderModel]:
         self.list_calls += 1
@@ -702,7 +703,11 @@ class FakeTransport:
         max_output_tokens: int,
         parameters: dict[str, object],
     ) -> AsyncIterator[ProviderStreamEvent]:
-        del model, messages, max_output_tokens, parameters
+        # Сообщения запоминаются: тесты сверяют фактический запрос с подготовленным.
+        self.stream_requests.append(
+            {"model": model, "messages": messages, "max_output_tokens": max_output_tokens}
+        )
+        del parameters
         self.stream_calls += 1
         if not self.streams:
             raise ProviderError("ai_provider_unavailable", "Fake stream queue is empty")

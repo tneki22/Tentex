@@ -356,8 +356,34 @@ export interface ChatAnswerResult {
   grade: GradeRead;
 }
 
+/**
+ * Источник ответа из `context_snapshot.retrieval_sources` и кадра `started`.
+ * Поля после `text` появились 27.09.2026 — в старых сообщениях их нет.
+ */
+export interface ChatRetrievalSource {
+  id: string;
+  material: string;
+  material_id: string;
+  locator: string;
+  page: number | null;
+  text: string;
+  page_to?: number | null;
+  typst_path?: string | null;
+  line_from?: number | null;
+  line_to?: number | null;
+  block_title?: string | null;
+  quality?: string | null;
+  warning?: string | null;
+}
+
 export type ChatStreamEvent =
-  | { type: "started"; messageId: string; runId: string }
+  | {
+      type: "started";
+      messageId: string;
+      userMessageId: string | null;
+      runId: string;
+      sources: ChatRetrievalSource[];
+    }
   | { type: "delta"; text: string }
   | { type: "reset"; reason: string }
   | {
@@ -367,7 +393,7 @@ export type ChatStreamEvent =
       usage: Record<string, unknown>;
       cached: boolean;
     }
-  | { type: "error"; code: string; detail: string };
+  | { type: "error"; code: string; detail: string; context: Record<string, unknown> };
 
 const chatPath = (projectId: string): string =>
   `/api/projects/${encodeURIComponent(projectId)}/chat`;
@@ -493,7 +519,13 @@ function parseFrame(raw: string): ChatStreamEvent | null {
   if (!event || !data) return null;
   const payload = JSON.parse(data) as Record<string, unknown>;
   if (event === "started") {
-    return { type: "started", messageId: String(payload.message_id), runId: String(payload.run_id) };
+    return {
+      type: "started",
+      messageId: String(payload.message_id),
+      userMessageId: payload.user_message_id ? String(payload.user_message_id) : null,
+      runId: String(payload.run_id),
+      sources: Array.isArray(payload.sources) ? (payload.sources as ChatRetrievalSource[]) : [],
+    };
   }
   if (event === "delta") return { type: "delta", text: String(payload.text ?? "") };
   if (event === "reset") return { type: "reset", reason: String(payload.reason ?? "") };
@@ -507,7 +539,12 @@ function parseFrame(raw: string): ChatStreamEvent | null {
     };
   }
   if (event === "error") {
-    return { type: "error", code: String(payload.code ?? "unknown"), detail: String(payload.detail ?? "") };
+    return {
+      type: "error",
+      code: String(payload.code ?? "unknown"),
+      detail: String(payload.detail ?? ""),
+      context: (payload.context as Record<string, unknown> | undefined) ?? {},
+    };
   }
   return null;
 }

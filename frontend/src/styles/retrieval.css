@@ -221,46 +221,98 @@
 
 .chat-citation {
   display: inline-flex;
+  align-items: center;
   padding: 0 var(--space-1);
   border: 0;
   border-radius: var(--radius-xs);
   background: var(--accent-wash);
   color: var(--accent);
   font: inherit;
-  font-size: .85em;
+  font-size: .8em;
+  font-weight: var(--weight-semibold);
+  line-height: 1.5;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+.chat-citation:hover,
+.chat-citation[data-state="open"] { background: var(--accent-wash-strong); }
+.chat-citation:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Окно цитаты: поверх ответа справа от ссылки; у края экрана Radix сдвигает его. */
+.popover-citation { width: 360px; padding: var(--space-3); }
+
+.chat-citation-preview { display: grid; gap: var(--space-2); }
+.chat-citation-preview header { display: flex; align-items: flex-start; gap: var(--space-2); }
+.chat-citation-preview header > div { display: grid; gap: 2px; min-width: 0; }
+.chat-citation-preview header strong { overflow-wrap: anywhere; }
+.chat-citation-preview small { color: var(--muted); font-size: var(--text-xs); }
+.chat-citation-preview .chat-citation-text {
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: var(--space-1);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+.chat-citation-preview > a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--accent);
+  font-size: var(--text-sm);
+}
+
+.chat-source-id {
+  flex: none;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1.6;
+}
+
+.chat-source-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--tone-warning);
+  font-size: var(--text-xs);
+}
+
+/* «Источники · N» под ответом. */
+.chat-sources {
+  margin-top: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line);
+  font-size: var(--text-sm);
+}
+.chat-sources summary {
+  width: fit-content;
+  color: var(--muted);
   font-weight: var(--weight-medium);
   cursor: pointer;
 }
-.chat-citation:hover { background: var(--accent-wash-strong); }
-
-.chat-citation-preview {
+.chat-sources summary:hover { color: var(--ink); }
+.chat-sources ol {
   display: grid;
   gap: var(--space-2);
-  margin-top: var(--space-3);
-  padding: var(--space-3);
-  border: 1px solid var(--accent-edge);
-  border-radius: var(--radius-md);
-  background: var(--paper);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
 }
-.chat-citation-preview header { display: flex; justify-content: space-between; gap: var(--space-3); }
-.chat-citation-preview header > div { display: grid; gap: var(--space-1); }
-.chat-citation-preview small { color: var(--muted); }
-.chat-citation-preview header button {
-  align-self: start;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
+.chat-sources li { display: flex; align-items: flex-start; gap: var(--space-2); }
+.chat-sources li:not(.is-cited) { opacity: .72; }
+.chat-source-name { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.chat-source-name a { color: var(--ink); overflow-wrap: anywhere; }
+.chat-source-name small { color: var(--muted); font-size: var(--text-xs); }
+.chat-source-used {
+  flex: none;
+  color: var(--tone-success);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
 }
-.chat-citation-preview p {
-  display: -webkit-box;
-  overflow: hidden;
-  margin: 0;
-  color: var(--ink-soft);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 6;
-}
-.chat-citation-preview > a { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--accent); }
 
 .retrieval-overview-grid article {
   display: grid;

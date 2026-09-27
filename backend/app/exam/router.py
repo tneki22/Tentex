@@ -47,7 +47,12 @@ from app.exam.schemas import (
 from app.models import AiRun, ChatMessage, ChatMessageRole, ChatSession, ChatStreamState, Grade
 from app.projects.errors import ProjectDomainError
 from app.retrieval.context import ContextAssembler
-from app.retrieval.schemas import RetrievalScope, RetrievalSearchWrite, SearchStrategy
+from app.retrieval.schemas import (
+    RetrievalHitRead,
+    RetrievalScope,
+    RetrievalSearchWrite,
+    SearchStrategy,
+)
 from app.retrieval.search import HybridRetriever
 
 SessionDependency = Annotated[Session, Depends(get_session)]
@@ -234,7 +239,9 @@ async def post_chat_message(
     session: SessionDependency,
     gateway: GatewayDependency,
 ) -> StreamingResponse:
-    chat, ctx = chat_service.start_turn(session, project_id, session_id, command.text)
+    chat, ctx, user_message_id = chat_service.start_turn(
+        session, project_id, session_id, command.text
+    )
     retrieval_sources: list[dict[str, object]] = []
     retrieval_notes: list[str] = []
     if chat.mode.value == "study":
@@ -252,24 +259,9 @@ async def post_chat_message(
         )
         assembled = ContextAssembler().assemble(session, result)
         retrieval_notes = result.degradation_reasons
-        for number, hit in enumerate(assembled.sources, start=1):
-            locator = hit.locator.typst_path or (
-                f"стр. {hit.locator.page_from}" if hit.locator.page_from else "без страницы"
-            )
-            retrieval_sources.append(
-                {
-                    "kind": "retrieval_source",
-                    "id": f"S{number}",
-                    "material": hit.locator.material_name,
-                    "material_id": str(hit.locator.material_id),
-                    "locator": locator,
-                    "page": hit.locator.page_from,
-                    "chunk_id": str(hit.locator.chunk_id),
-                    "text": hit.text,
-                    "included": True,
-                    "bytes": len(hit.text.encode()),
-                }
-            )
+        retrieval_sources = [
+            _source_entry(number, hit) for number, hit in enumerate(assembled.sources, start=1)
+        ]
     request = _reply_request(
         chat,
         ctx,
@@ -282,17 +274,59 @@ async def post_chat_message(
     # обычным ProjectDomainError, до того как клиент увидит поток.
     await gateway.preflight(request)
     return StreamingResponse(
-        _events(project_id, session_id, request),
+        _events(project_id, session_id, request, user_message_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _source_entry(number: int, hit: RetrievalHitRead) -> dict[str, object]:
+    """Источник ответа с полным локатором: страницы или путь и строки Typst."""
+    locator = hit.locator
+    if locator.typst_path:
+        label = locator.typst_path
+        if locator.line_from:
+            label += f", строки {locator.line_from}–{locator.line_to or locator.line_from}"
+    elif locator.page_from:
+        label = (
+            f"стр. {locator.page_from}–{locator.page_to}"
+            if locator.page_to and locator.page_to != locator.page_from
+            else f"стр. {locator.page_from}"
+        )
+    else:
+        label = "без страницы"
+    return {
+        "kind": "retrieval_source",
+        "id": f"S{number}",
+        "material": locator.material_name,
+        "material_id": str(locator.material_id),
+        "locator": label,
+        "page": locator.page_from,
+        "page_to": locator.page_to,
+        "typst_path": locator.typst_path,
+        "line_from": locator.line_from,
+        "line_to": locator.line_to,
+        "block_title": locator.block_title,
+        "chunk_id": str(locator.chunk_id),
+        "text": hit.text,
+        "quality": hit.quality.value if hit.quality else None,
+        "warning": hit.warning,
+        "included": True,
+        "bytes": len(hit.text.encode()),
+    }
+
+
+def _retrieval_manifest(request: AiTextRequest) -> list[dict[str, Any]]:
+    return [item for item in request.context_manifest if item.get("kind") == "retrieval_source"]
 
 
 def _frame(event: str, payload: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-async def _events(project_id: UUID, chat_id: UUID, request: AiTextRequest) -> AsyncIterator[str]:
+async def _events(
+    project_id: UUID, chat_id: UUID, request: AiTextRequest, user_message_id: UUID
+) -> AsyncIterator[str]:
     # Зависимость get_session закрывается до отправки тела StreamingResponse
     # (FastAPI ≥ 0.106), поэтому поток открывает свою сессию — тот же случай,
     # что воркер разбора, а не обход правила из tentex-api.
@@ -312,13 +346,7 @@ async def _events(project_id: UUID, chat_id: UUID, request: AiTextRequest) -> As
                 text="".join(chunks),
                 stream_state=stream_state,
                 ai_run_id=run_id,
-                context_snapshot={
-                    "retrieval_sources": [
-                        item
-                        for item in request.context_manifest
-                        if item.get("kind") == "retrieval_source"
-                    ]
-                },
+                context_snapshot={"retrieval_sources": _retrieval_manifest(request)},
             )
             saved = True
             return message
@@ -330,8 +358,16 @@ async def _events(project_id: UUID, chat_id: UUID, request: AiTextRequest) -> As
                 async for event in ModelGateway(db).stream(current_request):
                     if event.kind == "started":
                         run_id = event.run_id
+                        # Источники едут в первом кадре: ссылки [S3] работают уже
+                        # во время потока, а не только после `completed`.
                         yield _frame(
-                            "started", {"message_id": str(message_id), "run_id": str(run_id)}
+                            "started",
+                            {
+                                "message_id": str(message_id),
+                                "user_message_id": str(user_message_id),
+                                "run_id": str(run_id),
+                                "sources": _retrieval_manifest(request),
+                            },
                         )
                     elif event.kind == "delta":
                         chunks.append(event.delta)
@@ -382,7 +418,9 @@ async def _events(project_id: UUID, chat_id: UUID, request: AiTextRequest) -> As
                 _save(ChatStreamState.STOPPED)
             raise
         except ProjectDomainError as error:
-            yield _frame("error", {"code": error.code, "detail": error.detail})
+            yield _frame(
+                "error", {"code": error.code, "detail": error.detail, "context": error.context}
+            )
             if not saved:
                 _save(ChatStreamState.FAILED)
         finally:

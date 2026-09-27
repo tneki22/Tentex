@@ -316,16 +316,16 @@ def append_message(session: Session, chat: ChatSession, **fields: Any) -> ChatMe
 
 def start_turn(
     session: Session, project_id: UUID, chat_id: UUID, text: str
-) -> tuple[ChatSession, ChatContext]:
+) -> tuple[ChatSession, ChatContext, UUID]:
     """Validate, build the reply context and record the user's turn — one transaction."""
     with project_write_transaction(session, project_id):
         _require_exam_project(session, project_id)
         chat = _require_session(session, project_id, chat_id)
         ctx = build_context(session, chat, for_judge=False)
-        _append_message_row(
+        user_message = _append_message_row(
             session, chat, role=ChatMessageRole.USER, text=text, context_snapshot=ctx.snapshot
         )
-    return chat, ctx
+    return chat, ctx, user_message.id
 
 
 def finish_turn(

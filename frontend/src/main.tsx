@@ -13,6 +13,7 @@ import "./styles/base.css";
 import "./styles/ui-kit.css";
 import "./styles/chart.css";
 import "./styles/domain.css";
+import "./styles/markdown.css";
 import "./styles/cards.css";
 import "./styles/chat.css";
 import "./styles/library-viewer.css";

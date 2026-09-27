@@ -1,11 +1,11 @@
-import { useState } from "react";
-import { ExternalLink, X } from "lucide-react";
-import { Link } from "react-router";
+import { useMemo } from "react";
 import { QualityControl } from "../../preparation/QualityControl";
 import type { AttemptOutcome, ChatMessageRead } from "../../../api/chat";
 import { AnswerFormCard } from "./AnswerFormCard";
+import { citedIds } from "../../../components/domain/markdown/parse";
+import { ChatSourcesList } from "./ChatSources";
 import { Markdown } from "./Markdown";
-import { parsePayload } from "./payload";
+import { parsePayload, retrievalSources } from "./payload";
 import { ProgramDiffCard } from "./ProgramDiffCard";
 import { ToolRunCard } from "./ToolRunCard";
 import { VerdictCard } from "./VerdictCard";
@@ -45,16 +45,9 @@ export function TypedMessage({
   headingRef,
 }: TypedMessageProps) {
   const payload = parsePayload(message);
-  const sources = (message.context_snapshot.retrieval_sources ?? []) as Array<{
-    id: string;
-    material: string;
-    material_id: string;
-    locator: string;
-    page: number | null;
-    text: string;
-  }>;
-  const [activeCitation, setActiveCitation] = useState<string | null>(null);
-  const citation = sources.find((source) => source.id === activeCitation);
+  // Снимок не меняется при потоке (меняется только текст), поэтому окно цитаты
+  // и уже нарисованные блоки не пересобираются на каждый кусок ответа.
+  const sources = useMemo(() => retrievalSources(message), [message.context_snapshot]);
 
   if (payload.kind === "answer_form" && onAnswerAgain) {
     return (
@@ -125,24 +118,11 @@ export function TypedMessage({
   return (
     <div className={`chat-bubble is-${message.role}`}>
       {message.role === "examiner" || message.role === "assistant"
-        ? <Markdown
-          text={message.text}
-          citationIds={sources.map((source) => source.id)}
-          onCitation={setActiveCitation}
-        />
+        ? <>
+          <Markdown text={message.text} sources={sources} />
+          {!isStreaming && <ChatSourcesList sources={sources} cited={citedIds(message.text)} />}
+        </>
         : <p>{message.text}</p>}
-      {citation && (
-        <aside className="chat-citation-preview" aria-label={`Источник ${citation.id}`}>
-          <header>
-            <div><strong>{citation.material}</strong><small>{citation.locator}</small></div>
-            <button type="button" onClick={() => setActiveCitation(null)} aria-label="Закрыть источник"><X size={14} /></button>
-          </header>
-          <p>{citation.text}</p>
-          <Link to={`/library/${citation.material_id}${citation.page ? `?page=${citation.page}` : ""}`}>
-            Открыть в просмотрщике <ExternalLink size={13} />
-          </Link>
-        </aside>
-      )}
       {isStreaming && message.stream_state === "complete" && (
         <span className="chat-typing" aria-hidden="true" />
       )}

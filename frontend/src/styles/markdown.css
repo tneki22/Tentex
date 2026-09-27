@@ -1,0 +1,134 @@
+/* Общий Markdown: ответы чата и пояснения урока (components/domain/markdown). */
+
+.md {
+  overflow-wrap: break-word;
+  min-width: 0;
+}
+
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+
+.md p,
+.md ul,
+.md ol,
+.md blockquote,
+.md pre,
+.md hr,
+.md .md-table-scroll,
+.md .md-math-display {
+  margin: 0 0 var(--space-2);
+}
+
+.md .md-heading {
+  margin: var(--space-4) 0 var(--space-2);
+  color: var(--ink);
+  font-weight: var(--weight-bold);
+  line-height: 1.3;
+}
+
+.md .md-h1 { font-size: var(--text-lg); }
+.md .md-h2 { font-size: var(--text-md); }
+.md .md-h3,
+.md .md-h4 { font-size: var(--text-base); }
+.md .md-h5,
+.md .md-h6 { font-size: var(--text-sm); }
+.md .md-h6 { color: var(--ink-soft); }
+
+.md ul,
+.md ol {
+  padding-left: var(--space-5);
+}
+
+.md li { margin-bottom: var(--space-1); }
+.md li > p:last-child { margin-bottom: 0; }
+
+.md li > ul,
+.md li > ol {
+  margin: var(--space-1) 0 0;
+}
+
+.md blockquote {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--line-strong);
+  color: var(--ink-soft);
+}
+
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.md code {
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.md pre {
+  overflow-x: auto;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.md pre code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+/* Таблица и длинная формула прокручиваются внутри сообщения, а не растягивают ленту. */
+.md .md-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.md .md-table {
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.md .md-table th,
+.md .md-table td {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  text-align: start;
+  vertical-align: top;
+}
+
+.md .md-table th {
+  background: var(--surface-sunken);
+  font-weight: var(--weight-semibold);
+}
+
+.md .md-math-display {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 2px;
+}
+
+.md .md-math-display .katex-display { margin: 0; }
+.md .md-math-display.is-inline { margin: var(--space-1) 0; }
+
+.md .md-math-source {
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.md pre.md-math-source { font-size: var(--text-sm); }
+.md code.md-math-source.is-error { text-decoration: underline dotted var(--tone-danger); }
+
+.md .md-citations { white-space: nowrap; }
+.md .md-citations > * + * { margin-left: 2px; }
+
+.md .md-image-alt {
+  color: var(--muted);
+  font-style: italic;
+}

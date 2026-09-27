@@ -1,4 +1,5 @@
 import katex from "katex";
+import { splitMarkdownRow } from "../markdown/parse";
 import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
 import type {
   MaterialFragmentRead,
@@ -508,44 +509,6 @@ function renderInlineMath(text: string, terms: string[]): ReactNode {
   if (cursor === 0) return highlight(text, terms);
   if (cursor < text.length) parts.push(highlight(text.slice(cursor), terms));
   return parts;
-}
-
-const TABLE_MATH = /\$\$[\s\S]+?\$\$|\$(?=\S)(?:[^$\\\n]|\\.)+?(?<=\S)\$(?!\d)/g;
-
-/**
- * Ячейки строки Markdown-таблицы.
- *
- * Обратный слеш снимается только перед `|` (экранированная черта в ячейке):
- * прежде он снимался всегда, и `$A\wedge B$` приезжал в ячейку как
- * `$Awedge B$`. Черта внутри `$…$` — модуль или «такой, что», а не граница
- * ячейки: модели пишут `$|x|$` без экранирования. Формула узнаётся по правилу
- * Pandoc (после открывающего `$` и перед закрывающим — не пробел, за
- * закрывающим — не цифра), чтобы «Цена, $» и «$5 | $10» остались текстом.
- */
-export function splitMarkdownRow(row: string): string[] {
-  const cells: string[] = [];
-  let cell = "";
-  const source = row.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
-  const math: [number, number][] = [];
-  for (const match of source.matchAll(TABLE_MATH)) {
-    math.push([match.index, match.index + match[0].length]);
-  }
-  const inMath = (position: number) =>
-    math.some(([start, end]) => position > start && position < end);
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    if (character === "\\" && source[index + 1] === "|") {
-      cell += "|";
-      index += 1;
-    } else if (character === "|" && !inMath(index)) {
-      cells.push(cell.trim());
-      cell = "";
-    } else {
-      cell += character;
-    }
-  }
-  cells.push(cell.trim());
-  return cells;
 }
 
 export function MarkdownTable({ markdown }: { markdown: string }) {

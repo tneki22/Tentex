@@ -771,11 +771,6 @@
   background: var(--surface-hover);
 }
 
-.lesson-math {
-  overflow-x: auto;
-  margin: var(--space-2) 0;
-}
-
 .lesson-source-head .lesson-source-topic {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
   color: var(--accent);

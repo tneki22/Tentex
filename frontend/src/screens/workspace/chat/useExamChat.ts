@@ -214,6 +214,19 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
     });
   }
 
+  /** Оптимистичная запись получает настоящий ID из кадра `started`. */
+  function renameMessage(from: string, to: string) {
+    if (from === to) return;
+    setMessagesById((current) => {
+      const existing = current[from];
+      if (!existing) return current;
+      const next = { ...current, [to]: { ...existing, id: to } };
+      delete next[from];
+      return next;
+    });
+    setMessageOrder((current) => current.map((id) => (id === from ? to : id)));
+  }
+
   function patchMessage(id: string, patch: Partial<ChatMessageRead>) {
     setMessagesById((current) => {
       const existing = current[id];
@@ -285,6 +298,7 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
       )) {
         if (event.type === "started") {
           examinerId = event.messageId;
+          if (event.userMessageId) renameMessage(userId, event.userMessageId);
           setPreparing(false);
           setStreamingMessageId(examinerId);
           upsertMessage({
@@ -296,7 +310,8 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
             stream_state: "complete",
             payload_kind: "none",
             payload: {},
-            context_snapshot: {},
+            // Источники с первого кадра: ссылки [S3] открываются, пока ответ ещё пишется.
+            context_snapshot: { retrieval_sources: event.sources },
             skill: null,
             ai_run_id: event.runId,
             attempt_id: null,
