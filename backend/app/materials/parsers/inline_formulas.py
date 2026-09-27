@@ -241,7 +241,9 @@ def formulas_in_tables(
                     pending.remove(row)
                     grew = True
         if inner:
-            tables[index] = (box, inner)
+            # Вырез целиком накрывает и сами формулы: шапка из формул стоит
+            # над рамкой, которую разметка нашла по строкам с текстом.
+            tables[index] = (_union([box, *(elements[item].bbox for item in inner)]), inner)
     return tables
 
 

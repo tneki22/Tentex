@@ -510,17 +510,34 @@ function renderInlineMath(text: string, terms: string[]): ReactNode {
   return parts;
 }
 
-function splitMarkdownRow(row: string): string[] {
+const TABLE_MATH = /\$\$[\s\S]+?\$\$|\$(?=\S)(?:[^$\\\n]|\\.)+?(?<=\S)\$(?!\d)/g;
+
+/**
+ * Ячейки строки Markdown-таблицы.
+ *
+ * Обратный слеш снимается только перед `|` (экранированная черта в ячейке):
+ * прежде он снимался всегда, и `$A\wedge B$` приезжал в ячейку как
+ * `$Awedge B$`. Черта внутри `$…$` — модуль или «такой, что», а не граница
+ * ячейки: модели пишут `$|x|$` без экранирования. Формула узнаётся по правилу
+ * Pandoc (после открывающего `$` и перед закрывающим — не пробел, за
+ * закрывающим — не цифра), чтобы «Цена, $» и «$5 | $10» остались текстом.
+ */
+export function splitMarkdownRow(row: string): string[] {
   const cells: string[] = [];
   let cell = "";
-  let escaped = false;
-  for (const character of row.trim().replace(/^\|/, "").replace(/\|$/, "")) {
-    if (escaped) {
-      cell += character;
-      escaped = false;
-    } else if (character === "\\") {
-      escaped = true;
-    } else if (character === "|") {
+  const source = row.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
+  const math: [number, number][] = [];
+  for (const match of source.matchAll(TABLE_MATH)) {
+    math.push([match.index, match.index + match[0].length]);
+  }
+  const inMath = (position: number) =>
+    math.some(([start, end]) => position > start && position < end);
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\\" && source[index + 1] === "|") {
+      cell += "|";
+      index += 1;
+    } else if (character === "|" && !inMath(index)) {
       cells.push(cell.trim());
       cell = "";
     } else {
@@ -548,11 +565,17 @@ export function MarkdownTable({ markdown }: { markdown: string }) {
     <div className="structured-table-scroll" role="region" aria-label="Таблица из документа" tabIndex={0}>
       <table className="structured-table">
         <thead>
-          <tr>{head.map((cell, index) => <th scope="col" key={`${index}-${cell}`}>{cell}</th>)}</tr>
+          <tr>
+            {head.map((cell, index) => (
+              <th scope="col" key={`${index}-${cell}`}>{renderInlineMath(cell, [])}</th>
+            ))}
+          </tr>
         </thead>
         <tbody>
           {body.map((row, rowIndex) => (
-            <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>
+            <tr key={rowIndex}>
+              {row.map((cell, cellIndex) => <td key={cellIndex}>{renderInlineMath(cell, [])}</td>)}
+            </tr>
           ))}
         </tbody>
       </table>

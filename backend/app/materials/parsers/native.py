@@ -26,7 +26,15 @@ from app.materials.image_meta import (
     pixel_size,
     with_description,
 )
-from app.materials.parsers import inline_formulas, paddle_fast, raster, reading_order
+from app.materials.parsers import (
+    docx_content,
+    formula_zones,
+    inline_formulas,
+    paddle_fast,
+    page_geometry,
+    raster,
+    reading_order,
+)
 from app.materials.parsers.audio import parse_audio
 from app.materials.parsers.base import (
     IMAGE_PLACEHOLDER,
@@ -158,7 +166,9 @@ def _block_lines(block: dict) -> list[_Line]:
         spans = [span for span in line.get("spans", []) if span.get("text", "").strip()]
         if not spans:
             continue
-        text = "".join(str(span["text"]) for span in spans).strip()
+        text = "".join(
+            formula_zones.readable(str(span["text"]), str(span.get("font", ""))) for span in spans
+        ).strip()
         if not text:
             continue
         x0, top, x1, bottom = line["bbox"]
@@ -691,10 +701,13 @@ def _docx_list_level(paragraph: Paragraph) -> int | None:
 
 
 def _docx_element(
-    paragraph: Paragraph, bbox: tuple[float, float, float, float], marker: str
+    paragraph: Paragraph, bbox: tuple[float, float, float, float], marker: str, body: str
 ) -> ParsedElement:
+    """Элемент абзаца DOCX; `body` — текст с формулами (`docx_content`)."""
     style = paragraph.style.name.lower() if paragraph.style else ""
-    text = f"{marker} {paragraph.text.strip()}".strip() if marker else paragraph.text.strip()
+    if not marker and docx_content.display_only(body):
+        return ParsedElement("formula", body, bbox)
+    text = f"{marker} {body}".strip() if marker else body
     list_level = _docx_list_level(paragraph)
     if marker or "list" in style or BULLET_RE.match(text):
         return ParsedElement("list", text, bbox, list_level or 1)
@@ -770,40 +783,83 @@ def _docx_images_pass(
     return replace(parsed, elements=tuple(elements))
 
 
+def _docx_blocks(document: Document) -> Iterator[Paragraph | object]:
+    """Абзацы и таблицы тела документа в их порядке (`document.paragraphs`
+    таблиц не видит). Таблица отдаётся своим XML-узлом `w:tbl`."""
+    body = document.element.body
+    pending = list(body.iterchildren())
+    while pending:
+        node = pending.pop(0)
+        if node.tag == f"{W_NS}p":
+            yield Paragraph(node, document._body)
+        elif node.tag == f"{W_NS}tbl":
+            yield node
+        elif node.tag == f"{W_NS}sdt":
+            content = node.find(f"{W_NS}sdtContent")
+            if content is not None:
+                pending[:0] = list(content.iterchildren())
+
+
+def _docx_image_elements(
+    document: Document,
+    paragraphs: Sequence[Paragraph],
+    index: int,
+    owner: str,
+    bbox: tuple[float, float, float, float],
+) -> list[ParsedElement]:
+    elements: list[ParsedElement] = []
+    for offset, paragraph in enumerate(paragraphs):
+        # У абзаца имя выреза прежнее (`docx<абзац>-<n>`), у ячеек таблицы — своё.
+        number = index if len(paragraphs) == 1 else index * 1000 + offset
+        for name, data in _docx_images(document, paragraph, number):
+            elements.append(
+                ParsedElement(
+                    "image",
+                    IMAGE_PLACEHOLDER,
+                    bbox,
+                    None,
+                    asset_path=store_material_asset(owner, name, data),
+                    image=ImageMeta(
+                        detection="docx",
+                        crop_hash=crop_hash(data),
+                        pixel_size=pixel_size(data),
+                    ),
+                )
+            )
+    return elements
+
+
 def _docx_page(path: Path, owner: str = "") -> ParsedPage:
+    """DOCX целиком одной страницей: абзацы, формулы Word, таблицы и картинки."""
     document = Document(path)
     numbering = _docx_numbering(document)
-    paragraphs = [
-        paragraph
-        for paragraph in document.paragraphs
-        if paragraph.text.strip() or (owner and _docx_images(document, paragraph, 0))
-    ]
-    total = max(1, len(paragraphs))
+    blocks: list[tuple[Paragraph | object, str]] = []
+    for block in _docx_blocks(document):
+        if isinstance(block, Paragraph):
+            text = docx_content.paragraph_text(block._p)
+            if text or (owner and _docx_images(document, block, 0)):
+                blocks.append((block, text))
+        else:
+            blocks.append((block, docx_content.table_markdown(block)))
+    total = max(1, len(blocks))
     counters: dict[int, dict[int, int]] = {}
 
     elements: list[ParsedElement] = []
-    for index, paragraph in enumerate(paragraphs):
+    for index, (block, text) in enumerate(blocks):
         bbox = (0.0, index / total, 1.0, (index + 1) / total)
+        if not isinstance(block, Paragraph):
+            if text:
+                elements.append(ParsedElement("table", text, bbox))
+            if owner:
+                cells = [Paragraph(node, document._body) for node in block.iter(f"{W_NS}p")]
+                elements.extend(_docx_image_elements(document, cells, index, owner, bbox))
+            continue
         if owner:
-            for name, data in _docx_images(document, paragraph, index):
-                elements.append(
-                    ParsedElement(
-                        "image",
-                        IMAGE_PLACEHOLDER,
-                        bbox,
-                        None,
-                        asset_path=store_material_asset(owner, name, data),
-                        image=ImageMeta(
-                            detection="docx",
-                            crop_hash=crop_hash(data),
-                            pixel_size=pixel_size(data),
-                        ),
-                    )
-                )
-        if not paragraph.text.strip():
+            elements.extend(_docx_image_elements(document, [block], index, owner, bbox))
+        if not text:
             continue
         marker = ""
-        reference = _docx_num_ref(paragraph)
+        reference = _docx_num_ref(block)
         spec = numbering.get(reference) if reference is not None else None
         if reference is not None and spec is not None:
             num_id, ilvl = reference
@@ -812,7 +868,7 @@ def _docx_page(path: Path, owner: str = "") -> ParsedPage:
             for deeper in [key for key in level_counts if key > ilvl]:
                 del level_counts[deeper]
             marker = _list_marker(spec, ilvl, level_counts)
-        elements.append(_docx_element(paragraph, bbox, marker))
+        elements.append(_docx_element(block, bbox, marker, text))
 
     plain = "\n".join(element.text for element in elements if element.kind != "image")
     return ParsedPage(1, 1, 1, _markdown(elements), plain, "native", tuple(elements))
@@ -867,7 +923,12 @@ def _text_layer_page(
     params: OcrRuntimeParams,
     repeated_xrefs: frozenset[int] = frozenset(),
 ) -> ParsedPage:
-    """Страница с готовым текстовым слоем: разметка плюс картинки со страницы."""
+    """Страница с готовым текстовым слоем: разметка плюс картинки со страницы.
+
+    Формулы, которых слой не передаёт текстом (`formula_zones`), приходят
+    элементами-вырезами: отдельно стоящие вычёркиваются из абзацев разметки,
+    строчные потом встают в свою фразу.
+    """
     legacy = _native_pdf_page(
         page,
         page_index + 1,
@@ -876,8 +937,11 @@ def _text_layer_page(
         params=params,
         repeated_xrefs=repeated_xrefs,
     )
+    zones = _formula_zones(page)
     try:
-        parsed = parse_layout_page(document, page_index, owner)
+        parsed = parse_layout_page(
+            document, page_index, owner, tuple(zone.box for zone in zones if zone.standalone)
+        )
     except (ValueError, KeyError, RuntimeError) as error:
         log.warning(
             "разметка страницы %s не удалась, откат на текстовый слой: %s",
@@ -905,7 +969,13 @@ def _text_layer_page(
         if (element.kind == "image" or (element.kind == "formula" and element.asset_path))
         and not any(_bbox_overlap(element.bbox, box) >= 0.6 for box in layout_pictures)
     )
+    found = _zone_elements(page, page_index, owner, zones, layout_pictures)
+    images = (*images, *found)
     parsed = _inherit_xref_repeats(parsed, legacy.elements)
+    if found:
+        parsed = replace(
+            parsed, diagnostics=(*parsed.diagnostics, f"formula_zones:{len(found)}")
+        )
     if not images:
         return parsed
     elements = _merge_native_and_images(parsed.elements, images)
@@ -917,6 +987,44 @@ def _text_layer_page(
         elements=elements,
         confidence=confidence,
     )
+
+
+def _formula_zones(page: fitz.Page) -> list[formula_zones.FormulaZone]:
+    try:
+        return formula_zones.find_zones(page)
+    except (RuntimeError, ValueError) as error:
+        log.warning("зоны формул страницы %s не найдены: %s", page.number + 1, error)
+        return []
+
+
+def _zone_elements(
+    page: fitz.Page,
+    page_index: int,
+    owner: str,
+    zones: Sequence[formula_zones.FormulaZone],
+    taken: Sequence[tuple[float, float, float, float]],
+) -> tuple[ParsedElement, ...]:
+    """Зоны формул — элементы-вырезы, как формулы-картинки высотой в строку.
+
+    Дальше их путь общий: «Облако» читает вырезы пачкой, строчные встают в
+    свою фразу, формулы в ячейках уводят таблицу на чтение целиком; «Быстро»
+    показывает вырез. Зона внутри формулы или рисунка разметчика — уже там.
+    """
+    elements: list[ParsedElement] = []
+    for index, zone in enumerate(zones):
+        if any(_bbox_overlap(zone.box, box) >= 0.6 for box in taken):
+            continue
+        asset_path = (
+            store_material_asset(
+                owner, f"p{page_index + 1}-zone{index}.png", raster.region_image(page, zone.box)
+            )
+            if owner
+            else None
+        )
+        elements.append(
+            ParsedElement("formula", IMAGE_PLACEHOLDER, zone.box, asset_path=asset_path)
+        )
+    return tuple(elements)
 
 
 def _render_page(
@@ -943,20 +1051,31 @@ def _scanned_page(
     params: OcrRuntimeParams,
     recognizer: PageRecognizer | None,
     rendered: tuple[bytes, float] | None = None,
+    *,
+    layer: bool = False,
 ) -> ParsedPage:
     """Страница целиком во внешнюю модель или в локальный OCR.
 
     :param rendered: растр, уже снятый для чтения наперёд, — второй раз не рендерим.
+    :param layer: у страницы пригодный текстовый слой. Тогда рамки модели
+        приводятся к нему (`page_geometry`), и пропуски ищутся по словам слоя,
+        а не по чернилам вокруг неточных рамок.
     """
     image, dpi = rendered or _render_page(page, params, for_model=recognizer is not None)
     if recognizer is not None:
         parsed = recognizer.recognize_page(
             image, page_index + 1, page.rect.width, page.rect.height
         )
+        if layer:
+            geometry = page_geometry.page_geometry(page, _formula_zones(page))
+            parsed = _rebuilt(page_geometry.snap_to_layer(parsed, geometry))
+        else:
+            parsed = page_geometry.merge_split_images(parsed)
         parsed = _attach_region_assets(
             parsed, owner, lambda box: raster.region_image(page, box), "cloud_page"
         )
-        parsed = _missed_regions(parsed, image, owner)
+        if not layer:
+            parsed = _missed_regions(parsed, image, owner)
         parsed = _describe_page_images(finalize_images(parsed), recognizer, params)
         return replace(parsed, diagnostics=(*parsed.diagnostics, f"render_dpi:{dpi:.0f}"))
     with NamedTemporaryFile(suffix=".png", delete=False) as temporary:
@@ -976,6 +1095,15 @@ def _scanned_page(
         temporary_path.unlink(missing_ok=True)
     parsed = finalize_images(_ocr_unread_regions(parsed, params))
     return replace(parsed, diagnostics=(*parsed.diagnostics, f"render_dpi:{dpi:.0f}"))
+
+
+def _rebuilt(parsed: ParsedPage) -> ParsedPage:
+    """Разметка и простой текст страницы после добавления элементов."""
+    return replace(
+        parsed,
+        markdown=_markdown(list(parsed.elements)),
+        plain_text="\n".join(item.text for item in parsed.elements if item.kind != "image"),
+    )
 
 
 def _attach_region_assets(
@@ -1005,7 +1133,11 @@ def _attach_region_assets(
         if element.kind == "image" and element.image is None:
             # Фраза модели про картинку — подпись неизвестного качества, не описание.
             meta = ImageMeta(
-                processing="legacy" if element.text.strip() else "unprocessed",
+                processing=(
+                    "legacy"
+                    if element.text.strip() and element.text != IMAGE_PLACEHOLDER
+                    else "unprocessed"
+                ),
                 review="needs_review",
                 reasons=("page_model_caption",),
                 detection=detection,
@@ -1053,7 +1185,10 @@ def _missed_regions(parsed: ParsedPage, image: bytes, owner: str) -> ParsedPage:
             page_image = opened.convert("RGB")
     except (OSError, ValueError):
         return parsed
-    regions = raster.unread_regions(page_image, [element.bbox for element in parsed.elements])
+    regions = page_geometry.unread_candidates(
+        raster.unread_regions(page_image, [element.bbox for element in parsed.elements]),
+        parsed.elements,
+    )
     if not regions:
         return parsed
     added: list[ParsedElement] = []
@@ -1351,8 +1486,12 @@ def _recognized_regions(
             targets.append((index, replace(element, bbox=tables[index][0])))
         elif index in shaped:
             targets.append((index, replace(element, kind="formula")))
-        elif (element.kind == "formula" and index not in in_tables) or (
-            text_only and index in sendable
+        elif (
+            (element.kind == "formula" and index not in in_tables)
+            or (text_only and index in sendable)
+            # Таблица, из которой слой не достал ни одной ячейки (формулы или
+            # картинки в каждой), читается вырезом, иначе от неё только рамка.
+            or (element.kind == "table" and element.text == IMAGE_PLACEHOLDER)
         ):
             targets.append((index, element))
     if targets:
@@ -1383,11 +1522,7 @@ def _display_formula(text: str) -> str:
 
 
 def _page_words(page: fitz.Page) -> list[inline_formulas.Word]:
-    width, height = page.rect.width, page.rect.height
-    return [
-        inline_formulas.Word((x0 / width, y0 / height, x1 / width, y1 / height), word)
-        for x0, y0, x1, y1, word, *_ in page.get_text("words")
-    ]
+    return [inline_formulas.Word(box, word) for box, word in formula_zones.page_words(page)]
 
 
 def _apply_region_answers(
@@ -1595,7 +1730,8 @@ def _pdf_pages(
             if page_index not in rendered:
                 _prefetch_pages(document, upcoming, routes, rendered, recognizer, params)
             parsed = _scanned_page(page, page_index, owner, params, recognizer,
-                                   rendered.pop(page_index, None))
+                                   rendered.pop(page_index, None),
+                                   layer=diagnosis.route == "text")
             fallback = "cloud_page" if whole_page or route == "cloud_page" else None
             yield _with_route(parsed, diagnosis, fallback)
             continue

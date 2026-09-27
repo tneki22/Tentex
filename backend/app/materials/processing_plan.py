@@ -24,7 +24,13 @@ from sqlalchemy.orm import Session
 from app.ai.job_budget import budget_state
 from app.ai.roles import get_role_spec
 from app.ai.schemas import AiModelSelection
-from app.materials.parsers.cloud_vlm import IMAGE_PROMPT_VERSION, IMAGE_ROLE, ROLE
+from app.materials.parsers.cloud_vlm import (
+    IMAGE_PROMPT_VERSION,
+    IMAGE_ROLE,
+    MAX_REGIONS_PER_REQUEST,
+    ROLE,
+)
+from app.materials.parsers.formula_zones import find_zones
 from app.materials.parsers.native import MIN_IMAGE_SIDE, repeated_image_xrefs
 from app.materials.parsers.text_layer import diagnose
 from app.materials.schemas import ProcessingEstimateRead, ProcessingStart
@@ -73,6 +79,9 @@ class _Shape:
     images: int
     page_tokens: int
     sampled: bool
+    # Пачки вырезов формул и таблиц: на странице методички из Word их бывает
+    # три-четыре, а не одна. `None` — по пачке на текстовую страницу.
+    region_calls: int | None = None
 
 
 def page_model(session: Session) -> AiModelSelection | None:
@@ -167,7 +176,7 @@ def _pdf_shape(path: Path, pages: list[int], params: OcrRuntimeParams) -> _Shape
     sample = pages[::step]
     with fitz.open(path) as document:
         repeated = repeated_image_xrefs(document)
-        whole = text = suspicious = images = 0
+        whole = text = suspicious = images = batches = 0
         page_tokens = 0
         for number in sample:
             page = document[number - 1]
@@ -190,6 +199,8 @@ def _pdf_shape(path: Path, pages: list[int], params: OcrRuntimeParams) -> _Shape
                 whole += 1
                 continue
             text += 1
+            zones = find_zones(page)
+            batches += max(1, math.ceil(len(zones) / MAX_REGIONS_PER_REQUEST))
             images += sum(
                 1
                 for info in page.get_image_info(xrefs=True)
@@ -205,6 +216,7 @@ def _pdf_shape(path: Path, pages: list[int], params: OcrRuntimeParams) -> _Shape
         images=round(images * factor),
         page_tokens=page_tokens or 20 * IMAGE_TILE_TOKENS,
         sampled=step > 1,
+        region_calls=round(batches * factor),
     )
 
 
@@ -285,7 +297,7 @@ def estimate(
         if describe
         else 0
     )
-    region_calls = shape.text_pages
+    region_calls = shape.text_pages if shape.region_calls is None else shape.region_calls
     requests_upper = shape.whole_pages + region_calls + image_calls
     page_price = _price(session, pages_model)
     image_price = _price(session, images_model) if describe else page_price
