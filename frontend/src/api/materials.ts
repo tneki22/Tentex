@@ -87,6 +87,8 @@ export interface MaterialRead {
   error: string | null;
   task: ProcessingTaskRead | null;
   last_parse: MaterialParseRead | null;
+  /** Сколько тем текущей программы опирается на источник. */
+  used_by_topics: number;
   attached_at: string;
   created_at: string;
   updated_at: string;
@@ -616,6 +618,13 @@ export const updateMaterial = (
   method: "PATCH",
   body: JSON.stringify(command),
 });
+
+/** Порядок строк сверху вниз становится приоритетом источников. */
+export const reorderMaterials = (projectId: string, materialIds: string[]): Promise<MaterialRead[]> =>
+  request(`${projectMaterialsPath(projectId)}/order`, {
+    method: "PUT",
+    body: JSON.stringify({ material_ids: materialIds }),
+  });
 
 export const detachMaterial = (projectId: string, materialId: string): Promise<void> =>
   request(materialPath(projectId, materialId), { method: "DELETE" });

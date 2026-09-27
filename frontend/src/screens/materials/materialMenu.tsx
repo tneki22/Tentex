@@ -1,10 +1,7 @@
-import { FileText, LibraryBig, ListOrdered, Pencil, RefreshCw, ScanSearch, Trash2, UserRoundCog } from "lucide-react";
+import { ArrowDown, ArrowUp, FileText, LibraryBig, Pencil, RefreshCw, ScanSearch, Trash2, UserRoundCog } from "lucide-react";
 import type { MaterialRead, SourceRole } from "../../api/materials";
 import type { ContextMenuItem } from "../../components/ui";
 import { SOURCE_ROLE_OPTIONS } from "./materialLabels";
-
-/** Приоритеты, которые предлагает меню: дальше пятого порядок уже не различают. */
-const PRIORITY_CHOICES = [0, 1, 2, 3, 4, 5];
 
 export interface MaterialMenuActions {
   onOpen: (material: MaterialRead) => void;
@@ -13,7 +10,8 @@ export interface MaterialMenuActions {
   onResearch?: (material: MaterialRead) => void;
   onProcess: (material: MaterialRead) => void;
   onRole: (material: MaterialRead, role: SourceRole) => void;
-  onPriority: (material: MaterialRead, priority: number) => void;
+  /** Сдвиг в списке: −1 — выше, +1 — ниже. Порядок строк и есть приоритет. */
+  onMove: (material: MaterialRead, offset: -1 | 1) => void;
   onRename: (material: MaterialRead) => void;
   onRemove: (material: MaterialRead) => void;
 }
@@ -24,11 +22,12 @@ function processLabel(material: MaterialRead): string {
 }
 
 /** Меню строки материала по правой кнопке — одно для таблицы и каталога. */
-export function materialMenuItems(material: MaterialRead, actions: MaterialMenuActions): ContextMenuItem[] {
+export function materialMenuItems(
+  material: MaterialRead,
+  place: { index: number; total: number },
+  actions: MaterialMenuActions,
+): ContextMenuItem[] {
   const running = material.status === "queued" || material.status === "processing";
-  const priorities = PRIORITY_CHOICES.includes(material.priority)
-    ? PRIORITY_CHOICES
-    : [...PRIORITY_CHOICES, material.priority];
   const items: ContextMenuItem[] = [
     { label: "Открыть", icon: <FileText size={15} />, onSelect: () => actions.onOpen(material) },
     { label: "Открыть в Библиотеке", icon: <LibraryBig size={15} />, onSelect: () => actions.onOpenLibrary(material) },
@@ -62,16 +61,8 @@ export function materialMenuItems(material: MaterialRead, actions: MaterialMenuA
     });
   }
   items.push(
-    {
-      label: "Приоритет",
-      icon: <ListOrdered size={15} />,
-      items: priorities.map((priority) => ({
-        label: priority === 0 ? "0 — раньше остальных" : String(priority),
-        checked: material.priority === priority,
-        disabled: material.priority === priority,
-        onSelect: () => actions.onPriority(material, priority),
-      })),
-    },
+    { label: "Поднять выше", icon: <ArrowUp size={15} />, disabled: place.index <= 0, onSelect: () => actions.onMove(material, -1) },
+    { label: "Опустить ниже", icon: <ArrowDown size={15} />, disabled: place.index >= place.total - 1, onSelect: () => actions.onMove(material, 1) },
     { label: "Переименовать в проекте", icon: <Pencil size={15} />, onSelect: () => actions.onRename(material) },
     { label: "Убрать из проекта", icon: <Trash2 size={15} />, destructive: true, onSelect: () => actions.onRemove(material) },
   );

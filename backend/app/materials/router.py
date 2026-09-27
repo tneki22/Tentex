@@ -41,6 +41,7 @@ from app.materials.schemas import (
     LibraryTextMaterialCreate,
     MaterialAnswerImportResult,
     MaterialDeletePreview,
+    MaterialOrderWrite,
     MaterialPurpose,
     MaterialRead,
     MaterialRevisionRead,
@@ -549,6 +550,13 @@ def import_composite_exam_draft(
     session: SessionDependency,
 ) -> ExamCompositeDraftImportResult:
     return service.import_composite_exam_draft(session, project_id, command)
+
+
+@router.put("/projects/{project_id}/materials/order", response_model=list[MaterialRead])
+def reorder_project_materials(
+    project_id: UUID, command: MaterialOrderWrite, session: SessionDependency
+) -> list[MaterialRead]:
+    return service.reorder_materials(session, project_id, command)
 
 
 @router.get("/projects/{project_id}/materials/{material_id}", response_model=MaterialRead)

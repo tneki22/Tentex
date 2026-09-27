@@ -9,6 +9,7 @@ import {
   FileImage,
   FileText,
   Globe,
+  GripVertical,
   Files,
   Info,
   Link2,
@@ -93,7 +94,7 @@ import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTr
 import { AiCleanupPanel } from "./AiCleanupPanel";
 import { MaterialFileTab } from "./materials/MaterialFileTab";
 import { materialMenuItems, type MaterialMenuActions } from "./materials/materialMenu";
-import { materialRoleText, pagesSummary, parseModeShort } from "./materials/materialLabels";
+import { materialRoleText, pagesSummary, parseModeShort, progressSuffix, topicsLabel } from "./materials/materialLabels";
 import { ProjectFileUploadStatus } from "./materials/ProjectFileUploadStatus";
 import { MaterialProcessingPanels } from "./materials/MaterialProcessingPanels";
 import { MaterialsWebSearch, type MaterialsWebSearchHandle } from "./materials/MaterialsWebSearch";
@@ -170,7 +171,7 @@ function MaterialCatalog({
     <ContextMenu
       key={material.id}
       label={`Действия с «${material.display_name}»`}
-      items={materialMenuItems(material, menu)}
+      items={materialMenuItems(material, { index: materials.indexOf(material), total: materials.length }, menu)}
       trigger={<div
       className={`materials-catalog-item ${selectedId === material.id ? "is-active" : ""}`.trim()}
     >
@@ -260,10 +261,13 @@ function MaterialOverview({
   onResearch,
   webSearch,
   menu,
+  onReorder,
 }: {
   materials: MaterialRead[];
   textbook: boolean;
   menu: MaterialMenuActions;
+  /** Новый порядок строк сверху вниз — он и есть приоритет источников. */
+  onReorder: (materialIds: string[]) => void;
   onOpen: (id: string) => void;
   onAdd: () => void;
   onChooseLibrary: () => void;
@@ -273,6 +277,20 @@ function MaterialOverview({
   /** Блок «Поиск в интернете» под списком материалов. */
   webSearch?: ReactNode;
 }) {
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dropId, setDropId] = useState<string | null>(null);
+
+  function drop(targetId: string) {
+    const from = materials.findIndex((item) => item.id === draggedId);
+    const to = materials.findIndex((item) => item.id === targetId);
+    setDraggedId(null);
+    setDropId(null);
+    if (from < 0 || to < 0 || from === to) return;
+    const ids = materials.map((item) => item.id);
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    onReorder(ids);
+  }
+
   return (
     <div className="materials-document-stage is-standalone">
       <div className="materials-document-scroll">
@@ -303,9 +321,9 @@ function MaterialOverview({
           ) : (
             <div className="materials-overview-table" role="table" aria-label="Материалы проекта">
               <div className="materials-overview-row is-head" role="row">
-                <span>Материал</span><span>Роль</span><span>Страницы</span><span>Разбор</span><span>Состояние</span><span>Действие</span>
+                <span>Материал</span><span>Роль</span><span>Страницы</span><span>Разбор</span><span>Используется</span><span>Состояние</span><span>Действие</span>
               </div>
-              {materials.map((material) => {
+              {materials.map((material, index) => {
                 const pages = pagesSummary(material);
                 const parse = parseModeShort(material);
                 const lowPages = material.parser_mode !== "fast" ? material.ocr_low_page_count : 0;
@@ -313,9 +331,39 @@ function MaterialOverview({
                   <ContextMenu
                     key={material.id}
                     label={`Действия с «${material.display_name}»`}
-                    items={materialMenuItems(material, menu)}
-                    trigger={<div className="materials-overview-row" role="row">
-                      <button className="materials-overview-link" type="button" onClick={() => onOpen(material.id)}><strong>{material.display_name}</strong></button>
+                    items={materialMenuItems(material, { index, total: materials.length }, menu)}
+                    trigger={<div
+                      className={[
+                        "materials-overview-row",
+                        draggedId === material.id ? "is-dragging" : "",
+                        dropId === material.id && draggedId && draggedId !== material.id
+                          ? materials.findIndex((item) => item.id === draggedId) < index ? "is-drop-after" : "is-drop-before"
+                          : "",
+                      ].filter(Boolean).join(" ")}
+                      role="row"
+                      onDragOver={(event) => {
+                        if (!draggedId) return;
+                        event.preventDefault();
+                        if (dropId !== material.id) setDropId(material.id);
+                      }}
+                      onDrop={(event) => { event.preventDefault(); drop(material.id); }}
+                    >
+                      <span className="materials-overview-name">
+                        <Tooltip label="Перетащите, чтобы изменить порядок">
+                          <span
+                            className="materials-drag-handle"
+                            draggable
+                            aria-hidden="true"
+                            onDragStart={(event) => {
+                              event.dataTransfer.effectAllowed = "move";
+                              event.dataTransfer.setData("text/plain", material.id);
+                              setDraggedId(material.id);
+                            }}
+                            onDragEnd={() => { setDraggedId(null); setDropId(null); }}
+                          ><GripVertical size={14} /></span>
+                        </Tooltip>
+                        <button className="materials-overview-link" type="button" onClick={() => onOpen(material.id)}><strong>{material.display_name}</strong></button>
+                      </span>
                       <span>{materialRoleText(material)}</span>
                       <span className="materials-overview-cell">
                         <span>{pages.value}</span>
@@ -325,7 +373,8 @@ function MaterialOverview({
                         <span title={parse?.model ?? undefined}>{parse ? parse.model ? `${parse.mode} · ${parse.model}` : parse.mode : "—"}</span>
                         {lowPages > 0 && <small className="is-warning">проверить: {lowPages} стр.</small>}
                       </span>
-                      <StatusBadge tone={STATUS[material.status].tone}>{STATUS[material.status].label}</StatusBadge>
+                      <span>{topicsLabel(material.used_by_topics)}</span>
+                      <StatusBadge tone={STATUS[material.status].tone}>{STATUS[material.status].label}{progressSuffix(material)}</StatusBadge>
                       <span>{textbook && material.status === "ready" ? <Button variant="ghost" onClick={() => onResearch(material.id)}><ScanSearch size={14} />Исследовать</Button> : "—"}</span>
                     </div>}
                   />
@@ -346,6 +395,7 @@ function AddMaterialDialog({
   uploadStatus,
   answersMaterial,
   allowExamPurposes = true,
+  studyRole,
   onOpenChange,
   onFile,
   onText,
@@ -358,6 +408,8 @@ function AddMaterialDialog({
   /** Уже загруженные эталонные ответы: второй такой файл проект не держит. */
   answersMaterial: MaterialRead | null;
   allowExamPurposes?: boolean;
+  /** Роль нового учебного источника: основной, пока основного в проекте нет. */
+  studyRole: SourceRole;
   onOpenChange: (open: boolean) => void;
   onFile: (file: File, role: SourceRole, purposes: MaterialPurpose[]) => void;
   onText: (name: string, text: string) => void;
@@ -457,7 +509,7 @@ function AddMaterialDialog({
               <ChevronRight size={15} />
             </button>
           </>}
-          <button type="button" disabled={busy} onClick={() => choose("main", ["study_source"])}>
+          <button type="button" disabled={busy} onClick={() => choose(studyRole, ["study_source"])}>
             <BookOpen size={18} /><span><strong>Учебный источник</strong><small>PDF, DOCX, TXT, MD или изображение</small></span><ChevronRight size={15} />
           </button>
           {allowExamPurposes && <button type="button" disabled={busy} onClick={() => chooseAnswers("text")}>
@@ -1171,6 +1223,7 @@ function MaterialInspector({
   onError,
   answersMaterial,
   allowPurposeChoice,
+  order,
   onSaveFile,
   bindingsProps,
   examStructureProps,
@@ -1193,6 +1246,7 @@ function MaterialInspector({
   onError: (message: string) => void;
   answersMaterial: MaterialRead | null;
   allowPurposeChoice: boolean;
+  order: { position: number; total: number } | null;
   onSaveFile: (command: MaterialUpdateCommand) => Promise<MaterialRead | null>;
   bindingsProps: BindingsTabProps;
   examStructureProps: ExamStructureBindingsTabProps;
@@ -1221,6 +1275,7 @@ function MaterialInspector({
               material={material}
               answersMaterial={answersMaterial}
               allowPurposeChoice={allowPurposeChoice}
+              order={order}
               busy={busy}
               onSave={onSaveFile}
               onRemove={onRemove}
@@ -1311,6 +1366,10 @@ function MaterialSurface() {
   // Вопросы и ответы бывают только в учебниковом шаблоне; экзамен и свободное
   // изучение держат одни учебные источники (решение 27.09.2026 в SCREENS.md).
   const allowExamPurposes = project?.project.template_key === "textbook";
+  // Основной источник у проекта один: первый учебный источник становится
+  // основным, следующие — дополнительными, как в мастере проекта.
+  const newStudyRole: SourceRole = store.materials.some((item) =>
+    item.purposes.includes("study_source") && item.source_role === "main") ? "additional" : "main";
   // Ручные привязки — инструмент экзамена: в учебнике и свободном изучении
   // вкладки нет, и инспектор открывается на «Обработке».
   const visibleInspectorTab: InspectorTab = textbook && inspectorTab === "bindings" ? "processing" : inspectorTab;
@@ -1802,7 +1861,7 @@ function MaterialSurface() {
   }
 
   async function addExternal(kind: "url" | "youtube", url: string) {
-    const created = await store.createExternal({ kind, url, source_role: "additional", purposes: ["study_source"] });
+    const created = await store.createExternal({ kind, url, source_role: newStudyRole, purposes: ["study_source"] });
     if (!created) return;
     setAddOpen(false);
     navigate(`/projects/${projectId}/materials/${created.id}`);
@@ -1925,7 +1984,14 @@ function MaterialSurface() {
     onResearch: textbook ? (target) => { setResearchMaterialIds([target.id]); setResearchOpen(true); } : undefined,
     onProcess: (target) => openMaterial(target, "processing"),
     onRole: (target, role) => void updateFromMenu(target, { source_role: role }, `Роль «${target.display_name}» изменена.`),
-    onPriority: (target, priority) => void updateFromMenu(target, { priority }, `Приоритет «${target.display_name}»: ${priority}.`),
+    onMove: (target, offset) => {
+      const ids = store.materials.map((item) => item.id);
+      const from = ids.indexOf(target.id);
+      const to = from + offset;
+      if (from < 0 || to < 0 || to >= ids.length) return;
+      ids.splice(to, 0, ids.splice(from, 1)[0]);
+      void store.reorder(ids);
+    },
     onRename: (target) => setRenameTarget({ material: target, value: target.display_name }),
     onRemove: setRemoveTarget,
   };
@@ -1989,6 +2055,7 @@ function MaterialSurface() {
             onFindOnline={() => webSearch.current?.reveal()}
             onResearch={(id) => { setResearchMaterialIds([id]); setResearchOpen(true); }}
             menu={menuActions}
+            onReorder={(ids) => void store.reorder(ids)}
             webSearch={project ? (
               <MaterialsWebSearch
                 ref={webSearch}
@@ -2148,6 +2215,7 @@ function MaterialSurface() {
           onError={(message) => say(message, "danger")}
           answersMaterial={answersMaterial}
           allowPurposeChoice={allowExamPurposes}
+          order={{ position: store.materials.indexOf(material) + 1, total: store.materials.length }}
           onSaveFile={saveFileSettings}
           textbook={Boolean(textbook)}
           isExamStructureFile={isExamStructureFile}
@@ -2243,6 +2311,7 @@ function MaterialSurface() {
         uploadStatus={store.uploadStatus}
         answersMaterial={answersMaterial}
         allowExamPurposes={allowExamPurposes}
+        studyRole={newStudyRole}
         onOpenChange={setAddOpen}
         onFile={(file, role, purposes) => void addFile(file, role, purposes)}
         onText={(name, text) => void addText(name, text)}
@@ -2257,7 +2326,7 @@ function MaterialSurface() {
         allowPurposeSelection
         allowExamPurposes={allowExamPurposes}
         existingStudySourceCount={store.materials.filter((item) => item.purposes.includes("study_source")).length}
-        defaultStudyRole="main"
+        defaultStudyRole={newStudyRole}
         answersMaterial={answersMaterial}
         onReplaceAnswers={releaseAnswersMaterial}
         onOpenChange={setLibraryOpen}

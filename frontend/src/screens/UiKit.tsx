@@ -114,6 +114,7 @@ const DEMO_RESEARCH_MATERIAL: MaterialRead = {
   error: null,
   task: null,
   last_parse: null,
+  used_by_topics: 0,
   attached_at: "2026-09-18T00:00:00Z",
   created_at: "2026-09-18T00:00:00Z",
   updated_at: "2026-09-18T00:00:00Z",

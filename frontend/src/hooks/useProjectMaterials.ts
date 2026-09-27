@@ -5,6 +5,7 @@ import {
   createTextMaterial,
   detachMaterial,
   listMaterials,
+  reorderMaterials,
   startMaterialProcessing,
   updateMaterial,
   uploadMaterial,
@@ -133,6 +134,26 @@ export function useProjectMaterials(projectId: string | undefined) {
       projectId ? mutate(() => startMaterialProcessing(projectId, materialId, mode)) : null,
     control: (materialId: string, action: "pause" | "resume" | "retry" | "cancel") =>
       projectId ? mutate(() => controlMaterialProcessing(projectId, materialId, action)) : null,
+    // Порядок меняется сразу, сервер его только подтверждает: перетаскивание
+    // не должно ждать ответа. Ошибка возвращает серверный список.
+    reorder: async (materialIds: string[]) => {
+      if (!projectId) return;
+      const position = new Map(materialIds.map((id, index) => [id, index]));
+      requestIdRef.current += 1;
+      setMaterials((current) => [...current]
+        .sort((left, right) => (position.get(left.id) ?? 0) - (position.get(right.id) ?? 0))
+        .map((item) => ({ ...item, priority: position.get(item.id) ?? item.priority })));
+      try {
+        const saved = await reorderMaterials(projectId, materialIds);
+        // Опрос, начатый до записи, мог прочитать старый порядок — гасим его.
+        requestIdRef.current += 1;
+        setMaterials(saved);
+        setError(null);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "Не удалось сохранить порядок");
+        await refresh();
+      }
+    },
     detach: (materialId: string) =>
       projectId ? mutate(() => detachMaterial(projectId, materialId)) : null,
   };

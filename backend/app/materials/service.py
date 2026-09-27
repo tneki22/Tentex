@@ -3,7 +3,7 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select, union
 from sqlalchemy.orm import Session
 
 from app.ai.gateway import ModelGateway
@@ -37,6 +37,7 @@ from app.materials.schemas import (
     ExamProgramPreviewNode,
     ExternalMaterialCreate,
     MaterialAnswerImportResult,
+    MaterialOrderWrite,
     MaterialParseRead,
     MaterialPurpose,
     MaterialRead,
@@ -51,6 +52,8 @@ from app.materials.schemas import (
 from app.materials.storage import material_path
 from app.models import (
     BackgroundJob,
+    Binding,
+    BindingStatus,
     ExamFormat,
     ExamKind,
     GoalPassport,
@@ -61,6 +64,8 @@ from app.models import (
     MaterialRevisionOrigin,
     MaterialState,
     NodeType,
+    ProgramNode,
+    ProgramNodeSourcePageRange,
     Project,
     ProjectMaterial,
     ProjectStatus,
@@ -143,12 +148,57 @@ def _last_parses(session: Session, materials: list[Material]) -> dict[UUID, Mate
     return result
 
 
+_ACTIVE_BINDINGS = (BindingStatus.MANUAL, BindingStatus.CONFIRMED, BindingStatus.MACHINE)
+
+
+def _topic_usage(session: Session, project_id: UUID, material_ids: list[UUID]) -> dict[UUID, int]:
+    """Число тем текущей программы, которые опираются на каждый материал.
+
+    Тема считается один раз, как бы она ни была связана с источником: живой
+    привязкой фрагмента, диапазоном страниц или тем, что выросла из его оглавления.
+    """
+    if not material_ids:
+        return {}
+    by_bindings = select(Binding.material_id, Binding.program_node_id).where(
+        Binding.project_id == project_id,
+        Binding.material_id.in_(material_ids),
+        Binding.status.in_(_ACTIVE_BINDINGS),
+    )
+    by_ranges = select(
+        ProgramNodeSourcePageRange.material_id, ProgramNodeSourcePageRange.program_node_id
+    ).where(
+        ProgramNodeSourcePageRange.project_id == project_id,
+        ProgramNodeSourcePageRange.material_id.in_(material_ids),
+    )
+    by_origin = select(ProgramNode.origin_material_id, ProgramNode.id).where(
+        ProgramNode.project_id == project_id,
+        ProgramNode.origin_material_id.in_(material_ids),
+    )
+    links = union(by_bindings, by_ranges, by_origin).subquery()
+    material_col, node_col = links.c
+    rows = session.execute(
+        select(material_col, func.count(func.distinct(node_col)))
+        .join(
+            ProgramNode,
+            (ProgramNode.project_id == project_id) & (ProgramNode.id == node_col),
+        )
+        .where(
+            ProgramNode.node_type.in_([NodeType.TOPIC, NodeType.SUBPOINT]),
+            ProgramNode.is_in_current_program.is_(True),
+            ProgramNode.is_archived.is_(False),
+        )
+        .group_by(material_col)
+    ).all()
+    return {material_id: count for material_id, count in rows}
+
+
 def _read_one(session: Session, link: ProjectMaterial, material: Material) -> MaterialRead:
     return _read(
         link,
         material,
         _latest_task(session, material.id),
         _last_parses(session, [material]).get(material.id),
+        _topic_usage(session, link.project_id, [material.id]).get(material.id, 0),
     )
 
 
@@ -157,6 +207,7 @@ def _read(
     material: Material,
     task: BackgroundJob | None,
     last_parse: MaterialParseRead | None = None,
+    used_by_topics: int = 0,
 ) -> MaterialRead:
     purposes = [purpose for purpose in link.purposes if purpose in PURPOSE_VALUES]
     return MaterialRead(
@@ -188,6 +239,7 @@ def _read(
         error=material.error,
         task=_task_read(task),
         last_parse=last_parse,
+        used_by_topics=used_by_topics,
         attached_at=link.created_at,
         created_at=material.created_at,
         updated_at=material.updated_at,
@@ -356,10 +408,41 @@ def list_materials(session: Session, project_id: UUID) -> list[MaterialRead]:
     material_ids = [material.id for _link, material in rows]
     tasks_by_material = _latest_tasks_by_material(session, material_ids)
     parses = _last_parses(session, [material for _link, material in rows])
+    usage = _topic_usage(session, project_id, material_ids)
     return [
-        _read(link, material, tasks_by_material.get(material.id), parses.get(material.id))
+        _read(
+            link,
+            material,
+            tasks_by_material.get(material.id),
+            parses.get(material.id),
+            usage.get(material.id, 0),
+        )
         for link, material in rows
     ]
+
+
+def reorder_materials(
+    session: Session, project_id: UUID, command: MaterialOrderWrite
+) -> list[MaterialRead]:
+    """Порядок строк списка становится приоритетом: верхний источник — 0."""
+    with project_write_transaction(session, project_id):
+        _project(session, project_id, writable=True)
+        links = {
+            link.material_id: link
+            for link in session.scalars(
+                select(ProjectMaterial).where(ProjectMaterial.project_id == project_id)
+            )
+        }
+        if len(set(command.material_ids)) != len(command.material_ids) or set(
+            command.material_ids
+        ) != set(links):
+            raise ProjectConflictError(
+                "Список материалов изменился — обновите экран и повторите",
+                code="material_order_stale",
+            )
+        for priority, material_id in enumerate(command.material_ids):
+            links[material_id].priority = priority
+    return list_materials(session, project_id)
 
 
 def get_material(session: Session, project_id: UUID, material_id: UUID) -> MaterialRead:

@@ -50,7 +50,6 @@ interface MaterialDraft {
   displayName: string;
   purposes: MaterialPurpose[];
   sourceRole: SourceRole;
-  priority: string;
   instruction: string;
 }
 
@@ -59,7 +58,6 @@ function draftFrom(material: MaterialRead): MaterialDraft {
     displayName: material.display_name,
     purposes: [...material.purposes],
     sourceRole: material.source_role,
-    priority: String(material.priority),
     instruction: material.instruction ?? "",
   };
 }
@@ -71,7 +69,6 @@ function normalizedPurposes(purposes: MaterialPurpose[]): MaterialPurpose[] {
 function sameDraft(left: MaterialDraft, right: MaterialDraft): boolean {
   return left.displayName === right.displayName
     && left.sourceRole === right.sourceRole
-    && left.priority === right.priority
     && left.instruction === right.instruction
     && normalizedPurposes(left.purposes).join("|") === normalizedPurposes(right.purposes).join("|");
 }
@@ -96,6 +93,8 @@ interface MaterialFileTabProps {
   material: MaterialRead;
   answersMaterial: MaterialRead | null;
   busy: boolean;
+  /** Место файла в списке материалов проекта: порядок задаётся перетаскиванием там. */
+  order: { position: number; total: number } | null;
   /** Список вопросов и ответы бывают только в учебниковом проекте; в экзамене и
    *  свободном изучении файл всегда учебный источник, выбирать нечего. */
   allowPurposeChoice: boolean;
@@ -107,6 +106,7 @@ export function MaterialFileTab({
   material,
   answersMaterial,
   busy,
+  order,
   allowPurposeChoice,
   onSave,
   onRemove,
@@ -122,14 +122,10 @@ export function MaterialFileTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [material.id]);
 
-  const priority = Number(draft.priority);
   const nameError = draft.displayName.trim() ? undefined : "Введите название";
-  const priorityError = !draft.priority.trim() || !Number.isInteger(priority) || priority < 0
-    ? "Укажите целое число от 0"
-    : undefined;
   const purposesError = draft.purposes.length ? undefined : "Выберите хотя бы одно назначение";
   const dirty = !sameDraft(draft, initial);
-  const valid = !nameError && !priorityError && !purposesError;
+  const valid = !nameError && !purposesError;
 
   function togglePurpose(purpose: MaterialPurpose, checked: boolean) {
     setDraft((current) => ({
@@ -145,7 +141,6 @@ export function MaterialFileTab({
       display_name: draft.displayName.trim(),
       purposes: normalizedPurposes(draft.purposes),
       source_role: draft.sourceRole,
-      priority,
       instruction: draft.instruction.trim() || null,
       replace_reference_answers: replaceReferenceAnswers || undefined,
     };
@@ -222,19 +217,12 @@ export function MaterialFileTab({
             />
           </Field>
 
-          <Field label="Приоритет" hint="0 — раньше остальных источников той же роли." error={priorityError}>
-            <input
-              type="number"
-              min="0"
-              step="1"
-              value={draft.priority}
-              disabled={busy}
-              onChange={(event) => setDraft((current) => ({
-                ...current,
-                priority: event.target.value,
-              }))}
-            />
-          </Field>
+          {order && (
+            <div className="materials-purpose-static">
+              <span>Порядок среди источников</span>
+              <strong>{order.position} из {order.total}</strong>
+            </div>
+          )}
 
           <Field label="Пояснение" hint="Например: брать отсюда теорию, а таблицы считать приложениями.">
             <textarea

@@ -352,6 +352,9 @@ class MaterialRead(ApiModel):
     error: str | None
     task: ProcessingTaskRead | None
     last_parse: MaterialParseRead | None = None
+    # Сколько тем программы опирается на источник: привязки его фрагментов,
+    # диапазоны страниц темы и темы, выросшие из его оглавления.
+    used_by_topics: int = 0
     attached_at: datetime
     created_at: datetime
     updated_at: datetime
@@ -583,6 +586,12 @@ class MaterialDeletePreview(ApiModel):
     reference_answer_count: int
     binding_count: int
     affected_projects: list[AffectedProjectPreview]
+
+
+class MaterialOrderWrite(ApiModel):
+    """Порядок материалов проекта сверху вниз; задаёт их приоритет."""
+
+    material_ids: list[UUID] = Field(min_length=1)
 
 
 class MaterialsDeleteWrite(ApiModel):

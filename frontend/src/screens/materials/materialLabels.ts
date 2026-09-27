@@ -43,6 +43,25 @@ export function parseModeShort(material: MaterialRead): { mode: string; model: s
   return { mode: PARSER_MODE_TITLES[mode], model };
 }
 
+/** Колонка «Используется»: «12 тем», пусто — прочерк. */
+export function topicsLabel(count: number): string {
+  if (!count) return "—";
+  const mod100 = count % 100;
+  const mod10 = count % 10;
+  if (mod100 >= 11 && mod100 <= 14) return `${count} тем`;
+  if (mod10 === 1) return `${count} тема`;
+  if (mod10 >= 2 && mod10 <= 4) return `${count} темы`;
+  return `${count} тем`;
+}
+
+/** Состояние с ходом разбора: «Разбирается · 12/85». Очередь и готовый файл — без счёта. */
+export function progressSuffix(material: MaterialRead): string {
+  const task = material.task;
+  if (!task || task.total <= 0) return "";
+  if (material.status !== "processing" && material.status !== "paused") return "";
+  return ` · ${task.done}/${task.total}`;
+}
+
 /** Колонка «Страницы»: диапазон последнего запуска или сколько страниц он перечитал. */
 export function pagesSummary(material: MaterialRead): { value: string; note: string | null } {
   const total = material.page_count;
