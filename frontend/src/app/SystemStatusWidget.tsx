@@ -156,7 +156,7 @@ function StorageRows({ storage, lowDisk }: StorageRowsProps) {
   const used = storage.used_bytes;
   const total = Math.max(storage.total_bytes, 1);
   // Доля Tentex на большом диске — доли процента; тонкая черта всё равно видна.
-  const tentexShare = used === null || used === 0 ? 0 : Math.min(100, Math.max(0.8, (used / total) * 100));
+  const tentexShare = used === null || used === 0 ? 0 : Math.min(100, Math.max(1.5, (used / total) * 100));
   const freeShare = Math.min(100, (storage.free_bytes / total) * 100);
   const otherShare = Math.max(0, 100 - tentexShare - freeShare);
   const schedule = storage.automatic_enabled === null
@@ -170,7 +170,8 @@ function StorageRows({ storage, lowDisk }: StorageRowsProps) {
         <span className="status-storage-icon"><HardDrive size={15} aria-hidden="true" /></span>
         <div className="status-storage-text">
           <p>
-            <span>Занято </span><b>{used === null ? "—" : formatBytes(used)}</b>
+            <span className="status-swatch is-tentex" aria-hidden="true" />
+            <span>Tentex занимает </span><b>{used === null ? "—" : formatBytes(used)}</b>
             <span className="status-dot-sep" aria-hidden="true">·</span>
             <span>свободно </span><b className="status-free">{formatBytes(storage.free_bytes)}</b>
             <span className="status-faint"> из {formatBytes(storage.total_bytes)}</span>

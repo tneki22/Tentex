@@ -308,6 +308,20 @@ def test_failed_copy_is_reported_until_a_new_one_succeeds(status_session: Sessio
     assert "backup_failed" not in _codes(service.system_status(status_session))
 
 
+def test_failed_first_copy_is_one_row_with_retry(status_session: Session) -> None:
+    _add_material(status_session)
+    _add_backup(status_session, state=BackupArchiveState.FAILED)
+
+    status = service.system_status(status_session)
+
+    codes = _codes(status)
+    assert "backup_missing" not in codes
+    item = _item(status, "backup_failed")
+    assert item.title == "Не удалось создать первую копию"
+    assert item.target.command == "create_backup"
+    assert status.attention_count == 1
+
+
 @pytest.mark.parametrize(("free", "level"), [(3 * GIB, "warning"), (GIB // 2, "danger")])
 def test_low_disk_space(
     status_session: Session, monkeypatch: pytest.MonkeyPatch, free: int, level: str

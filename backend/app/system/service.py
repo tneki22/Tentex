@@ -523,12 +523,30 @@ def _check_disk(facts: _StorageFacts, report: _Report) -> None:
 
 def _check_backups(session: Session, facts: _StorageFacts, report: _Report) -> None:
     backups_link = _link("Резервные копии", STORAGE_BACKUPS)
+    latest = session.scalar(
+        select(BackupArchive).order_by(BackupArchive.created_at.desc()).limit(1)
+    )
+    failed_at = (
+        latest.completed_at or latest.created_at
+        if latest is not None and latest.state == BackupArchiveState.FAILED
+        else None
+    )
     if facts.latest_ready_at is None and facts.has_data:
+        # Одна причина — одна строка: «копий нет» и «последняя упала» вместе
+        # читаются как «первая копия не получилась», и повтор — прямо здесь.
         if facts.read.backup_in_progress:
             report.add(
                 "backup_in_progress", "info", "storage",
                 "Создаётся первая резервная копия", "ход — в «Фоновых задачах»",
                 _command("Фоновые задачи", "open_background_jobs"),
+            )
+        elif failed_at is not None:
+            report.add(
+                "backup_failed", "warning", "attention",
+                "Не удалось создать первую копию",
+                "проверьте свободное место и папку копий, затем повторите",
+                _command("Повторить", "create_backup"),
+                last_failure_at=failed_at,
             )
         else:
             report.add(
@@ -536,16 +554,13 @@ def _check_backups(session: Session, facts: _StorageFacts, report: _Report) -> N
                 "Резервных копий ещё нет", "создайте первую",
                 _command("Создать копию", "create_backup"),
             )
-    latest = session.scalar(
-        select(BackupArchive).order_by(BackupArchive.created_at.desc()).limit(1)
-    )
-    if latest is not None and latest.state == BackupArchiveState.FAILED:
+    elif failed_at is not None and not facts.read.backup_in_progress:
         report.add(
             "backup_failed", "warning", "attention",
             "Не удалось создать копию",
             "проверьте свободное место и папку копий, затем повторите",
             backups_link,
-            last_failure_at=latest.completed_at or latest.created_at,
+            last_failure_at=failed_at,
         )
     overdue = (
         facts.read.automatic_enabled

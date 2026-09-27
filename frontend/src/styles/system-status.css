@@ -413,6 +413,20 @@
   font-size: var(--text-xs);
 }
 
+/* Метка-легенда: тот же цвет, что доля Tentex на шкале диска */
+.status-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--space-2);
+  border-radius: 2px;
+  vertical-align: 1px;
+}
+
+.status-swatch.is-tentex {
+  background: var(--status-tone);
+}
+
 .status-dot-sep {
   margin: 0 var(--space-2);
   color: var(--faint);
