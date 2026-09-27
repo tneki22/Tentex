@@ -65,6 +65,7 @@ import { AnswersAiPlanDialog } from "./answers/AnswersAiPlanDialog";
 import {
   Button,
   ConfirmDialog,
+  ContextMenu,
   Dialog,
   EmptyState,
   ErrorState,
@@ -91,6 +92,8 @@ import { useViewerFullscreen } from "../hooks/useViewerFullscreen";
 import { buildProgramTree, filterProgramTree, flattenProgramTree, type ProgramTreeNode } from "./programTree";
 import { AiCleanupPanel } from "./AiCleanupPanel";
 import { MaterialFileTab } from "./materials/MaterialFileTab";
+import { materialMenuItems, type MaterialMenuActions } from "./materials/materialMenu";
+import { materialRoleText, pagesSummary, parseModeShort } from "./materials/materialLabels";
 import { ProjectFileUploadStatus } from "./materials/ProjectFileUploadStatus";
 import { MaterialProcessingPanels } from "./materials/MaterialProcessingPanels";
 import { MaterialsWebSearch, type MaterialsWebSearchHandle } from "./materials/MaterialsWebSearch";
@@ -111,12 +114,6 @@ const STATUS: Record<MaterialRead["status"], { label: string; tone: "neutral" | 
   needs_input: { label: "Нужны файлы", tone: "warning" },
   ready: { label: "Готов", tone: "success" },
   failed: { label: "Ошибка", tone: "danger" },
-};
-
-const PURPOSE: Record<MaterialPurpose, string> = {
-  exam_structure: "Структура экзамена",
-  reference_answers: "Ответы",
-  study_source: "Учебный источник",
 };
 
 function fileCountLabel(count: number): string {
@@ -144,6 +141,7 @@ interface CatalogProps {
   onChooseLibrary: () => void;
   hasConspects: boolean;
   conspectSummaryActive: boolean;
+  menu: MaterialMenuActions;
 }
 
 function MaterialCatalog({
@@ -157,6 +155,7 @@ function MaterialCatalog({
   onChooseLibrary,
   hasConspects,
   conspectSummaryActive,
+  menu,
 }: CatalogProps) {
   const textbook = project?.project.workspace_variant === "textbook";
   const visible = materials.filter((material) =>
@@ -168,9 +167,12 @@ function MaterialCatalog({
     || "сводный конспект".includes(query.toLocaleLowerCase("ru").trim());
 
   const items = (group: MaterialRead[]) => group.map((material) => (
-    <div
-      className={`materials-catalog-item ${selectedId === material.id ? "is-active" : ""}`.trim()}
+    <ContextMenu
       key={material.id}
+      label={`Действия с «${material.display_name}»`}
+      items={materialMenuItems(material, menu)}
+      trigger={<div
+      className={`materials-catalog-item ${selectedId === material.id ? "is-active" : ""}`.trim()}
     >
       <Link to={`/projects/${projectId}/materials/${material.id}`}>
         <MaterialIcon material={material} />
@@ -182,7 +184,8 @@ function MaterialCatalog({
           <span className="materials-attention-dot tone-warning" />
         )}
       </Link>
-    </div>
+    </div>}
+    />
   ));
 
   return (
@@ -256,9 +259,11 @@ function MaterialOverview({
   onFindOnline,
   onResearch,
   webSearch,
+  menu,
 }: {
   materials: MaterialRead[];
   textbook: boolean;
+  menu: MaterialMenuActions;
   onOpen: (id: string) => void;
   onAdd: () => void;
   onChooseLibrary: () => void;
@@ -274,9 +279,9 @@ function MaterialOverview({
         <div className="materials-overview">
           <header>
             <div>
-              <p className="materials-kicker">{textbook ? "Источники проекта" : "Приоритет этапа 5"}</p>
+              <p className="materials-kicker">Источники проекта</p>
               <h1>{textbook ? "Материалы" : "Материалы экзамена"}</h1>
-              <p>{textbook ? "Подготовьте текст, затем исследуйте содержание одного или нескольких источников." : "Загрузите список вопросов, ответы и учебные источники."}</p>
+              <p>{textbook ? "Подготовьте текст, затем исследуйте содержание одного или нескольких источников." : "Учебники, конспекты и лекции, по которым идёт подготовка к экзамену."}</p>
             </div>
             <div className="material-entry-actions is-end">
               <Button onClick={onAdd}><Upload size={15} /> Добавить материал</Button>
@@ -288,7 +293,7 @@ function MaterialOverview({
             <section className="materials-empty-state">
               <Files size={28} />
               <h2>Материалов пока нет</h2>
-              <p>{textbook ? "Добавьте учебник, конспект или справочник и подготовьте его текст." : "Начните с фотографии списка вопросов — быстрый OCR разберёт её в фоне."}</p>
+              <p>Добавьте учебник, конспект или справочник и подготовьте его текст.</p>
               <div className="material-entry-actions">
                 <Button onClick={onAdd}>Выбрать файл</Button>
                 <Button variant="secondary" onClick={onChooseLibrary}><LibraryBig size={15} /> Из Библиотеки</Button>
@@ -298,22 +303,34 @@ function MaterialOverview({
           ) : (
             <div className="materials-overview-table" role="table" aria-label="Материалы проекта">
               <div className="materials-overview-row is-head" role="row">
-                <span>Материал</span><span>Назначение</span><span>Страницы</span><span>Качество</span><span>Состояние</span><span>Действие</span>
+                <span>Материал</span><span>Роль</span><span>Страницы</span><span>Разбор</span><span>Состояние</span><span>Действие</span>
               </div>
-              {materials.map((material) => (
-                <div
-                  className="materials-overview-row"
-                  role="row"
-                  key={material.id}
-                >
-                  <button className="materials-overview-link" type="button" onClick={() => onOpen(material.id)}><strong>{material.display_name}</strong></button>
-                  <span>{material.purposes.map((purpose) => PURPOSE[purpose]).join(", ")}</span>
-                  <span>{material.page_count ?? "—"}</span>
-                  <span>{material.parser_mode !== "fast" && material.ocr_low_page_count ? `${material.ocr_low_page_count} low` : "—"}</span>
-                  <StatusBadge tone={STATUS[material.status].tone}>{STATUS[material.status].label}</StatusBadge>
-                  <span>{textbook && material.status === "ready" ? <Button variant="ghost" onClick={() => onResearch(material.id)}><ScanSearch size={14} />Исследовать</Button> : "—"}</span>
-                </div>
-              ))}
+              {materials.map((material) => {
+                const pages = pagesSummary(material);
+                const parse = parseModeShort(material);
+                const lowPages = material.parser_mode !== "fast" ? material.ocr_low_page_count : 0;
+                return (
+                  <ContextMenu
+                    key={material.id}
+                    label={`Действия с «${material.display_name}»`}
+                    items={materialMenuItems(material, menu)}
+                    trigger={<div className="materials-overview-row" role="row">
+                      <button className="materials-overview-link" type="button" onClick={() => onOpen(material.id)}><strong>{material.display_name}</strong></button>
+                      <span>{materialRoleText(material)}</span>
+                      <span className="materials-overview-cell">
+                        <span>{pages.value}</span>
+                        {pages.note && <small>{pages.note}</small>}
+                      </span>
+                      <span className="materials-overview-cell">
+                        <span title={parse?.model ?? undefined}>{parse ? parse.model ? `${parse.mode} · ${parse.model}` : parse.mode : "—"}</span>
+                        {lowPages > 0 && <small className="is-warning">проверить: {lowPages} стр.</small>}
+                      </span>
+                      <StatusBadge tone={STATUS[material.status].tone}>{STATUS[material.status].label}</StatusBadge>
+                      <span>{textbook && material.status === "ready" ? <Button variant="ghost" onClick={() => onResearch(material.id)}><ScanSearch size={14} />Исследовать</Button> : "—"}</span>
+                    </div>}
+                  />
+                );
+              })}
             </div>
           )}
           {webSearch}
@@ -385,7 +402,9 @@ function AddMaterialDialog({
         ? "Заголовок ответа должен точно совпадать с названием вопроса программы."
         : externalMode
           ? externalMode === "url" ? "Tentex сохранит локальный снимок читаемого текста и дату получения." : "Tentex сохранит субтитры с временными метками, а не видеопоток."
-        : "Выберите назначение сейчас; изменить его можно будет позже."}
+        : allowExamPurposes
+          ? "Выберите назначение сейчас; изменить его можно будет позже."
+          : "Роль и приоритет источника можно изменить позже — в меню по правой кнопке."}
       footer={textMode ? (
         <>
           <Button variant="ghost" onClick={() => setTextMode(false)}>Назад</Button>
@@ -1151,6 +1170,7 @@ function MaterialInspector({
   onChanged,
   onError,
   answersMaterial,
+  allowPurposeChoice,
   onSaveFile,
   bindingsProps,
   examStructureProps,
@@ -1172,6 +1192,7 @@ function MaterialInspector({
   onChanged: () => void;
   onError: (message: string) => void;
   answersMaterial: MaterialRead | null;
+  allowPurposeChoice: boolean;
   onSaveFile: (command: MaterialUpdateCommand) => Promise<MaterialRead | null>;
   bindingsProps: BindingsTabProps;
   examStructureProps: ExamStructureBindingsTabProps;
@@ -1182,23 +1203,13 @@ function MaterialInspector({
   return (
     <aside className="materials-inspector" aria-label="Действия с материалом">
       <div className="materials-inspector-tabs" role="tablist" aria-label="Разделы инспектора">
-        {(["bindings", "processing", "file"] as const).map((tab) => (
+        {(textbook ? (["processing", "file"] as const) : (["bindings", "processing", "file"] as const)).map((tab) => (
           <button type="button" role="tab" aria-selected={activeTab === tab} className={activeTab === tab ? "is-active" : ""} key={tab} onClick={() => onTabChange(tab)}>{TAB_LABELS[tab]}</button>
         ))}
       </div>
       <div className="materials-inspector-scroll">
         {activeTab === "bindings" && (
-          textbook ? (
-            <div className="materials-inspector-content">
-              <NoticeLine notice={notice} onDismiss={onDismissNotice} />
-              <p className="materials-muted">
-                Привязки учебника к программе — отдельный раздел «Привязки», он появится
-                после этапа 7 (эскиз — <code>SCREENS.md</code>). Ручная привязка фрагментов
-                к вопросам в этой вкладке работает только в экзаменационном проекте.
-              </p>
-            </div>
-          ) : isExamStructureFile ? <ExamStructureBindingsTab {...examStructureProps} />
-          : <BindingsTab {...bindingsProps} />
+          isExamStructureFile ? <ExamStructureBindingsTab {...examStructureProps} /> : <BindingsTab {...bindingsProps} />
         )}
         {activeTab === "processing" && (
           <ProcessingTab projectId={projectId} material={material} page={page} libraryLink={libraryLink} onEdit={onEdit} onCleanup={onCleanup} onChanged={onChanged} onError={onError} notice={notice} onDismissNotice={onDismissNotice} />
@@ -1209,6 +1220,7 @@ function MaterialInspector({
             <MaterialFileTab
               material={material}
               answersMaterial={answersMaterial}
+              allowPurposeChoice={allowPurposeChoice}
               busy={busy}
               onSave={onSaveFile}
               onRemove={onRemove}
@@ -1229,7 +1241,8 @@ function MaterialSurface() {
   const [query, setQuery] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const [removeOpen, setRemoveOpen] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<MaterialRead | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ material: MaterialRead; value: string } | null>(null);
   const [autoMatchOpen, setAutoMatchOpen] = useState(false);
   const [aiPlanOpen, setAiPlanOpen] = useState(false);
   const webSearch = useRef<MaterialsWebSearchHandle>(null);
@@ -1295,6 +1308,12 @@ function MaterialSurface() {
   const hasOriginal = material?.media_type === "application/pdf"
     || material?.media_type.startsWith("image/");
   const textbook = project?.project.workspace_variant === "textbook";
+  // Вопросы и ответы бывают только в учебниковом шаблоне; экзамен и свободное
+  // изучение держат одни учебные источники (решение 27.09.2026 в SCREENS.md).
+  const allowExamPurposes = project?.project.template_key === "textbook";
+  // Ручные привязки — инструмент экзамена: в учебнике и свободном изучении
+  // вкладки нет, и инспектор открывается на «Обработке».
+  const visibleInspectorTab: InspectorTab = textbook && inspectorTab === "bindings" ? "processing" : inspectorTab;
   const conspectSummary = useConspectSummary(projectId);
   const hasConspects = !textbook && conspectSummary.entries.length > 0;
   const conspectSummaryActive = !textbook && searchParams.get("view") === "conspect-summary";
@@ -1881,6 +1900,36 @@ function MaterialSurface() {
     return null;
   }
 
+  function openMaterial(target: MaterialRead, tab?: InspectorTab) {
+    if (tab) setInspectorTab(tab);
+    navigate(`/projects/${projectId}/materials/${target.id}`);
+  }
+
+  async function updateFromMenu(target: MaterialRead, command: MaterialUpdateCommand, done: string) {
+    const updated = await store.update(target.id, command);
+    say(updated ? done : store.error ?? "Не удалось изменить материал", updated ? "success" : "danger");
+  }
+
+  function submitRename() {
+    if (!renameTarget?.value.trim()) return;
+    const { material: target, value } = renameTarget;
+    setRenameTarget(null);
+    void updateFromMenu(target, { display_name: value.trim() }, "Название в проекте изменено.");
+  }
+
+  const menuActions: MaterialMenuActions = {
+    onOpen: (target) => openMaterial(target),
+    onOpenLibrary: (target) => navigate(`/library/${target.id}?returnTo=${encodeURIComponent(
+      `/projects/${projectId}/materials${materialId ? `/${materialId}` : ""}`,
+    )}`),
+    onResearch: textbook ? (target) => { setResearchMaterialIds([target.id]); setResearchOpen(true); } : undefined,
+    onProcess: (target) => openMaterial(target, "processing"),
+    onRole: (target, role) => void updateFromMenu(target, { source_role: role }, `Роль «${target.display_name}» изменена.`),
+    onPriority: (target, priority) => void updateFromMenu(target, { priority }, `Приоритет «${target.display_name}»: ${priority}.`),
+    onRename: (target) => setRenameTarget({ material: target, value: target.display_name }),
+    onRemove: setRemoveTarget,
+  };
+
   const libraryLink = material
     ? `/library/${material.id}?returnTo=${encodeURIComponent(
       `/projects/${projectId}/materials/${material.id}?page=${pageNumber}`
@@ -1911,6 +1960,7 @@ function MaterialSurface() {
         onChooseLibrary={() => setLibraryOpen(true)}
         hasConspects={hasConspects}
         conspectSummaryActive={conspectSummaryActive}
+        menu={menuActions}
       />
       <main className="materials-document-area">
         {store.error && <p className="materials-action-note" role="alert">{store.error}</p>}
@@ -1938,6 +1988,7 @@ function MaterialSurface() {
             onChooseLibrary={() => setLibraryOpen(true)}
             onFindOnline={() => webSearch.current?.reveal()}
             onResearch={(id) => { setResearchMaterialIds([id]); setResearchOpen(true); }}
+            menu={menuActions}
             webSearch={project ? (
               <MaterialsWebSearch
                 ref={webSearch}
@@ -1980,7 +2031,8 @@ function MaterialSurface() {
                   </Tooltip>
                   <IconButton label="Увеличить" disabled={effectiveZoom >= 2} onClick={() => setZoom(Math.min(2, Number((effectiveZoom + 0.25).toFixed(2))))}><ZoomIn size={15} /></IconButton>
                 </div>
-                <Tooltip label={textbook ? "Привязки появятся после этапа 7 (учебник)" : isExamStructureFile ? "Список вопросов не привязывается по фрагментам" : "Режим привязки (B)"}>
+                {/* Ручная привязка к вопросам — инструмент экзамена; в учебнике кнопки нет. */}
+                {!textbook && <Tooltip label={isExamStructureFile ? "Список вопросов не привязывается по фрагментам" : "Режим привязки (B)"}>
                   <IconButton
                     label="Режим привязки"
                     aria-pressed={bindingMode && documentBindingEnabled}
@@ -1989,7 +2041,7 @@ function MaterialSurface() {
                   >
                     <Link2 size={15} />
                   </IconButton>
-                </Tooltip>
+                </Tooltip>}
                 {documentBindingEnabled && bindingMode && selectedFragmentIds.length > 0 && (
                   <span className="materials-selection-hint">Выбрано: {selectedFragmentIds.length} · <Kbd>Enter</Kbd> привязать</span>
                 )}
@@ -2069,7 +2121,9 @@ function MaterialSurface() {
                   <div className="materials-processing-placeholder">
                     <StatusBadge tone={STATUS[material.status].tone}>{STATUS[material.status].label}</StatusBadge>
                     <h1>{material.display_name}</h1>
-                    <p>Страница ещё обрабатывается. Готовые страницы появляются здесь по мере разбора.</p>
+                    <p>{material.status === "ready_to_process"
+                      ? "Текст ещё не подготовлен: запустите разбор на вкладке «Обработка»."
+                      : "Страница ещё обрабатывается. Готовые страницы появляются здесь по мере разбора."}</p>
                   </div>
                 ) : <div className="materials-document-center"><LoadingState label="Открываем страницу" /></div>}
               </div>
@@ -2081,18 +2135,19 @@ function MaterialSurface() {
         <MaterialInspector
           projectId={projectId}
           material={material}
-          activeTab={inspectorTab}
+          activeTab={visibleInspectorTab}
           onTabChange={setInspectorTab}
           busy={store.busy}
           notice={notice}
           libraryLink={libraryLink}
           page={page}
-          onRemove={() => setRemoveOpen(true)}
+          onRemove={() => setRemoveTarget(material)}
           onEdit={() => { if (page) { setEditText(page.text); setEditOpen(true); } }}
           onCleanup={() => setCleanupOpen(true)}
           onChanged={() => { void store.refresh(); refreshBindingData(); }}
           onError={(message) => say(message, "danger")}
           answersMaterial={answersMaterial}
+          allowPurposeChoice={allowExamPurposes}
           onSaveFile={saveFileSettings}
           textbook={Boolean(textbook)}
           isExamStructureFile={isExamStructureFile}
@@ -2187,7 +2242,7 @@ function MaterialSurface() {
         busy={store.busy}
         uploadStatus={store.uploadStatus}
         answersMaterial={answersMaterial}
-        allowExamPurposes={project?.project.template_key === "textbook"}
+        allowExamPurposes={allowExamPurposes}
         onOpenChange={setAddOpen}
         onFile={(file, role, purposes) => void addFile(file, role, purposes)}
         onText={(name, text) => void addText(name, text)}
@@ -2200,7 +2255,7 @@ function MaterialSurface() {
         title="Выбрать материалы из Библиотеки"
         multiple
         allowPurposeSelection
-        allowExamPurposes={project?.project.template_key === "textbook"}
+        allowExamPurposes={allowExamPurposes}
         existingStudySourceCount={store.materials.filter((item) => item.purposes.includes("study_source")).length}
         defaultStudyRole="main"
         answersMaterial={answersMaterial}
@@ -2268,21 +2323,43 @@ function MaterialSurface() {
           }}
         />
       )}
-      {material && (
-        <ConfirmDialog
-          open={removeOpen}
-          onOpenChange={setRemoveOpen}
-          title={`Убрать «${material.display_name}» из проекта?`}
-          confirmLabel="Убрать материал"
-          destructive
-          onConfirm={() => {
-            const removal = store.detach(material.id);
-            if (removal) void removal.then(() => navigate(`/projects/${projectId}/materials`));
-          }}
-        >
-          <p>Файл отвяжется от этого проекта. Ответы, уже импортированные из него, сохранятся.</p>
-        </ConfirmDialog>
-      )}
+      <ConfirmDialog
+        open={removeTarget !== null}
+        onOpenChange={(open) => { if (!open) setRemoveTarget(null); }}
+        title={`Убрать «${removeTarget?.display_name ?? ""}» из проекта?`}
+        confirmLabel="Убрать материал"
+        destructive
+        onConfirm={() => {
+          if (!removeTarget) return;
+          const removedId = removeTarget.id;
+          const removal = store.detach(removedId);
+          // Открытый материал исчез из проекта — к списку; другой убирается на месте.
+          if (removal && removedId === materialId) void removal.then(() => navigate(`/projects/${projectId}/materials`));
+        }}
+      >
+        <p>
+          Файл отвяжется от этого проекта и останется в Библиотеке.
+          {allowExamPurposes ? " Ответы, уже импортированные из него, сохранятся." : ""}
+        </p>
+      </ConfirmDialog>
+      <Dialog
+        open={renameTarget !== null}
+        onOpenChange={(open) => { if (!open) setRenameTarget(null); }}
+        title="Переименовать в проекте"
+        description="Название меняется только здесь; в Библиотеке и других проектах у файла останется своё."
+        footer={<>
+          <Button variant="ghost" onClick={() => setRenameTarget(null)}>Отменить</Button>
+          <Button disabled={!renameTarget?.value.trim() || store.busy} onClick={submitRename}>Сохранить</Button>
+        </>}
+      >
+        <form className="materials-text-form" onSubmit={(event) => { event.preventDefault(); submitRename(); }}>
+          <label>Название<input
+            autoFocus
+            value={renameTarget?.value ?? ""}
+            onChange={(event) => setRenameTarget((current) => current && { ...current, value: event.target.value })}
+          /></label>
+        </form>
+      </Dialog>
       {textbook && (
         <ResearchLaunchDialog
           open={researchOpen}

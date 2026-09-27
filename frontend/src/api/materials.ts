@@ -41,6 +41,19 @@ export interface ProcessingTaskRead {
   updated_at: string;
 }
 
+/** Чем и какие страницы прочитал последний разбор активной версии. */
+export interface MaterialParseRead {
+  revision: number;
+  parser_mode: ParserMode | null;
+  /** Модель страниц облачного запуска; у «Быстро» — null. */
+  model_id: string | null;
+  scope: "all" | "range" | "needs_review" | string;
+  page_from: number | null;
+  page_to: number | null;
+  /** Сколько страниц прочитал этот запуск; остальные пришли из прошлой версии. */
+  parsed_pages: number | null;
+}
+
 export interface MaterialRead {
   id: string;
   original_name: string;
@@ -73,6 +86,7 @@ export interface MaterialRead {
   diagnostics: string[];
   error: string | null;
   task: ProcessingTaskRead | null;
+  last_parse: MaterialParseRead | null;
   attached_at: string;
   created_at: string;
   updated_at: string;
