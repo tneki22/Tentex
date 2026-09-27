@@ -17,4 +17,4 @@
 
 ## Где они
 
-`backend/tests/` — pytest, гоняется `cd backend && python -m pytest` и включён в CI. Общего frontend test script нет; два точечных файла на встроенном `node:test` — `frontend/src/screens/workspace/referenceAnswerMedia.test.ts` и `sourcePlaces.test.ts` — запускаются вручную и не входят ни в `npm run build`, ни в CI. Frontend автоматически проверяется TypeScript typecheck и Vite build; ESLint и метрика покрытия не настроены.
+`backend/tests/` — pytest, включён в CI. Локально запускай выбранные файлы или тесты по правилам `AGENTS.md`; полный `cd backend && python -m pytest` не является обязательной проверкой каждой правки. Общего frontend test script нет; два точечных файла на встроенном `node:test` — `frontend/src/screens/workspace/referenceAnswerMedia.test.ts` и `sourcePlaces.test.ts` — запускаются вручную и не входят ни в `npm run build`, ни в CI. Frontend автоматически проверяется TypeScript typecheck и Vite build; ESLint и метрика покрытия не настроены.

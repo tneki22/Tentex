@@ -48,9 +48,9 @@ description: Правила бэкенда Tentex — слои, доменные
 
 ## Своё к общему циклу проверки
 
-Общий порядок — в `CLAUDE.md`. Бэкенду сверх него:
+Общий порядок и выбор объёма проверок — в `AGENTS.md`. Бэкенду сверх него:
 
-- `cd backend && python -m ruff check .` — чисто (правила `E,F,I,UP,B,SIM`, line-length 100, py313).
-- Затронул домен — прогони профильную проверку из `backend/scripts/`: `check_stage2` … `check_stage5`, `check_manual_binding`, `check_ai_gateway`, `check_exam_chat`, `check_library_workspace`.
+- Из `backend/` запусти `python -m ruff check <изменённые_файлы>` (правила `E,F,I,UP,B,SIM`, line-length 100, py313).
+- Если выбранные тесты не покрывают изменённый сценарий, выбери нужную профильную проверку из `backend/scripts/`: `check_stage2` … `check_stage5`, `check_manual_binding`, `check_ai_gateway`, `check_exam_chat`, `check_library_workspace`.
 - Меняешь контракт (путь, тело, код ответа, `code` ошибки) — обнови соответствующий `docs/architecture/*.md`.
 - Новая настройка — только через `Settings` в `config.py` (префикс `TENTEX_`), не `os.environ` напрямую.
