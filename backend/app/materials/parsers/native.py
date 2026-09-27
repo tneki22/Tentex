@@ -1013,17 +1013,32 @@ def _zone_elements(
     for index, zone in enumerate(zones):
         if any(_bbox_overlap(zone.box, box) >= 0.6 for box in taken):
             continue
+        box = zone.box if zone.standalone else _inline_crop_box(zone.box, page)
         asset_path = (
             store_material_asset(
-                owner, f"p{page_index + 1}-zone{index}.png", raster.region_image(page, zone.box)
+                owner, f"p{page_index + 1}-zone{index}.png", raster.region_image(page, box)
             )
             if owner
             else None
         )
-        elements.append(
-            ParsedElement("formula", IMAGE_PLACEHOLDER, zone.box, asset_path=asset_path)
-        )
+        elements.append(ParsedElement("formula", IMAGE_PLACEHOLDER, box, asset_path=asset_path))
     return tuple(elements)
+
+
+def _inline_crop_box(
+    box: tuple[float, float, float, float], page: fitz.Page
+) -> tuple[float, float, float, float]:
+    """Рамка строчной формулы, у которой вырез не заденет соседние буквы.
+
+    Вырез берётся с полем в `REGION_PADDING_PT` со всех сторон, а у формулы
+    внутри фразы соседнее слово стоит в паре пунктов: «Пусть A, B, C» уходило
+    в модель с хвостом «ь» и возвращалось как «б A, B, C». Рамка заранее
+    сужается по горизонтали на это поле: вырез идёт ровно по чернилам формулы.
+    """
+    inset = raster.REGION_PADDING_PT / page.rect.width
+    if box[2] - box[0] <= 2 * inset:
+        return box
+    return (box[0] + inset, box[1], box[2] - inset, box[3])
 
 
 def _render_page(

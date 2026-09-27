@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from collections.abc import Iterable, Sequence
@@ -309,8 +310,10 @@ class _Ink:
             )
             self._image = Image.frombytes("L", (pixmap.width, pixmap.height), pixmap.samples)
         scale = self._scale
-        left, top = max(0, int(rect.x0 * scale)), max(0, int(rect.y0 * scale))
-        right = min(self._image.width, int(rect.x1 * scale) + 1)
+        # Слева и справа — только пиксели целиком внутри прогона: крайний
+        # столбец наполовину занят соседней буквой, и её хвост попадал в рамку.
+        left, top = max(0, math.ceil(rect.x0 * scale)), max(0, int(rect.y0 * scale))
+        right = min(self._image.width, int(rect.x1 * scale))
         bottom = min(self._image.height, int(rect.y1 * scale) + 1)
         if right - left < 1 or bottom - top < 2:
             return None
