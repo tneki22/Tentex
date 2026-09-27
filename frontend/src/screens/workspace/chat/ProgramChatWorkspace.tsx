@@ -29,10 +29,14 @@ const FLAG_META: Record<string, { title: string; icon: typeof BookOpen }> = {
 
 function buildProgramChipList(
   manifest: ProjectChatManifestEntry[] | undefined,
-): ChipDef[] | null {
-  if (!manifest) return null;
-  const byFlag = new Map<string, typeof manifest>();
-  for (const entry of manifest) {
+  contextFlags: Record<string, boolean>,
+): ChipDef[] {
+  // Переключатели должны оставаться доступны до загрузки предпросмотра
+  // контекста: это особенно важно в мастере, где проект ещё не активирован.
+  const entriesInManifest = manifest !== undefined;
+  const availableEntries = manifest ?? [];
+  const byFlag = new Map<string, ProjectChatManifestEntry[]>();
+  for (const entry of availableEntries) {
     if (!entry.flag_key) continue;
     const list = byFlag.get(entry.flag_key) ?? [];
     list.push(entry);
@@ -40,7 +44,9 @@ function buildProgramChipList(
   }
   return Object.entries(FLAG_META).map(([flagKey, meta]) => {
     const entries = byFlag.get(flagKey) ?? [];
-    const included = entries.some((entry) => entry.included);
+    const included = entriesInManifest
+      ? entries.some((entry) => entry.included)
+      : contextFlags[flagKey] ?? flagKey !== "reference_sources";
     const bytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
     const count = flagKey === "profile" ? null : entries.length;
     const reason = entries.find((entry) => !entry.included)?.reason ?? null;
@@ -204,7 +210,7 @@ export function ProgramChatWorkspace({
           )}
 
           <ContextChips
-            chips={buildProgramChipList(chat.contextPreview?.manifest)}
+            chips={buildProgramChipList(chat.contextPreview?.manifest, chat.session.context_flags)}
             contextFlags={chat.session.context_flags}
             onToggleFlag={chat.updateContextFlag}
           />
