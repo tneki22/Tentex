@@ -2204,6 +2204,9 @@ class OcrSettings(Base):
             "quality_threshold >= 0 AND quality_threshold <= 1", name="threshold_range"
         ),
         CheckConstraint("raster_scale IN (1.5, 2.0, 3.0)", name="raster_scale_known"),
+        CheckConstraint(
+            "cpu_profile IN ('gentle', 'balanced', 'maximum')", name="cpu_profile_known"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
@@ -2212,6 +2215,7 @@ class OcrSettings(Base):
     )
     quality_threshold: Mapped[float] = mapped_column(Float, default=0.75)
     raster_scale: Mapped[float] = mapped_column(Float, default=2.0)
+    cpu_profile: Mapped[str] = mapped_column(String(16), default="balanced")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 

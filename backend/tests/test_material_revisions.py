@@ -292,3 +292,38 @@ def test_timed_fragments_survive_rebuild(session: Session) -> None:
     read = library.read_library_page(session, material.id, 1)
     assert read.fragments[0].time_from == 12.5
     assert read.fragments[0].time_to == 18.0
+
+
+def test_last_parse_skips_edits_and_unfinished_revisions(session: Session) -> None:
+    from app.materials.service import _last_parses
+
+    material = make_material(session, "a12")
+    revision_registry.record_revision(
+        session,
+        material.id,
+        1,
+        origin=MaterialRevisionOrigin.PARSE,
+        parser_mode=ParserMode.CLOUD,
+        scope={
+            "kind": "range",
+            "page_from": 3,
+            "page_to": 9,
+            "options": {"page_model": {"provider_id": str(uuid4()), "model_id": "gpt-6-luna"}},
+        },
+        summary={"changed_pages": 7},
+    )
+    revision_registry.record_revision(
+        session, material.id, 2, origin=MaterialRevisionOrigin.MANUAL_EDIT
+    )
+    # Разбор, ещё не ставший активным, не описывает то, что видно в проекте.
+    revision_registry.record_revision(
+        session, material.id, 3, origin=MaterialRevisionOrigin.PARSE, parser_mode=ParserMode.FAST
+    )
+    material.active_parse_revision = 2
+    session.commit()
+
+    parse = _last_parses(session, [material])[material.id]
+
+    assert (parse.revision, parse.parser_mode) == (1, ParserMode.CLOUD)
+    assert parse.model_id == "gpt-6-luna"
+    assert (parse.scope, parse.page_from, parse.page_to, parse.parsed_pages) == ("range", 3, 9, 7)

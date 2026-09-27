@@ -113,6 +113,7 @@ const DEMO_RESEARCH_MATERIAL: MaterialRead = {
   diagnostics: [],
   error: null,
   task: null,
+  last_parse: null,
   attached_at: "2026-09-18T00:00:00Z",
   created_at: "2026-09-18T00:00:00Z",
   updated_at: "2026-09-18T00:00:00Z",
@@ -449,6 +450,7 @@ export function UiKit() {
             items={[
               { label: "Переименовать", onSelect: () => undefined },
               { label: "Добавить внутрь", items: [{ label: "Тему", onSelect: () => undefined }, { label: "Подпункт", onSelect: () => undefined }] },
+              { label: "Роль", items: [{ label: "Основной", checked: true }, { label: "Дополнительный", checked: false, onSelect: () => undefined }] },
               { label: "Убрать из программы", icon: <Trash2 size={14} />, onSelect: () => undefined, destructive: true },
             ]}
           />

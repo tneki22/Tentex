@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { ContextMenu as RadixContextMenu } from "radix-ui";
-import { ChevronRight } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 
 export interface ContextMenuItem {
   label: string;
@@ -8,6 +8,8 @@ export interface ContextMenuItem {
   onSelect?: () => void;
   disabled?: boolean;
   destructive?: boolean;
+  /** Пункт группы выбора: `true` — текущее значение, отмечается галочкой. */
+  checked?: boolean;
   /** Один уровень вложенности — для «Пометить» и подобных групп выбора. */
   items?: ContextMenuItem[];
 }
@@ -45,7 +47,10 @@ export function ContextMenu({ trigger, label, items, onCloseAutoFocus }: Context
                       disabled={sub.disabled}
                       onSelect={sub.onSelect}
                     >
-                      {sub.icon}{sub.label}
+                      {sub.checked === undefined ? sub.icon : (
+                        <span className="menu-item-check" aria-hidden="true">{sub.checked && <Check size={14} />}</span>
+                      )}
+                      {sub.label}
                     </RadixContextMenu.Item>
                   ))}
                 </RadixContextMenu.SubContent>

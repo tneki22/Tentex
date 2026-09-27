@@ -131,6 +131,7 @@ def run_options(
         "quality_threshold": params.quality_threshold,
         "raster_scale": params.raster_scale,
         "fast_model_id": params.fast_model_id,
+        "cpu_profile": params.cpu_profile,
     }
     if command.parser_mode == ParserMode.CLOUD and material.source_kind != MaterialSourceKind.AUDIO:
         pages = page_model(session)
@@ -153,6 +154,7 @@ def params_from_options(options: dict[str, Any], current: OcrRuntimeParams) -> O
         raster_scale=float(options.get("raster_scale", current.raster_scale)),
         fast_language=current.fast_language,
         fast_model_id=str(options.get("fast_model_id") or current.fast_model_id),
+        cpu_profile=options.get("cpu_profile") or current.cpu_profile,
         cloud_strategy=options.get("cloud_strategy") or current.cloud_strategy,
         image_mode=options.get("image_mode"),
     )

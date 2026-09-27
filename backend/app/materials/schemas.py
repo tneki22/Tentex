@@ -300,6 +300,24 @@ class ProcessingTaskRead(ApiModel):
     updated_at: datetime
 
 
+class MaterialParseRead(ApiModel):
+    """Чем и какие страницы прочитал последний разбор активной версии.
+
+    Список материалов проекта показывает это в строке: режим с моделью и
+    диапазон, если запуск был не по всему документу.
+    """
+
+    revision: int
+    parser_mode: ParserMode | None
+    # Модель страниц облачного запуска; у «Быстро» и старых версий — `None`.
+    model_id: str | None
+    scope: str
+    page_from: int | None
+    page_to: int | None
+    # Сколько страниц прочитал этот запуск; остальные пришли из прошлой версии.
+    parsed_pages: int | None
+
+
 class MaterialRead(ApiModel):
     id: UUID
     original_name: str
@@ -333,6 +351,7 @@ class MaterialRead(ApiModel):
     diagnostics: list[str]
     error: str | None
     task: ProcessingTaskRead | None
+    last_parse: MaterialParseRead | None = None
     attached_at: datetime
     created_at: datetime
     updated_at: datetime

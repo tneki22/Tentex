@@ -1,7 +1,6 @@
 import { ExternalLink, Save, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  PARSER_MODE_TITLES,
   type MaterialPurpose,
   type MaterialRead,
   type MaterialSourceKind,
@@ -9,27 +8,11 @@ import {
   type SourceRole,
 } from "../../api/materials";
 import { Button, Checkbox, ConfirmDialog, Field, Select, StatusBadge } from "../../components/ui";
+import { PURPOSE_LABEL, SOURCE_ROLE_OPTIONS, parseModeLabel } from "./materialLabels";
 
-const PURPOSE_OPTIONS: Array<{ value: MaterialPurpose; label: string }> = [
-  { value: "study_source", label: "Учебный источник" },
-  { value: "exam_structure", label: "Список вопросов" },
-  { value: "reference_answers", label: "Ответы" },
-];
-
-const ROLE_OPTIONS = [
-  { value: "main", label: "Основной", description: "Главный источник для изучения" },
-  { value: "additional", label: "Дополнительный", description: "Расширяет основной материал" },
-  { value: "reference", label: "Справочный", description: "Для ответов и пояснений" },
-];
-
-/** Как материал был разобран. У записи режимы называются по-своему: это Whisper и модель речи. */
-function parseModeLabel(material: MaterialRead): string {
-  if (material.source_kind === "audio") {
-    if (material.parser_mode === "cloud") return "Облако — внешняя модель речи";
-    return material.parser_mode === "fast" ? "Локально — Whisper" : "Не запускалась";
-  }
-  return material.parser_mode ? PARSER_MODE_TITLES[material.parser_mode] : "Не запускался";
-}
+const PURPOSE_OPTIONS: Array<{ value: MaterialPurpose; label: string }> = (
+  ["study_source", "exam_structure", "reference_answers"] as const
+).map((value) => ({ value, label: PURPOSE_LABEL[value] }));
 
 const SOURCE_LABEL: Record<MaterialSourceKind, string> = {
   file: "Загруженный файл",
@@ -113,6 +96,9 @@ interface MaterialFileTabProps {
   material: MaterialRead;
   answersMaterial: MaterialRead | null;
   busy: boolean;
+  /** Список вопросов и ответы бывают только в учебниковом проекте; в экзамене и
+   *  свободном изучении файл всегда учебный источник, выбирать нечего. */
+  allowPurposeChoice: boolean;
   onSave: (command: MaterialUpdateCommand) => Promise<MaterialRead | null>;
   onRemove: () => void;
 }
@@ -121,6 +107,7 @@ export function MaterialFileTab({
   material,
   answersMaterial,
   busy,
+  allowPurposeChoice,
   onSave,
   onRemove,
 }: MaterialFileTabProps) {
@@ -202,7 +189,7 @@ export function MaterialFileTab({
             />
           </Field>
 
-          <fieldset className={`materials-purpose-field ${purposesError ? "is-invalid" : ""}`}>
+          {allowPurposeChoice ? <fieldset className={`materials-purpose-field ${purposesError ? "is-invalid" : ""}`}>
             <legend>Используется как</legend>
             <div className="materials-purpose-options">
               {PURPOSE_OPTIONS.map((option) => (
@@ -216,12 +203,17 @@ export function MaterialFileTab({
               ))}
             </div>
             {purposesError && <small role="alert">{purposesError}</small>}
-          </fieldset>
+          </fieldset> : (
+            <div className="materials-purpose-static">
+              <span>Используется как</span>
+              <strong>{material.purposes.map((purpose) => PURPOSE_LABEL[purpose]).join(", ")}</strong>
+            </div>
+          )}
 
           <Field label="Роль источника" hint="Роль влияет на построение программы и порядок источников.">
             <Select
               value={draft.sourceRole}
-              options={ROLE_OPTIONS}
+              options={SOURCE_ROLE_OPTIONS}
               ariaLabel="Роль источника"
               disabled={busy}
               onValueChange={(value) => {

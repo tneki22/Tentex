@@ -37,6 +37,7 @@ from app.materials.schemas import (
     ExamProgramPreviewNode,
     ExternalMaterialCreate,
     MaterialAnswerImportResult,
+    MaterialParseRead,
     MaterialPurpose,
     MaterialRead,
     MaterialUpdate,
@@ -56,6 +57,8 @@ from app.models import (
     Material,
     MaterialFragment,
     MaterialPage,
+    MaterialRevision,
+    MaterialRevisionOrigin,
     MaterialState,
     NodeType,
     Project,
@@ -101,7 +104,60 @@ def _link(session: Session, project_id: UUID, material_id: UUID) -> ProjectMater
     return link
 
 
-def _read(link: ProjectMaterial, material: Material, task: BackgroundJob | None) -> MaterialRead:
+def _last_parses(session: Session, materials: list[Material]) -> dict[UUID, MaterialParseRead]:
+    """Последний разбор активной версии каждого материала одним запросом.
+
+    Правка страницы или уборка текста дают новую версию, но режим и модель
+    остаются от разбора, из которого она выросла, — поэтому берётся последняя
+    версия-разбор не новее активной, а не сама активная.
+    """
+    active = {material.id: material.active_parse_revision for material in materials}
+    if not active:
+        return {}
+    rows = session.scalars(
+        select(MaterialRevision)
+        .where(
+            MaterialRevision.material_id.in_(active),
+            MaterialRevision.origin.in_(
+                [MaterialRevisionOrigin.IMPORTED, MaterialRevisionOrigin.PARSE]
+            ),
+        )
+        .order_by(MaterialRevision.revision)
+    )
+    result: dict[UUID, MaterialParseRead] = {}
+    for row in rows:
+        if row.revision > active[row.material_id]:
+            continue
+        scope = row.scope or {}
+        page_model = (scope.get("options") or {}).get("page_model") or {}
+        changed = (row.summary or {}).get("changed_pages")
+        result[row.material_id] = MaterialParseRead(
+            revision=row.revision,
+            parser_mode=row.parser_mode,
+            model_id=page_model.get("model_id"),
+            scope=str(scope.get("kind") or "all"),
+            page_from=scope.get("page_from"),
+            page_to=scope.get("page_to"),
+            parsed_pages=changed if isinstance(changed, int) else None,
+        )
+    return result
+
+
+def _read_one(session: Session, link: ProjectMaterial, material: Material) -> MaterialRead:
+    return _read(
+        link,
+        material,
+        _latest_task(session, material.id),
+        _last_parses(session, [material]).get(material.id),
+    )
+
+
+def _read(
+    link: ProjectMaterial,
+    material: Material,
+    task: BackgroundJob | None,
+    last_parse: MaterialParseRead | None = None,
+) -> MaterialRead:
     purposes = [purpose for purpose in link.purposes if purpose in PURPOSE_VALUES]
     return MaterialRead(
         id=material.id,
@@ -131,6 +187,7 @@ def _read(link: ProjectMaterial, material: Material, task: BackgroundJob | None)
         diagnostics=material.diagnostics,
         error=material.error,
         task=_task_read(task),
+        last_parse=last_parse,
         attached_at=link.created_at,
         created_at=material.created_at,
         updated_at=material.updated_at,
@@ -240,7 +297,7 @@ async def upload_material(
             exam_slot=exam_slot,
             duplicate_detail="Этот файл уже добавлен в проект",
         )
-        return _read(link, material, _latest_task(session, material.id))
+        return _read_one(session, link, material)
 
 
 def create_text_material(
@@ -261,7 +318,7 @@ def create_text_material(
             exam_slot=command.exam_slot,
             duplicate_detail="Этот текст уже добавлен в проект",
         )
-        return _read(link, material, _latest_task(session, material.id))
+        return _read_one(session, link, material)
 
 
 def create_external_material(
@@ -285,7 +342,7 @@ def create_external_material(
             exam_slot=command.exam_slot,
             duplicate_detail="Этот источник уже добавлен в проект",
         )
-        return _read(link, material, _latest_task(session, material.id))
+        return _read_one(session, link, material)
 
 
 def list_materials(session: Session, project_id: UUID) -> list[MaterialRead]:
@@ -298,7 +355,11 @@ def list_materials(session: Session, project_id: UUID) -> list[MaterialRead]:
     ).all()
     material_ids = [material.id for _link, material in rows]
     tasks_by_material = _latest_tasks_by_material(session, material_ids)
-    return [_read(link, material, tasks_by_material.get(material.id)) for link, material in rows]
+    parses = _last_parses(session, [material for _link, material in rows])
+    return [
+        _read(link, material, tasks_by_material.get(material.id), parses.get(material.id))
+        for link, material in rows
+    ]
 
 
 def get_material(session: Session, project_id: UUID, material_id: UUID) -> MaterialRead:
@@ -307,7 +368,7 @@ def get_material(session: Session, project_id: UUID, material_id: UUID) -> Mater
     material = session.get(Material, material_id)
     if material is None:
         raise ProjectNotFoundError("Материал не найден")
-    return _read(link, material, _latest_task(session, material.id))
+    return _read_one(session, link, material)
 
 
 def update_material(
@@ -343,7 +404,7 @@ def update_material(
         if command.source_role is not None:
             link.affects_program = command.source_role != SourceRole.REFERENCE
         session.flush()
-        return _read(link, material, _latest_task(session, material.id))
+        return _read_one(session, link, material)
 
 
 def detach_material(session: Session, project_id: UUID, material_id: UUID) -> None:
@@ -363,7 +424,7 @@ def start_processing(
         link = _link(session, project_id, material_id)
         library.start_processing_core(session, material_id, command)
         material = library.material_or_404(session, material_id)
-        return _read(link, material, _latest_task(session, material_id))
+        return _read_one(session, link, material)
 
 
 def control_task(
@@ -374,7 +435,7 @@ def control_task(
         link = _link(session, project_id, material_id)
         library.control_task_core(session, material_id, action)
         material = library.material_or_404(session, material_id)
-        return _read(link, material, _latest_task(session, material_id))
+        return _read_one(session, link, material)
 
 
 def get_page(
