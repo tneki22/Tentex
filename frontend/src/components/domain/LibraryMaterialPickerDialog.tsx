@@ -88,6 +88,7 @@ interface LibraryMaterialPickerDialogProps {
   examSlot?: ExamMaterialSlot;
   multiple?: boolean;
   allowPurposeSelection?: boolean;
+  allowExamPurposes?: boolean;
   existingStudySourceCount?: number;
   studyRoleMode?: "first-main" | "selected";
   defaultStudyRole?: SourceRole;
@@ -122,6 +123,7 @@ export function LibraryMaterialPickerDialog({
   examSlot,
   multiple = false,
   allowPurposeSelection = false,
+  allowExamPurposes = true,
   existingStudySourceCount = 0,
   studyRoleMode = "selected",
   defaultStudyRole = "main",
@@ -144,6 +146,9 @@ export function LibraryMaterialPickerDialog({
   const [busy, setBusy] = useState(false);
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const purposeOptions = allowExamPurposes
+    ? PURPOSE_OPTIONS
+    : PURPOSE_OPTIONS.filter((option) => option.value === "study_source");
 
   useEffect(() => {
     if (!open) return;
@@ -167,7 +172,11 @@ export function LibraryMaterialPickerDialog({
     setQuery("");
     setPurpose(fixedPurpose ?? "study_source");
     setStudyRole(defaultStudyRole);
-  }, [open, fixedPurpose, defaultStudyRole]);
+  }, [open, fixedPurpose, defaultStudyRole, allowExamPurposes]);
+
+  useEffect(() => {
+    if (!allowExamPurposes && purpose !== "study_source") setPurpose("study_source");
+  }, [allowExamPurposes, purpose]);
 
   const visible = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("ru");
@@ -287,7 +296,7 @@ export function LibraryMaterialPickerDialog({
               <Select
                 ariaLabel="Назначение материала"
                 value={purpose}
-                options={PURPOSE_OPTIONS}
+                options={purposeOptions}
                 onValueChange={(next) => {
                   const nextPurpose = (next ?? "study_source") as MaterialPurpose;
                   setPurpose(nextPurpose);
