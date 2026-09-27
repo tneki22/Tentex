@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Literal
 
@@ -12,6 +13,28 @@ DEFAULT_RASTER_SCALE = 2.0
 RASTER_SCALE_OPTIONS = (1.5, 2.0, 3.0)
 DEFAULT_FAST_LANGUAGE = "ru"
 DEFAULT_FAST_MODEL_ID = "PP-OCRv5"
+OcrCpuProfile = Literal["gentle", "balanced", "maximum"]
+DEFAULT_CPU_PROFILE: OcrCpuProfile = "balanced"
+# Доли логических CPU оставляют запас API и интерфейсу; минимум balanced
+# нужен для машин с 2–4 потоками, но никогда не превышает доступное число.
+GENTLE_CPU_DIVISOR = 8
+BALANCED_CPU_DIVISOR = 4
+BALANCED_MIN_THREADS = 2
+
+
+def available_cpu_count() -> int:
+    """Число логических процессоров, доступных текущему процессу."""
+    return max(1, os.process_cpu_count() or os.cpu_count() or 1)
+
+
+def cpu_threads_for(profile: OcrCpuProfile, available: int | None = None) -> int:
+    """Потоки локального OCR; это не жёсткий лимит CPU всего воркера."""
+    count = max(1, available if available is not None else available_cpu_count())
+    if profile == "gentle":
+        return max(1, count // GENTLE_CPU_DIVISOR)
+    if profile == "balanced":
+        return min(count, max(BALANCED_MIN_THREADS, count // BALANCED_CPU_DIVISOR))
+    return count
 
 # Как режим «Облако» делит работу между текстовым слоем файла и внешней моделью.
 # Выбирается на запуск; значение в настройках — только выбор по умолчанию.
@@ -111,9 +134,15 @@ class OcrRuntimeParams:
     raster_scale: float = DEFAULT_RASTER_SCALE
     fast_language: str = DEFAULT_FAST_LANGUAGE
     fast_model_id: str = DEFAULT_FAST_MODEL_ID
+    cpu_profile: OcrCpuProfile = DEFAULT_CPU_PROFILE
     cloud_strategy: CloudStrategy = DEFAULT_CLOUD_STRATEGY
     # `None` — выбор движка по умолчанию (`DEFAULT_IMAGE_MODE`).
     image_mode: ImageMode | None = None
+
+    @property
+    def cpu_threads(self) -> int:
+        """Число потоков OCR для профиля этого запуска на текущей машине."""
+        return cpu_threads_for(self.cpu_profile)
 
     def images_for(self, engine: str) -> ImageMode:
         """Режим изображений, реально действующий для движка этого запуска."""

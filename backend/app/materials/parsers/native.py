@@ -252,6 +252,7 @@ def _ocr_raster(
             page_number,
             language=params.fast_language,
             ocr_version=params.fast_model_id,
+            cpu_threads=params.cpu_threads,
             quality_threshold=params.quality_threshold,
         )
     except (OSError, RuntimeError, ValueError) as error:
@@ -1086,6 +1087,7 @@ def _scanned_page(
             page_index + 1,
             language=params.fast_language,
             ocr_version=params.fast_model_id,
+            cpu_threads=params.cpu_threads,
             quality_threshold=params.quality_threshold,
             owner=owner,
         )
@@ -1782,6 +1784,7 @@ def _photo_page(
         1,
         language=params.fast_language,
         ocr_version=params.fast_model_id,
+        cpu_threads=params.cpu_threads,
         quality_threshold=params.quality_threshold,
         owner=owner,
     )

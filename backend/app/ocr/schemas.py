@@ -8,7 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import ParserMode
-from app.ocr.engines import RASTER_SCALE_OPTIONS, CloudStrategy, ImageMode
+from app.ocr.engines import RASTER_SCALE_OPTIONS, CloudStrategy, ImageMode, OcrCpuProfile
 
 RasterScale = Literal[*RASTER_SCALE_OPTIONS]
 EngineRuntime = Literal["worker", "gpu_service", "cloud"]
@@ -35,6 +35,7 @@ class OcrGlobalSettingsWrite(ApiModel):
     default_mode: ParserMode
     quality_threshold: float = Field(ge=0, le=1)
     raster_scale: RasterScale
+    cpu_profile: OcrCpuProfile = "balanced"
 
 
 class OcrEngineWrite(ApiModel):
@@ -171,6 +172,9 @@ class OcrSettingsRead(ApiModel):
     default_mode: ParserMode
     quality_threshold: float
     raster_scale: float
+    cpu_profile: OcrCpuProfile
+    cpu_available: int
+    cpu_threads_by_profile: dict[OcrCpuProfile, int]
     engines: list[OcrEngineRead]
     cloud: OcrCloudRead
     speech: list[SpeechEngineRead]

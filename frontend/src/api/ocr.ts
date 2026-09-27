@@ -135,6 +135,9 @@ export interface OcrSettingsRead {
   default_mode: ParserMode;
   quality_threshold: number;
   raster_scale: number;
+  cpu_profile: OcrCpuProfile;
+  cpu_available: number;
+  cpu_threads_by_profile: Record<OcrCpuProfile, number>;
   engines: OcrEngineRead[];
   cloud: OcrCloudRead;
   speech: SpeechEngineRead[];
@@ -146,7 +149,10 @@ export interface OcrGlobalSettingsWrite {
   default_mode: ParserMode;
   quality_threshold: number;
   raster_scale: number;
+  cpu_profile: OcrCpuProfile;
 }
+
+export type OcrCpuProfile = "gentle" | "balanced" | "maximum";
 
 export interface OcrEngineWrite {
   model_id: string | null;
