@@ -177,3 +177,9 @@ def test_page_answer_keeps_figure_without_labels() -> None:
     assert [element.kind for element in parsed.elements] == ["paragraph", "image"]
     assert parsed.elements[1].text == IMAGE_PLACEHOLDER
     assert parsed.plain_text == "Текст"
+
+
+def test_cyrillic_after_backslash_becomes_text() -> None:
+    from app.materials.parsers.cloud_vlm import repair_latex
+
+    assert repair_latex(r"\ЭД(x_1) \equiv 1") == r"\text{ЭД}(x_1) \equiv 1"

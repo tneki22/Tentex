@@ -118,6 +118,7 @@ TEX_ENVIRONMENT_RE = re.compile(r"\\(begin|end)\{([^}]+)\}")
 # Обычный русский или английский текст с распознанной страницы такой
 # последовательности не даёт — обратный слеш там не встречается.
 BARE_LATEX_RE = re.compile(r"\\[a-zA-Z]{2,}")
+CYRILLIC_COMMAND_RE = re.compile(r"\\([А-Яа-яЁё]+)")
 
 PAGE_INSTRUCTION = """Ты распознаёшь страницу учебного документа.
 Верни JSON по схеме и ничего кроме него.
@@ -307,6 +308,15 @@ def latex_issues(text: str) -> list[str]:
     if opened:
         issues.append("unbalanced_environment")
     return issues
+
+
+def repair_latex(text: str) -> str:
+    """Кириллица после обратного слеша (`\\ЭД`) — не команда, а текст.
+
+    Модель переносит обозначение из учебника как команду LaTeX, и KaTeX
+    отказывается рисовать всю формулу: «Undefined control sequence».
+    """
+    return CYRILLIC_COMMAND_RE.sub(r"\\text{\1}", text)
 
 
 def wrap_bare_latex(text: str) -> str:
@@ -542,7 +552,7 @@ class CloudRecognizer:
                 RecognizedRegion(
                     index=item.index,
                     kind=REGION_KINDS.get(item.kind, "image"),
-                    text=item.content,
+                    text=repair_latex(item.content),
                     confidence=item.confidence,
                 )
                 for item in answer.value.regions
@@ -729,7 +739,7 @@ class CloudRecognizer:
         diagnostics: list[str] = []
         broken_boxes = 0
         for index, item in enumerate(answer.elements):
-            text = wrap_bare_latex(item.text.strip())
+            text = wrap_bare_latex(repair_latex(item.text.strip()))
             if not text and item.kind == "image":
                 # Схема без надписей приходит с пустым текстом, и это законно:
                 # её содержание — сам вырез по рамке. Прежде такой элемент
