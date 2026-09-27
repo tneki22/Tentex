@@ -63,13 +63,25 @@ ChatMessage ссылается на Attempt/Grade; Оценка не живёт 
 | `app/exam/checking.py` | нормализация, ключевые термины и детерминированные пороги |
 | `app/exam/judge.py` | схема судьи, prompt, вызов шлюза (с учётом `model_override`) и проверка цитат |
 | `app/exam/attempts.py` | снимок Попытки, Оценка, история, повторная проверка и самооценка |
+| `app/exam/reply.py` | сборка хода обычного ответа: предел контекста, приоритеты, источники, оценка шлюза, `ChatConfirmationRequired` |
+| `app/exam/sources.py` | источники учебного хода: запросы, область, второй материал для сравнения, стабильные S-ID |
 | `app/exam/router.py` | HTTP и SSE-контракт |
 | `app/chat_tools/registry.py` | неизменяемый реестр `ToolSpec`; настоящий Tool и заблокированные specs будущих |
 | `app/chat_tools/executor.py` | `run_tool`: проверка доступности/режима, валидация входа, `ChatToolRun`, типизированное сообщение |
 
-Для обычного ответа контекст ограничен 12 последними сообщениями, 6 фрагментами
-по 1500 символов и общим бюджетом 12 000 символов для эталона, профиля и
-фрагментов. Судья никогда не получает хвост чата: только вопрос, снимок
+Обычный ответ собирается в пределе контекста (`DEFAULT_BUDGET_TOKENS = 12 000`
+по локальной оценке `count_tokens`; чат может запомнить свой предел в
+`ChatSession.context_budget_tokens`). Приоритет: эталон → свидетельства
+(фрагменты и найденные места, не больше половины предела) → история (новые
+пары первыми) → профиль. Первый не влезший элемент обрезается, остальные
+исключаются. Порядок сообщений: system → история → данные хода → вопрос.
+Если что-то сокращено или шлюз требует подтверждения цены, ход не отправляется:
+`409 ai_confirmation_required` с `context` (причины, цена и верхняя граница с
+одной попыткой исправления ссылок, `budget: {limit, needed, maximum}`, что
+сокращено, `expanded` — хеш и цена при увеличенном пределе). Клиент повторяет
+тот же ход с `confirmed_request_hash`, при увеличении — с
+`context_budget_tokens` и `remember_budget`. Предел выше окна модели —
+`422 chat_context_budget_too_large`. Судья никогда не получает хвост чата: только вопрос, снимок
 профиля и эталона, привязанные фрагменты и текст конкретной Попытки — он же
 использует `Attempt.context_snapshot["model_override"]`, замороженный на
 момент сдачи, а не текущую настройку сессии.
@@ -141,7 +153,7 @@ upgrade/downgrade сохраняют пустой `PRAGMA foreign_key_check`.
 | GET | `/projects/{project}/chat/sessions/{chat}/context` | manifest, fingerprint, объём и источник модели — preview перед вызовом |
 | GET | `/projects/{project}/chat/capabilities?node_id=…` | режимы, навыки и Tools с `available`/`unavailable_reason` |
 | POST | `/projects/{project}/chat/sessions/{chat}/tools/{tool_key}/runs` | синхронный запуск Tool через `ToolExecutor` |
-| POST | `/projects/{project}/chat/sessions/{chat}/messages` | поток обычного ответа |
+| POST | `/projects/{project}/chat/sessions/{chat}/messages` | поток обычного ответа; тело: `text`, `scope`, `knowledge_policy`, `material_ids`, `operation`, `client_turn_id`, `confirmed_request_hash`, `context_budget_tokens`, `remember_budget` |
 | POST | `/projects/{project}/chat/sessions/{chat}/answer` | сохранить Попытку и сразу проверить |
 | POST | `/projects/{project}/attempts/{attempt}/check` | идемпотентно проверить прежнюю Попытку |
 | PUT | `/projects/{project}/attempts/{attempt}/self-assessment` | сохранить `passed/partial/failed` отдельно |
@@ -197,7 +209,7 @@ JSON-снимком: подключение провайдера могут уд
 
 ```text
 event: started
-data: {"message_id":"…","run_id":"…"}
+data: {"message_id":"…","user_message_id":"…","run_id":"…","sources":[…]}
 
 event: delta
 data: {"text":"часть ответа"}
@@ -212,6 +224,13 @@ data: {"message_id":"…","message":{…ChatMessageRead…},"usage":{…},"cache
 происходит ровно один раз за поток: успешный `completed` сохраняет прямо в
 обработчике события; отмена (`CancelledError`) и любая другая ветка выхода
 сохраняют `stopped`/`failed` в `finally`, если сохранение ещё не произошло.
+
+`client_turn_id` делает ход идемпотентным (уникален в чате, миграция 0070):
+повтор с тем же ID, когда ответ уже сохранён, отдаёт `started` + `completed` с
+`cached: true` без вызова модели; повтор после сбоя переиспользует реплику
+пользователя и её параметры (операция, область, политика), не дублируя её.
+Источники приходят в `started`, поэтому ссылки `[S…]` кликабельны во время
+потока.
 
 При доменной ошибке после старта приходит `event: error` с `code` и `detail`.
 Отмена клиентом сохраняет накопленный текст как `stream_state=stopped`; обычное
