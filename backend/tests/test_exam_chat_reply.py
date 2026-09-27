@@ -13,8 +13,10 @@ from app.ai.gateway import ModelGateway
 from app.ai.provider import FakeTransport, ProviderError, ProviderStreamEvent
 from app.exam import chat as chat_service
 from app.exam import router as chat_router
+from app.exam import sources as chat_sources
 from app.exam.schemas import ChatMessageWrite, ChatSettingsWrite
 from app.models import ChatMessageRole, ChatMode, PageQuality
+from app.projects.errors import ProjectDomainError
 from app.retrieval.context import AssembledContext
 from app.retrieval.schemas import (
     RetrievalHitRead,
@@ -65,8 +67,8 @@ def _stub_retrieval(monkeypatch: pytest.MonkeyPatch, hits: list[RetrievalHitRead
             del session
             return AssembledContext(sources=result.results, token_count=0, truncated=False)
 
-    monkeypatch.setattr(chat_router, "HybridRetriever", Retriever)
-    monkeypatch.setattr(chat_router, "ContextAssembler", Assembler)
+    monkeypatch.setattr(chat_sources, "HybridRetriever", Retriever)
+    monkeypatch.setattr(chat_sources, "ContextAssembler", Assembler)
 
 
 def _frames(chunks: list[str]) -> list[tuple[str, dict[str, object]]]:
@@ -147,3 +149,71 @@ async def test_error_frame_keeps_structured_context(
     assert event == "error"
     assert error["code"] == "ai_provider_unavailable"
     assert isinstance(error["context"], dict)
+
+
+@pytest.mark.asyncio
+async def test_operation_is_recorded_and_reaches_the_prompt_without_the_command_words(
+    session: Session, ai_config: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del ai_config
+    queries: list[str] = []
+    _stub_retrieval(monkeypatch, [_hit("Первое место"), _hit("Второе место")])
+    original = chat_sources.HybridRetriever.search
+
+    async def spy(self, session, command):  # noqa: ANN001 — тестовая обёртка
+        queries.append(command.query)
+        return await original(self, session, command)
+
+    monkeypatch.setattr(chat_sources.HybridRetriever, "search", spy)
+    fake = FakeTransport(streams=[[ProviderStreamEvent(delta="Согласны [S1] и [S2].")]])
+
+    project = make_exam_project(session)
+    topic = make_topic_node(session, project, title="Нормальные формы")
+    chat = chat_service.create_session(session, project.id, topic.id)
+    chat_service.update_settings(
+        session, project.id, chat.id, ChatSettingsWrite(mode=ChatMode.STUDY)
+    )
+    monkeypatch.setattr("app.ai.gateway.production_transport", lambda db, modality: fake)
+    monkeypatch.setattr(
+        chat_router, "SessionLocal", sessionmaker(bind=session.bind, expire_on_commit=False)
+    )
+    response = await chat_router.post_chat_message(
+        project_id=project.id,
+        session_id=chat.id,
+        command=ChatMessageWrite(text="Нормальные формы", operation="compare_sources"),
+        session=session,
+        gateway=ModelGateway(session),
+    )
+    [chunk async for chunk in response.body_iterator]
+
+    assert queries[0] == "Нормальные формы"
+    system = fake.stream_requests[0]["messages"][0]["content"]
+    assert "Операция: сравнить источники" in system
+    detail = chat_service.get_session_detail(session, project.id, chat.id)
+    user = next(message for message in detail.messages if message.role == ChatMessageRole.USER)
+    assert user.skill == "compare_sources"
+
+
+@pytest.mark.asyncio
+async def test_empty_linked_topic_is_rejected_before_the_turn_is_written(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    project = make_exam_project(session)
+    topic = make_topic_node(session, project, title="Без привязок")
+    chat = chat_service.create_session(session, project.id, topic.id)
+    chat_service.update_settings(
+        session, project.id, chat.id, ChatSettingsWrite(mode=ChatMode.STUDY)
+    )
+
+    with pytest.raises(ProjectDomainError) as error:
+        await chat_router.post_chat_message(
+            project_id=project.id,
+            session_id=chat.id,
+            command=ChatMessageWrite(text="Что это?", retrieval_scope="linked_topic"),
+            session=session,
+            gateway=ModelGateway(session),
+        )
+
+    assert error.value.code == "retrieval_scope_empty"
+    assert chat_service.get_session_detail(session, project.id, chat.id).messages == []

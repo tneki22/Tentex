@@ -194,11 +194,10 @@ class HybridRetriever:
 def _lexical_candidates(
     session: Session, scope: ScopeFilter, query: str, limit: int
 ) -> list[SearchHit]:
-    """Кандидаты BM25 внутри границ области."""
-    outcome = search_fragments(session, scope.material_ids, query, limit=limit)
-    return [
-        hit for hit in outcome.hits if scope.block_ids is None or hit.block_id in scope.block_ids
-    ]
+    """Кандидаты BM25 внутри границ области: блоки темы фильтруются до лимита."""
+    return search_fragments(
+        session, scope.material_ids, query, limit=limit, block_ids=scope.block_ids
+    ).hits
 
 
 def _lexical_ids(
@@ -375,7 +374,10 @@ def resolve_scope(session: Session, command: RetrievalSearchWrite) -> ScopeFilte
         )
         if len(existing) != len(set(command.material_ids)):
             raise ProjectNotFoundError("Один из выбранных материалов не найден")
-        return ScopeFilter(command.material_ids, None, command.query)
+        excluded = set(command.exclude_material_ids)
+        return ScopeFilter(
+            [item for item in command.material_ids if item not in excluded], None, command.query
+        )
     if command.scope == RetrievalScope.LIBRARY:
         query = select(Material.id).where(Material.status == MaterialState.READY)
         if command.project_id is not None:
@@ -390,20 +392,26 @@ def resolve_scope(session: Session, command: RetrievalSearchWrite) -> ScopeFilte
     assert command.project_id is not None
     if session.get(Project, command.project_id) is None:
         raise ProjectNotFoundError()
-    material_ids = list(
-        session.scalars(
+    excluded = set(command.exclude_material_ids)
+    material_ids = [
+        material_id
+        for material_id in session.scalars(
             select(ProjectMaterial.material_id).where(
                 ProjectMaterial.project_id == command.project_id
             )
         )
-    )
+        if material_id not in excluded
+    ]
     block_ids: list[UUID] | None = None
     semantic_query = command.query
     if command.node_id is not None:
         node = session.get(ProgramNode, command.node_id)
         if node is None or node.project_id != command.project_id:
             raise ProjectNotFoundError("Тема программы не найдена")
-        semantic_query = f"Тема: {node.title}\nЗапрос: {command.query}"
+        # «Весь проект» ищет по запросу как есть: тема в смысловом запросе
+        # скрыто тянула выдачу к текущему вопросу.
+        if command.scope in {RetrievalScope.LINKED_TOPIC, RetrievalScope.TOPIC_PROJECT}:
+            semantic_query = f"Тема: {node.title}\nЗапрос: {command.query}"
         if command.scope == RetrievalScope.LINKED_TOPIC:
             block_ids = list(
                 session.scalars(

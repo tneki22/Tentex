@@ -20,6 +20,9 @@ export function CitationPreview({ source }: { source: ChatRetrievalSource }) {
           <small>{[source.block_title, source.locator].filter(Boolean).join(" · ")}</small>
         </div>
       </header>
+      {source.also_in && source.also_in.length > 0 && (
+        <p className="chat-source-also">Тот же текст: {source.also_in.join(", ")}</p>
+      )}
       {source.warning && (
         <p className="chat-source-warning"><AlertTriangle size={13} aria-hidden="true" />{source.warning}</p>
       )}
@@ -49,7 +52,10 @@ export function ChatSourcesList({ sources, cited }: { sources: ChatRetrievalSour
               <span className="chat-source-id">{source.id}</span>
               <span className="chat-source-name">
                 {path ? <Link to={path}>{source.material}</Link> : source.material}
-                <small>{source.locator}</small>
+                <small>
+                  {source.locator}
+                  {source.also_in && source.also_in.length > 0 && ` · также в: ${source.also_in.join(", ")}`}
+                </small>
               </span>
               {used && <span className="chat-source-used">в ответе</span>}
             </li>

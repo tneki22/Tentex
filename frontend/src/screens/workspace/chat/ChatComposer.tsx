@@ -27,6 +27,8 @@ interface ChatComposerProps {
   sending: boolean;
   disabled?: boolean;
   placeholder?: string;
+  /** Выбранная операция над полем ввода — метка с кнопкой сброса. */
+  operation?: ReactNode;
 }
 
 /**
@@ -37,7 +39,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   {
     value, onChange, onSend, onStop, onOpenPalette, modelPicker, modes = [], currentMode = "exam",
     onModeChange,
-    showModeIndicator = true, sending, disabled, placeholder,
+    showModeIndicator = true, sending, disabled, placeholder, operation,
   },
   forwardedRef,
 ) {
@@ -81,6 +83,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
 
   return (
     <div className="chat-composer">
+      {operation}
       <textarea
         ref={ref}
         className="chat-composer-input"

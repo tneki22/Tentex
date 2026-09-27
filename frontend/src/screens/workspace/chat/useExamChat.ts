@@ -16,9 +16,8 @@ import {
   type AttemptOutcome,
   type ChatCapabilities,
   type ChatContextPreview,
-  type ChatKnowledgePolicy,
+  type ChatSendOptions,
   type ChatMessageRead,
-  type ChatRetrievalScope,
   type ChatSessionDetail,
   type ChatSessionSummary,
   type ChatSettingsPatch,
@@ -31,6 +30,8 @@ export interface StreamFailure {
   code: string;
   detail: string;
   retryText?: string;
+  /** Область, политика и операция хода: «Повторить» отправляет тот же ход. */
+  retrieval?: ChatSendOptions;
 }
 
 interface UseExamChatOptions {
@@ -214,6 +215,16 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
     });
   }
 
+  function removeMessage(id: string) {
+    setMessagesById((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setMessageOrder((current) => current.filter((item) => item !== id));
+  }
+
   /** Оптимистичная запись получает настоящий ID из кадра `started`. */
   function renameMessage(from: string, to: string) {
     if (from === to) return;
@@ -253,14 +264,7 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
     requestAnimationFrame(() => flushDelta(messageId));
   }
 
-  async function sendMessage(
-    retryText?: string,
-    retrieval?: {
-      scope: ChatRetrievalScope;
-      knowledgePolicy: ChatKnowledgePolicy;
-      materialIds?: string[];
-    },
-  ) {
+  async function sendMessage(retryText?: string, retrieval?: ChatSendOptions) {
     const text = (retryText ?? draft).trim();
     if (!activeSessionId || !text || streamingMessageId || preparing) return;
     const controller = new AbortController();
@@ -329,7 +333,7 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
           if (examinerId) flushDelta(examinerId);
           upsertMessage(event.message);
         } else if (event.type === "error") {
-          setFailure({ code: event.code, detail: event.detail, retryText: text });
+          setFailure({ code: event.code, detail: event.detail, retryText: text, retrieval });
           if (examinerId) patchMessage(examinerId, { stream_state: "failed" });
         }
       }
@@ -339,10 +343,16 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
           flushDelta(examinerId);
           patchMessage(examinerId, { stream_state: "stopped" });
         }
-      } else if (error instanceof ProjectApiError) {
-        setFailure({ code: error.code ?? "unknown", detail: error.message, retryText: text });
       } else {
-        setFailure({ code: "unknown", detail: "Ответ не получен", retryText: text });
+        // Отказ до кадра started: сервер ход не записал. Оптимистичная реплика
+        // уходит из ленты, а текст возвращается в поле — ничего не теряется.
+        if (!examinerId) {
+          removeMessage(userId);
+          setDraft((current) => current || text);
+        }
+        setFailure(error instanceof ProjectApiError
+          ? { code: error.code ?? "unknown", detail: error.message, retryText: text, retrieval }
+          : { code: "unknown", detail: "Ответ не получен", retryText: text, retrieval });
       }
     } finally {
       setPreparing(false);

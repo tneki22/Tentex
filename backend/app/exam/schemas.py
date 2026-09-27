@@ -132,6 +132,11 @@ class ChatDraftRead(ApiModel):
     updated_at: datetime
 
 
+ChatOperation = Literal[
+    "discuss", "explain", "find_evidence", "compare_sources", "find_discrepancies"
+]
+
+
 class ChatMessageWrite(ApiModel):
     text: NonBlank = Field(max_length=20_000)
     retrieval_scope: Literal["linked_topic", "topic_project", "project", "selected_materials"] = (
@@ -139,6 +144,9 @@ class ChatMessageWrite(ApiModel):
     )
     retrieval_material_ids: list[UUID] = Field(default_factory=list, max_length=100)
     knowledge_policy: Literal["sources_only", "allow_model"] = "sources_only"
+    #: Явная операция вместо префикса в тексте: слова «Сравнить источники» не
+    #: попадают в поисковый запрос и не портят выдачу.
+    operation: ChatOperation = "discuss"
 
 
 class ChatAnswerWrite(ApiModel):

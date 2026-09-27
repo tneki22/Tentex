@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { BookOpenCheck, FileQuestion, History, ListChecks, MessageSquare, MessageSquareText, ScrollText, Search, Sparkles } from "lucide-react";
+import { BookOpenCheck, FileQuestion, History, ListChecks, MessageSquare, MessageSquareText, ScrollText, Search, Sparkles, X } from "lucide-react";
 import { cancelBackgroundJob } from "../../../api/backgroundJobs";
 import type {
   ChatContextFlags,
   ChatContextPreview,
   ChatKnowledgePolicy,
+  ChatOperation,
   ChatRetrievalScope,
+  ChatSendOptions,
 } from "../../../api/chat";
 import type { ProgramNodeRead } from "../../../api/projects";
 import { ProjectApiError } from "../../../api/projects";
@@ -22,6 +24,14 @@ import { ContextChips } from "./ContextChips";
 import { SkillPalette } from "./SkillPalette";
 import type { PaletteCommandDef } from "./skills";
 import { useExamChat } from "./useExamChat";
+
+/** Кнопки операций учебного чата. Операция уходит полем, а не словами в тексте. */
+const OPERATIONS: Array<{ key: Exclude<ChatOperation, "discuss">; label: string }> = [
+  { key: "explain", label: "Объяснить" },
+  { key: "find_evidence", label: "Найти подтверждения" },
+  { key: "compare_sources", label: "Сравнить источники" },
+  { key: "find_discrepancies", label: "Найти расхождения" },
+];
 
 // Одна выбранная модель обслуживает и реплику, и судью той же сессии —
 // поэтому обе возможности сразу (как в `REQUIRED_MODEL_CAPABILITIES` на бэкенде).
@@ -132,6 +142,7 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
     projectChat ? "project" : studyOnly ? "topic_project" : "linked_topic",
   );
   const [knowledgePolicy, setKnowledgePolicy] = useState<ChatKnowledgePolicy>("sources_only");
+  const [operation, setOperation] = useState<ChatOperation>("discuss");
   const [chatZoom, setChatZoom] = useState(() => {
     const saved = Number(window.localStorage.getItem("tentex:chat-zoom"));
     return Number.isFinite(saved) && saved >= 0.8 && saved <= 1.2 ? saved : 1;
@@ -265,14 +276,15 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
 
       {chat.session && !chat.detailLoading && !chat.detailError && (
         <>
-          {isEmpty ? (
+          {/* Ошибка первого хода видна в ленте: пустое приглашение её бы спрятало. */}
+          {isEmpty && !chat.failure ? (
             <div className="chat-empty-invite">
               <p>Выберите действие или напишите сообщение</p>
               <div className="chat-empty-actions">
                 {!studyOnly && <Button onClick={() => { setAnswerDraft(""); setAnswering(true); }}>
                   <BookOpenCheck size={14} />Сдать ответ
                 </Button>}
-                {studyOnly && <Button onClick={() => chat.setDraft(`Объясни «${topicTitle}» по шагам`)}>
+                {studyOnly && <Button onClick={() => { setOperation("explain"); if (node) chat.setDraft(node.title); }}>
                   <BookOpenCheck size={14} />Объяснить
                 </Button>}
                 <Button variant="secondary" onClick={() => setSearching(true)}>
@@ -287,7 +299,14 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
               streamingMessageId={chat.streamingMessageId}
               preparing={chat.preparing}
               failure={chat.failure}
-              onRetry={() => { if (chat.failure?.retryText) void chat.sendMessage(chat.failure.retryText); }}
+              onRetry={() => { if (chat.failure?.retryText) void chat.sendMessage(chat.failure.retryText, chat.failure.retrieval); }}
+              failureAction={chat.failure?.code === "retrieval_scope_empty" && chat.failure.retryText ? (
+                <Button variant="secondary" onClick={() => {
+                  const retry: ChatSendOptions = { ...(chat.failure?.retrieval ?? { knowledgePolicy }), scope: "topic_project" };
+                  setRetrievalScope("topic_project");
+                  void chat.sendMessage(chat.failure?.retryText, retry);
+                }}>Искать по теме</Button>
+              ) : undefined}
               onAnswerAgain={() => { setAnswerDraft(""); setAnswering(true); }}
               onCheckAgain={chat.retryAttempt}
               onSelfAssessment={chat.assessAttempt}
@@ -322,8 +341,18 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
                 hint="Отделяются от источников"
               />
               <div className="chat-retrieval-commands" aria-label="Команды тьютора">
-                {["Объяснить", "Найти подтверждения", "Сравнить источники", "Найти расхождения"].map((label) => (
-                  <button type="button" key={label} onClick={() => chat.setDraft(`${label}: ${topicTitle}`)}>{label}</button>
+                {OPERATIONS.map((item) => (
+                  <button
+                    type="button"
+                    key={item.key}
+                    aria-pressed={operation === item.key}
+                    onClick={() => {
+                      setOperation((current) => (current === item.key ? "discuss" : item.key));
+                      // Поле заполняется учебным запросом, а не названием команды:
+                      // его можно поправить до отправки.
+                      if (!chat.draft.trim() && node) chat.setDraft(node.title);
+                    }}
+                  >{item.label}</button>
                 ))}
                 <button
                   type="button"
@@ -368,10 +397,16 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
             <ChatComposer
               value={chat.draft}
               onChange={chat.setDraft}
-              onSend={() => void chat.sendMessage(undefined, {
-                scope: retrievalScope,
-                knowledgePolicy,
-              })}
+              onSend={() => {
+                void chat.sendMessage(undefined, { scope: retrievalScope, knowledgePolicy, operation });
+                setOperation("discuss");
+              }}
+              operation={operation !== "discuss" ? (
+                <div className="chat-composer-operation">
+                  <span>{OPERATIONS.find((item) => item.key === operation)?.label}</span>
+                  <button type="button" aria-label="Отменить операцию" onClick={() => setOperation("discuss")}><X size={12} /></button>
+                </div>
+              ) : undefined}
               onStop={chat.stopMessage}
               onOpenPalette={() => setPaletteOpen(true)}
               modelPicker={

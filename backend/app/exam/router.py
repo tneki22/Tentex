@@ -44,16 +44,17 @@ from app.exam.schemas import (
     SelfAssessmentWrite,
     ToolRunCreateWrite,
 )
-from app.models import AiRun, ChatMessage, ChatMessageRole, ChatSession, ChatStreamState, Grade
-from app.projects.errors import ProjectDomainError
-from app.retrieval.context import ContextAssembler
-from app.retrieval.schemas import (
-    RetrievalHitRead,
-    RetrievalScope,
-    RetrievalSearchWrite,
-    SearchStrategy,
+from app.exam.sources import FoundSources, ensure_scope_has_places, find_sources
+from app.models import (
+    AiRun,
+    ChatMessage,
+    ChatMessageRole,
+    ChatMode,
+    ChatSession,
+    ChatStreamState,
+    Grade,
 )
-from app.retrieval.search import HybridRetriever
+from app.projects.errors import ProjectDomainError
 
 SessionDependency = Annotated[Session, Depends(get_session)]
 GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
@@ -136,26 +137,6 @@ def post_tool_run(
     return ChatToolRunRead.model_validate(run)
 
 
-#: Уточнение короче стольких слов не ищется само по себе: «а подробнее?» без
-#: прошлого вопроса находит в источниках случайные места.
-_FOLLOW_UP_WORDS = 6
-
-
-def _retrieval_query(text: str, tail: list[ChatMessage]) -> str:
-    """Запрос к источникам: короткое уточнение дополняется прошлым вопросом."""
-    if len(text.split()) >= _FOLLOW_UP_WORDS:
-        return text
-    previous = next(
-        (
-            item.text
-            for item in reversed(tail)
-            if item.role == ChatMessageRole.USER and item.text.strip()
-        ),
-        None,
-    )
-    return f"{previous}\n{text}" if previous else text
-
-
 def _history_messages(tail: list[ChatMessage]) -> list[AiMessage]:
     messages: list[AiMessage] = []
     for item in tail:
@@ -184,6 +165,7 @@ def _reply_request(
     retrieval_sources: list[dict[str, object]] | None = None,
     knowledge_policy: str = "sources_only",
     retrieval_notes: list[str] | None = None,
+    operation: str = "discuss",
 ) -> AiTextRequest:
     grounding = [f"Вопрос: {ctx.question}"]
     grounding.append(
@@ -202,9 +184,13 @@ def _reply_request(
         heading = f'material="{fragment.material_name}" page="{fragment.page_number}"'
         grounding.append(f"<fragment_data {heading}>\n{fragment.text}\n</fragment_data>")
     for source in retrieval_sources or []:
+        also_in = source.get("also_in") or []
+        # Тот же текст в других материалах — одно место: модель узнаёт, что
+        # источники здесь совпадают, а не видит два одинаковых S-ID.
+        also = f' also_in="{"; ".join(also_in)}"' if also_in else ""
         grounding.append(
-            '<retrieval_source id="{id}" material="{material}" locator="{locator}">\n'
-            "{text}\n</retrieval_source>".format(**source)
+            f'<retrieval_source id="{source["id"]}" material="{source["material"]}" '
+            f'locator="{source["locator"]}"{also}>\n{source["text"]}\n</retrieval_source>'
         )
     for note in retrieval_notes or []:
         grounding.append(f"<retrieval_note>{note}</retrieval_note>")
@@ -214,6 +200,7 @@ def _reply_request(
             content=build_chat_reply_prompt(
                 chat.persona, chat.strictness, chat.mode,
                 chat.model_parameters.get("max_output_tokens") if chat.model_parameters else None,
+                operation,
             ),
         ),
         AiMessage(role="user", content="\n\n".join(grounding)),
@@ -239,36 +226,34 @@ async def post_chat_message(
     session: SessionDependency,
     gateway: GatewayDependency,
 ) -> StreamingResponse:
-    chat, ctx, user_message_id = chat_service.start_turn(
-        session, project_id, session_id, command.text
-    )
-    retrieval_sources: list[dict[str, object]] = []
-    retrieval_notes: list[str] = []
-    if chat.mode.value == "study":
-        result = await HybridRetriever().search(
-            session,
-            RetrievalSearchWrite(
-                query=_retrieval_query(command.text, ctx.tail),
-                strategy=SearchStrategy.HYBRID,
-                scope=RetrievalScope(command.retrieval_scope),
-                project_id=project_id,
-                node_id=chat.program_node_id,
-                material_ids=command.retrieval_material_ids,
-                limit=10,
-            ),
+    existing = session.get(ChatSession, session_id)
+    if existing is not None and existing.mode == ChatMode.STUDY:
+        ensure_scope_has_places(
+            session, project_id, existing.program_node_id, command.retrieval_scope
         )
-        assembled = ContextAssembler().assemble(session, result)
-        retrieval_notes = result.degradation_reasons
-        retrieval_sources = [
-            _source_entry(number, hit) for number, hit in enumerate(assembled.sources, start=1)
-        ]
+    chat, ctx, user_message_id = chat_service.start_turn(
+        session, project_id, session_id, command.text, skill=command.operation
+    )
+    found = FoundSources(entries=[], notes=[])
+    if chat.mode == ChatMode.STUDY:
+        found = await find_sources(
+            session,
+            project_id=project_id,
+            node_id=chat.program_node_id,
+            text=command.text,
+            tail=ctx.tail,
+            scope=command.retrieval_scope,
+            material_ids=command.retrieval_material_ids,
+            operation=command.operation,
+        )
     request = _reply_request(
         chat,
         ctx,
         command.text,
-        retrieval_sources,
+        found.entries,
         command.knowledge_policy,
-        retrieval_notes,
+        found.notes,
+        command.operation,
     )
     # Локальная проверка (роль/модель/ключ настроены) без сети — падает здесь
     # обычным ProjectDomainError, до того как клиент увидит поток.
@@ -278,42 +263,6 @@ async def post_chat_message(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-def _source_entry(number: int, hit: RetrievalHitRead) -> dict[str, object]:
-    """Источник ответа с полным локатором: страницы или путь и строки Typst."""
-    locator = hit.locator
-    if locator.typst_path:
-        label = locator.typst_path
-        if locator.line_from:
-            label += f", строки {locator.line_from}–{locator.line_to or locator.line_from}"
-    elif locator.page_from:
-        label = (
-            f"стр. {locator.page_from}–{locator.page_to}"
-            if locator.page_to and locator.page_to != locator.page_from
-            else f"стр. {locator.page_from}"
-        )
-    else:
-        label = "без страницы"
-    return {
-        "kind": "retrieval_source",
-        "id": f"S{number}",
-        "material": locator.material_name,
-        "material_id": str(locator.material_id),
-        "locator": label,
-        "page": locator.page_from,
-        "page_to": locator.page_to,
-        "typst_path": locator.typst_path,
-        "line_from": locator.line_from,
-        "line_to": locator.line_to,
-        "block_title": locator.block_title,
-        "chunk_id": str(locator.chunk_id),
-        "text": hit.text,
-        "quality": hit.quality.value if hit.quality else None,
-        "warning": hit.warning,
-        "included": True,
-        "bytes": len(hit.text.encode()),
-    }
 
 
 def _retrieval_manifest(request: AiTextRequest) -> list[dict[str, Any]]:

@@ -11,6 +11,16 @@ export type ExaminerStrictness = "soft" | "normal" | "strict";
 export type ChatMode = "exam" | "study" | "program" | "source_search";
 export type ChatRetrievalScope = "linked_topic" | "topic_project" | "project" | "selected_materials";
 export type ChatKnowledgePolicy = "sources_only" | "allow_model";
+/** Что сделать с найденными местами; название операции не попадает в поисковый запрос. */
+export type ChatOperation = "discuss" | "explain" | "find_evidence" | "compare_sources" | "find_discrepancies";
+
+/** Параметры хода учебного чата: повтор после сбоя отправляет их без изменений. */
+export interface ChatSendOptions {
+  scope: ChatRetrievalScope;
+  knowledgePolicy: ChatKnowledgePolicy;
+  materialIds?: string[];
+  operation?: ChatOperation;
+}
 export type ChatToolRunState = "queued" | "running" | "succeeded" | "failed";
 export type AttemptOutcome = "passed" | "partial" | "failed" | "unscored";
 export type GradeMethod = "exact_match" | "key_terms" | "sql" | "semantic" | "ai_judge" | "self_assessment";
@@ -374,6 +384,8 @@ export interface ChatRetrievalSource {
   block_title?: string | null;
   quality?: string | null;
   warning?: string | null;
+  /** Тот же текст есть и в этих материалах — одно место вместо повтора. */
+  also_in?: string[];
 }
 
 export type ChatStreamEvent =
@@ -554,11 +566,7 @@ export async function* streamMessage(
   sessionId: string,
   text: string,
   signal: AbortSignal,
-  retrieval: {
-    scope: ChatRetrievalScope;
-    knowledgePolicy: ChatKnowledgePolicy;
-    materialIds?: string[];
-  } = { scope: "topic_project", knowledgePolicy: "sources_only" },
+  retrieval: ChatSendOptions = { scope: "topic_project", knowledgePolicy: "sources_only" },
 ): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch(
     `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/messages`,
@@ -570,6 +578,7 @@ export async function* streamMessage(
         retrieval_scope: retrieval.scope,
         retrieval_material_ids: retrieval.materialIds ?? [],
         knowledge_policy: retrieval.knowledgePolicy,
+        operation: retrieval.operation ?? "discuss",
       }),
       signal,
     },

@@ -37,13 +37,15 @@ interface ChatTimelineProps {
   preparingContent?: ReactNode;
   onRetry: () => void;
   failure: StreamFailure | null;
+  /** Действие рядом с ошибкой — например, «Искать по теме» при пустой области. */
+  failureAction?: ReactNode;
 }
 
 export function ChatTimeline({
   projectId, messages, streamingMessageId, preparing,
   onAnswerAgain, onCheckAgain, onSelfAssessment,
   onApplyProposal, onRejectProposal, proposalBusy, nodeTitles, onFollowUp,
-  preparingLabel = "Готовлю ответ", preparingContent, onRetry, failure,
+  preparingLabel = "Готовлю ответ", preparingContent, onRetry, failure, failureAction,
 }: ChatTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
@@ -147,7 +149,9 @@ export function ChatTimeline({
               {failure.retryText && <Button variant="secondary" onClick={onRetry}>Повторить</Button>}
             </div>
           )
-        : <p className="inline-error" role="alert">{failure.detail}</p>
+        : failureAction
+          ? <div className="chat-offline-action"><p className="inline-error" role="alert">{failure.detail}</p>{failureAction}</div>
+          : <p className="inline-error" role="alert">{failure.detail}</p>
   );
 
   return (

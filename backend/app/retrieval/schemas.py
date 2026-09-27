@@ -56,6 +56,8 @@ class RetrievalSearchWrite(ApiModel):
     project_id: UUID | None = None
     node_id: UUID | None = None
     material_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    #: Материалы проекта, которые не ищутся: добор второго источника для сравнения.
+    exclude_material_ids: list[UUID] = Field(default_factory=list, max_length=500)
     limit: Annotated[int, Field(ge=1, le=50)] = 10
 
     @model_validator(mode="after")

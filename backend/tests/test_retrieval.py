@@ -894,20 +894,3 @@ def test_known_embedding_models_get_their_query_and_document_templates(
     assert qwen.pooling == "last_token" and qwen.query_template.startswith("Instruct: ")
     assert (manual.query_template, manual.document_template) == ("q {text}", "{text}")
 
-
-def test_short_chat_follow_up_searches_together_with_previous_question() -> None:
-    """«А подробнее?» само по себе находило в источниках случайные места."""
-    from app.exam.router import _retrieval_query
-    from app.models import ChatMessage, ChatMessageRole
-
-    tail = [
-        ChatMessage(role=ChatMessageRole.USER, text="Как предотвратить взаимоблокировку?"),
-        ChatMessage(role=ChatMessageRole.EXAMINER, text="Нарушить одно из условий Коффмана."),
-    ]
-
-    assert _retrieval_query("А подробнее?", tail) == (
-        "Как предотвратить взаимоблокировку?\nА подробнее?"
-    )
-    long_question = "Чем отличается предотвращение тупиков от их обхода?"
-    assert _retrieval_query(long_question, tail) == long_question
-    assert _retrieval_query("Подробнее", []) == "Подробнее"

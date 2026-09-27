@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,6 +18,9 @@ class AssembledContext:
     sources: list[RetrievalHitRead]
     token_count: int
     truncated: bool
+    #: Тот же текст в других материалах: `chunk_id` оставленного места → их названия.
+    #: Повтор не занимает место в бюджете, но согласие источников не теряется.
+    also_in: dict[UUID, list[str]] = field(default_factory=dict)
 
 
 class ContextAssembler:
@@ -61,12 +65,19 @@ class ContextAssembler:
             )
         sources: list[RetrievalHitRead] = []
         seen_chunks = set()
-        seen_text = set()
+        kept_by_text: dict[bytes, RetrievalHitRead] = {}
+        also_in: dict[UUID, list[str]] = {}
         used = 0
         truncated = False
         for hit in candidates:
             digest = hashlib.sha256(" ".join(hit.text.split()).encode()).digest()
-            if hit.locator.chunk_id in seen_chunks or digest in seen_text:
+            if hit.locator.chunk_id in seen_chunks:
+                continue
+            if (kept := kept_by_text.get(digest)) is not None:
+                name = hit.locator.material_name
+                names = also_in.setdefault(kept.locator.chunk_id, [])
+                if hit.locator.material_id != kept.locator.material_id and name not in names:
+                    names.append(name)
                 continue
             size = count_tokens(hit.text)
             if sources and used + size > token_budget:
@@ -74,6 +85,11 @@ class ContextAssembler:
                 continue
             sources.append(hit)
             seen_chunks.add(hit.locator.chunk_id)
-            seen_text.add(digest)
+            kept_by_text[digest] = hit
             used += size
-        return AssembledContext(sources=sources, token_count=used, truncated=truncated)
+        return AssembledContext(
+            sources=sources,
+            token_count=used,
+            truncated=truncated,
+            also_in={chunk_id: names for chunk_id, names in also_in.items() if names},
+        )

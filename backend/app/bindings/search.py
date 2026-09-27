@@ -292,19 +292,26 @@ def search_fragments(
     query: str,
     *,
     limit: int = RESULT_LIMIT,
+    block_ids: Sequence[UUID] | None = None,
 ) -> SearchOutcome:
-    """Топ-N кандидатов по формулировке, сгруппированных по блоку материала (Р5)."""
+    """Топ-N кандидатов по формулировке, сгруппированных по блоку материала (Р5).
+
+    `block_ids` ограничивает поиск блоками прямо в SQL, до лимита: фильтр после
+    лимита оставлял теме пустую выдачу, когда совпадения вне её блоков занимали
+    все места.
+    """
     terms = query_terms(query)[:_MAX_QUERY_TERMS]
     prefix = prefix_term(query)
     empty = SearchOutcome(terms=terms, prefix=prefix, hits=[])
-    if not (terms or prefix) or not material_ids:
+    if not (terms or prefix) or not material_ids or (block_ids is not None and not block_ids):
         return empty
     material_hex = [material_id.hex for material_id in material_ids]
     outcomes = _REQUEST_OUTCOMES.get()
-    key = (tuple(sorted(material_hex)), query, limit)
+    block_hex = sorted(block_id.hex for block_id in block_ids) if block_ids is not None else None
+    key = (tuple(sorted(material_hex)), query, limit, tuple(block_hex) if block_hex else None)
     if outcomes is not None and key in outcomes:
         return outcomes[key]
-    outcome = _search_fragments(session, material_hex, terms, prefix, limit)
+    outcome = _search_fragments(session, material_hex, terms, prefix, limit, block_hex)
     if outcomes is not None:
         outcomes[key] = outcome
     return outcome
@@ -316,17 +323,26 @@ def _search_fragments(
     terms: list[str],
     prefix: str | None,
     limit: int,
+    block_hex: list[str] | None = None,
 ) -> SearchOutcome:
     """MATCH по материалам и группировка найденных фрагментов по блокам."""
     empty = SearchOutcome(terms=terms, prefix=prefix, hits=[])
     placeholders = ", ".join(f":m{index}" for index in range(len(material_hex)))
     params: dict[str, object] = {f"m{index}": value for index, value in enumerate(material_hex)}
+    block_clause = ""
+    if block_hex is not None:
+        block_placeholders = ", ".join(f":b{index}" for index in range(len(block_hex)))
+        params.update({f"b{index}": value for index, value in enumerate(block_hex)})
+        block_clause = (
+            " AND fragment_id IN (SELECT id FROM material_fragments "
+            f"WHERE block_id IN ({block_placeholders}))"
+        )
     params["q"] = _match_expression(terms, prefix)
     params["raw_limit"] = limit * _RAW_HIT_MULTIPLIER
     rows = session.execute(
         text(
             "SELECT fragment_id, bm25(fragment_search, 1.0, 2.0) AS rank FROM fragment_search "
-            f"WHERE fragment_search MATCH :q AND material_id IN ({placeholders}) "
+            f"WHERE fragment_search MATCH :q AND material_id IN ({placeholders}){block_clause} "
             "ORDER BY rank LIMIT :raw_limit"
         ),
         params,
