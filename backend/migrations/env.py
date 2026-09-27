@@ -6,13 +6,18 @@ from sqlalchemy import CheckConstraint, event
 from app import models  # noqa: F401
 from app.config import settings
 from app.db import Base, engine
+from app.logging_config import is_configured
 
 config = context.config
-if config.config_file_name:
-    # disable_existing_loggers по умолчанию True: без него fileConfig на каждом
-    # запуске (upgrade_database вызывается при старте api и worker) глушит уже
-    # созданные логгеры uvicorn ("uvicorn.access", "uvicorn.error") — из-за
-    # этого пропадали и строки доступа, и трейсбеки 500-х.
+if config.config_file_name and not is_configured():
+    # Api зовёт upgrade_database() из lifespan уже после своего
+    # configure_logging(): fileConfig без этой проверки перетирал бы
+    # обработчики и уровень корневого логгера (alembic.ini ставит WARN и свой
+    # формат), и строки tentex.http пропадали бы из `docker compose logs api`.
+    # Воркер и обычный alembic CLI зовут upgrade_database() до своей
+    # настройки логирования (или вовсе без неё) — там fileConfig применяется
+    # как раньше, disable_existing_loggers=False по той же причине, что и
+    # была: не глушить уже созданные логгеры uvicorn.
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata

@@ -525,6 +525,16 @@ def test_diagnostics_handler_survives_alembic_logging_setup() -> None:
     assert any(isinstance(handler, diagnostics.DiagnosticsHandler) for handler in handlers)
 
 
+def test_is_configured_reflects_configure_logging_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`migrations/env.py` пропускает fileConfig, если это уже True — не даём флагу протухнуть незаметно."""
+    import app.logging_config as logging_config
+
+    monkeypatch.setattr(logging_config, "_CONFIGURED", False)
+    assert logging_config.is_configured() is False
+    monkeypatch.setattr(logging_config, "_CONFIGURED", True)
+    assert logging_config.is_configured() is True
+
+
 def test_exhausted_retry_is_journaled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.db.time.sleep", lambda _: None)
 

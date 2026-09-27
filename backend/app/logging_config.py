@@ -52,3 +52,13 @@ def configure_logging(level: str | None = None, *, json_logs: bool | None = None
     )
     _CONFIGURED = True
     logging.getLogger("tentex").debug("logging configured at %s", resolved_level)
+
+
+def is_configured() -> bool:
+    """Уже вызывали `configure_logging()` в этом процессе.
+
+    Проверяет `migrations/env.py`: alembic `fileConfig` перетирает обработчики
+    и уровень корневого логгера, поэтому в api и worker, где своя настройка
+    логирования уже применена, `fileConfig` применять не нужно.
+    """
+    return _CONFIGURED
