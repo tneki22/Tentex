@@ -14,6 +14,7 @@ from app.materials.parsers.base import (
     ParsedElement,
     ParsedPage,
 )
+from app.materials.parsers.formula_zones import readable
 from app.materials.storage import store_material_asset
 
 INDENT_STEP = 18
@@ -68,12 +69,37 @@ def _span_bbox(span: dict[str, object]) -> tuple[float, float] | None:
         return None
 
 
-def _line_text(raw_line: dict[str, object]) -> str:
+type Rect = tuple[float, float, float, float]
+
+
+def _span_center(span: dict[str, object]) -> tuple[float, float] | None:
+    bbox = span.get("bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+        return None
+    try:
+        return (float(bbox[0]) + float(bbox[2])) / 2, (float(bbox[1]) + float(bbox[3])) / 2
+    except (TypeError, ValueError):
+        return None
+
+
+def _excluded(span: dict[str, object], exclude: Sequence[Rect]) -> bool:
+    center = _span_center(span)
+    if center is None:
+        return False
+    x, y = center
+    return any(x0 <= x <= x1 and y0 <= y <= y1 for x0, y0, x1, y1 in exclude)
+
+
+def _line_text(raw_line: dict[str, object], exclude: Sequence[Rect] = ()) -> str:
     """Склеивает спаны строки, вставляя пробел там, где между ними есть просвет.
 
     PDF-вёрстка (особенно LaTeX с выключкой по ширине) часто отдаёт каждое слово
     отдельным спаном без символа пробела — пробел выражен только зазором между
     координатами соседних спанов.
+
+    :param exclude: зоны отдельно стоящих формул в пунктах. Их спаны — линейная
+        строка формулы («EQ=(f9−f(z))⋅η») или пустота вместо невидимых глифов;
+        формула придёт вырезом, а в абзаце её обломки только мешают.
     """
     spans = raw_line.get("spans")
     if not isinstance(spans, list):
@@ -82,9 +108,9 @@ def _line_text(raw_line: dict[str, object]) -> str:
     previous_x1: float | None = None
     previous_size = 10.0
     for span in spans:
-        if not isinstance(span, dict):
+        if not isinstance(span, dict) or (exclude and _excluded(span, exclude)):
             continue
-        text = str(span.get("text", ""))
+        text = readable(str(span.get("text", "")), str(span.get("font", "")))
         if not text:
             continue
         span_bbox = _span_bbox(span)
@@ -105,17 +131,41 @@ def _line_text(raw_line: dict[str, object]) -> str:
 
 
 def _text_lines(box: dict[str, object]) -> list[str]:
-    result: list[str] = []
+    return [text for group in _line_groups(box) for text, _ in group]
+
+
+def _line_bbox(raw_line: dict[str, object]) -> Rect | None:
+    bbox = raw_line.get("bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+        return None
+    try:
+        return float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+    except (TypeError, ValueError):
+        return None
+
+
+def _line_groups(
+    box: dict[str, object], exclude: Sequence[Rect] = ()
+) -> list[list[tuple[str, Rect | None]]]:
+    """Строки бокса, разбитые на группы там, где между ними стояла формула.
+
+    Разметчик кладёт выносную формулу в один бокс с абзацами над и под ней.
+    Когда её строки уходят в вырез, абзац над формулой и абзац под ней —
+    разные элементы: иначе формула встала бы до или после склеенного целого.
+    """
+    groups: list[list[tuple[str, Rect | None]]] = [[]]
     raw_lines = box.get("textlines")
     if not isinstance(raw_lines, list):
-        return result
+        return []
     for raw_line in raw_lines:
         if not isinstance(raw_line, dict):
             continue
-        text = _line_text(raw_line)
+        text = _line_text(raw_line, exclude)
         if text:
-            result.append(text)
-    return result
+            groups[-1].append((text, _line_bbox(raw_line)))
+        elif exclude and groups[-1] and _line_text(raw_line):
+            groups.append([])
+    return [group for group in groups if group]
 
 
 def _join_box_lines(lines: Sequence[str]) -> str:
@@ -136,7 +186,7 @@ def _table_markdown(box: dict[str, object]) -> str:
     table = box.get("table")
     if not isinstance(table, dict):
         return ""
-    return str(table.get("markdown") or "").strip()
+    return readable(str(table.get("markdown") or "")).strip()
 
 
 def _table_plain(box: dict[str, object], markdown: str) -> str:
@@ -147,7 +197,7 @@ def _table_plain(box: dict[str, object], markdown: str) -> str:
     lines = []
     for row in extracted:
         if isinstance(row, list):
-            lines.append(" | ".join(str(cell or "").strip() for cell in row))
+            lines.append(" | ".join(readable(str(cell or "")).strip() for cell in row))
     return "\n".join(lines).strip() or markdown
 
 
@@ -197,7 +247,7 @@ def _formula_fallback(box: dict[str, object], page: fitz.Page) -> str:
     сохраняет вырезка рядом.
     """
     text = page.get_text("text", clip=_box_rect(box, page))
-    return " ".join(text.split())
+    return " ".join(readable(text).split())
 
 
 def _list_levels(boxes: Iterable[dict[str, object]]) -> dict[int, int]:
@@ -231,12 +281,36 @@ def _markdown(elements: Iterable[ParsedElement]) -> str:
     return "\n\n".join(lines)
 
 
+def _group_bbox(
+    group: Sequence[tuple[str, Rect | None]], box: dict[str, object], page: fitz.Page
+) -> tuple[float, float, float, float]:
+    rects = [rect for _, rect in group if rect is not None]
+    if not rects:
+        return _normalized_bbox(box, page.rect.width, page.rect.height)
+    return _normalized_bbox(
+        {
+            "x0": min(rect[0] for rect in rects),
+            "y0": min(rect[1] for rect in rects),
+            "x1": max(rect[2] for rect in rects),
+            "y1": max(rect[3] for rect in rects),
+        },
+        page.rect.width,
+        page.rect.height,
+    )
+
+
 def parse_layout_page(
-    document: fitz.Document, page_index: int, owner: str = ""
+    document: fitz.Document,
+    page_index: int,
+    owner: str = "",
+    formula_zones: Sequence[tuple[float, float, float, float]] = (),
 ) -> ParsedPage:
     """Преобразует один текстовый PDF-лист в Markdown и элементы с координатами.
 
     :param owner: папка материала для вырезок формул; пустая строка — не резать.
+    :param formula_zones: рамки отдельно стоящих формул в долях страницы
+        (`formula_zones.find_zones`). Их строки выбрасываются из текстовых
+        боксов: формулы придут своими элементами-вырезами.
     """
     import pymupdf4llm
 
@@ -256,6 +330,10 @@ def parse_layout_page(
         raise ValueError("Разметчик PDF вернул страницу неизвестного формата")
 
     page = document[page_index]
+    width, height = page.rect.width, page.rect.height
+    exclude = [
+        (x0 * width, y0 * height, x1 * width, y1 * height) for x0, y0, x1, y1 in formula_zones
+    ]
     raw_boxes = raw_page.get("boxes")
     boxes = (
         [box for box in raw_boxes if isinstance(box, dict)]
@@ -271,69 +349,84 @@ def parse_layout_page(
     textless_count = 0
     for index, box in enumerate(boxes):
         box_class = str(box.get("boxclass") or "text")
-        asset_path: str | None = None
-        level: int | None = None
         if box_class == "table":
             text = _table_markdown(box)
-            kind: ElementKind = "table"
             if text:
                 plain_parts.append(_table_plain(box, text))
                 table_count += 1
+            pieces = [(text, _normalized_bbox(box, width, height), "table")]
         else:
-            text = _join_box_lines(_text_lines(box)).strip()
-            kind = _box_kind(box_class, text)
-            if not text and kind == "formula":
-                text = _formula_fallback(box, page)
+            groups = _line_groups(box, exclude)
+            if exclude and not groups and _text_lines(box):
+                continue  # бокс целиком из строк формул: они придут вырезами
+            if len(groups) > 1:
+                pieces = []
+                for group in groups:
+                    text = _join_box_lines([line for line, _ in group]).strip()
+                    pieces.append((text, _group_bbox(group, box, page), _box_kind(box_class, text)))
+            else:
+                text = _join_box_lines([line for group in groups for line, _ in group]).strip()
+                kind: ElementKind = _box_kind(box_class, text)
+                if not text and kind == "formula":
+                    text = _formula_fallback(box, page)
+                bbox = (
+                    _group_bbox(groups[0], box, page)
+                    if groups and exclude and kind not in {"image", "formula"}
+                    else _normalized_bbox(box, width, height)
+                )
+                pieces = [(text, bbox, kind)]
+        for part, (text, bbox, kind) in enumerate(pieces):
+            level: int | None = None
             if kind == "heading":
                 level = max(1, min(6, int(box.get("header_level") or 1)))
             elif kind == "list":
                 level = levels.get(id(box), 1)
-            if text:
+            if text and kind != "table":
                 plain_parts.append(text)
-
-        bbox = _normalized_bbox(box, page.rect.width, page.rect.height)
-        if not text:
-            # Отбрасываем только то, где содержания и не было: пустой колонтитул
-            # и полоску тоньше пальца — линейку, точку списка, обрезок рамки.
-            if box_class in SERVICE_CLASSES or not _region_is_large_enough(box):
-                continue
-            if kind not in {"image", "formula", "table"}:
-                # Класс обещал текст, а строк у бокса нет. Молча выбрасывать
-                # такое нельзя: содержание страницы исчезает, и привязать его
-                # нечем. Сохраняем областью-рисунком и считаем в диагностике.
-                kind = "image"
-                textless_count += 1
-            text = IMAGE_PLACEHOLDER
-        # Вырез оригинала нужен всему, что не показать текстом: схеме, выносной
-        # формуле (её строки разметчик не собирает) и таблице.
-        image_meta: ImageMeta | None = None
-        if owner and kind in {"image", "formula", "table"}:
-            crop = raster.region_image(page, bbox)
-            asset_path = store_material_asset(
-                owner, f"p{page_index + 1}-{kind}{index}.png", crop
-            )
-            if kind == "image":
-                image_meta = ImageMeta(
-                    detection="layout",
-                    crop_hash=hashlib.sha256(crop).hexdigest(),
-                    pixel_size=_png_size(crop),
+            if not text:
+                # Отбрасываем только то, где содержания и не было: пустой колонтитул
+                # и полоску тоньше пальца — линейку, точку списка, обрезок рамки.
+                if box_class in SERVICE_CLASSES or not _region_is_large_enough(box):
+                    continue
+                if kind not in {"image", "formula", "table"}:
+                    # Класс обещал текст, а строк у бокса нет. Молча выбрасывать
+                    # такое нельзя: содержание страницы исчезает, и привязать его
+                    # нечем. Сохраняем областью-рисунком и считаем в диагностике.
+                    kind = "image"
+                    textless_count += 1
+                text = IMAGE_PLACEHOLDER
+            # Вырез оригинала нужен всему, что не показать текстом: схеме, выносной
+            # формуле (её строки разметчик не собирает) и таблице.
+            asset_path: str | None = None
+            image_meta: ImageMeta | None = None
+            if owner and kind in {"image", "formula", "table"}:
+                crop = raster.region_image(page, bbox)
+                suffix = f"-{part}" if part else ""
+                asset_path = store_material_asset(
+                    owner, f"p{page_index + 1}-{kind}{index}{suffix}.png", crop
                 )
-        if kind == "formula":
-            formula_count += 1
-        elif kind == "image":
-            picture_count += 1
-        elements.append(
-            ParsedElement(
-                kind=kind,
-                text=text,
-                bbox=bbox,
-                level=level,
-                asset_path=asset_path,
-                image=image_meta,
+                if kind == "image":
+                    image_meta = ImageMeta(
+                        detection="layout",
+                        crop_hash=hashlib.sha256(crop).hexdigest(),
+                        pixel_size=_png_size(crop),
+                    )
+            if kind == "formula":
+                formula_count += 1
+            elif kind == "image":
+                picture_count += 1
+            elements.append(
+                ParsedElement(
+                    kind=kind,
+                    text=text,
+                    bbox=bbox,
+                    level=level,
+                    asset_path=asset_path,
+                    image=image_meta,
+                )
             )
-        )
 
-    if not elements:
+    if not elements and not formula_zones:
         raise ValueError("Разметчик PDF не нашёл текстовых элементов")
     plain = "\n".join(plain_parts)
     diagnostics = [

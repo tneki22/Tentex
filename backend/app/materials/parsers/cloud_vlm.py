@@ -33,6 +33,7 @@ from app.ai.provider import OpenAICompatibleTransport
 from app.ai.schemas import AiImagePart, AiImageUrl, AiMessage, AiModelSelection, AiTextPart
 from app.ai.settings import AiGatewayError
 from app.materials.parsers.base import (
+    IMAGE_PLACEHOLDER,
     DescribedImage,
     ElementKind,
     ImageDescription,
@@ -137,7 +138,11 @@ PAGE_INSTRUCTION = """Ты распознаёшь страницу учебно�
 5. Колонтитул, номер страницы и маргиналия — отдельные элементы своего вида,
    не части соседнего абзаца.
 6. Нечитаемое место передавай как ⟨?⟩ и ставь этому элементу confidence ниже 0.5.
-7. bbox — доля от размера страницы: [x0, y0, x1, y1] в диапазоне 0..1,
+7. Рисунок, схема, график, фотография — один элемент image на весь рисунок
+   вместе с надписями внутри него, bbox — по его внешним границам. Не дроби
+   рисунок на части. В text — надписи с рисунка через перевод строки или
+   пустая строка; подпись «Рис. N» под рисунком — отдельный элемент caption.
+8. bbox — доля от размера страницы: [x0, y0, x1, y1] в диапазоне 0..1,
    считая от левого верхнего угла. Если удобнее в пикселях присланной
    картинки — присылай в пикселях, но одинаково для всех элементов."""
 
@@ -725,6 +730,11 @@ class CloudRecognizer:
         broken_boxes = 0
         for index, item in enumerate(answer.elements):
             text = wrap_bare_latex(item.text.strip())
+            if not text and item.kind == "image":
+                # Схема без надписей приходит с пустым текстом, и это законно:
+                # её содержание — сам вырез по рамке. Прежде такой элемент
+                # выбрасывался, а схему потом по кускам подбирала проверка пропусков.
+                text = IMAGE_PLACEHOLDER
             if not text:
                 continue
             bbox = _clamped_bbox(item.bbox, *pixels)
