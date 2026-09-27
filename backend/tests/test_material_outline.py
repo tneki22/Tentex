@@ -17,13 +17,40 @@ import pytest
 from conftest import add_page_with_fragments, make_material
 from sqlalchemy.orm import Session
 
-from app.materials import library
+from app.materials import library, outline
 from app.materials.outline import find_printed_outline
 from app.materials.schemas import OutlineItem
 from app.models import MaterialSourceKind
 
 LINE_HEIGHT = 20.0
 LEFT_MARGIN = 50.0
+
+
+@pytest.mark.parametrize("found", [None, ([{"level": 1, "title": "Contents", "page": 1}], [1])])
+def test_printed_outline_cache_isolated_and_invalidated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, found: object
+) -> None:
+    """Опрос не сканирует PDF повторно, включая отсутствие; новый файл виден."""
+    path = tmp_path / "cached.pdf"
+    path.write_bytes(b"first")
+    calls = []
+
+    def scan(source: Path, page_count: int):
+        calls.append((source, page_count))
+        return found
+
+    monkeypatch.setattr(outline, "_scan_printed_outline", scan)
+    first = find_printed_outline(path, 1)
+    if first:
+        first[0][0]["title"] = "Changed by caller"
+        first[1].append(99)
+    assert find_printed_outline(path, 1) == found
+    assert len(calls) == 1
+    path.write_bytes(b"second version")
+    assert find_printed_outline(path, 1) == found
+    assert len(calls) == 2
+    find_printed_outline(path, 2)
+    assert len(calls) == 3
 
 
 def _make_pdf(path: Path, pages: list[list[tuple[str, float]]]) -> Path:
@@ -457,6 +484,12 @@ def test_outline_source_priority_embedded_wins(
     found = library.outline_sources(session, material)
 
     assert set(found) >= {"embedded", "printed"}
+
+    def unexpected_scan(*args):
+        pytest.fail("Карточка с закладками не должна сканировать запасные источники")
+
+    monkeypatch.setattr(library, "_printed_outline", unexpected_scan)
+    monkeypatch.setattr(library, "_recognized_outline", unexpected_scan)
     items, source = library._outline(session, material)
     assert source == "embedded"
     assert [item.title for item in items] == ["Из закладок"]

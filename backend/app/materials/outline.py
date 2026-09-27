@@ -12,12 +12,21 @@
 
 from __future__ import annotations
 
+import logging
 import re
+from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
+from threading import RLock
 
 import pymupdf as fitz
 
 from app.materials.outline_titles import GENERAL_TITLE_RE, TOPIC_TITLE_RE
+
+log = logging.getLogger("tentex.materials.outline")
+# Карточка опрашивается во время разбора; скан PDF нужен лишь при смене файла.
+PRINTED_OUTLINE_CACHE_SIZE = 64
+_printed_outline_lock = RLock()
 
 # Кандидаты — начало книги и последние страницы: в русских учебниках
 # содержание нередко печатают в конце, а не сразу после титула.
@@ -64,7 +73,8 @@ def _page_lines(page: fitz.Page) -> list[PhysicalLine]:
     отдельный текстовый блок на той же строке. Без неё такой заголовок терялся
     при разборе, а длинные пункты оглавления распадались на два пункта.
     """
-    raw = page.get_text("dict", sort=True)
+    # Координаты текста нужны, бинарные изображения в оглавлении — нет.
+    raw = page.get_text("dict", sort=True, flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES)
     lines: list[PhysicalLine] = []
     for block in raw.get("blocks", []):
         for line in block.get("lines", []):
@@ -262,9 +272,25 @@ def find_printed_outline(
     if path.suffix.lower() != ".pdf" or page_count < 1 or not path.exists():
         return None
     try:
-        return _scan_printed_outline(path, page_count)
-    except Exception:
+        stat = path.stat()
+        # lru_cache сам не объединяет одновременные промахи: первый опрос
+        # не должен запустить несколько одинаковых сканов в потоках API.
+        with _printed_outline_lock:
+            result = _cached_printed_outline(
+                path.resolve(), page_count, stat.st_mtime_ns, stat.st_size
+            )
+            return deepcopy(result)
+    except (OSError, RuntimeError, ValueError):
+        log.exception("Не удалось прочитать печатное оглавление")
         return None
+
+
+@lru_cache(maxsize=PRINTED_OUTLINE_CACHE_SIZE)
+def _cached_printed_outline(
+    path: Path, page_count: int, modified_ns: int, size: int
+) -> tuple[list[dict[str, object]], list[int]] | None:
+    """Кэшировать также отсутствие оглавления; stat входит в ключ снимка."""
+    return _scan_printed_outline(path, page_count)
 
 
 def _scan_printed_outline(

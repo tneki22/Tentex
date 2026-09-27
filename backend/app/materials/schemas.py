@@ -288,10 +288,14 @@ class TypstStartRead(ApiModel):
 
 
 class ProcessingTaskRead(ApiModel):
+    """Прогресс и зафиксированные параметры запуска, без содержимого checkpoint."""
     id: UUID
     state: BackgroundJobState
     stage: ProcessingStage
     parser_mode: ParserMode | None
+    model_id: str | None = None
+    cloud_strategy: CloudStrategy | None = None
+    image_mode: ImageMode | None = None
     done: int
     total: int
     diagnostics: list[str]

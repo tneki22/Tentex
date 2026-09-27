@@ -324,6 +324,20 @@ def _embedded_outline(material: Material) -> list[OutlineItem]:
 OUTLINE_AUTO_PRIORITY: tuple[OutlineSource, ...] = ("embedded", "printed", "recognized")
 
 
+def _printed_outline(material: Material) -> tuple[list[OutlineItem], list[int]] | None:
+    """Печатный источник из кэша неизменного PDF."""
+    if not material.page_count:
+        return None
+    printed = find_printed_outline(material_path(material.storage_path), material.page_count)
+    if printed is None:
+        return None
+    items, source_pages = printed
+    return ([
+        OutlineItem(level=int(item["level"]), title=str(item["title"]), page=int(item["page"]))
+        for item in items
+    ], source_pages)
+
+
 def outline_sources(
     session: Session, material: Material
 ) -> dict[OutlineSource, tuple[list[OutlineItem], list[int]]]:
@@ -332,19 +346,9 @@ def outline_sources(
     embedded = _embedded_outline(material)
     if embedded:
         found["embedded"] = (embedded, [])
-    if material.page_count:
-        printed = find_printed_outline(material_path(material.storage_path), material.page_count)
-        if printed:
-            items, source_pages = printed
-            found["printed"] = (
-                [
-                    OutlineItem(
-                        level=int(item["level"]), title=str(item["title"]), page=int(item["page"])
-                    )
-                    for item in items
-                ],
-                source_pages,
-            )
+    printed = _printed_outline(material)
+    if printed:
+        found["printed"] = printed
     printed_pages = set(found["printed"][1]) if "printed" in found else set()
     recognized = _recognized_outline(session, material, printed_pages)
     if recognized:
@@ -353,12 +357,15 @@ def outline_sources(
 
 
 def _outline(session: Session, material: Material) -> tuple[list[OutlineItem], OutlineSource]:
-    """Просмотрщик Библиотеки: только список и источник, без страниц-носителей."""
-    found = outline_sources(session, material)
-    for source in OUTLINE_AUTO_PRIORITY:
-        if source in found:
-            return found[source][0], source
-    return [], "none"
+    """Первый источник по приоритету; остальные нужны лишь мастеру оглавления."""
+    embedded = _embedded_outline(material)
+    if embedded:
+        return embedded, "embedded"
+    printed = _printed_outline(material)
+    if printed:
+        return printed[0], "printed"
+    recognized = _recognized_outline(session, material)
+    return (recognized, "recognized") if recognized else ([], "none")
 
 
 def resolve_outline(session: Session, material: Material, requested: str) -> OutlineDetailRead:
@@ -418,7 +425,23 @@ def latest_task(session: Session, material_id: UUID) -> BackgroundJob | None:
 
 
 def task_read(task: BackgroundJob | None) -> ProcessingTaskRead | None:
-    return ProcessingTaskRead.model_validate(task) if task else None
+    """Показать параметры снимка запуска, независимо от текущих настроек OCR."""
+    if task is None:
+        return None
+    options = task.checkpoint.get("options") or {}
+    model = options.get("page_model") or {}
+    return ProcessingTaskRead.model_validate(task).model_copy(update={
+        "model_id": model.get("model_id") if task.parser_mode == ParserMode.CLOUD
+        else options.get("fast_model_id"),
+        "cloud_strategy": options.get("cloud_strategy"),
+        "image_mode": options.get("image_mode"),
+    })
+
+
+def read_processing_task(session: Session, material_id: UUID) -> ProcessingTaskRead | None:
+    """Опрос прогресса без чтения PDF, страниц, изображений и истории версий."""
+    material_or_404(session, material_id)
+    return task_read(latest_task(session, material_id))
 
 
 def latest_tasks_by_material(
@@ -691,8 +714,8 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
         outline_source=outline_source,
         page_states=[
             PageStateRead.model_validate(page)
-            for page in session.scalars(
-                select(MaterialPage)
+            for page in session.execute(
+                select(MaterialPage.page_number, MaterialPage.quality, MaterialPage.reviewed_at)
                 .where(
                     MaterialPage.material_id == material.id,
                     MaterialPage.revision == material.active_parse_revision,
