@@ -107,6 +107,7 @@
 .lib-content-sources .disclosure-trigger { color: var(--ink); font-weight: var(--weight-semibold); }
 .lib-content-source-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-1); }
 .lib-content-source-actions .button { white-space: nowrap; }
+.lib-content-subject-select { width: 13rem; max-width: 100%; }
 .lib-content-source-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: var(--space-1) var(--space-3); max-height: min(18rem, 40vh); overflow: auto; padding: var(--space-2) 0; }
 .lib-content-source-list .checkbox-row { min-width: 0; }
 .lib-content-source-list .checkbox-row label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -378,6 +378,22 @@ export function Library() {
     () => materials.filter((material) => material.status === "ready"),
     [materials],
   );
+  const contentSubjects = useMemo(
+    () => [...new Set(readyContentMaterials.flatMap((material) => material.subject ? [material.subject] : []))].sort((a, b) => a.localeCompare(b, "ru")),
+    [readyContentMaterials],
+  );
+  const selectedContentSubject = useMemo(() => {
+    if (contentMaterialIds.length === 0 || contentMaterialIds.length === readyContentMaterials.length) return "all";
+    const selected = new Set(contentMaterialIds);
+    const subject = contentSubjects.find((candidate) => {
+      const matchingIds = readyContentMaterials.filter((material) => material.subject === candidate).map((material) => material.id);
+      return matchingIds.length === selected.size && matchingIds.every((id) => selected.has(id));
+    });
+    if (subject) return `subject:${subject}`;
+    const noSubjectIds = readyContentMaterials.filter((material) => material.subject === null).map((material) => material.id);
+    if (noSubjectIds.length === selected.size && noSubjectIds.every((id) => selected.has(id))) return "__no_subject__";
+    return null;
+  }, [contentMaterialIds, contentSubjects, readyContentMaterials]);
   /* Перезапуск после ошибки — такое же обычное массовое действие, как первый
      разбор: сервер отказывает только при уже активной задаче. */
   const processable = selected.filter(
@@ -784,6 +800,27 @@ export function Library() {
                     </div>
                   </Disclosure>
                   <div className="lib-content-source-actions">
+                    <Select
+                      ariaLabel="Выбрать источники по предмету"
+                      className="lib-content-subject-select"
+                      value={selectedContentSubject}
+                      placeholder="Выбраны вручную"
+                      options={[
+                        { value: "all", label: "По предмету: все" },
+                        ...contentSubjects.map((subject) => ({ value: `subject:${subject}`, label: subject })),
+                        ...(readyContentMaterials.some((material) => material.subject === null)
+                          ? [{ value: "__no_subject__", label: "Без предмета" }]
+                          : []),
+                      ]}
+                      onValueChange={(value) => {
+                        if (value === "all") setContentMaterialIds(readyContentMaterials.map((material) => material.id));
+                        else if (value === "__no_subject__") setContentMaterialIds(readyContentMaterials.filter((material) => material.subject === null).map((material) => material.id));
+                        else if (value?.startsWith("subject:")) {
+                          const subject = value.slice("subject:".length);
+                          setContentMaterialIds(readyContentMaterials.filter((material) => material.subject === subject).map((material) => material.id));
+                        }
+                      }}
+                    />
                     <Button variant="ghost" onClick={() => setContentMaterialIds(readyContentMaterials.map((material) => material.id))}>Выбрать все</Button>
                     <Button variant="ghost" onClick={() => setContentMaterialIds([])}>Снять все выборы</Button>
                   </div>
