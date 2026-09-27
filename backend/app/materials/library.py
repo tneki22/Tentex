@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pymupdf as fitz
 from fastapi import UploadFile
@@ -93,7 +93,7 @@ from app.materials.schemas import (
     TypstIssueRead,
     TypstMaterialRead,
 )
-from app.materials.segmentation import build_blocks
+from app.materials.segmentation import BlockSpec, build_blocks
 from app.materials.storage import material_path, store_revision_text, store_text, store_upload
 from app.materials.typst import Bundle, entrypoint_candidates, store_bundle
 from app.models import (
@@ -2067,17 +2067,36 @@ def rebuild_structure(
             MaterialBlock.revision == revision,
         )
     )
-    parsed_pages = [page_to_parsed(page) for page in pages]
+    new_fragments = _insert_structure(session, material_id, revision, pages)
+    session.flush()
+    return new_fragments
+
+
+def _insert_structure(
+    session: Session,
+    material_id: UUID,
+    revision: int,
+    pages: list[MaterialPage],
+    *,
+    specs: list[BlockSpec] | None = None,
+    start_order: int = 0,
+    page_orders: dict[int, int] | None = None,
+    fragments: dict[int, list[MaterialFragment]] | None = None,
+) -> dict[int, list[MaterialFragment]]:
+    """Записать готовые блоки; UUID задаются до flush для пакетной вставки."""
+    if specs is None:
+        specs = build_blocks([page_to_parsed(page) for page in pages])
     page_by_number = {page.page_number: page for page in pages}
     has_heading = {
         page.page_number: any(item.get("kind") == "heading" for item in page.elements)
         for page in pages
     }
-    new_fragments: dict[int, list[MaterialFragment]] = defaultdict(list)
-    page_orders: dict[int, int] = {}
-    for block_order, spec in enumerate(build_blocks(parsed_pages)):
+    orders = page_orders if page_orders is not None else {}
+    result = fragments if fragments is not None else defaultdict(list)
+    for block_order, spec in enumerate(specs, start=start_order):
         page_numbers = [number for number, _ in spec.elements] or [1]
         block = MaterialBlock(
+            id=uuid4(),
             material_id=material_id,
             revision=revision,
             sort_order=block_order,
@@ -2088,11 +2107,11 @@ def rebuild_structure(
             page_to=max(page_numbers),
         )
         session.add(block)
-        session.flush()
         for page_number, element in spec.elements:
             page = page_by_number[page_number]
-            order = page_orders.get(page_number, 0)
+            order = orders.get(page_number, 0)
             fragment = MaterialFragment(
+                id=uuid4(),
                 material_id=material_id,
                 page_id=page.id,
                 block_id=block.id,
@@ -2111,10 +2130,46 @@ def rebuild_structure(
                 quality=page.quality,
             )
             session.add(fragment)
-            new_fragments[page_number].append(fragment)
-            page_orders[page_number] = order + 1
-    session.flush()
-    return new_fragments
+            result[page_number].append(fragment)
+            orders[page_number] = order + 1
+    return result
+
+
+def rebuild_structure_staged(
+    session: Session, job_id: UUID, material_id: UUID, revision: int
+) -> dict[int, list[MaterialFragment]]:
+    """Собрать ещё не опубликованную ревизию короткими write-транзакциями.
+
+    Checkpoint уже сохранил страницы. После прерывания повторный запуск удалит
+    частичную структуру и соберёт её заново; активная ревизия не затрагивается.
+    """
+    pages = list(session.scalars(
+        select(MaterialPage)
+        .where(MaterialPage.material_id == material_id, MaterialPage.revision == revision)
+        .order_by(MaterialPage.page_number)
+    ))
+    specs = build_blocks([page_to_parsed(page) for page in pages])
+    block_ids = list(session.scalars(
+        select(MaterialBlock.id).where(
+            MaterialBlock.material_id == material_id, MaterialBlock.revision == revision
+        )
+    ))
+    session.commit()
+    for page in pages:
+        with job_write_transaction(session, job_id):
+            session.execute(delete(MaterialFragment).where(MaterialFragment.page_id == page.id))
+    for block_id in block_ids:
+        with job_write_transaction(session, job_id):
+            session.execute(delete(MaterialBlock).where(MaterialBlock.id == block_id))
+    page_orders: dict[int, int] = {}
+    fragments: dict[int, list[MaterialFragment]] = defaultdict(list)
+    for order, spec in enumerate(specs):
+        with job_write_transaction(session, job_id):
+            _insert_structure(
+                session, material_id, revision, pages, specs=[spec], start_order=order,
+                page_orders=page_orders, fragments=fragments,
+            )
+    return fragments
 
 
 def discard_building_revision(session: Session, material_id: UUID, revision: int) -> None:

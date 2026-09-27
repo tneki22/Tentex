@@ -1199,6 +1199,9 @@ class RetrievalChunk(Base):
         ),
         Index("ix_retrieval_chunks_index_material", "index_id", "material_id"),
         Index("ix_retrieval_chunks_index_block", "index_id", "block_id"),
+        # При удалении блока SQLite проверяет FK только по block_id: индекс
+        # (index_id, block_id) здесь не помогает и сканирует всю таблицу.
+        Index("ix_retrieval_chunks_block", "block_id"),
         # Фрагменты кусков и векторы читает снимок индекса в памяти
         # (`retrieval/snapshot.py`): покрывающий индекс по fragment_ids из
         # миграции 0065 снят миграцией 0066.

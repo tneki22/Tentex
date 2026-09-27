@@ -343,24 +343,33 @@ def link_answers_projects(session: Session, material_id: UUID) -> None:
 
 def _finish(session: Session, task_id: UUID) -> None:
     started = time.perf_counter()
+    task = session.get(BackgroundJob, task_id)
+    if task is None:
+        return
+    material_id = task.material_id
+    revision = int(task.checkpoint["revision"])
+    session.commit()
+    # Строящаяся ревизия ещё невидима читателям. Готовим её короткими записями,
+    # чтобы единственный SQLite-writer не удерживался на весь документ.
     with job_write_transaction(session, task_id):
         task = session.get(BackgroundJob, task_id)
         if task is None:
             return
-        revision = int(task.checkpoint["revision"])
         task.stage = ProcessingStage.SEGMENT
+        image_descriptions.refresh_image_roles(session, material_id, revision)
+    new_fragments = library.rebuild_structure_staged(session, task_id, material_id, revision)
+    with job_write_transaction(session, task_id):
+        task = session.get(BackgroundJob, task_id)
+        if task is None:
+            return
         material = session.get(Material, task.material_id)
         if material is None:
             return
         previous_revision = material.active_parse_revision
-        # Роль изображений решается по всей ревизии: повтор логотипа виден
-        # только на нескольких страницах сразу, а не на одной.
-        image_descriptions.refresh_image_roles(session, task.material_id, revision)
         # Разбор заново — это новая ревизия, а не потеря работы: страницы и
         # фрагменты прошлой ревизии остаются, чтобы её можно было открыть и
         # восстановить, а привязки переносятся на новые фрагменты (Р6).
         old_fragments = library.fragments_by_page(session, task.material_id, previous_revision)
-        new_fragments = library.rebuild_structure(session, task.material_id, revision)
 
         material.active_parse_revision = revision
         material.status = MaterialState.READY
