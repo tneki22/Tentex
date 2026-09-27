@@ -570,8 +570,14 @@ def material_chunks(
     target_tokens: int,
     max_tokens: int,
     overlap_tokens: int,
+    block_ids: set[UUID] | None = None,
 ) -> list[ChunkDraft]:
-    """Построить retrieval-куски активной ревизии материала."""
+    """Построить retrieval-куски активной ревизии материала.
+
+    `block_ids` оставляет только эти блоки до упаковки: иначе короткий блок
+    темы склеился бы с соседними, и в кусок попал бы текст вне области.
+    Оглавление строится по всем секциям, чтобы заголовки остались прежними.
+    """
     if material.active_parse_revision <= 0:
         return []
     if material.source_kind == MaterialSourceKind.TYPST:
@@ -581,10 +587,15 @@ def material_chunks(
         kind = RetrievalChunkKind.TEXT
         sections = material_sections(session, material)
     outline = _Outline(sections)
+    packed = (
+        sections
+        if block_ids is None
+        else [section for section in sections if section.block_id in block_ids]
+    )
     return [
         _draft(material, kind, atoms, outline)
         for atoms in pack_sections(
-            sections,
+            packed,
             target_tokens=target_tokens,
             max_tokens=max_tokens,
             overlap_tokens=overlap_tokens,

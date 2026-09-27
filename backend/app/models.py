@@ -1285,6 +1285,9 @@ class RetrievalExhaustiveRun(Base):
     query: Mapped[str] = mapped_column(Text)
     scope: Mapped[str] = mapped_column(String(32))
     corpus_manifest: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    #: Снимок запуска: блоки области, модель, параметры, политика знаний.
+    #: У запусков до миграции 0070 пуст — они идут по всем блокам моделью роли.
+    settings: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

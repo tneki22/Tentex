@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.gateway import AiTextRequest, ModelGateway
-from app.ai.schemas import AiMessage
+from app.ai.schemas import AiMessage, AiModelSelection
 from app.chat.common import append_message_row
 from app.materials.naming import material_display_name
 from app.models import (
@@ -27,6 +27,7 @@ from app.models import (
 )
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.retrieval.chunking import ChunkDraft, material_chunks
+from app.retrieval.citations import citation_error, cited_ids
 from app.retrieval.jobs import finish, write_job
 from app.retrieval.schemas import (
     ExhaustiveRunRead,
@@ -36,7 +37,9 @@ from app.retrieval.schemas import (
 from app.retrieval.search import resolve_scope, visual_page_locators
 
 _BATCH_TOKEN_BUDGET = 9_000
-_CITATION = re.compile(r"\[(S\d+)]")
+#: Итог с неверными ссылками переспрашивается один раз, потом запуск падает:
+#: map-проходы уже оплачены, и одна ошибка модели не должна их обнулять.
+_REDUCE_ATTEMPTS = 2
 
 
 class ExhaustiveFinding(BaseModel):
@@ -94,6 +97,16 @@ def start_run(
             "В выбранной области нет готовых материалов",
             code="retrieval_empty_corpus",
         )
+    # Ограничение привязками и выбор модели фиксируются при запуске: обзор идёт
+    # в фоне и после перезапуска worker, когда чат и привязки могли измениться.
+    run_settings = {
+        "block_ids": (
+            None if scope.block_ids is None else sorted(str(item) for item in scope.block_ids)
+        ),
+        "model_override": chat.model_override,
+        "parameters": chat.model_parameters or {},
+        "knowledge_policy": command.knowledge_policy,
+    }
     manifest = [
         {
             "material_id": str(material.id),
@@ -141,6 +154,7 @@ def start_run(
             query=command.query,
             scope=command.scope.value,
             corpus_manifest=manifest,
+            settings=run_settings,
         )
         session.add_all([job, run])
     return ExhaustiveRunRead.model_validate(run)
@@ -203,6 +217,8 @@ def _snapshot_sources(session: Session, run: RetrievalExhaustiveRun) -> list[Sou
     target = int(expert.get("chunk_target_tokens", 384))
     maximum = int(expert.get("chunk_max_tokens", 480))
     overlap = int(expert.get("chunk_overlap_tokens", 64))
+    block_ids = (run.settings or {}).get("block_ids")
+    allowed_blocks = None if block_ids is None else {UUID(item) for item in block_ids}
     sources: list[SourceChunk] = []
     for item in run.corpus_manifest:
         material = session.get(Material, UUID(item["material_id"]))
@@ -217,6 +233,7 @@ def _snapshot_sources(session: Session, run: RetrievalExhaustiveRun) -> list[Sou
             target_tokens=target,
             max_tokens=maximum,
             overlap_tokens=overlap,
+            block_ids=allowed_blocks,
         ):
             sources.append(
                 SourceChunk(
@@ -227,10 +244,26 @@ def _snapshot_sources(session: Session, run: RetrievalExhaustiveRun) -> list[Sou
             )
     if not sources:
         raise ProjectConflictError(
-            "В выбранных материалах нет индексируемого текста",
+            "В выбранной области нет индексируемого текста",
             code="retrieval_exhaustive_empty_text",
         )
     return sources
+
+
+def _model(run: RetrievalExhaustiveRun) -> dict[str, Any]:
+    """Модель и параметры запуска; у запусков до снимка — модель роли по умолчанию."""
+    settings = run.settings or {}
+    override = settings.get("model_override")
+    return {
+        "request_model_override": (
+            AiModelSelection(
+                provider_id=override["provider_id"], model_id=override["model_id"]
+            )
+            if override
+            else None
+        ),
+        "parameters": settings.get("parameters") or {},
+    }
 
 
 def _batches(sources: list[SourceChunk]) -> list[list[SourceChunk]]:
@@ -265,6 +298,7 @@ async def _map_batch(
         job_id=run.job_id,
         response_model=ExhaustiveMapResult,
         confirmed=True,
+        **_model(run),
         source_fingerprint={"run_id": str(run.id), "sources": [item.source_id for item in sources]},
         context_manifest=[_source_manifest(item) for item in sources],
         messages=[
@@ -295,45 +329,68 @@ async def _reduce(
         )
         or "По корпусу не найдено фактов, отвечающих на вопрос."
     )
-    request = AiTextRequest(
-        role="retrieval_exhaustive",
-        project_id=run.project_id,
-        job_id=run.job_id,
-        response_model=ExhaustiveReduceResult,
-        confirmed=True,
-        source_fingerprint={"run_id": str(run.id), "phase": "reduce"},
-        messages=[
-            AiMessage(
-                role="system",
-                content=(
-                    "Собери полный, но компактный ответ только по переданным выводам. "
-                    "Сохраняй цитаты [S<number>] у каждого материального утверждения. "
-                    "Явно выдели согласие источников, расхождения и что не удалось проверить."
-                ),
+    policy = (
+        "Общие знания модели разрешены только в отдельном разделе «Дополнение модели» "
+        "в конце, без ссылок [S…]."
+        if (run.settings or {}).get("knowledge_policy") == "allow_model"
+        else "Не добавляй ничего сверх выводов."
+    )
+    messages = [
+        AiMessage(
+            role="system",
+            content=(
+                "Собери полный, но компактный ответ только по переданным выводам. "
+                "Сохраняй цитаты [S<number>] у каждого материального утверждения. "
+                "Явно выдели согласие источников, расхождения и что не удалось проверить. "
+                + policy
             ),
+        ),
+        AiMessage(
+            role="user",
+            content=(
+                f"Вопрос: {run.query}\n\nВыводы:\n{evidence}\n\n"
+                "Заранее известные ограничения:\n"
+                + ("\n".join(f"- {item}" for item in predefined_limitations) or "- нет")
+            ),
+        ),
+    ]
+    allowed = {source_id for finding in findings for source_id in finding.source_ids}
+    for attempt in range(_REDUCE_ATTEMPTS):
+        request = AiTextRequest(
+            role="retrieval_exhaustive",
+            project_id=run.project_id,
+            job_id=run.job_id,
+            response_model=ExhaustiveReduceResult,
+            confirmed=True,
+            source_fingerprint={"run_id": str(run.id), "phase": "reduce", "attempt": attempt},
+            messages=messages,
+            **_model(run),
+        )
+        result = (await ModelGateway(session).complete(request)).value
+        problem = citation_error(result.answer, allowed)
+        if problem is None:
+            return result.model_copy(
+                update={
+                    "limitations": list(
+                        dict.fromkeys([*predefined_limitations, *result.limitations])
+                    )
+                }
+            )
+        messages = [
+            *messages,
+            AiMessage(role="assistant", content=result.answer),
             AiMessage(
                 role="user",
                 content=(
-                    f"Вопрос: {run.query}\n\nВыводы:\n{evidence}\n\n"
-                    "Заранее известные ограничения:\n"
-                    + ("\n".join(f"- {item}" for item in predefined_limitations) or "- нет")
+                    f"{problem}. Перепиши ответ, ссылаясь только на "
+                    f"{', '.join(sorted(allowed)) or 'выводы без ссылок'}."
                 ),
             ),
-        ],
-    )
-    result = (await ModelGateway(session).complete(request)).value
-    allowed = {source_id for finding in findings for source_id in finding.source_ids}
-    unknown = set(_CITATION.findall(result.answer)) - allowed
-    if unknown:
-        raise ProjectConflictError(
-            "Итог полного обзора содержит неизвестные цитаты",
-            code="retrieval_exhaustive_invalid_citations",
-            context={"unknown": sorted(unknown)},
-        )
-    return result.model_copy(
-        update={
-            "limitations": list(dict.fromkeys([*predefined_limitations, *result.limitations]))
-        }
+        ]
+    raise ProjectConflictError(
+        "Итог полного обзора содержит неверные цитаты",
+        code="retrieval_exhaustive_invalid_citations",
+        context={"problem": problem},
     )
 
 
@@ -396,7 +453,7 @@ def _finish_success(
     findings: list[ExhaustiveFinding],
     reduced: ExhaustiveReduceResult,
 ) -> None:
-    cited = set(_CITATION.findall(reduced.answer))
+    cited = cited_ids(reduced.answer)
     manifest = [_source_manifest(source) for source in sources if source.source_id in cited]
     run_id = run.id
 

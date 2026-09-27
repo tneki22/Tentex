@@ -245,6 +245,7 @@ class ExhaustiveRunWrite(ApiModel):
     scope: RetrievalScope = RetrievalScope.PROJECT
     node_id: UUID | None = None
     material_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    knowledge_policy: Literal["sources_only", "allow_model"] = "sources_only"
     confirmed: bool = False
 
     @model_validator(mode="after")
@@ -269,6 +270,7 @@ class ExhaustiveRunRead(ApiModel):
     query: str
     scope: str
     corpus_manifest: list[dict]
+    settings: dict | None
     result: dict
     created_at: datetime
     completed_at: datetime | None

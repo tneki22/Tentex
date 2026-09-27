@@ -231,6 +231,7 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
       scope: retrievalScope,
       node_id: node?.id ?? null,
       material_ids: [],
+      knowledge_policy: knowledgePolicy,
     };
     setExhaustiveError("");
     try {

@@ -248,6 +248,7 @@ export const startExhaustiveReview = (
     scope: RetrievalScope;
     node_id?: string | null;
     material_ids?: string[];
+    knowledge_policy: "sources_only" | "allow_model";
     confirmed: boolean;
   },
 ): Promise<ExhaustiveRunRead> => request(
