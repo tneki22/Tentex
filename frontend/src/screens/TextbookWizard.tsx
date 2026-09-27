@@ -115,6 +115,15 @@ export function TextbookWizard({ controller, requestedStep, onStepChange, onActi
   const materials = useProjectMaterials(controller.detail?.project.id);
 
   useEffect(() => {
+    if (controller.status !== "idle" || controller.detail) return;
+    // Материалы принадлежат черновому проекту, поэтому он должен появиться до
+    // того, как пользователь нажмёт «Добавить материал» или откроет Библиотеку.
+    void controller.ensureDraft().catch((error) => {
+      setActionError(error instanceof Error ? error.message : "Не удалось создать черновик");
+    });
+  }, [controller.status, controller.detail, controller.ensureDraft]);
+
+  useEffect(() => {
     if (controller.status !== "idle" || controller.detail
       || JSON.stringify(form) === JSON.stringify(EMPTY_FORM)) return;
     void controller.queueSave(command(step)).catch((error) => {
