@@ -35,6 +35,11 @@ from app.system.router import router as system_router
 
 api = APIRouter(prefix="/api")
 
+#: Опрашиваются с фронтенда (BACKGROUND_POLL_MS, STATUS_POLL_MS) или докером
+#: (healthcheck) каждые несколько секунд — успешный ответ по ним на INFO
+#: тонет в них же самих. Ошибки и остальные пути логируются как обычно.
+POLLED_PATHS = frozenset({"/api/health", "/api/background-jobs", "/api/system/status"})
+
 
 @api.get("/health")
 def health() -> dict[str, str]:
@@ -116,7 +121,8 @@ def create_app() -> FastAPI:
             )
         elapsed_ms = (time.perf_counter() - start) * 1000
         response.headers["X-Request-ID"] = request_id
-        log.info(
+        log_success = log.debug if request.url.path in POLLED_PATHS else log.info
+        log_success(
             "%s %s -> %s rid=%s %.1fms",
             request.method,
             request.url.path,

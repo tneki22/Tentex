@@ -328,6 +328,7 @@ function AddMaterialDialog({
   busy,
   uploadStatus,
   answersMaterial,
+  allowExamPurposes = true,
   onOpenChange,
   onFile,
   onText,
@@ -339,6 +340,7 @@ function AddMaterialDialog({
   uploadStatus: { name: string; progress: number } | null;
   /** Уже загруженные эталонные ответы: второй такой файл проект не держит. */
   answersMaterial: MaterialRead | null;
+  allowExamPurposes?: boolean;
   onOpenChange: (open: boolean) => void;
   onFile: (file: File, role: SourceRole, purposes: MaterialPurpose[]) => void;
   onText: (name: string, text: string) => void;
@@ -419,27 +421,29 @@ function AddMaterialDialog({
         </div>
       ) : (
         <div className="materials-add-grid">
-          <button type="button" disabled={busy} onClick={() => choose("reference", ["exam_structure"])}>
-            <FileImage size={18} /><span><strong>Список вопросов</strong><small>PDF, фото или текст структуры экзамена</small></span><ChevronRight size={15} />
-          </button>
-          <button type="button" disabled={busy} onClick={() => chooseAnswers("file")}>
-            <FileText size={18} />
-            <span>
-              <strong>Ответы</strong>
-              <small>
-                {answersMaterial
-                  ? `Сейчас: ${answersMaterial.display_name}. Файл ответов один — можно заменить`
-                  : "После разбора сам ляжет на вопросы по заголовкам"}
-              </small>
-            </span>
-            <ChevronRight size={15} />
-          </button>
+          {allowExamPurposes && <>
+            <button type="button" disabled={busy} onClick={() => choose("reference", ["exam_structure"])}>
+              <FileImage size={18} /><span><strong>Список вопросов</strong><small>PDF, фото или текст структуры экзамена</small></span><ChevronRight size={15} />
+            </button>
+            <button type="button" disabled={busy} onClick={() => chooseAnswers("file")}>
+              <FileText size={18} />
+              <span>
+                <strong>Ответы</strong>
+                <small>
+                  {answersMaterial
+                    ? `Сейчас: ${answersMaterial.display_name}. Файл ответов один — можно заменить`
+                    : "После разбора сам ляжет на вопросы по заголовкам"}
+                </small>
+              </span>
+              <ChevronRight size={15} />
+            </button>
+          </>}
           <button type="button" disabled={busy} onClick={() => choose("main", ["study_source"])}>
             <BookOpen size={18} /><span><strong>Учебный источник</strong><small>PDF, DOCX, TXT, MD или изображение</small></span><ChevronRight size={15} />
           </button>
-          <button type="button" disabled={busy} onClick={() => chooseAnswers("text")}>
+          {allowExamPurposes && <button type="button" disabled={busy} onClick={() => chooseAnswers("text")}>
             <Plus size={18} /><span><strong>Вставить текст ответов</strong><small>Без создания отдельного файла вручную</small></span><ChevronRight size={15} />
-          </button>
+          </button>}
           <button type="button" disabled={busy} onClick={() => setExternalMode("url")}>
             <Globe size={18} /><span><strong>Веб-страница по URL</strong><small>Локальный снимок текста и исходная ссылка</small></span><ChevronRight size={15} />
           </button>
@@ -2183,6 +2187,7 @@ function MaterialSurface() {
         busy={store.busy}
         uploadStatus={store.uploadStatus}
         answersMaterial={answersMaterial}
+        allowExamPurposes={project?.project.template_key === "textbook"}
         onOpenChange={setAddOpen}
         onFile={(file, role, purposes) => void addFile(file, role, purposes)}
         onText={(name, text) => void addText(name, text)}
@@ -2195,6 +2200,7 @@ function MaterialSurface() {
         title="Выбрать материалы из Библиотеки"
         multiple
         allowPurposeSelection
+        allowExamPurposes={project?.project.template_key === "textbook"}
         existingStudySourceCount={store.materials.filter((item) => item.purposes.includes("study_source")).length}
         defaultStudyRole="main"
         answersMaterial={answersMaterial}

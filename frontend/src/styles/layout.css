@@ -1471,6 +1471,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-5);
+  min-width: 0;
 }
 
 .ai-global-row .switch-row {
@@ -2354,6 +2355,7 @@
 
 .ai-role-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* Категория функций: заголовок, первая функция всегда видна, остальные раскрываются. */
@@ -2531,6 +2533,23 @@
   .ai-catalog-row > .text-button {
     grid-column: 1 / -1;
     justify-self: end;
+  }
+}
+
+/* Контент раздела «Параметры» уже сужен боковой навигацией `.setup-nav`, поэтому
+   он упирается в минимумы этих колонок раньше, чем весь `.setup-layout` успевает
+   перестроиться в один столбец на 760px. */
+@media (max-width: 1230px) {
+  .ai-role-card,
+  .ai-role-row,
+  .provider-model-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-role-card .disclosure,
+  .ai-role-card .ai-save-state,
+  .provider-model-picker > small {
+    grid-column: 1;
   }
 }
 

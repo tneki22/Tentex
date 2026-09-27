@@ -86,6 +86,7 @@
 .retrieval-download-progress,
 .retrieval-manual-model {
   display: grid;
+  min-width: 0;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--line);
@@ -279,6 +280,7 @@
 .retrieval-index-list,
 .retrieval-benchmark-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
 }
 
@@ -288,6 +290,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
+  min-width: 0;
   padding: var(--space-4);
 }
 
@@ -333,15 +336,21 @@
   padding: var(--space-4);
 }
 
-@media (max-width: 850px) {
+/* Раздел «Поиск» в Параметрах живёт рядом с боковой навигацией `.setup-nav`, поэтому
+   его контент упирается в минимумы этих сеток раньше, чем весь `.setup-layout`
+   успевает перестроиться в один столбец. */
+@media (max-width: 1230px) {
   .retrieval-overview-grid { grid-template-columns: 1fr; }
   .retrieval-model-list article,
   .retrieval-index-list article { align-items: flex-start; flex-direction: column; }
+  .retrieval-manual-model,
+  .retrieval-quality-guide { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 850px) {
   .lib-content-search-form { grid-template-columns: auto minmax(0, 1fr); }
   .lib-content-search-form .segmented-tabs,
   .lib-content-search-form .button { grid-column: 1 / -1; }
-  .retrieval-manual-model,
-  .retrieval-quality-guide { grid-template-columns: 1fr; }
   .lib-active-index { grid-template-columns: 1fr; }
   .lib-active-index .lib-active-index-actions { justify-content: flex-start; }
   .lib-content-sources-head,
