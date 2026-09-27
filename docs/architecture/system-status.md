@@ -75,7 +75,8 @@
 {"at": "2026-09-27T09:06:30+00:00", "kind": "recovered", "node": "database", "source": "api"}
 ```
 
-- `failure` пишет обработчик логов `DiagnosticsHandler` (корневой логгер, уровень ERROR) по
+- `failure` пишет обработчик логов `DiagnosticsHandler` (логгер `tentex`, уровень ERROR; не
+  корень — миграции при старте API заменяют его обработчики через `fileConfig`) по
   классификации цепочки исключения: `database is locked` → `database_locked`, `disk I/O error`
   → `database_io`, `database disk image is malformed` → `database_corrupt`, `ENOSPC` или
   `database or disk is full` → `disk_full`. Текст исключения, SQL и пути не сохраняются.

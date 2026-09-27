@@ -511,6 +511,20 @@ def test_logged_failure_is_journaled_without_raw_text(isolated_diagnostics: Path
     assert "secret" not in journal and "I/O" not in journal
 
 
+def test_diagnostics_handler_survives_alembic_logging_setup() -> None:
+    """Миграции при старте API читают alembic.ini и заменяют обработчики корня."""
+    from logging.config import fileConfig
+
+    from app.config import BACKEND_ROOT
+    from app.logging_config import configure_logging
+
+    configure_logging()
+    fileConfig(str(BACKEND_ROOT / "alembic.ini"), disable_existing_loggers=False)
+
+    handlers = logging.getLogger("tentex").handlers
+    assert any(isinstance(handler, diagnostics.DiagnosticsHandler) for handler in handlers)
+
+
 def test_exhausted_retry_is_journaled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.db.time.sleep", lambda _: None)
 

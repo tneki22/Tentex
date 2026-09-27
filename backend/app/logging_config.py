@@ -38,8 +38,12 @@ def configure_logging(level: str | None = None, *, json_logs: bool | None = None
                     "level": "ERROR",
                 },
             },
-            "root": {"handlers": ["console", "diagnostics"], "level": resolved_level},
+            "root": {"handlers": ["console"], "level": resolved_level},
             "loggers": {
+                # Журнал сбоев висит на `tentex`, а не на корне: миграции при
+                # старте API читают alembic.ini через fileConfig и заменяют
+                # обработчики корня. Уровень не задан — логгер наследует корневой.
+                "tentex": {"handlers": ["diagnostics"]},
                 # SQLAlchemy на INFO печатает каждый SQL — держим на WARNING.
                 "sqlalchemy.engine": {"level": "WARNING"},
                 "uvicorn.access": {"level": resolved_level},
