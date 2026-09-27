@@ -206,6 +206,50 @@
   line-height: var(--leading-snug);
 }
 
+.sidebar-recent .disclosure-trigger {
+  width: 100%;
+  margin: 0;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.sidebar-recent .disclosure-content { padding-top: var(--space-1); }
+.sidebar-recent-list { display: grid; gap: 2px; }
+
+.sidebar-recent-row {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  transition: background-color var(--ease-fast), color var(--ease-fast);
+}
+
+.sidebar-recent-row:hover { background: var(--surface-hover); color: var(--ink); }
+.sidebar-recent-row small { color: var(--faint); font-size: var(--text-xs); }
+.sidebar-recent-row b {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-project-type {
+  display: inline-block;
+  margin-right: var(--space-1);
+  padding: 1px 3px;
+  border-radius: var(--radius-xs);
+  color: var(--accent);
+  background: var(--accent-wash);
+  font-family: var(--font-mono);
+  font-weight: var(--weight-semibold);
+}
+
 /* --- Приборный блок: три строки состояния установки --- */
 
 .app-widgets {
@@ -347,6 +391,7 @@
 
 .is-collapsed .nav-text,
 .is-collapsed .nav-meta,
+.is-collapsed .sidebar-recent,
 .is-collapsed .app-widget b,
 .is-collapsed .app-widget-value,
 .is-collapsed .stage-note {
@@ -3788,6 +3833,8 @@
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
+
+  .sidebar-recent { display: none; }
 
   .app-nav-group {
     grid-auto-flow: column;
