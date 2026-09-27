@@ -511,8 +511,8 @@ export function AppLayout() {
           <Disclosure className="sidebar-recent" summary="Последние занятия">
             {recentStudy.length === 0 ? <p className="sidebar-empty">Пройденные уроки и ответы появятся здесь.</p> : (
               <div className="sidebar-recent-list">
-                {recentStudy.map((item) => (
-                  <Link className="sidebar-recent-row" key={`${item.kind}-${item.item_id}`} to={item.kind === "lesson" ? `/projects/${item.project_id}/lessons?lesson=${item.item_id}` : `/projects/${item.project_id}?node=${item.item_id}`}>
+                {recentStudy.map((item, index) => (
+                  <Link className="sidebar-recent-row" key={`${item.kind}-${item.item_id}-${index}`} to={item.kind === "lesson" ? `/projects/${item.project_id}/lessons?lesson=${item.item_id}` : `/projects/${item.project_id}?node=${item.item_id}`}>
                     <small><span className="sidebar-project-type">{item.template_key === "exam" ? "Э" : item.template_key === "textbook" ? "Уч" : "СИ"}</span>{item.project_name}</small>
                     <b>{item.kind === "lesson" ? "Урок:" : "Вопрос:"} {item.title}</b>
                     <small>{new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(item.happened_at))}</small>
