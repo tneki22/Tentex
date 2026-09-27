@@ -576,10 +576,10 @@ export function AppLayout() {
               open={statusOpen}
               onOpenChange={setStatusOpen}
               onOpenBackgroundJobs={() => {
+                // Сводка при этом не возвращает фокус своей кнопке (см.
+                // SystemStatusWidget), иначе он закрыл бы открывшиеся задачи.
                 setStatusOpen(false);
-                // Закрытая сводка возвращает фокус своей кнопке; открой второй
-                // поповер в том же кадре — этот фокус «снаружи» тут же закрыл бы его.
-                window.setTimeout(() => setJobsOpen(true), 0);
+                setJobsOpen(true);
               }}
             />
           </div>

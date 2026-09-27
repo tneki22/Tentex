@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router";
 import {
   Archive,
@@ -219,6 +219,8 @@ export function SystemStatusWidget({ open, onOpenChange, onOpenBackgroundJobs }:
   const { status, unreachable, error, checking, checked, refresh, apply } = useSystemStatus();
   const [busy, setBusy] = useState<StatusCommand | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  // Панель закрывается ради «Фоновых задач» — фокус её кнопке не возвращаем.
+  const handingOff = useRef(false);
 
   const attention = status?.items.filter((item) => item.section === "attention") ?? [];
   const storageItems = status?.items.filter((item) => item.section === "storage") ?? [];
@@ -243,6 +245,7 @@ export function SystemStatusWidget({ open, onOpenChange, onOpenBackgroundJobs }:
 
   async function runCommand(command: StatusCommand) {
     if (command === "open_background_jobs") {
+      handingOff.current = true;
       onOpenBackgroundJobs();
       return;
     }
@@ -286,6 +289,11 @@ export function SystemStatusWidget({ open, onOpenChange, onOpenBackgroundJobs }:
       align="end"
       open={open}
       onOpenChange={changeOpen}
+      onCloseAutoFocus={(event) => {
+        if (!handingOff.current) return;
+        handingOff.current = false;
+        event.preventDefault();
+      }}
       trigger={
         <button type="button" className={`app-widget status-widget is-${tone}`}>
           <ToneIcon size={15} aria-hidden="true" />

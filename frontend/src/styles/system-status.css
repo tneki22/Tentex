@@ -423,8 +423,9 @@
   vertical-align: 1px;
 }
 
+/* Доля Tentex всегда акцентом: тоном нехватки места красится «свободно» */
 .status-swatch.is-tentex {
-  background: var(--status-tone);
+  background: var(--accent);
 }
 
 .status-dot-sep {
@@ -451,7 +452,7 @@
 }
 
 .status-meter-tentex {
-  background: var(--status-tone);
+  background: var(--accent);
 }
 
 .status-meter-other {
