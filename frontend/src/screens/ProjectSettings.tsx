@@ -349,7 +349,7 @@ export function ProjectSettings() {
 
   if (loadError instanceof ProjectApiError && loadError.status === 404) {
     return (
-      <div className="screen project-settings-screen settings-state">
+      <div className="screen screen-error-state project-settings-screen settings-state">
         <ErrorState title="Проект не найден" message={loadError.message} />
         <Link className="secondary-button" to="/projects"><ArrowLeft size={15} aria-hidden="true" /> К проектам</Link>
       </div>
@@ -358,7 +358,7 @@ export function ProjectSettings() {
 
   if (loadError || !detail || !form) {
     return (
-      <div className="screen project-settings-screen settings-state">
+      <div className="screen screen-error-state project-settings-screen settings-state">
         <ErrorState message={requestErrorMessage(loadError)} />
         <Button variant="secondary" onClick={() => setReloadKey((value) => value + 1)}>Повторить</Button>
       </div>

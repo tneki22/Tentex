@@ -701,6 +701,21 @@
   animation: surface-in var(--motion-slow) var(--motion-ease-out) both;
 }
 
+/* Полноэкранные ошибки должны оставаться в центре доступной области приложения. */
+.screen.screen-error-state {
+  min-height: calc(100dvh - 64px - var(--space-6) - var(--space-16));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  text-align: center;
+}
+
+.screen-error-state > .error-state {
+  width: min(100%, 42rem);
+}
+
 /* --- Дашборд «Проекты» --- */
 
 /* Крупные карточки держатся до трёх в ряд: минимальная ширина колонки

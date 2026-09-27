@@ -487,7 +487,7 @@ export function Projects() {
   if (loading) return <div className="screen"><LoadingState label="Загружаем проекты" placement="page" /></div>;
   if (loadError) {
     return (
-      <div className="screen">
+      <div className="screen screen-error-state">
         <ErrorState message={loadError} />
         <Button onClick={() => void load()}>Повторить загрузку</Button>
       </div>
