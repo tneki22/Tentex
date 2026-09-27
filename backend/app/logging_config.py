@@ -31,9 +31,14 @@ def configure_logging(level: str | None = None, *, json_logs: bool | None = None
                 "console": {
                     "class": "logging.StreamHandler",
                     "formatter": "default",
-                }
+                },
+                # Упавшие операции → коды сводки «Состояние» (без текста ошибки).
+                "diagnostics": {
+                    "class": "app.system.diagnostics.DiagnosticsHandler",
+                    "level": "ERROR",
+                },
             },
-            "root": {"handlers": ["console"], "level": resolved_level},
+            "root": {"handlers": ["console", "diagnostics"], "level": resolved_level},
             "loggers": {
                 # SQLAlchemy на INFO печатает каждый SQL — держим на WARNING.
                 "sqlalchemy.engine": {"level": "WARNING"},

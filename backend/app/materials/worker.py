@@ -60,12 +60,16 @@ from app.models import (
 from app.ocr import settings as ocr_settings
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.storage import maintenance as storage_maintenance
+from app.system import diagnostics
 
 log = logging.getLogger("tentex.worker")
 
 LEASE_SECONDS = 60
 HEARTBEAT_SECONDS = 20
 POLL_SECONDS = 0.75
+#: Как часто воркер отмечается в `data/diagnostics/worker.json`. Сводка
+#: «Состояние» считает его молчащим после нескольких пропущенных отметок.
+WORKER_PULSE_SECONDS = 15
 
 type WorkerLane = Literal["local", "cloud", "ai"]
 
@@ -799,6 +803,7 @@ def _heartbeat(job_id: UUID, worker_id: str, stopped: Event) -> None:
                 if not _renew_lease(session, job_id, worker_id):
                     return
         except OperationalError as error:
+            diagnostics.record_error(error, kind="exhausted")
             log.warning("heartbeat delayed job=%s: %s", job_id, error)
 
 
@@ -918,15 +923,20 @@ def run_pool(capacities: dict[WorkerLane, int]) -> None:
     """Постоянно заполнять независимые слоты локальных, облачных и AI-задач."""
     active: dict[WorkerLane, set[Future[None]]] = {lane: set() for lane in WORKER_LANES}
     next_schedule_check = 0.0
+    next_pulse = 0.0
     with ThreadPoolExecutor(max_workers=sum(capacities.values()), thread_name_prefix="job") as pool:
         while True:
             now = time.monotonic()
+            if now >= next_pulse:
+                diagnostics.touch_worker_heartbeat()
+                next_pulse = now + WORKER_PULSE_SECONDS
             if now >= next_schedule_check and not storage_maintenance.active():
                 from app.storage.service import enqueue_due_automatic_backup
 
                 try:
                     enqueue_due_automatic_backup()
                 except OperationalError as error:
+                    diagnostics.record_error(error, kind="exhausted")
                     log.warning("automatic backup schedule check delayed: %s", error)
                 next_schedule_check = now + 60
             _reap_finished(active)
@@ -943,6 +953,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
+    diagnostics.set_source("worker")
     upgrade_database()
     configure_logging()
     if args.once:

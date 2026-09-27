@@ -13,6 +13,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import NullPool, QueuePool
 
 from app.config import BACKEND_ROOT, settings
+from app.system import diagnostics
 
 log = logging.getLogger("tentex.db")
 
@@ -191,6 +192,9 @@ def retry_on_locked[T](operation: Callable[[], T], *, attempts: int = 5) -> T:
             if "database is locked" not in message and "database is busy" not in message:
                 raise
             if attempt == attempts - 1:
+                # Одиночный исчерпанный повтор ещё не сбой: сводка «Состояние»
+                # покажет блокировку, только если они повторяются.
+                diagnostics.record_failure("database_locked", kind="exhausted")
                 raise
             delay = delays[min(attempt, len(delays) - 1)]
             log.warning("retrying after sqlite lock, attempt=%d delay=%.1fs", attempt + 1, delay)

@@ -38,6 +38,7 @@ from app.storage.schemas import (
     StorageBreakdown,
     StorageSnapshot,
 )
+from app.system import diagnostics
 
 WAIT_INTERVAL_SECONDS = 0.5
 
@@ -54,6 +55,11 @@ def _policy(session: Session) -> StorageSettings:
 def backup_directory(row: StorageSettings) -> Path:
     candidate = Path(row.backup_directory) if row.backup_directory else settings.default_backup_dir
     return maintenance.ensure_directory(candidate)
+
+
+def backups_inside_data_dir(directory: Path) -> bool:
+    """Копии внутри `data/` — единственный случай, когда общий диск известен точно."""
+    return directory.resolve().is_relative_to(settings.data_dir.resolve())
 
 
 def read_policy(session: Session) -> BackupPolicyRead:
@@ -100,6 +106,17 @@ def _tree_size(path: Path, *, exclude: set[str] | None = None) -> int:
     return total
 
 
+def models_bytes() -> int:
+    """Локальные модели и Typst-пакеты.
+
+    В отличие от `storage/` (тысячи страниц и фрагментов) моделей и пакетов
+    немного и они крупные: обход дерева здесь остаётся быстрым.
+    """
+    return _tree_size(settings.embedding_models_dir) + _tree_size(
+        settings.typst_package_cache_dir
+    )
+
+
 def storage_snapshot(session: Session) -> StorageSnapshot:
     policy_row = _policy(session)
     backups = backup_directory(policy_row)
@@ -112,11 +129,7 @@ def storage_snapshot(session: Session) -> StorageSnapshot:
     temporary = int(
         session.scalar(select(func.coalesce(func.sum(TransferArtifact.size_bytes), 0))) or 0
     )
-    # В отличие от `storage/` (тысячи страниц и фрагментов) моделей и
-    # Typst-пакетов немного и они крупные: обход дерева здесь остаётся быстрым.
-    models = _tree_size(settings.embedding_models_dir) + _tree_size(
-        settings.typst_package_cache_dir
-    )
+    models = models_bytes()
     backup_bytes = int(
         session.scalar(
             select(func.coalesce(func.sum(BackupArchive.size_bytes), 0)).where(
@@ -134,7 +147,10 @@ def storage_snapshot(session: Session) -> StorageSnapshot:
     return StorageSnapshot(
         data_directory=str(settings.data_dir.resolve()),
         backup_directory=str(backups),
-        same_disk_warning=Path(settings.data_dir).drive == backups.drive,
+        # `Path.drive` в контейнере пуст у обоих путей и ничего не говорит о
+        # физическом диске. Достоверно известно одно: лежат ли копии внутри
+        # папки рабочих данных — тогда поломка диска унесёт и их.
+        same_disk_warning=backups_inside_data_dir(backups),
         used_bytes=database + files + temporary + models + backup_bytes,
         free_bytes=usage.free,
         breakdown=StorageBreakdown(
@@ -381,7 +397,10 @@ def verify_storage() -> MaintenanceResult:
     try:
         result = connection.execute("PRAGMA quick_check").fetchone()
         if not result or result[0] != "ok":
+            diagnostics.record_failure("database_corrupt")
             return MaintenanceResult(ok=False, detail="SQLite сообщила об ошибке целостности")
+        # Сводка «Состояние» держит ошибку целостности до этой отметки.
+        diagnostics.record_recovered("integrity")
         paths = [row[0] for row in connection.execute("SELECT storage_path FROM materials")]
     finally:
         connection.close()

@@ -3,7 +3,6 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import {
   Activity,
   BookOpenText,
-  CircleCheck,
   Cpu,
   PanelLeftClose,
   PanelLeftOpen,
@@ -20,6 +19,7 @@ import { BrandMark } from "./BrandMark";
 import { CommandPalette } from "./CommandPalette";
 import { screenById } from "./screens";
 import { SCREEN_VIEWS } from "./views";
+import { SystemStatusWidget } from "./SystemStatusWidget";
 import { ThemeToggle } from "./ThemeToggle";
 import { getAiSettings, updateAiDefault, type AiModality, type AiSettingsRead } from "../api/ai";
 import { listRecentStudy, type RecentStudyItem } from "../api/projects";
@@ -186,6 +186,8 @@ function BackgroundJobGroup({ jobs, pendingIds, navigate, onCancel, onPause, onR
 }
 
 interface BackgroundJobsWidgetProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   backgroundJobs: BackgroundJobRead[];
   reviewJobs: BackgroundJobRead[];
   runningJobs: BackgroundJobRead[];
@@ -201,6 +203,8 @@ interface BackgroundJobsWidgetProps {
 /** Кнопка и всплывашка «Фоновые задачи» в панели слева. Отдельным компонентом —
  *  чтобы разметка кнопки и попапа не дублировалась там, где к ним обращаются. */
 function BackgroundJobsWidget({
+  open,
+  onOpenChange,
   backgroundJobs,
   reviewJobs,
   runningJobs,
@@ -216,6 +220,8 @@ function BackgroundJobsWidget({
     <Popover
       title="Фоновые задачи"
       className="popover-tasks"
+      open={open}
+      onOpenChange={onOpenChange}
       trigger={
         <button type="button" className={reviewJobs.length > 0 || failedJobs.length > 0 ? "app-widget has-review" : "app-widget"}>
           <Activity size={15} aria-hidden="true" />
@@ -287,6 +293,10 @@ export function AppLayout() {
   // Отмена или снятие уже отправлены, ответ ещё не пришёл — строка показывает
   // «Завершаем…» вместо того чтобы молча ничего не делать до следующего опроса.
   const [pendingJobIds, setPendingJobIds] = useState<Set<string>>(new Set());
+  // Оба поповера управляемые: строка «Состояния» про упавшую задачу закрывает
+  // сводку и открывает «Фоновые задачи» — там задачу можно открыть и повторить.
+  const [jobsOpen, setJobsOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
   const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
   const [viewSlot, setViewSlot] = useState<HTMLElement | null>(null);
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
@@ -524,6 +534,8 @@ export function AppLayout() {
 
           <div className="app-widgets" aria-label="Состояние установки">
             <BackgroundJobsWidget
+              open={jobsOpen}
+              onOpenChange={setJobsOpen}
               backgroundJobs={backgroundJobs}
               reviewJobs={reviewJobs}
               runningJobs={runningJobs}
@@ -560,19 +572,16 @@ export function AppLayout() {
               )}
             </Popover>
 
-            <Popover
-              title="Состояние"
-              trigger={
-                <button type="button" className="app-widget">
-                  <CircleCheck size={15} aria-hidden="true" />
-                  <b className="nav-label">Состояние</b>
-                  <span className="app-widget-value">в порядке</span>
-                </button>
-              }
-            >
-              <p className="popover-note">API работает локально.</p>
-              <Link className="popover-link" to="/setup">Бот и резервные копии не настроены</Link>
-            </Popover>
+            <SystemStatusWidget
+              open={statusOpen}
+              onOpenChange={setStatusOpen}
+              onOpenBackgroundJobs={() => {
+                setStatusOpen(false);
+                // Закрытая сводка возвращает фокус своей кнопке; открой второй
+                // поповер в том же кадре — этот фокус «снаружи» тут же закрыл бы его.
+                window.setTimeout(() => setJobsOpen(true), 0);
+              }}
+            />
           </div>
 
           <div className="app-nav-footer">

@@ -105,5 +105,10 @@ class Settings(BaseSettings):
         """Журнал атомарной замены, читаемый до открытия базы."""
         return self.data_dir / "restore-journal.json"
 
+    @property
+    def diagnostics_dir(self) -> Path:
+        """Журнал сбоев и пульс воркера: читаются, даже когда SQLite не отвечает."""
+        return self.data_dir / "diagnostics"
+
 
 settings = Settings()

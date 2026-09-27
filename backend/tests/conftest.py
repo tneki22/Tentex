@@ -33,6 +33,16 @@ from app.models import (
     WorkspaceVariant,
     utc_now,
 )
+from app.system import diagnostics
+
+
+@pytest.fixture(autouse=True)
+def isolated_diagnostics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Тесты с блокировками и сбоями пишут журнал сюда, а не в data/ установки."""
+    directory = tmp_path / "diagnostics"
+    monkeypatch.setattr(diagnostics, "_directory", lambda: directory)
+    monkeypatch.setattr(diagnostics, "_recent", {})
+    return directory
 
 
 @pytest.fixture

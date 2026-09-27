@@ -263,7 +263,7 @@ def _external_models_enabled(session: Session) -> bool:
     return bool(row and row.external_models_enabled)
 
 
-def _cloud_readiness(session: Session) -> tuple[str, str, str]:
+def cloud_readiness(session: Session) -> tuple[str, str, str]:
     """Готов ли режим «Облако» прямо сейчас и чего ему не хватает.
 
     Порядок проверок повторяет порядок действий пользователя: сначала общий
@@ -405,7 +405,7 @@ def read_settings(session: Session) -> OcrSettingsRead:
         if spec.key == "fast":
             readiness, detail, active = _fast_readiness(models)
         elif spec.key == "cloud":
-            readiness, detail, active = _cloud_readiness(session)
+            readiness, detail, active = cloud_readiness(session)
         else:
             readiness, detail, active = "unavailable", spec.unavailable_reason or "", ""
 

@@ -285,7 +285,7 @@ export function StorageSettingsSection({
               </button>
             </div>
           </div>
-          {snapshot.same_disk_warning && <div className="storage-notice is-warning">Копии находятся на том же диске, что и рабочие данные. Для защиты от поломки диска выберите другой накопитель.</div>}
+          {snapshot.same_disk_warning && <div className="storage-notice is-warning">Копии лежат внутри папки рабочих данных и пропадут вместе с ней при поломке диска. Выберите папку на другом накопителе.</div>}
           <div className="storage-breakdown" aria-label="Использование места">
             {Object.entries({ database: "База и индексы", files: "Материалы и производные", models: "Локальные модели", backups: "Копии", temporary: "Временные файлы" }).map(([key, label]) => (
               <div key={key}><span>{label}</span><strong>{bytes(snapshot.breakdown[key as keyof typeof snapshot.breakdown])}</strong></div>

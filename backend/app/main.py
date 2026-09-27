@@ -31,13 +31,14 @@ from app.retrieval.snapshot import warm_active_snapshot
 from app.storage import maintenance as storage_maintenance
 from app.storage.restore import recover_interrupted_restore
 from app.storage.router import router as storage_router
+from app.system.router import router as system_router
 
 api = APIRouter(prefix="/api")
 
 
 @api.get("/health")
 def health() -> dict[str, str]:
-    """Пульс сервера. Фронтенд дёргает его на служебном экране «Состояние»."""
+    """Пульс сервера для healthcheck контейнера. Сводка панели — `/api/system/status`."""
     return {"status": "ok", "service": "tentex-api"}
 
 
@@ -153,6 +154,7 @@ def create_app() -> FastAPI:
     app.include_router(preparation_router)
     app.include_router(retrieval_router)
     app.include_router(storage_router)
+    app.include_router(system_router)
     return app
 
 
