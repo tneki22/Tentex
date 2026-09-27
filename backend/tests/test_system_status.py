@@ -526,7 +526,7 @@ def test_diagnostics_handler_survives_alembic_logging_setup() -> None:
 
 
 def test_is_configured_reflects_configure_logging_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`migrations/env.py` пропускает fileConfig, если это уже True — не даём флагу протухнуть незаметно."""
+    """Флаг configure_logging не протухает: migrations/env.py использует его для fileConfig."""
     import app.logging_config as logging_config
 
     monkeypatch.setattr(logging_config, "_CONFIGURED", False)

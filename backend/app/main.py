@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -91,6 +92,15 @@ def create_app() -> FastAPI:
             if (
                 storage_maintenance.active()
                 and request.method not in {"GET", "HEAD", "OPTIONS"}
+                # Отмена самой копии должна доходить до реестра. Он проверяет
+                # владельца lock; при restore и для других задач запись запрещена.
+                and not (
+                    request.method == "POST"
+                    and re.fullmatch(
+                        r"/api/background-jobs/[0-9a-fA-F-]{36}/cancel", request.url.path
+                    )
+                    and (storage_maintenance.read_state() or {}).get("operation") == "backup"
+                )
             ):
                 return JSONResponse(
                     status_code=503,

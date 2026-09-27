@@ -61,7 +61,7 @@ export interface BackgroundJobRead {
   diagnostics: string[];
   error: string | null;
   pause_requested: boolean;
-  control_action: "pause" | "finish" | null;
+  control_action: "pause" | "finish" | "cancel" | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;

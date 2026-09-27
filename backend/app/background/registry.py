@@ -124,7 +124,7 @@ def _progress_unit(session: Session, job: BackgroundJob) -> str:
     if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
         return "материалов"
     if job.kind == BackgroundJobKind.BACKUP_CREATE:
-        return "файлов"
+        return "страниц базы" if job.checkpoint.get("backup_label") == "Снимок базы" else "файлов"
     if job.kind in {BackgroundJobKind.PROJECT_EXPORT, BackgroundJobKind.PROJECT_IMPORT}:
         return "пакетов"
     if job.kind == BackgroundJobKind.IMAGE_DESCRIPTIONS:
@@ -146,7 +146,7 @@ def _model_label(session: Session, job: BackgroundJob) -> str:
     if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
         return "Сбор индекса"
     if job.kind == BackgroundJobKind.BACKUP_CREATE:
-        return "Резервная копия"
+        return str(job.checkpoint.get("backup_label") or "Резервная копия")
     if job.kind == BackgroundJobKind.PROJECT_EXPORT:
         return "Экспорт проекта"
     if job.kind == BackgroundJobKind.PROJECT_IMPORT:
@@ -194,7 +194,9 @@ def _read(session: Session, job: BackgroundJob) -> BackgroundJobRead:
             "progress_unit": _progress_unit(session, job),
             "needs_review": _needs_review(job),
             "control_action": (
-                "finish"
+                "cancel"
+                if job.kind == BackgroundJobKind.BACKUP_CREATE and job.pause_requested
+                else "finish"
                 if job.kind == BackgroundJobKind.RETRIEVAL_INDEX
                 and job.checkpoint.get("finish_requested")
                 else "pause"
@@ -316,6 +318,24 @@ def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:
     `completed` (см. `app.ai.jobs`).
     """
     job = _job_or_404(session, job_id)
+    from app.storage import maintenance
+
+    if maintenance.active():
+        lock = maintenance.read_state() or {}
+        if (
+            job.kind != BackgroundJobKind.BACKUP_CREATE
+            or lock.get("operation") != "backup"
+            or lock.get("operation_id") != job.checkpoint.get("backup_id")
+        ):
+            raise ProjectConflictError(
+                "Хранилище временно работает в режиме обслуживания", code="maintenance_busy"
+            )
+    if job.kind == BackgroundJobKind.BACKUP_CREATE:
+        from app.storage.service import cancel_backup
+
+        cancel_backup(session, job_id)
+        session.expire_all()
+        return get_job(session, job_id)
     if (
         job.kind == BackgroundJobKind.RETRIEVAL_INDEX
         and job.checkpoint.get("mode") != "incremental"

@@ -12,7 +12,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ACTIVE_JOB_STATES, getBackgroundJobResult } from "../api/backgroundJobs";
+import { ACTIVE_JOB_STATES, cancelBackgroundJob, getBackgroundJobResult } from "../api/backgroundJobs";
 import { listProjects, type ProjectSummary } from "../api/projects";
 import {
   backupDownloadUrl,
@@ -50,6 +50,8 @@ import {
 import type { StorageSettingsSubsection } from "./Setup";
 
 const SUBSECTIONS = ["overview", "backups", "projects", "maintenance"] as const;
+// История и сводка обновляются и для копий, запущенных до открытия экрана.
+const STORAGE_POLL_MS = 3000;
 
 type WatchedAction = "backup" | "export" | "import" | "verify" | "cleanup";
 
@@ -132,8 +134,13 @@ export function StorageSettingsSection({
         listBackups(signal),
         listProjects(signal),
       ]);
+      if (signal?.aborted) return;
       setSnapshot(nextSnapshot);
       setBackups(nextBackups);
+      const activeBackup = nextBackups.find((backup) => backup.state === "queued" || backup.state === "creating");
+      if (activeBackup?.job_id) {
+        setWatched((current) => current ?? { jobId: activeBackup.job_id!, action: "backup" });
+      }
       setProjects(nextProjects);
       setProjectId((current) => current ?? nextProjects[0]?.id ?? null);
       setError("");
@@ -147,6 +154,30 @@ export function StorageSettingsSection({
     void load(controller.signal);
     return () => controller.abort();
   }, [load]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer: number;
+    async function poll() {
+      try {
+        if (!document.hidden) {
+          // Сводка обходит локальные модели и может читаться долго. Для
+          // обнаружения копии достаточно лёгкого списка архивов без обхода диска.
+          const nextBackups = await listBackups(controller.signal);
+          if (controller.signal.aborted) return;
+          setBackups(nextBackups);
+          const active = nextBackups.find((backup) => backup.state === "queued" || backup.state === "creating");
+          if (active?.job_id) setWatched((current) => current ?? { jobId: active.job_id!, action: "backup" });
+        }
+      } catch (caught) {
+        if (!controller.signal.aborted) setError(errorText(caught));
+      } finally {
+        if (!controller.signal.aborted) timer = window.setTimeout(() => void poll(), STORAGE_POLL_MS);
+      }
+    }
+    timer = window.setTimeout(() => void poll(), STORAGE_POLL_MS);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, []);
 
   useEffect(() => {
     onActiveSubsection(subsection);
@@ -192,7 +223,10 @@ export function StorageSettingsSection({
       }
       if (watched.action !== "verify" && watched.action !== "cleanup") void load();
     } else if (job.state === "failed") {
-      setError(WATCHED_ACTION_FAILURE[watched.action]);
+      void load().then(() => setError(WATCHED_ACTION_FAILURE[watched.action]));
+    } else if (job.state === "cancelled") {
+      setFeedback("Создание копии отменено.");
+      void load();
     }
     setWatched(null);
   }, [load, watched, watchedJob.job]);
@@ -256,13 +290,20 @@ export function StorageSettingsSection({
             <div><h2>Хранилище</h2><p>Рабочие данные, переносимые копии и место на этом компьютере.</p></div>
             <div className="storage-actions">
               <Button variant="secondary" disabled={Boolean(busy)} onClick={() => fileInput.current?.click()}><Upload size={15} />Восстановить из файла</Button>
-              <Button disabled={Boolean(busy)} onClick={() => void run("backup", async () => {
+              <Button disabled={Boolean(busy) || watched?.action === "backup" || snapshot.maintenance} onClick={() => void run("backup", async () => {
                 const result = await createBackup();
                 setWatched({ jobId: result.job_id, action: "backup" });
                 await load();
               })}><FolderArchive size={15} />Создать копию</Button>
             </div>
           </header>
+          {watched?.action === "backup" && <div className="storage-notice" role="status">
+            <span>{watchedJob.job?.pause_requested ? "Отменяем создание копии…" : watchedJob.job?.model_label || "Резервная копия создаётся…"}{watchedJob.job && watchedJob.job.total > 0 ? `: ${watchedJob.job.done} из ${watchedJob.job.total}` : ""}</span>
+            <Button variant="secondary" disabled={Boolean(busy) || watchedJob.job?.pause_requested} onClick={() => void run("cancel-backup", async () => {
+              await cancelBackgroundJob(watched.jobId);
+              await watchedJob.refresh();
+            })}>Отменить создание</Button>
+          </div>}
           <input ref={fileInput} hidden type="file" accept=".tentex-backup,.tentex-project" onChange={(event) => void chooseFile(event.target.files?.[0])} />
           <div className="storage-summary-grid">
             <div><span>Занято Tentex</span><strong>{bytes(snapshot.used_bytes)}</strong></div>
