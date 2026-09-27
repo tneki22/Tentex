@@ -33,12 +33,22 @@ export interface ProcessingTaskRead {
   state: "queued" | "running" | "paused" | "failed" | "completed";
   stage: "queued" | "extract" | "segment" | "complete";
   parser_mode: ParserMode | null;
+  model_id: string | null;
+  cloud_strategy: OcrCloudStrategy | null;
+  image_mode: OcrImageMode | null;
   done: number;
   total: number;
   diagnostics: string[];
   error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Короткий опрос идущего разбора без страницы, оглавления и истории. */
+export function getLibraryProcessing(
+  materialId: string, signal?: AbortSignal,
+): Promise<ProcessingTaskRead | null> {
+  return request(`${libraryPath(materialId)}/processing`, { signal });
 }
 
 /** Чем и какие страницы прочитал последний разбор активной версии. */

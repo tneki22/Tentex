@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import stat
 import tempfile
+import time
 import zipfile
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
@@ -22,42 +24,86 @@ FORMAT = "tentex-backup"
 FORMAT_VERSION = 1
 APP_VERSION = "0.1.0"
 BUFFER_SIZE = 1024 * 1024
+# PDF/изображения уже сжаты, а векторы плохо сжимаются: более высокие уровни
+# заметно увеличивают время обслуживания ради небольшой экономии места.
+BACKUP_COMPRESSION_LEVEL = 1
+# 1 MiB за шаг: отзывчивая отмена даже на медленном bind mount.
+SNAPSHOT_PAGES = 256
+SNAPSHOT_TIMEOUT_SECONDS = 600
 
 
-def sha256_file(path: Path) -> str:
+class BackupCancelled(Exception):
+    """Кооперативная отмена без публикации частичного архива."""
+
+
+def sha256_file(path: Path, *, check_cancel: Callable[[], None] | None = None) -> str:
     """Хешировать потоково: рабочие архивы значительно больше памяти процесса."""
     digest = hashlib.sha256()
     with path.open("rb") as source:
         while chunk := source.read(BUFFER_SIZE):
+            if check_cancel:
+                check_cancel()
             digest.update(chunk)
     return digest.hexdigest()
 
 
-def iter_storage_files(root: Path) -> Iterable[tuple[Path, str]]:
+def iter_storage_files(
+    root: Path, *, check_cancel: Callable[[], None] | None = None,
+) -> Iterable[tuple[Path, str]]:
     """Архивировать всё устойчивое; `tmp/` всегда можно построить заново."""
     if not root.exists():
         return
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.is_symlink():
-            continue
-        relative = path.relative_to(root)
-        if relative.parts and relative.parts[0] == "tmp":
-            continue
-        yield path, PurePosixPath("storage", *relative.parts).as_posix()
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        # DirEntry использует тип из листинга. Повторные Path.stat для каждого
+        # файла на Windows bind mount делают инвентаризацию многоминутной.
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if check_cancel:
+                    check_cancel()
+                if entry.is_dir(follow_symlinks=False):
+                    if directory != root or entry.name != "tmp":
+                        pending.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    path = Path(entry.path)
+                    relative = path.relative_to(root)
+                    yield path, PurePosixPath("storage", *relative.parts).as_posix()
 
 
-def snapshot_database(source: Path, destination: Path) -> tuple[dict[str, int], str]:
+def snapshot_database(
+    source: Path, destination: Path, *,
+    check_cancel: Callable[[], None] | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> tuple[dict[str, int], str]:
     """Получить согласованный SQLite-снимок и убрать машинные секреты/реестры."""
     source_connection = sqlite3.connect(str(source), timeout=30)
     target_connection = sqlite3.connect(str(destination))
+    deadline = time.monotonic() + SNAPSHOT_TIMEOUT_SECONDS
+
+    def step(status: int, remaining: int, total: int) -> None:
+        if check_cancel:
+            check_cancel()
+        if time.monotonic() > deadline:
+            raise TimeoutError("Превышено время создания снимка базы")
+        if progress:
+            progress(total - remaining, total)
+
     try:
-        source_connection.backup(target_connection, pages=2048)
+        # Без read-транзакции heartbeat задачи меняет источник каждые 20 с,
+        # и Online Backup API заново копирует всю базу. WAL позволяет писателям
+        # работать, пока этот читатель держит одно согласованное поколение.
+        source_connection.execute("BEGIN")
+        source_connection.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        source_connection.backup(target_connection, pages=SNAPSHOT_PAGES, progress=step)
     finally:
         target_connection.close()
         source_connection.close()
 
     connection = sqlite3.connect(str(destination))
     try:
+        if check_cancel:
+            check_cancel()
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("UPDATE ai_provider_connections SET api_key_ciphertext = NULL")
         connection.execute("UPDATE storage_settings SET backup_directory = NULL")
@@ -72,6 +118,8 @@ def snapshot_database(source: Path, destination: Path) -> tuple[dict[str, int], 
             "'storage_verify', 'storage_cleanup')"
         )
         connection.commit()
+        if check_cancel:
+            check_cancel()
         result = connection.execute("PRAGMA quick_check").fetchone()
         if not result or result[0] != "ok":
             raise ProjectDomainError(
@@ -107,30 +155,46 @@ def create_backup(
     backup_id: UUID,
     kind: BackupKind,
     progress: Callable[[int, int], None] | None = None,
+    check_cancel: Callable[[], None] | None = None,
+    snapshot_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, object]:
     """Создать ZIP64 рядом с конечным путём и опубликовать атомарным rename."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    files = list(iter_storage_files(settings.storage_dir))
+    files = list(iter_storage_files(settings.storage_dir, check_cancel=check_cancel))
     total = len(files) + 1
     entries: list[dict[str, object]] = []
-    with tempfile.TemporaryDirectory(prefix="tentex-backup-", dir=destination.parent) as raw_tmp:
+    # SQLite работает на локальном диске контейнера: тысячи случайных записей
+    # в Windows bind mount намного медленнее последовательной публикации ZIP.
+    with tempfile.TemporaryDirectory(prefix="tentex-backup-") as raw_tmp:
         temp_dir = Path(raw_tmp)
         database_copy = temp_dir / "tentex.sqlite"
-        counts, alembic_revision = snapshot_database(settings.database_path, database_copy)
+        counts, alembic_revision = snapshot_database(
+            settings.database_path, database_copy,
+            check_cancel=check_cancel, progress=snapshot_progress,
+        )
         temp_archive = temp_dir / destination.name
         with zipfile.ZipFile(
             temp_archive,
             "w",
             compression=zipfile.ZIP_DEFLATED,
-            compresslevel=6,
+            compresslevel=BACKUP_COMPRESSION_LEVEL,
             allowZip64=True,
         ) as archive:
             members = [(database_copy, "database/tentex.sqlite"), *files]
             for index, (path, member_name) in enumerate(members, start=1):
-                file_hash = sha256_file(path)
-                size = path.stat().st_size
-                archive.write(path, member_name)
-                entries.append({"path": member_name, "size": size, "sha256": file_hash})
+                digest = hashlib.sha256()
+                size = 0
+                with (
+                    path.open("rb") as source,
+                    archive.open(member_name, "w", force_zip64=True) as output,
+                ):
+                    while chunk := source.read(BUFFER_SIZE):
+                        if check_cancel:
+                            check_cancel()
+                        digest.update(chunk)
+                        size += len(chunk)
+                        output.write(chunk)
+                entries.append({"path": member_name, "size": size, "sha256": digest.hexdigest()})
                 if progress:
                     progress(index, total)
             manifest: dict[str, object] = {
@@ -156,7 +220,21 @@ def create_backup(
                 "manifest.json",
                 json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
             )
-        shutil.move(temp_archive, destination)
+        if check_cancel:
+            check_cancel()
+        # Сначала полная запись рядом с назначением, затем атомарный rename.
+        partial = destination.with_suffix(destination.suffix + ".partial")
+        try:
+            with temp_archive.open("rb") as source, partial.open("wb") as output:
+                while chunk := source.read(BUFFER_SIZE):
+                    if check_cancel:
+                        check_cancel()
+                    output.write(chunk)
+            if check_cancel:
+                check_cancel()
+            partial.replace(destination)
+        finally:
+            partial.unlink(missing_ok=True)
     return manifest
 
 

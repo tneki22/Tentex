@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import sqlite3
 import time
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from datetime import time as day_time
 from pathlib import Path
@@ -41,6 +43,10 @@ from app.storage.schemas import (
 from app.system import diagnostics
 
 WAIT_INTERVAL_SECONDS = 0.5
+# Частые callbacks SQLite/ZIP не должны превращаться в тысячи запросов к БД.
+CONTROL_POLL_SECONDS = 0.5
+PROGRESS_WRITE_SECONDS = 1.0
+log = logging.getLogger("tentex.storage")
 
 
 def _policy(session: Session) -> StorageSettings:
@@ -216,9 +222,11 @@ def start_backup(session: Session, kind: BackupKind = BackupKind.MANUAL) -> Back
     return BackupCreateRead(backup_id=backup_id, job_id=job.id)
 
 
-def _wait_for_other_jobs(job_id: UUID) -> None:
+def _wait_for_other_jobs(job_id: UUID, check_cancel: Callable[[], None] | None = None) -> None:
     """Не отменять работу: обслуживание начнётся, когда остальные leases завершатся."""
     while True:
+        if check_cancel:
+            check_cancel()
         with SessionLocal() as session:
             active_count = session.scalar(
                 select(func.count()).select_from(BackgroundJob).where(
@@ -231,14 +239,72 @@ def _wait_for_other_jobs(job_id: UUID) -> None:
         time.sleep(WAIT_INTERVAL_SECONDS)
 
 
-def _update_progress(job_id: UUID, done: int, total: int) -> None:
+def _update_progress(job_id: UUID, done: int, total: int, label: str = "Упаковка файлов") -> None:
     def write() -> None:
         with SessionLocal() as session, job_write_transaction(session, job_id):
             job = session.get(BackgroundJob, job_id)
             if job is not None:
                 job.done = done
                 job.total = total
+                job.checkpoint = {**job.checkpoint, "backup_label": label}
                 job.updated_at = utc_now()
+
+    retry_on_locked(write)
+
+
+def recover_interrupted_backup() -> None:
+    """Снять backup-lock после смерти владельца, когда его lease уже истёк."""
+    state = maintenance.read_state()
+    if not state or state.get("operation") != "backup":
+        return
+    backup_id = UUID(str(state["operation_id"]))
+    with SessionLocal() as session, job_write_transaction(session):
+        row = session.get(BackupArchive, backup_id)
+        job = session.get(BackgroundJob, row.job_id) if row and row.job_id else None
+        if (
+            job and job.state == BackgroundJobState.RUNNING
+            and job.lease_expires_at and job.lease_expires_at > utc_now()
+        ):
+            return
+        if row and row.state != BackupArchiveState.READY:
+            row.state = BackupArchiveState.FAILED
+            row.error = "Создание копии прервано перезапуском. Создайте новую копию."
+        if job and job.state in {BackgroundJobState.RUNNING, BackgroundJobState.QUEUED}:
+            job.state = BackgroundJobState.FAILED
+            job.error = "Создание копии прервано перезапуском"
+            job.lease_owner = None
+            job.lease_expires_at = None
+            job.completed_at = utc_now()
+            job.updated_at = utc_now()
+    maintenance.finish(backup_id)
+    log.warning("released interrupted backup lock backup=%s", backup_id)
+
+
+def cancel_backup(session: Session, job_id: UUID) -> None:
+    """Очередь отменить сразу; running прервётся на ближайшем блоке SQLite/ZIP."""
+    session.rollback()
+
+    def write() -> None:
+        """Согласовать состояние очереди и архивной записи одной транзакцией."""
+        session.rollback()
+        with job_write_transaction(session, job_id):
+            job = session.get(BackgroundJob, job_id)
+            if job is None or job.state not in {
+                BackgroundJobState.QUEUED, BackgroundJobState.RUNNING,
+            }:
+                raise ProjectConflictError(
+                    "Задачу нельзя отменить в текущем состоянии",
+                    code="background_job_not_cancellable",
+                )
+            job.pause_requested = True
+            job.updated_at = utc_now()
+            if job.state == BackgroundJobState.QUEUED:
+                job.state = BackgroundJobState.CANCELLED
+                job.completed_at = utc_now()
+                row = session.get(BackupArchive, UUID(job.checkpoint["backup_id"]))
+                if row:
+                    row.state = BackupArchiveState.FAILED
+                    row.error = "Создание копии отменено"
 
     retry_on_locked(write)
 
@@ -253,7 +319,40 @@ def process_backup_job(session: Session, detached_job: BackgroundJob) -> None:
     """
     job_id = detached_job.id
     backup_id = UUID(str(detached_job.checkpoint["backup_id"]))
+    destination = None
+    last_control = last_progress = 0.0
+
+    def check_cancel() -> None:
+        """Читать команду короткой транзакцией, не удерживая поколение SQLite."""
+        nonlocal last_control
+        now = time.monotonic()
+        if now - last_control < CONTROL_POLL_SECONDS:
+            return
+        with SessionLocal() as control_session:
+            control = control_session.execute(
+                select(BackgroundJob.pause_requested, BackgroundJob.state).where(
+                    BackgroundJob.id == job_id
+                )
+            ).first()
+            if (
+                control is None or control.pause_requested
+                or control.state == BackgroundJobState.CANCELLED
+            ):
+                raise archive.BackupCancelled()
+        # Отсчёт после запроса: холодное соединение на bind mount само может
+        # читаться дольше интервала, иначе следующий файл снова откроет SQLite.
+        last_control = time.monotonic()
+
+    def progress(done: int, total: int, label: str) -> None:
+        nonlocal last_progress
+        check_cancel()
+        now = time.monotonic()
+        if now - last_progress >= PROGRESS_WRITE_SECONDS or done == total:
+            _update_progress(job_id, done, total, label)
+            last_progress = time.monotonic()
+
     try:
+        check_cancel()
         def _mark_creating() -> None:
             if session.in_transaction():
                 session.rollback()
@@ -271,7 +370,8 @@ def process_backup_job(session: Session, detached_job: BackgroundJob) -> None:
         # из-за троттлинга внешнего провайдера — 22.09.2026 это держало
         # глобальную блокировку записи (см. `main.py`) на всю установку без
         # необходимости. Лок берётся только на сам снимок и упаковку.
-        _wait_for_other_jobs(job_id)
+        _update_progress(job_id, 0, 0, "Ожидание фоновых задач")
+        _wait_for_other_jobs(job_id, check_cancel)
         with maintenance.lock("backup", backup_id):
             with SessionLocal() as read_session:
                 row = backup_or_404(read_session, backup_id)
@@ -280,24 +380,31 @@ def process_backup_job(session: Session, detached_job: BackgroundJob) -> None:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             file_name = f"tentex-{kind.value}-{stamp}-{str(backup_id)[:8]}.tentex-backup"
             destination = directory / file_name
+            _update_progress(job_id, 0, 0, "Подготовка файлов")
             manifest = archive.create_backup(
                 destination,
                 backup_id=backup_id,
                 kind=kind,
-                progress=lambda done, total: _update_progress(job_id, done, total),
+                progress=lambda done, total: progress(done, total, "Упаковка файлов"),
+                check_cancel=check_cancel,
+                snapshot_progress=lambda done, total: progress(done, total, "Снимок базы"),
             )
+        file_hash = archive.sha256_file(destination, check_cancel=check_cancel)
         def _mark_ready() -> None:
+            """Публиковать реестр после полного файла и последней проверки отмены."""
             if session.in_transaction():
                 session.rollback()
             with job_write_transaction(session, job_id):
                 row = session.get(BackupArchive, backup_id)
                 job = session.get(BackgroundJob, job_id)
                 assert row is not None and job is not None
+                if job.pause_requested:
+                    raise archive.BackupCancelled()
                 row.state = BackupArchiveState.READY
                 row.file_path = str(destination)
                 row.file_name = file_name
                 row.size_bytes = destination.stat().st_size
-                row.sha256 = archive.sha256_file(destination)
+                row.sha256 = file_hash
                 row.manifest = manifest
                 row.completed_at = utc_now()
                 job.state = BackgroundJobState.COMPLETED
@@ -306,13 +413,20 @@ def process_backup_job(session: Session, detached_job: BackgroundJob) -> None:
                 job.lease_owner = None
                 job.lease_expires_at = None
                 job.updated_at = utc_now()
+                job.checkpoint = {**job.checkpoint, "backup_label": "Резервная копия"}
 
         retry_on_locked(_mark_ready)
     except Exception as error:
         session.rollback()
+        cancelled = isinstance(error, archive.BackupCancelled)
+        if cancelled and destination:
+            destination.unlink(missing_ok=True)
+        if not cancelled:
+            log.exception("backup failed job=%s backup=%s", job_id, backup_id)
         error_message = str(error)
 
         def _mark_failed() -> None:
+            """Закрыть lease и обе записи при ошибке либо кооперативной отмене."""
             if session.in_transaction():
                 session.rollback()
             with job_write_transaction(session, job_id):
@@ -320,16 +434,23 @@ def process_backup_job(session: Session, detached_job: BackgroundJob) -> None:
                 job = session.get(BackgroundJob, job_id)
                 if row is not None:
                     row.state = BackupArchiveState.FAILED
-                    row.error = "Не удалось создать резервную копию"
+                    row.error = (
+                        "Создание копии отменено" if cancelled
+                        else "Не удалось создать резервную копию"
+                    )
                 if job is not None:
-                    job.state = BackgroundJobState.FAILED
-                    job.error = error_message
+                    job.state = (
+                        BackgroundJobState.CANCELLED if cancelled else BackgroundJobState.FAILED
+                    )
+                    job.error = None if cancelled else error_message
+                    job.completed_at = utc_now()
                     job.lease_owner = None
                     job.lease_expires_at = None
                     job.updated_at = utc_now()
 
         retry_on_locked(_mark_failed)
-        raise
+        if not cancelled:
+            raise
 
 
 def backup_file(session: Session, backup_id: UUID) -> Path:

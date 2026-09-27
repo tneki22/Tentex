@@ -4,6 +4,7 @@ import {
   buildTypstMaterial,
   controlLibraryProcessing,
   getLibraryMaterial,
+  getLibraryProcessing,
   getLibraryPage,
   listMaterialRevisions,
   startLibraryProcessing,
@@ -77,11 +78,33 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
     const task = detail?.task;
     const active = task && (task.state === "queued" || task.state === "running");
     if (!active) return;
-    const timer = window.setInterval(() => {
-      void refreshDetail();
-    }, POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [detail?.task?.state, detail?.task?.done, refreshDetail]);
+    const controller = new AbortController();
+    let timer: number;
+    // Следующий опрос только после ответа: медленный запрос не создаёт очередь.
+    const poll = async () => {
+      try {
+        const next = await getLibraryProcessing(materialId, controller.signal);
+        if (controller.signal.aborted) return;
+        if (!next || (next.state !== "queued" && next.state !== "running")) {
+          const updated = await refreshDetail(controller.signal);
+          if (updated && updated.task?.state !== "queued" && updated.task?.state !== "running") return;
+        } else {
+          setDetail((current) => current ? {
+            ...current, task: next, status: next.state === "running" ? "processing" : "queued",
+          } : current);
+        }
+      } catch {
+        // Временный сбой опроса не скрывает уже открытую страницу.
+        if (controller.signal.aborted) return;
+      }
+      if (!controller.signal.aborted) timer = window.setTimeout(poll, POLL_MS);
+    };
+    timer = window.setTimeout(poll, POLL_MS);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [materialId, detail?.task?.state, refreshDetail]);
 
   const activeTaskId = detail?.task
     && (detail.task.state === "running" || detail.task.state === "queued" || detail.task.state === "paused")

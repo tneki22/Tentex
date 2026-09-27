@@ -8,9 +8,12 @@ from uuid import uuid4
 
 import pytest
 from conftest import add_page_with_fragments, make_material
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db import get_session
+from app.main import create_app
 from app.materials import library
 from app.materials.parsers.base import ParsedElement
 from app.materials.worker import _prepare_revision, _renew_lease
@@ -80,6 +83,50 @@ def _task(material: Material, *, state: BackgroundJobState, selected: list[int])
         created_at=now,
         updated_at=now,
     )
+
+
+def test_task_read_exposes_launch_snapshot(session: Session) -> None:
+    """Подпись идущего разбора берётся из checkpoint, а не общих настроек."""
+    material = make_material(session, "facade")
+    task = _task(material, state=BackgroundJobState.RUNNING, selected=[1])
+    task.parser_mode = ParserMode.CLOUD
+    task.checkpoint["options"] = {
+        "page_model": {"model_id": "launch-model"},
+        "cloud_strategy": "page",
+        "image_mode": "skip",
+    }
+    result = library.task_read(task)
+    assert result.model_id == "launch-model"
+    assert result.cloud_strategy == "page"
+    assert result.image_mode == "skip"
+    assert "checkpoint" not in result.model_dump()
+    task.checkpoint = {}
+    legacy = library.task_read(task)
+    assert legacy.model_id is None
+    assert legacy.cloud_strategy is None
+
+
+def test_progress_endpoint_does_not_read_material_detail(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Опрос не запускает тяжёлый путь карточки; неизвестный материал даёт 404."""
+    material = make_material(session, "abac")
+    task = _task(material, state=BackgroundJobState.RUNNING, selected=[1])
+    session.add(task)
+    session.commit()
+
+    def unexpected_detail(*args):
+        pytest.fail("Опрос прогресса не должен читать полную карточку")
+
+    monkeypatch.setattr(library, "read_library_material", unexpected_detail)
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+    response = client.get(f"/api/materials/{material.id}/processing")
+    assert response.status_code == 200
+    assert response.json()["id"] == str(task.id)
+    assert response.json()["done"] == 0
+    assert client.get(f"/api/materials/{uuid4()}/processing").status_code == 404
 
 
 def test_cancel_discards_building_revision_and_frees_material(session: Session) -> None:

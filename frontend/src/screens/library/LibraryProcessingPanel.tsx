@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import {
   estimateLibraryProcessing,
+  PARSER_MODE_TITLES,
   type LibraryMaterialDetailRead,
   type LibraryProcessingCommand,
   type MaterialPageRead,
@@ -48,6 +49,13 @@ const STAGE_LABEL: Record<string, string> = {
   extract: "Разбираем страницы",
   segment: "Собираем блоки и фрагменты",
   complete: "Готово",
+};
+
+const STRATEGY_LABEL: Record<OcrCloudStrategy, string> = {
+  economy: "Экономно", auto: "Адаптивно", page: "Каждую страницу целиком",
+};
+const IMAGE_MODE_LABEL: Record<OcrImageMode, string> = {
+  describe: "Описывать изображения", text_only: "Только текст изображений", skip: "Не распознавать изображения",
 };
 
 // Сколько секунд уходит на страницу. Измерено прогоном `tentex-ocr-bench` на
@@ -225,7 +233,7 @@ export function LibraryProcessingPanel({
         setMode((current) => current ?? "fast");
       });
     return () => controller.abort();
-  }, [material.id, material.task?.updated_at]);
+  }, [material.id, isAudio]);
 
   const ocrModes = isAudio ? (ocr?.speech ?? []) : (ocr?.engines ?? []);
   const selectedMode = ocrModes.find((item) => item.mode === mode);
@@ -496,6 +504,15 @@ export function LibraryProcessingPanel({
               ? `: ${Math.min(task.done + 1, task.total)} из ${task.total}`
               : ""}
           </p>
+          {task?.parser_mode && (
+            <p className="inspector-note">
+              Режим: {PARSER_MODE_TITLES[task.parser_mode]}
+              {!isAudio && task.parser_mode === "cloud" && task.cloud_strategy && ` · ${STRATEGY_LABEL[task.cloud_strategy]}`}
+              <br />
+              Модель: {(isAudio ? speechModelLabel : task.model_id) ?? "не сохранена в запуске"}
+              {!isAudio && task.image_mode && <><br />{IMAGE_MODE_LABEL[task.image_mode]}</>}
+            </p>
+          )}
           {/* Пауза у записи не нужна: локальный Whisper с середины не продолжит, а
               облачная расшифровка при сбое и так продолжается с готовых кусков. */}
           <TaskRow

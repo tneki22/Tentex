@@ -54,6 +54,7 @@ from app.materials.schemas import (
     PageTextUpdate,
     ProcessingEstimateRead,
     ProcessingStart,
+    ProcessingTaskRead,
     SourceRefreshResult,
     TextMaterialCreate,
     TypstBuildWrite,
@@ -68,6 +69,14 @@ SessionDependency = Annotated[Session, Depends(get_session)]
 SearchSessionDependency = Annotated[Session, Depends(get_search_session)]
 GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
 router = APIRouter(prefix="/api", tags=["materials"])
+
+
+@router.get("/materials/{material_id}/processing", response_model=ProcessingTaskRead | None)
+def get_library_processing_task(
+    material_id: UUID, session: SessionDependency
+) -> ProcessingTaskRead | None:
+    """Прогресс и снимок запуска без пересборки полной карточки материала."""
+    return library.read_processing_task(session, material_id)
 
 
 # ── Глобальная Библиотека. Конкретные пути объявляются раньше `/{material_id}`,

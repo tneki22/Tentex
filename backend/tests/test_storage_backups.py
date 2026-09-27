@@ -3,17 +3,25 @@
 import json
 import sqlite3
 import zipfile
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db import Base
+from app.db import Base, get_session
+from app.main import create_app
 from app.models import (
     AiProviderConnection,
+    BackgroundJob,
+    BackgroundJobKind,
+    BackgroundJobState,
+    BackupArchive,
+    BackupArchiveState,
     BackupKind,
     EmbeddingBackendKind,
     EmbeddingProfile,
@@ -32,7 +40,7 @@ from app.models import (
     utc_now,
 )
 from app.projects.errors import ProjectDomainError
-from app.storage import archive, project_transfer
+from app.storage import archive, maintenance, project_transfer, service
 
 
 @pytest.fixture
@@ -148,6 +156,131 @@ def test_backup_rejects_path_traversal(storage_session: Session) -> None:
     with pytest.raises(ProjectDomainError) as caught:
         archive.validate_backup(malicious)
     assert caught.value.code == "backup_corrupt"
+
+
+def test_snapshot_does_not_restart_when_heartbeat_writes(storage_session: Session) -> None:
+    """Каждый шаг меняет источник другим соединением: снимок всё равно конечен."""
+    project, _ = _seed_project(storage_session)
+    writer = sqlite3.connect(settings.database_path)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("CREATE TABLE padding (data BLOB)")
+    writer.execute("INSERT INTO padding VALUES (zeroblob(4194304))")
+    writer.commit()
+    steps = []
+
+    def heartbeat(done: int, total: int) -> None:
+        steps.append(done)
+        assert len(steps) <= total // archive.SNAPSHOT_PAGES + 1
+        writer.execute("UPDATE projects SET name = 'heartbeat'")
+        writer.commit()
+
+    destination = settings.data_dir / "snapshot.sqlite"
+    try:
+        archive.snapshot_database(settings.database_path, destination, progress=heartbeat)
+    finally:
+        writer.close()
+    assert len(steps) > 1
+    assert steps == sorted(set(steps))
+    with sqlite3.connect(destination) as snapshot:
+        assert snapshot.execute("SELECT name FROM projects").fetchone()[0] == project.name
+        assert snapshot.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+
+
+@pytest.mark.parametrize("state", [BackgroundJobState.QUEUED, BackgroundJobState.RUNNING])
+def test_backup_cancellation_and_lock_release(
+    storage_session: Session, monkeypatch: pytest.MonkeyPatch, state: BackgroundJobState,
+) -> None:
+    """Отмена допускается middleware во время backup и снимает lock воркером."""
+    def factory():
+        return Session(storage_session.bind, expire_on_commit=False)
+    monkeypatch.setattr(service, "SessionLocal", factory)
+    started = service.start_backup(storage_session)
+    job = storage_session.get(BackgroundJob, started.job_id)
+    job.state = state
+    storage_session.commit()
+    if state == BackgroundJobState.RUNNING:
+        maintenance.begin("backup", started.backup_id)
+    app = create_app()
+    def session_dependency():
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = session_dependency
+    client = TestClient(app)
+    if state == BackgroundJobState.RUNNING:
+        unrelated = BackgroundJob(
+            id=uuid4(), kind=BackgroundJobKind.STORAGE_VERIFY,
+            state=BackgroundJobState.QUEUED, checkpoint={},
+        )
+        storage_session.add(unrelated)
+        storage_session.commit()
+        assert client.post(f"/api/background-jobs/{unrelated.id}/cancel").status_code == 409
+        assert client.post("/api/backups").status_code == 503
+    response = client.post(f"/api/background-jobs/{job.id}/cancel")
+    assert response.status_code == 200
+    storage_session.expire_all()
+    job = storage_session.get(BackgroundJob, started.job_id)
+    if state == BackgroundJobState.RUNNING:
+        assert response.json()["control_action"] == "cancel"
+        maintenance.finish(started.backup_id)
+        service.process_backup_job(storage_session, job)
+    storage_session.expire_all()
+    assert storage_session.get(BackgroundJob, started.job_id).state == BackgroundJobState.CANCELLED
+    assert storage_session.get(BackupArchive, started.backup_id).state == BackupArchiveState.FAILED
+    assert not maintenance.active()
+
+
+def test_archive_cancel_during_snapshot_does_not_publish(storage_session: Session) -> None:
+    """Исключение из SQLite-callback не публикует частичную копию."""
+    destination = settings.default_backup_dir / "cancelled.tentex-backup"
+
+    def cancel(done: int, total: int) -> None:
+        raise archive.BackupCancelled()
+
+    with pytest.raises(archive.BackupCancelled):
+        archive.create_backup(
+            destination, backup_id=uuid4(), kind=BackupKind.MANUAL, snapshot_progress=cancel,
+        )
+    assert not destination.exists()
+    assert not destination.with_suffix(".tentex-backup.partial").exists()
+
+
+def test_cancel_during_publication_removes_partial_archive(storage_session: Session) -> None:
+    """Отмена после упаковки не оставляет файл, который выглядит готовой копией."""
+    destination = settings.default_backup_dir / "cancelled.tentex-backup"
+    partial = destination.with_suffix(".tentex-backup.partial")
+
+    def check_cancel() -> None:
+        if partial.exists():
+            raise archive.BackupCancelled()
+
+    with pytest.raises(archive.BackupCancelled):
+        archive.create_backup(
+            destination, backup_id=uuid4(), kind=BackupKind.MANUAL, check_cancel=check_cancel,
+        )
+    assert not destination.exists()
+    assert not partial.exists()
+
+
+def test_dead_backup_lock_recovers_without_touching_live_lease(
+    storage_session: Session, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Восстановление снимает только lock с истёкшей арендой задачи."""
+    monkeypatch.setattr(service, "SessionLocal", lambda: Session(storage_session.bind))
+    started = service.start_backup(storage_session)
+    job = storage_session.get(BackgroundJob, started.job_id)
+    job.state = BackgroundJobState.RUNNING
+    job.lease_expires_at = utc_now() + timedelta(minutes=1)
+    storage_session.commit()
+    maintenance.begin("backup", started.backup_id)
+    service.recover_interrupted_backup()
+    assert maintenance.active()
+    job.lease_expires_at = utc_now() - timedelta(minutes=1)
+    storage_session.commit()
+    service.recover_interrupted_backup()
+    assert not maintenance.active()
+    storage_session.expire_all()
+    assert storage_session.get(BackgroundJob, job.id).state == BackgroundJobState.FAILED
 
 
 def test_project_package_imports_next_to_existing_and_reuses_material(

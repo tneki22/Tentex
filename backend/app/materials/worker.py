@@ -929,6 +929,13 @@ def run_pool(capacities: dict[WorkerLane, int]) -> None:
             now = time.monotonic()
             if now >= next_pulse:
                 diagnostics.touch_worker_heartbeat()
+                if storage_maintenance.active():
+                    from app.storage.service import recover_interrupted_backup
+
+                    try:
+                        retry_on_locked(recover_interrupted_backup)
+                    except OperationalError as error:
+                        log.warning("backup recovery delayed: %s", error)
                 next_pulse = now + WORKER_PULSE_SECONDS
             if now >= next_schedule_check and not storage_maintenance.active():
                 from app.storage.service import enqueue_due_automatic_backup
