@@ -3,8 +3,7 @@ import type {
   LibraryMaterialDetailRead,
   MaterialPageRead,
   MaterialRevisionRead,
-  ParserMode,
-  ProcessingScope,
+  LibraryProcessingCommand,
 } from "../../api/materials";
 import { LibraryMaterialFilePanel } from "./LibraryMaterialFilePanel";
 import { LibraryProcessingPanel } from "./LibraryProcessingPanel";
@@ -30,12 +29,8 @@ interface LibraryMaterialInspectorProps {
   onTabChange: (tab: InspectorTab) => void;
   onSelectRevision: (revision: number | null) => void;
   onCompareRevision: (revision: number | null) => void;
-  onStart: (command: {
-    parser_mode: ParserMode;
-    scope: ProcessingScope;
-    page_from?: number;
-    page_to?: number;
-  }) => void;
+  onStart: (command: LibraryProcessingCommand) => void;
+  onImagesQueued?: () => void;
   onControl: (action: "pause" | "resume" | "retry" | "cancel") => void;
   onTypstBuild: (downloadPackages: boolean, entrypoint?: string) => void;
   onTypstAddFile: (file: File, targetPath: string) => void;
@@ -71,6 +66,7 @@ export function LibraryMaterialInspector({
   onSelectRevision,
   onCompareRevision,
   onStart,
+  onImagesQueued,
   onControl,
   onTypstBuild,
   onTypstAddFile,
@@ -122,6 +118,7 @@ export function LibraryMaterialInspector({
               onFindHeaderFooter={onFindHeaderFooter}
               onConfirmPageReview={onConfirmPageReview}
               onIndexMaterial={onIndexMaterial}
+              onImagesQueued={onImagesQueued}
             />
           </Tabs.Content>
           <Tabs.Content value="revisions">

@@ -647,12 +647,8 @@ export function LibraryMaterialWorkspace() {
             onTabChange={(tab) => setParam("panel", tab === "processing" ? null : tab)}
             onSelectRevision={selectRevision}
             onCompareRevision={compareWithRevision}
-            onStart={(command) => void store.startProcessing({
-              parser_mode: command.parser_mode,
-              scope: command.scope,
-              page_from: command.page_from ?? null,
-              page_to: command.page_to ?? null,
-            })}
+            onStart={(command) => void store.startProcessing(command)}
+            onImagesQueued={() => void store.refreshDetail()}
             onControl={(action) => void store.controlProcessing(action)}
             onTypstBuild={(downloadPackages, entrypoint) => void store.buildTypst(downloadPackages, entrypoint)}
             onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
@@ -748,12 +744,8 @@ export function LibraryMaterialWorkspace() {
             onTabChange={(tab) => setParam("panel", tab === "processing" ? null : tab)}
             onSelectRevision={selectRevision}
             onCompareRevision={compareWithRevision}
-            onStart={(command) => void store.startProcessing({
-              parser_mode: command.parser_mode,
-              scope: command.scope,
-              page_from: command.page_from ?? null,
-              page_to: command.page_to ?? null,
-            })}
+            onStart={(command) => void store.startProcessing(command)}
+            onImagesQueued={() => void store.refreshDetail()}
             onControl={(action) => void store.controlProcessing(action)}
             onTypstBuild={(downloadPackages, entrypoint) => void store.buildTypst(downloadPackages, entrypoint)}
             onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}

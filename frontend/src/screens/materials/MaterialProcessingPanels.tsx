@@ -11,8 +11,7 @@ import {
   type LibraryMaterialDetailRead,
   type MaterialPageRead,
   type MaterialRevisionRead,
-  type ParserMode,
-  type ProcessingScope,
+  type LibraryProcessingCommand,
 } from "../../api/materials";
 import { indexLibraryMaterial } from "../../api/retrieval";
 import { Button, ErrorState, LoadingState } from "../../components/ui";
@@ -115,12 +114,7 @@ export function MaterialProcessingPanels({
     }
   }, [refresh, onChanged, onError]);
 
-  const start = (command: {
-    parser_mode: ParserMode;
-    scope: ProcessingScope;
-    page_from?: number;
-    page_to?: number;
-  }) => void run(() => startLibraryProcessing(materialId, command));
+  const start = (command: LibraryProcessingCommand) => void run(() => startLibraryProcessing(materialId, command));
 
   const control = (action: "pause" | "resume" | "retry" | "cancel") =>
     void run(() => controlLibraryProcessing(materialId, action));
@@ -173,6 +167,7 @@ export function MaterialProcessingPanels({
         onFindHeaderFooter={() => setHeaderFooterOpen(true)}
         onConfirmPageReview={confirmReview}
         onIndexMaterial={() => void run(() => indexLibraryMaterial(materialId))}
+        onImagesQueued={() => void refresh()}
       />
       <MaterialRevisionPanel
         material={detail}

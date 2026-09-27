@@ -41,6 +41,7 @@ function backgroundJobPath(job: BackgroundJobRead): string | null {
   switch (job.kind) {
     case "parse":
     case "ai_cleanup":
+    case "image_descriptions":
       if (!job.material_id) return null;
       return job.project_id
         ? `/projects/${job.project_id}/materials/${job.material_id}`

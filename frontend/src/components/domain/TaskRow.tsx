@@ -65,6 +65,7 @@ const KIND_LABEL: Record<TaskKind, string> = {
   project_import: "Импорт проекта",
   storage_verify: "Проверка хранилища",
   storage_cleanup: "Очистка временного",
+  image_descriptions: "Описание изображений",
 };
 
 interface TaskRowProps {

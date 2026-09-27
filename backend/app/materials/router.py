@@ -9,7 +9,15 @@ from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
 from app.background.schemas import BackgroundJobStartRead
 from app.db import get_search_session, get_session
-from app.materials import ai_cleanup, header_footer, library, outline_ai, service, typst
+from app.materials import (
+    ai_cleanup,
+    header_footer,
+    image_descriptions,
+    library,
+    outline_ai,
+    service,
+    typst,
+)
 from app.materials.schemas import (
     ExamCompositeDraftImportResult,
     ExamCompositeDraftImportWrite,
@@ -18,6 +26,11 @@ from app.materials.schemas import (
     ExamProgramImportWrite,
     ExamProgramPreview,
     ExternalMaterialCreate,
+    ImageDescriptionEstimateRead,
+    ImageDescriptionEstimateWrite,
+    ImageDescriptionStart,
+    ImageDescriptionStartRead,
+    ImageInventoryRead,
     LibraryExternalMaterialCreate,
     LibraryMaterialAttachWrite,
     LibraryMaterialDetailRead,
@@ -38,6 +51,7 @@ from app.materials.schemas import (
     PageCorrectionRead,
     PageRead,
     PageTextUpdate,
+    ProcessingEstimateRead,
     ProcessingStart,
     SourceRefreshResult,
     TextMaterialCreate,
@@ -389,6 +403,45 @@ def get_library_fragment_asset(
     material_id: UUID, fragment_id: UUID, session: SessionDependency
 ) -> FileResponse:
     return FileResponse(library.library_fragment_asset_path(session, material_id, fragment_id))
+
+
+@router.post("/materials/{material_id}/processing-estimate", response_model=ProcessingEstimateRead)
+def estimate_library_processing(
+    material_id: UUID, command: ProcessingStart, session: SessionDependency
+) -> ProcessingEstimateRead:
+    """Оценка запуска без побочных эффектов: страницы, запросы, верхняя цена."""
+    return library.processing_estimate(session, material_id, command)
+
+
+@router.get("/materials/{material_id}/image-descriptions", response_model=ImageInventoryRead)
+def image_inventory(
+    material_id: UUID,
+    session: SessionDependency,
+    provider_id: UUID | None = None,
+    model_id: str | None = None,
+) -> ImageInventoryRead:
+    return image_descriptions.inventory(session, material_id, provider_id, model_id)
+
+
+@router.post(
+    "/materials/{material_id}/image-descriptions/estimate",
+    response_model=ImageDescriptionEstimateRead,
+)
+def estimate_image_descriptions(
+    material_id: UUID, command: ImageDescriptionEstimateWrite, session: SessionDependency
+) -> ImageDescriptionEstimateRead:
+    return image_descriptions.estimate(session, material_id, command)
+
+
+@router.post(
+    "/materials/{material_id}/image-descriptions",
+    response_model=ImageDescriptionStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_image_descriptions(
+    material_id: UUID, command: ImageDescriptionStart, session: SessionDependency
+) -> ImageDescriptionStartRead:
+    return image_descriptions.start(session, material_id, command)
 
 
 @router.post("/materials/{material_id}/processing", response_model=LibraryMaterialDetailRead)

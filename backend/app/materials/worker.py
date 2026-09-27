@@ -17,6 +17,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.ai.job_budget import JobBudget
 from app.ai.jobs import process_ai_job
 from app.bindings.answers_link import link_answers_material
 from app.bindings.search import reindex_material
@@ -24,7 +25,7 @@ from app.bindings.service import transfer_bindings_on_revision
 from app.config import settings
 from app.db import SessionLocal, job_write_transaction, retry_on_locked, upgrade_database
 from app.logging_config import configure_logging
-from app.materials import audio_job, library
+from app.materials import audio_job, image_descriptions, library, processing_plan
 from app.materials import revisions as revision_registry
 from app.materials.parsers.base import ParsedPage
 from app.materials.parsers.cloud_vlm import CloudRecognizer
@@ -80,6 +81,7 @@ AI_JOB_KINDS = frozenset(
         BackgroundJobKind.COVERAGE_RESEARCH,
         BackgroundJobKind.RETRIEVAL_INDEX,
         BackgroundJobKind.RETRIEVAL_EXHAUSTIVE,
+        BackgroundJobKind.IMAGE_DESCRIPTIONS,
     }
 )
 LOCAL_JOB_KINDS = frozenset(
@@ -351,6 +353,9 @@ def _finish(session: Session, task_id: UUID) -> None:
         if material is None:
             return
         previous_revision = material.active_parse_revision
+        # Роль изображений решается по всей ревизии: повтор логотипа виден
+        # только на нескольких страницах сразу, а не на одной.
+        image_descriptions.refresh_image_roles(session, task.material_id, revision)
         # Разбор заново — это новая ревизия, а не потеря работы: страницы и
         # фрагменты прошлой ревизии остаются, чтобы её можно было открыть и
         # восстановить, а привязки переносятся на новые фрагменты (Р6).
@@ -370,6 +375,9 @@ def _finish(session: Session, task_id: UUID) -> None:
         )
         summary = revision_registry.revision_summary(session, task.material_id, revision)
         summary["changed_pages"] = len(_selected(task))
+        summary |= image_descriptions.revision_image_summary(session, task.material_id, revision)
+        if task.checkpoint.get("budget"):
+            summary["budget"] = task.checkpoint["budget"]
         revision_registry.record_revision(
             session,
             task.material_id,
@@ -384,7 +392,8 @@ def _finish(session: Session, task_id: UUID) -> None:
             task_id=task.id,
             source_storage_path=storage_path,
             source_hash=source_hash,
-            scope=dict(task.checkpoint.get("scope") or {"kind": "all"}),
+            scope=dict(task.checkpoint.get("scope") or {"kind": "all"})
+            | ({"options": task.checkpoint["options"]} if task.checkpoint.get("options") else {}),
             summary=summary,
         )
         link_answers_projects(session, task.material_id)
@@ -431,12 +440,26 @@ def process_parse_job(session: Session, task: BackgroundJob) -> None:
         # SQLAlchemy starts a read transaction for session.get(); page checkpoints
         # need their own short transactions so a stopped worker never loses a page.
         session.rollback()
-        params = ocr_settings.runtime_params(session)
+        # Снимок настроек запуска, а не текущие настройки: пауза и смена общих
+        # параметров не меняют ход уже начатого разбора.
+        options = dict(task.checkpoint.get("options") or {})
+        has_budget = "budget" in task.checkpoint
+        params = processing_plan.params_from_options(
+            options, ocr_settings.runtime_params(session)
+        )
         session.rollback()
         # Порт внешней модели заводится только для облачного разбора: локальные
         # режимы не должны и не могут дотянуться до шлюза.
         recognizer = (
-            CloudRecognizer(session, params.quality_threshold)
+            CloudRecognizer(
+                session,
+                params.quality_threshold,
+                page_model=processing_plan.selection_from_options(options, "page_model"),
+                description_model=processing_plan.selection_from_options(
+                    options, "description_model"
+                ),
+                budget=JobBudget(session, task_id) if has_budget else None,
+            )
             if parser_mode == ParserMode.CLOUD and not is_audio
             else None
         )
@@ -790,6 +813,8 @@ def _process_claimed_job(job: BackgroundJob) -> None:
                 process_typst_compile_job(session, job)
             elif job.kind == BackgroundJobKind.LINK_ANSWERS:
                 process_link_answers_job(session, job)
+            elif job.kind == BackgroundJobKind.IMAGE_DESCRIPTIONS:
+                image_descriptions.process_job(session, job)
             elif job.kind == BackgroundJobKind.COVERAGE_RESEARCH:
                 from app.coverage.research import process_coverage_job
 

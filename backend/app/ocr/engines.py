@@ -14,22 +14,51 @@ DEFAULT_FAST_LANGUAGE = "ru"
 DEFAULT_FAST_MODEL_ID = "PP-OCRv5"
 
 # Как режим «Облако» делит работу между текстовым слоем файла и внешней моделью.
-CloudStrategy = Literal["auto", "page"]
+# Выбирается на запуск; значение в настройках — только выбор по умолчанию.
+CloudStrategy = Literal["economy", "auto", "page"]
 DEFAULT_CLOUD_STRATEGY: CloudStrategy = "auto"
 CLOUD_STRATEGY_TITLES: dict[CloudStrategy, str] = {
-    "auto": "Только то, что не читается",
-    "page": "Каждую страницу целиком",
+    "economy": "Экономно",
+    "auto": "Адаптивно",
+    "page": "Каждую страницу",
 }
 CLOUD_STRATEGY_HINTS: dict[CloudStrategy, str] = {
+    "economy": (
+        "Готовый текст берётся из файла бесплатно, наружу уходят только формулы, "
+        "схемы и сканы без текстового слоя. Страница с испорченным слоем помечается "
+        "для проверки, но целиком не отправляется."
+    ),
     "auto": (
-        "Готовый текст берётся из файла бесплатно и точно, наружу уходят только "
-        "формулы, схемы и сканы. Дешевле в разы, и страница целиком не покидает "
-        "компьютер."
+        "Как «Экономно», но страница с неполным или испорченным текстовым слоем "
+        "уходит в модель целиком. Причина выбора сохраняется в диагностике страницы."
     ),
     "page": (
         "Каждая страница уходит в модель картинкой. Дороже и медленнее, зато "
         "вёрстку и порядок чтения выбирает модель, а не разметчик PDF."
     ),
+}
+
+# Что делать с изображениями на запуске. У «Быстро» описаний нет: только текст
+# внутри картинки локальным OCR или ничего.
+ImageMode = Literal["describe", "text_only", "skip"]
+IMAGE_MODE_TITLES: dict[ImageMode, str] = {
+    "describe": "Описывать",
+    "text_only": "Только текст",
+    "skip": "Не распознавать",
+}
+IMAGE_MODE_HINTS: dict[ImageMode, str] = {
+    "describe": (
+        "Каждое содержательное изображение отдельным запросом получает название, "
+        "описание, надписи и при наличии — таблицу или формулу. Повторяющиеся "
+        "логотипы и колонтитулы не отправляются."
+    ),
+    "text_only": "Из изображения берутся только надписи, без описания увиденного.",
+    "skip": "Изображения остаются вырезами оригинала без текста.",
+}
+DEFAULT_IMAGE_MODE: dict[str, ImageMode] = {"cloud": "describe", "fast": "text_only"}
+IMAGE_MODES_BY_ENGINE: dict[str, tuple[ImageMode, ...]] = {
+    "cloud": ("describe", "text_only", "skip"),
+    "fast": ("text_only", "skip"),
 }
 
 
@@ -83,3 +112,12 @@ class OcrRuntimeParams:
     fast_language: str = DEFAULT_FAST_LANGUAGE
     fast_model_id: str = DEFAULT_FAST_MODEL_ID
     cloud_strategy: CloudStrategy = DEFAULT_CLOUD_STRATEGY
+    # `None` — выбор движка по умолчанию (`DEFAULT_IMAGE_MODE`).
+    image_mode: ImageMode | None = None
+
+    def images_for(self, engine: str) -> ImageMode:
+        """Режим изображений, реально действующий для движка этого запуска."""
+        allowed = IMAGE_MODES_BY_ENGINE.get(engine, ("text_only", "skip"))
+        if self.image_mode in allowed:
+            return self.image_mode  # type: ignore[return-value]
+        return DEFAULT_IMAGE_MODE.get(engine, "text_only")

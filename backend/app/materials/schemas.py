@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
@@ -25,6 +26,7 @@ from app.models import (
     RecognitionSource,
     SourceRole,
 )
+from app.ocr.engines import CloudStrategy, ImageMode
 from app.projects.schemas import ProgramChangeResult
 
 NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -122,6 +124,16 @@ class ProcessingStart(ApiModel):
     scope: ProcessingScope = "all"
     page_from: int | None = Field(default=None, ge=1)
     page_to: int | None = Field(default=None, ge=1)
+    # Выбор на этот запуск; `None` — значение по умолчанию из «Распознавания».
+    cloud_strategy: CloudStrategy | None = None
+    image_mode: ImageMode | None = None
+    # Модель описаний изображений; по умолчанию — модель страниц.
+    description_provider_id: UUID | None = None
+    description_model_id: str | None = Field(default=None, max_length=200)
+    # Потолок суммы запуска (обычно верхняя оценка из `.../processing/estimate`).
+    max_cost_usd: Decimal | None = Field(default=None, gt=0, le=1000)
+    # Модель без цены в каталоге (локальная, автовыбор) запускается только явно.
+    confirm_unknown_price: bool = False
 
     @model_validator(mode="after")
     def range_is_complete(self) -> "ProcessingStart":
@@ -133,6 +145,113 @@ class ProcessingStart(ApiModel):
         elif self.page_from is not None or self.page_to is not None:
             raise ValueError("Диапазон задаётся только вместе с областью «Диапазон»")
         return self
+
+
+class ProcessingEstimateRead(ApiModel):
+    """Read-only оценка облачного запуска: что уйдёт наружу и во что обойдётся.
+
+    Верхняя оценка включает потолок ответа каждого вызова; «обычно» — типичный
+    ответ. Неизвестная цена — `price_known=False`, а не ноль.
+    """
+
+    parser_mode: ParserMode
+    cloud_strategy: CloudStrategy
+    image_mode: ImageMode
+    pages: int
+    whole_pages: int
+    text_pages: int
+    suspicious_pages: int
+    image_candidates: int
+    requests_upper: int
+    page_model_id: str | None
+    description_model_id: str | None
+    price_known: bool
+    cost_typical_usd: Decimal | None
+    cost_upper_usd: Decimal | None
+    sampled: bool
+    notes: list[str]
+
+
+class ImageCandidateRead(ApiModel):
+    """Одно изображение активной ревизии в инвентаре «Описать изображения»."""
+
+    id: str
+    page_number: int
+    element_index: int
+    fragment_id: UUID | None
+    bbox: list[float]
+    has_asset: bool
+    role: str
+    processing: str
+    review: str
+    reasons: list[str]
+    signals: list[str]
+    caption: str | None
+    crop_hash: str | None
+    text: str
+    selectable: bool
+
+
+class ImageInventoryRead(ApiModel):
+    """Что уйдёт на описание, что сомнительно и что исключено — до платного вызова.
+
+    `targets` отправляются по умолчанию; `doubtful` — только если человек их
+    отметит; `excluded` не отправляются (служебные, декоративные, описанные,
+    исправленные вручную).
+    """
+
+    material_id: UUID
+    revision: int
+    targets: list[ImageCandidateRead]
+    doubtful: list[ImageCandidateRead]
+    excluded: list[ImageCandidateRead]
+    model_id: str | None
+    provider_id: UUID | None
+    provider_label: str
+    price_known: bool
+    cost_per_image_typical_usd: Decimal | None
+    cost_per_image_upper_usd: Decimal | None
+    active_job_id: UUID | None
+    vector_index_stale: bool
+
+
+class ImageDescriptionEstimateWrite(ApiModel):
+    """Оценка по явному списку кандидатов и модели."""
+
+    target_ids: list[str] = Field(min_length=1, max_length=500)
+    provider_id: UUID | None = None
+    model_id: str | None = Field(default=None, max_length=200)
+
+
+class ImageDescriptionEstimateRead(ApiModel):
+    target_count: int
+    requests: int
+    reused_by_hash: int
+    model_id: str | None
+    price_known: bool
+    cost_typical_usd: Decimal | None
+    cost_upper_usd: Decimal | None
+
+
+class ImageDescriptionStart(ImageDescriptionEstimateWrite):
+    expected_revision: int = Field(ge=1)
+    max_cost_usd: Decimal | None = Field(default=None, gt=0, le=100)
+    confirm_unknown_price: bool = False
+
+
+class ImageDescriptionStartRead(ApiModel):
+    job_id: UUID
+    requests: int
+
+
+class ImageCountsRead(ApiModel):
+    """Счётчики изображений активной ревизии для карточки материала."""
+
+    total: int = 0
+    describable: int = 0
+    described: int = 0
+    needs_review: int = 0
+    service: int = 0
 
 
 class TypstBuildWrite(ApiModel):
@@ -236,6 +355,8 @@ class FragmentRead(ApiModel):
     # Границы сегмента у расшифровки аудио и субтитров; у остальных источников None.
     time_from: float | None = None
     time_to: float | None = None
+    # Состояние изображения: роль, обработка, проверка, описание и происхождение.
+    visual: dict[str, object] | None = None
 
 
 class BlockRead(ApiModel):
@@ -400,6 +521,7 @@ class LibraryMaterialDetailRead(LibraryMaterialRead):
     #: перезапрашивает уже показанные страницы.
     raster_token: str
     typst: TypstMaterialRead | None = None
+    images: ImageCountsRead = ImageCountsRead()
 
 
 class LibraryMaterialAttachWrite(ApiModel):

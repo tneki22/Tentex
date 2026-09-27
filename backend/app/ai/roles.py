@@ -220,6 +220,23 @@ ROLE_SPECS = {
             "content_hash",
             "page-recognition-v1",
             {"max_output_tokens": 8000, "temperature": 0},
+            # Модель фиксируется в задаче при запуске: пауза и смена общих
+            # настроек не должны менять ход уже начатого разбора.
+            allow_request_model_override=True,
+        ),
+        AiRoleSpec(
+            "material_image_description",
+            "Описание изображений",
+            "Описывает вырезанные из материала схемы, графики и фотографии: название, "
+            "суть, дословные надписи, таблицу или формулу. Работает при обработке "
+            "«Облако» и в действии «Описать изображения» готового материала.",
+            "vision",
+            frozenset({"image_input", "structured_output"}),
+            # Тот же вырез с той же подписью не оплачивается повторно.
+            "content_hash",
+            "image-description-v1",
+            {"max_output_tokens": 3000, "temperature": 0},
+            allow_request_model_override=True,
         ),
         AiRoleSpec(
             "speech_transcription",

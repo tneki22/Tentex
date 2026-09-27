@@ -21,7 +21,8 @@ export type BackgroundJobKind =
   | "project_export"
   | "project_import"
   | "storage_verify"
-  | "storage_cleanup";
+  | "storage_cleanup"
+  | "image_descriptions";
 
 export type BackgroundJobState =
   | "queued"

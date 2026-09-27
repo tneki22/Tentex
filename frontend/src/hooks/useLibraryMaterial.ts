@@ -11,8 +11,7 @@ import {
   type LibraryMaterialDetailRead,
   type MaterialPageRead,
   type MaterialRevisionRead,
-  type ParserMode,
-  type ProcessingScope,
+  type LibraryProcessingCommand,
 } from "../api/materials";
 
 const POLL_MS = 1200;
@@ -175,12 +174,7 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
     }
   }, [detail, materialId]);
 
-  const startProcessing = useCallback((command: {
-    parser_mode: ParserMode;
-    scope: ProcessingScope;
-    page_from?: number | null;
-    page_to?: number | null;
-  }) => run(() => startLibraryProcessing(materialId, command)), [materialId, run]);
+  const startProcessing = useCallback((command: LibraryProcessingCommand) => run(() => startLibraryProcessing(materialId, command)), [materialId, run]);
 
   const controlProcessing = useCallback((action: "pause" | "resume" | "retry" | "cancel") =>
     run(() => controlLibraryProcessing(materialId, action)), [materialId, run]);

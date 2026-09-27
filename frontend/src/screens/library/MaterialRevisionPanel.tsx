@@ -21,6 +21,7 @@ const ORIGIN_LABEL: Record<RevisionOrigin, string> = {
   ai_cleanup: "Уборка текста",
   source_refresh: "Обновление снимка",
   restore: "Восстановление версии",
+  image_descriptions: "Описание изображений моделью",
 };
 
 /** Происхождение читается фразой, а не значением поля: «Исправление страницы 12». */

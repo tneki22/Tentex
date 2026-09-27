@@ -223,6 +223,7 @@ class MaterialRevisionOrigin(StrEnum):
     AI_CLEANUP = "ai_cleanup"
     SOURCE_REFRESH = "source_refresh"
     RESTORE = "restore"
+    IMAGE_DESCRIPTIONS = "image_descriptions"
 
 
 class BackgroundJobKind(StrEnum):
@@ -250,6 +251,7 @@ class BackgroundJobKind(StrEnum):
     PROJECT_IMPORT = "project_import"
     STORAGE_VERIFY = "storage_verify"
     STORAGE_CLEANUP = "storage_cleanup"
+    IMAGE_DESCRIPTIONS = "image_descriptions"
 
 
 class BackgroundJobState(StrEnum):
@@ -857,6 +859,10 @@ class MaterialFragment(Base):
     # Границы сегмента у временных источников: расшифровка аудио и субтитры.
     time_from: Mapped[float | None] = mapped_column(Float, nullable=True)
     time_to: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Состояние изображения (роль, обработка, проверка, описание) — копия
+    # `MaterialPage.elements[i]["image"]`. Поиск «без описания» читает его, а не
+    # угадывает по префиксу текста. У текстовых фрагментов — NULL.
+    visual: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
 class MaterialRevision(Base):
