@@ -715,7 +715,7 @@ AiRoleSpec(
     "vision",                                            # модальность
     frozenset({"image_input", "structured_output"}),      # обязательные возможности
     "content_hash",                                       # политика кэша
-    "page-recognition-v1",
+    "page-recognition-v2",
     {"max_output_tokens": 8000, "temperature": 0},
 )
 ```
