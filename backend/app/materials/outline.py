@@ -44,6 +44,9 @@ MIN_TOC_LINE_RATIO = 0.5
 # Шаг отступа одного уровня вложенности при кластеризации без нумерации, в
 # пунктах PDF — тот же порядок, что и у распознавания структуры страницы.
 LEVEL_INDENT_STEP = 6.0
+# Разница кегля внутри одной строки PDF бывает дробной; пояснение под пунктом
+# обычно отличается заметнее, чем соседние фрагменты одного заголовка.
+WRAPPED_TITLE_SIZE_TOLERANCE = 0.75
 
 _NUMBERING = r"\d+(?:\.\d+)*\.?"
 # Заголовок и номер страницы через точечную (или похожую) выноску.
@@ -53,7 +56,8 @@ _LEADER_RE = re.compile(
 # Запасной путь без выноски: заголовок, пробелы, число.
 _PLAIN_RE = re.compile(rf"^(?P<num>{_NUMBERING})?\s*(?P<title>.+?)\s+(?P<page>\d{{1,4}})\s*$")
 _ENDS_WITH_NUMBER_RE = re.compile(r"(?<=\D)\d{1,4}\s*$")
-PhysicalLine = tuple[str, float, float]
+_SPACED_CHAPTER_RE = re.compile(r"^Г\s+л\s+а\s+в\s+а(?=\s)", re.IGNORECASE)
+PhysicalLine = tuple[str, float, float, float]
 ParsedLine = tuple[str | None, str, int, float]
 
 
@@ -69,9 +73,8 @@ def _candidate_pages(page_count: int) -> list[int]:
 def _page_lines(page: fitz.Page) -> list[PhysicalLine]:
     """Строки страницы с координатами текста.
 
-    Координата ``y`` нужна для PDF, где номер страницы лекции вынесен в
-    отдельный текстовый блок на той же строке. Без неё такой заголовок терялся
-    при разборе, а длинные пункты оглавления распадались на два пункта.
+    Координата ``y`` нужна для вынесенного отдельно номера страницы, а размер
+    шрифта отличает перенос заголовка от мелкого пояснения под ним.
     """
     # Координаты текста нужны, бинарные изображения в оглавлении — нет.
     raw = page.get_text("dict", sort=True, flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES)
@@ -83,7 +86,9 @@ def _page_lines(page: fitz.Page) -> list[PhysicalLine]:
             if not text:
                 continue
             x0 = min((span["bbox"][0] for span in spans), default=0.0)
-            lines.append((text, x0, float(line["bbox"][1])))
+            main_span = max(spans, key=lambda span: len(span.get("text", "")), default=None)
+            size = float(main_span["size"]) if main_span else 0.0
+            lines.append((text, x0, float(line["bbox"][1]), size))
     return lines
 
 
@@ -118,6 +123,7 @@ def _parse_line(line: str) -> tuple[str | None, str, int] | None:
     if not match:
         return None
     title = match.group("title").strip(" .·…")
+    title = _SPACED_CHAPTER_RE.sub("Глава", title)
     if not title:
         return None
     try:
@@ -128,37 +134,58 @@ def _parse_line(line: str) -> tuple[str | None, str, int] | None:
 
 
 def _logical_lines(lines: list[PhysicalLine]) -> list[PhysicalLine]:
-    """Приклеивает номер страницы, вынесенный в отдельный PDF-блок справа."""
+    """Приклеивает вынесенный справа номер к строке с той же координатой.
+
+    PDF может отдать несколько заголовков подряд, а затем их номера отдельным
+    блоком; соседство в порядке извлечения тогда не соответствует строке.
+    """
     logical: list[PhysicalLine] = []
-    for text, x0, y0 in lines:
-        if re.fullmatch(r"\d{1,4}", text.strip()) and logical:
-            previous_text, previous_x, previous_y = logical[-1]
-            if abs(y0 - previous_y) <= 2.5:
-                logical[-1] = (f"{previous_text} {text.strip()}", previous_x, previous_y)
-                continue
-        logical.append((text, x0, y0))
+    attached: set[int] = set()
+    for text, x0, y0, size in lines:
+        if re.fullmatch(r"\d{1,4}", text.strip()):
+            for index in range(len(logical) - 1, -1, -1):
+                previous_text, previous_x, previous_y, previous_size = logical[index]
+                if (
+                    abs(y0 - previous_y) <= 2.5
+                    and x0 > previous_x
+                    and index not in attached
+                ):
+                    logical[index] = (
+                        f"{previous_text} {text.strip()}", previous_x, previous_y,
+                        previous_size,
+                    )
+                    attached.add(index)
+                    break
+            else:
+                logical.append((text, x0, y0, size))
+            continue
+        logical.append((text, x0, y0, size))
     return logical
 
 
 def _parsed_lines(lines: list[PhysicalLine]) -> list[ParsedLine]:
-    """Разбирает логические строки и склеивает переносы одного пункта."""
+    """Склеивает переносы заголовка, не прихватывая пояснения меньшим кеглем."""
     parsed: list[ParsedLine] = []
     pending: PhysicalLine | None = None
-    for text, x0, y0 in _logical_lines(lines):
+    for text, x0, y0, size in _logical_lines(lines):
         result = _parse_line(text.strip())
         if result is None:
             same_entry = (
                 pending is not None
-                and y0 - pending[2] <= 20
-                and abs(x0 - pending[1]) <= 8
+                and 0 <= y0 - pending[2] <= 20
+                and abs(size - pending[3]) <= WRAPPED_TITLE_SIZE_TOLERANCE
             )
             pending = (
-                (f"{pending[0]} {text.strip()}", pending[1], y0)
+                (f"{pending[0]} {text.strip()}", pending[1], y0, size)
                 if same_entry and pending is not None
-                else (text.strip(), x0, y0)
+                else (text.strip(), x0, y0, size)
             )
             continue
-        if pending is not None and y0 - pending[2] <= 20 and abs(x0 - pending[1]) <= 8:
+        if (
+            pending is not None
+            and 0 <= y0 - pending[2] <= 20
+            and abs(size - pending[3]) <= WRAPPED_TITLE_SIZE_TOLERANCE
+        ):
             combined = _parse_line(f"{pending[0]} {text.strip()}")
             if combined is not None:
                 result = combined
@@ -216,10 +243,12 @@ def _normalize_named_hierarchy(items: list[dict[str, object]]) -> None:
             item["level"] = 3
 
 
-def _extract_page_items(page: fitz.Page, *, max_page: int) -> list[dict[str, object]] | None:
+def _extract_page_items(
+    page: fitz.Page, *, max_page: int, continuation: bool = False
+) -> list[dict[str, object]] | None:
     lines = _page_lines(page)
-    plain = [text for text, _, _ in lines]
-    if _toc_page_kind(plain) is None:
+    plain = [text for text, *_ in lines]
+    if not continuation and _toc_page_kind(plain) is None:
         return None
 
     # Номер страницы не может далеко уйти за объём книги — это и отсекает
@@ -301,7 +330,7 @@ def _scan_printed_outline(
         weak_start: tuple[int, list[dict[str, object]]] | None = None
         for page_number in _candidate_pages(total):
             page = document[page_number - 1]
-            kind = _toc_page_kind([text for text, _, _ in _page_lines(page)])
+            kind = _toc_page_kind([text for text, *_ in _page_lines(page)])
             if kind is None:
                 continue
             items = _extract_page_items(page, max_page=page_count)
@@ -330,8 +359,12 @@ def _merge_from(
     source_pages = [page_number]
     next_page = page_number + 1
     while len(source_pages) < MAX_MERGED_PAGES and next_page <= total:
-        continued = _extract_page_items(document[next_page - 1], max_page=max_page)
+        continued = _extract_page_items(
+            document[next_page - 1], max_page=max_page, continuation=True
+        )
         if continued is None:
+            break
+        if int(continued[0]["page"]) < int(items[-1]["page"]):
             break
         items.extend(continued)
         source_pages.append(next_page)

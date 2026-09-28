@@ -165,6 +165,59 @@ def test_printed_outline_joins_detached_pages_and_wrapped_titles(tmp_path: Path)
     ]
 
 
+def test_printed_outline_ignores_smaller_notes_and_continues_dense_pages(tmp_path: Path) -> None:
+    """Подробные пояснения не приклеиваются к пунктам и не обрывают оглавление."""
+    path = tmp_path / "annotated-contents.pdf"
+    document = fitz.open()
+    for sheet in range(2):
+        page = document.new_page()
+        if sheet == 0:
+            page.insert_text((50, 35), "Contents", fontsize=12)
+        for index in range(8):
+            number = sheet * 8 + index + 1
+            y = 60 + index * 65
+            if number == 2:
+                page.insert_text((50, y), "Section 2. Long title about", fontsize=9.5)
+                page.insert_text((85, y + 11), "proofs .......... 20", fontsize=9.5)
+            else:
+                title = f"Section {number}. Topic .......... {number * 10}"
+                page.insert_text((50, y), title, fontsize=9.5)
+            page.insert_text(
+                (65, y + 25), "Explanation of this topic and its examples.", fontsize=8
+            )
+            page.insert_text((50, y + 35), "More explanation without a page number.", fontsize=8)
+    document.save(path)
+    document.close()
+
+    result = find_printed_outline(path, page_count=200)
+
+    assert result is not None
+    items, source_pages = result
+    assert source_pages == [1, 2]
+    assert len(items) == 16
+    assert items[1]["title"] == "Section 2. Long title about proofs"
+    assert items[-1]["title"] == "Section 16. Topic"
+    assert [item["page"] for item in items] == list(range(10, 161, 10))
+
+
+def test_detached_numbers_match_coordinates_not_pdf_block_order() -> None:
+    """Два правых номера могут следовать после двух левых строк одним блоком."""
+    lines: list[outline.PhysicalLine] = [
+        ("Chapter VI. Theory", 35, 58, 9.5),
+        ("Section 28. Axioms", 47, 72, 9.5),
+        ("247", 338, 58.2, 9.5),
+        ("248", 338, 72.3, 9.5),
+    ]
+
+    assert [(title, page) for _, title, page, _ in outline._parsed_lines(lines)] == [
+        ("Chapter VI. Theory", 247),
+        ("Section 28. Axioms", 248),
+    ]
+    assert outline._parsed_lines([("Chapter 7", 35, 58, 9.5), ("50", 338, 58, 9.5)]) == [
+        (None, "Chapter 7", 50, 35),
+    ]
+
+
 def test_recognized_outline_uses_sections_as_roots_and_removes_noise() -> None:
     items = [
         OutlineItem(level=1, title="OPERATING SYSTEMS", page=1),
