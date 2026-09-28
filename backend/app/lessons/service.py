@@ -20,6 +20,7 @@ from app.lessons import refs as refs_module
 from app.lessons.boundaries import FragmentView, NextItem, OutlineRange, Pages, Piece, Position
 from app.lessons.schemas import (
     LessonBlockRead,
+    LessonBuildRead,
     LessonChangeResult,
     LessonManualWrite,
     LessonQuickWrite,
@@ -33,6 +34,7 @@ from app.lessons.schemas import (
     LessonUnbindOffer,
     LessonUpdateWrite,
 )
+from app.lessons.task_store import retire_lesson_tasks, task_reads
 from app.materials.naming import material_display_name, project_material_display_name
 from app.models import (
     Binding,
@@ -395,7 +397,23 @@ def _ref_read(
             and (ref.from_fragment_id is not None or ref.to_fragment_id is not None)
         ),
         pages_shown=pages_shown,
+        citation_label=ref.citation_label,
     )
+
+
+def _ref_order(ref: LessonSourceRef) -> tuple[str, int]:
+    """Сначала содержимое куска, затем опоры пояснения по номеру: S2 раньше S10."""
+    label = ref.citation_label or ""
+    return ref.role.value, int(label[1:]) if label[1:].isdigit() else 0
+
+
+def build_read(lesson: Lesson) -> LessonBuildRead | None:
+    """Подпись модельного урока; у ручного и быстрого урока её нет."""
+    meta = lesson.build_meta or {}
+    if "template" not in meta:
+        return None
+    fields = LessonBuildRead.model_fields
+    return LessonBuildRead.model_validate({key: meta.get(key) for key in fields if key in meta})
 
 
 def _lesson_read(session: Session, lesson: Lesson) -> LessonRead:
@@ -419,6 +437,9 @@ def _lesson_read(session: Session, lesson: Lesson) -> LessonRead:
         if ref.role == LessonRefRole.CONTENT
     ]
     shown = refs_module.shown_pages(session, content_refs)
+    task_by_activity = task_reads(
+        session, [block.activity_id for block in blocks if block.activity_id is not None]
+    )
     topics = _topic_reads(session, lesson.id)
     action = _latest_action(session, lesson.project_id)
     undo_sequence = (
@@ -453,13 +474,16 @@ def _lesson_read(session: Session, lesson: Lesson) -> LessonRead:
                 bound_program_node_id=block.bound_program_node_id,
                 media_kind=media_kind(block),
                 media_url=block.media_path if media_kind(block) == "link" else None,
+                collapsed=block.collapsed,
                 refs=[
                     _ref_read(session, lesson.project_id, ref, shown.get(ref.id, []))
-                    for ref in sorted(refs_by_block[block.id], key=lambda item: item.role.value)
+                    for ref in sorted(refs_by_block[block.id], key=_ref_order)
                 ],
+                task=task_by_activity.get(block.activity_id) if block.activity_id else None,
             )
             for block in blocks
         ],
+        build=build_read(lesson),
         created_at=lesson.created_at,
         updated_at=lesson.updated_at,
     )
@@ -516,6 +540,7 @@ def lessons_overview(session: Session, project_id: UUID) -> LessonsOverviewRead:
                 needs_review=any(needs_review(topic) for topic in topics_by_lesson[lesson.id]),
                 completed_at=lesson.completed_at,
                 updated_at=lesson.updated_at,
+                build=build_read(lesson),
             )
             for lesson in lessons
         ]
@@ -868,6 +893,7 @@ def delete_lesson(session: Session, project_id: UUID, lesson_id: UUID) -> None:
         ):
             if action.inverse_data.get("lesson_id") == str(lesson_id):
                 action.undone_at = now
+        retire_lesson_tasks(session, lesson.id)
         session.execute(delete(Lesson).where(Lesson.id == lesson.id))
 
 
@@ -886,5 +912,6 @@ def apply_undo(session: Session, project_id: UUID, data: dict) -> None:
     for raw_id in raw_lessons:
         lesson = session.get(Lesson, UUID(raw_id))
         if lesson is not None and lesson.project_id == project_id:
+            retire_lesson_tasks(session, lesson.id)
             session.execute(delete(Lesson).where(Lesson.id == lesson.id))
             session.expunge(lesson)

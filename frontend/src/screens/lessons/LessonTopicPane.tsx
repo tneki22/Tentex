@@ -2,13 +2,14 @@ import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "rea
 import { Link } from "react-router";
 import {
   AlertTriangle, Archive, ArrowDown, ArrowRightLeft, ArrowUp, CheckCircle2, ChevronDown, Combine, Dumbbell, ExternalLink,
-  FilePlus2, Image, LibraryBig, Link2, Pencil, Plus, RotateCcw, Scissors, Search, Sparkles, SquareDashed, Trash2, Undo2, X,
+  FilePlus2, Image, LibraryBig, Link2, ListChecks, Pencil, Plus, RotateCcw, Scissors, Search, Sparkles, SquareDashed, Trash2, Undo2, X,
 } from "lucide-react";
 import {
-  confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, unbindLessonBindings,
+  applyLessonProposal, confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, LESSON_TEMPLATE_LABELS, unbindLessonBindings,
   updateLesson, updateLessonNote, uploadLessonImage, type LessonBlockCommand, type LessonBlockRead,
-  type LessonChangeResult, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
+  type LessonChangeResult, type LessonProposalRead, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
 } from "../../api/lessons";
+import { getBackgroundJobResult, resolveBackgroundJob } from "../../api/backgroundJobs";
 import { undoProjectAction } from "../../api/projects";
 import { LessonDocument } from "../../components/domain/lesson/LessonDocument";
 import { TopicMaterialFinderDialog } from "../../components/domain/TopicMaterialFinderDialog";
@@ -20,6 +21,9 @@ import {
 import { useLesson } from "../../hooks/useLessons";
 import { useLessonViewMode } from "../../hooks/useLessonViewMode";
 import type { ProgramTreeNode } from "../programTree";
+import { LessonEnrichDialog } from "./LessonEnrichDialog";
+import { LessonPracticeRun } from "./LessonPracticeRun";
+import { LessonProposalBar } from "./LessonProposalBar";
 import { NOTE_VARIANTS } from "./lessonBlocks";
 import { VIEW_MODE_TABS } from "./LessonTab";
 import { errorText } from "./lessonTree";
@@ -39,6 +43,8 @@ interface LessonTopicPaneProps {
   onQuickLesson(): void;
   onFromSources(): void;
   onManual(): void;
+  /** Диалог «Собрать урок с ИИ» по этой теме. */
+  onBuildWithAi(): void;
   onChanged(): void;
   refreshKey: number;
   selectedBlockId: string | null;
@@ -48,6 +54,8 @@ interface LessonTopicPaneProps {
   actionError: string;
   /** Открыть вкладку «Поиск» правой панели: найденные страницы становятся уроком. */
   onFindInMaterials(): void;
+  /** Готовое предложение «Дополнить урок» из «Фона» — показать его в уроке. */
+  proposalJobId?: string | null;
 }
 
 const STATUS_TONE: Record<LessonStatus, "warning" | "success" | "neutral"> = {
@@ -55,14 +63,6 @@ const STATUS_TONE: Record<LessonStatus, "warning" | "success" | "neutral"> = {
   ready: "success",
   archived: "neutral",
 };
-
-function StageButton({ icon, label, stage }: { icon: ReactNode; label: string; stage: string }) {
-  return (
-    <Tooltip label={`Появится на этапе ${stage}`} side="bottom">
-      <span><Button variant="ghost" disabled aria-label={label}>{icon}<span className="toolbar-label toolbar-label-stage">{label}</span></Button></span>
-    </Tooltip>
-  );
-}
 
 interface ToolButtonProps {
   icon: ReactNode;
@@ -95,7 +95,7 @@ function ToolButton({ icon, label, hint, variant = "ghost", disabled, destructiv
 }
 
 /** Центр для одной темы: формулировка, уроки темы и открытый урок (записка §2, бриф §12). */
-export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onChanged, refreshKey, selectedBlockId, onSelectBlock, panelToggle, actionError, onFindInMaterials }: LessonTopicPaneProps) {
+export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onBuildWithAi, onChanged, refreshKey, selectedBlockId, onSelectBlock, panelToggle, actionError, onFindInMaterials, proposalJobId = null }: LessonTopicPaneProps) {
   const topicLessons = lessons.filter((lesson) => lesson.program_node_ids.includes(topic.id));
   const defaultLesson = topicLessons.find((lesson) => lesson.status !== "archived") ?? topicLessons[0];
   const openId = topicLessons.some((lesson) => lesson.id === lessonId) ? lessonId : defaultLesson?.id ?? null;
@@ -116,9 +116,17 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const hasRange = topic.source_page_ranges.length > 0;
   const [finderOpen, setFinderOpen] = useState(false);
+  const [enrichOpen, setEnrichOpen] = useState(false);
+  const [practiceOpen, setPracticeOpen] = useState(false);
+  const [runOpen, setRunOpen] = useState(false);
+  // Предложение модели к открытому уроку: изменения стоят в документе, решение — в шапке.
+  const [proposal, setProposal] = useState<{ jobId: string; read: LessonProposalRead } | null>(null);
+  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [proposalNote, setProposalNote] = useState("");
   const data = lesson.data && lesson.data.id === openId ? lesson.data : null;
   const selected = data?.blocks.find((block) => block.id === selectedBlockId) ?? null;
   const selectedIndex = selected ? data!.blocks.indexOf(selected) : -1;
+  const lessonTasks = (data?.blocks ?? []).flatMap((block) => (block.task ? [block.task] : []));
   const selectedRef = selected?.kind === "source" ? selected.refs.find((ref) => ref.role === "content") ?? null : null;
   const nextBlock = selectedIndex >= 0 ? data!.blocks[selectedIndex + 1] : undefined;
   const reviewReasons = data ? [
@@ -161,6 +169,45 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
   useEffect(() => {
     setError("");
   }, [openId]);
+
+  useEffect(() => {
+    if (!proposalJobId) return;
+    const controller = new AbortController();
+    getBackgroundJobResult<LessonProposalRead>(proposalJobId, controller.signal)
+      .then((read) => { if (!controller.signal.aborted && read.kind === "enrich") showProposal(proposalJobId, read); })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [proposalJobId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function showProposal(jobId: string, read: LessonProposalRead) {
+    setProposal({ jobId, read });
+    setChosen(new Set(read.ops.map((op) => op.id)));
+    setProposalNote("");
+  }
+
+  function applyProposal() {
+    if (!proposal || !data) return;
+    const current = proposal;
+    void run(async () => {
+      const result = await applyLessonProposal(projectId, data.id, current.jobId, {
+        op_ids: current.read.ops.filter((op) => chosen.has(op.id)).map((op) => op.id),
+        expected_revision: revisionRef.current,
+      });
+      setProposal(null);
+      const accepted = current.read.kind === "practice" ? "Задания добавлены" : "Изменения приняты";
+      setProposalNote(result.conflicts.length
+        ? `Не легли на урок: ${result.conflicts.length} — блок пропал или разрез не встал. Остальное принято; «Отменить» уберёт всё разом.`
+        : `${accepted}. «Отменить» уберёт их одним действием.`);
+      return result;
+    }, "Предложение не применилось");
+  }
+
+  function rejectProposal() {
+    if (!proposal) return;
+    const current = proposal;
+    setProposal(null);
+    void resolveBackgroundJob(current.jobId).catch(() => undefined);
+  }
 
   async function run(action: () => Promise<LessonChangeResult | void>, fallback: string) {
     setSaving(true);
@@ -318,7 +365,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
         { label: "Из источников…", icon: <ArrowRightLeft size={14} />, disabled: !hasRange, onSelect: onFromSources },
         { label: "Из найденного в материалах…", icon: <Search size={14} />, onSelect: onFindInMaterials },
         { label: "Вручную", icon: <Pencil size={14} />, onSelect: onManual },
-        { label: "Собрать с ИИ — этап 7", icon: <Sparkles size={14} />, disabled: true, onSelect: () => undefined },
+        { label: "Собрать с ИИ…", icon: <Sparkles size={14} />, onSelect: onBuildWithAi },
       ]}
     />
   );
@@ -353,6 +400,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
             <li key={item.id}>
               <button type="button" className={item.id === openId ? "is-active" : ""} onClick={() => onSelectLesson(item.id)}>
                 <strong>{item.title}</strong>
+                {item.build && <span className="lessons-lesson-template"><Sparkles size={12} aria-hidden="true" />{LESSON_TEMPLATE_LABELS[item.build.template]}</span>}
                 <StatusBadge tone={STATUS_TONE[item.status]}>{LESSON_STATUS_LABELS[item.status]}</StatusBadge>
                 {item.needs_review && <StatusBadge tone="warning">Требует проверки</StatusBadge>}
                 <span>{item.duration_minutes ? `≈ ${item.duration_minutes} мин` : "длительность не оценена"}</span>
@@ -367,15 +415,19 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
 
       {topicLessons.length === 0 && (hasRange ? (
         <EmptyState title="У темы ещё нет урока">
-          <p>Быстрый урок соберёт страницы темы из оглавления без модели.</p>
-          <Button variant="secondary" disabled={busy} onClick={onManual}><Pencil size={15} />Собрать вручную</Button>
-          <div className="lessons-topic-actions"><Button onClick={onQuickLesson} disabled={busy}><FilePlus2 size={15} />Быстрый урок</Button></div>
+          <p>Быстрый урок соберёт страницы темы из оглавления без модели. С ИИ — объяснение по этим страницам: модель выберет куски и напишет пояснения между ними.</p>
+          <div className="lessons-topic-actions">
+            <Button onClick={onQuickLesson} disabled={busy}><FilePlus2 size={15} />Быстрый урок</Button>
+            <Button variant="secondary" disabled={busy} onClick={onBuildWithAi}><Sparkles size={15} />Собрать с ИИ</Button>
+            <Button variant="ghost" disabled={busy} onClick={onManual}><Pencil size={15} />Собрать вручную</Button>
+          </div>
         </EmptyState>
       ) : (
         <EmptyState title="У темы пока нет материала из оглавления">
-          <p>Найдите тему в материалах проекта и отметьте подходящие страницы — из них соберётся урок. Если в проекте нужного нет, подберите материал в Библиотеке.</p>
+          <p>Найдите тему в материалах проекта и отметьте подходящие страницы — из них соберётся урок. С ИИ модель сама найдёт куски поиском или напишет урок из своих знаний. Если в проекте нужного нет, подберите материал в Библиотеке.</p>
           <div className="lessons-topic-actions">
             <Button disabled={busy} onClick={onFindInMaterials}><Search size={15} />Найти в материалах проекта</Button>
+            <Button variant="secondary" disabled={busy} onClick={onBuildWithAi}><Sparkles size={15} />Собрать с ИИ</Button>
             <Button variant="secondary" disabled={busy} onClick={() => setFinderOpen(true)}><LibraryBig size={15} />Подобрать материал</Button>
             <Button variant="ghost" disabled={busy} onClick={onManual}><Pencil size={15} />Собрать вручную</Button>
           </div>
@@ -403,6 +455,9 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                       ? <ToolButton variant="secondary" icon={<CheckCircle2 size={14} />} label="Готов" hint="Урок готов — снять пометку черновика" disabled={saving} onClick={() => void change({ status: "ready" })} />
                       : <ToolButton variant="secondary" icon={<RotateCcw size={14} />} label="Вернуть в черновики" disabled={saving} onClick={() => void change({ status: "draft" })} />}
                     {data.status !== "archived" && <ToolButton icon={<Archive size={14} />} label="В архив" disabled={saving} onClick={() => void change({ status: "archived" })} />}
+                    {lessonTasks.length > 0 && (
+                      <ToolButton variant="secondary" icon={<ListChecks size={14} />} label={`Пройти задания · ${lessonTasks.length}`} hint="Задания урока по одному, в конце — сводка" onClick={() => setRunOpen(true)} />
+                    )}
                     <ToolButton
                       icon={<Undo2 size={14} />}
                       label="Отменить"
@@ -483,8 +538,8 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                   <ToolButton icon={<Combine size={14} />} label="Склеить" hint="Склеить со следующим куском" disabled={!selectedRef || nextBlock?.kind !== "source" || saving} onClick={() => void edit({ operation: "merge", block_id: selectedBlockId ?? undefined })} />
                   <ToolButton icon={<Trash2 size={14} />} label="Удалить" hint="Удалить выбранный блок" disabled={!selected || saving} onClick={() => void edit({ operation: "delete", block_id: selectedBlockId ?? undefined })} />
                   <ToolButton icon={<SquareDashed size={14} />} label="Снять выбор" hint="Снять выбор блока — то же делает средняя кнопка мыши" disabled={!selectedBlockId} onClick={() => onSelectBlock(null)} />
-                  <StageButton icon={<Sparkles size={14} />} label="Дополнить с ИИ" stage="5 — ИИ «Дополнить урок»" />
-                  <StageButton icon={<Dumbbell size={14} />} label="Добавить практику" stage="6 — задания" />
+                  <ToolButton icon={<Sparkles size={14} />} label="Дополнить с ИИ" hint={selected ? "Предложить изменения для выбранного блока или всего урока" : "Предложить пояснения, примеры и определения"} disabled={saving || Boolean(proposal)} onClick={() => setEnrichOpen(true)} />
+                  <ToolButton icon={<Dumbbell size={14} />} label="Добавить практику" hint="Предложить задания с проверкой ответа по тексту урока" disabled={saving || Boolean(proposal)} onClick={() => setPracticeOpen(true)} />
                 </div>
 
                 {selectedRef && selected && (
@@ -493,6 +548,11 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                       <input type="checkbox" checked={selectedRef.always_pages} disabled={saving}
                         onChange={(event) => void edit({ operation: "set_always_pages", block_id: selected.id, always_pages: event.target.checked })} />
                       Всегда показывать страницами
+                    </label>
+                    <label className="lessons-inline-check">
+                      <input type="checkbox" checked={selected.collapsed} disabled={saving}
+                        onChange={(event) => void edit({ operation: "set_collapsed", block_id: selected.id, collapsed: event.target.checked })} />
+                      Свернуть под пояснением
                     </label>
                     {data.topics.length > 1 && (
                       <label className="lessons-inline-select">
@@ -519,6 +579,11 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                   </div>
                 )}
                 {error && <p className="inline-error" role="alert">{error}</p>}
+                {proposal && proposal.read.lesson_id === data.id && (
+                  <LessonProposalBar proposal={proposal.read} chosen={chosen.size} busy={saving}
+                    onApply={applyProposal} onReject={rejectProposal} />
+                )}
+                {proposalNote && <p className="lesson-proposal-note" role="status">{proposalNote}</p>}
               </header>
               <LessonDocument projectId={projectId} lesson={data} mode={mode} hiddenHeading={topic.title}
                 selectedBlockId={selectedBlockId} onSelectBlock={onSelectBlock}
@@ -526,6 +591,41 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                 renderNoteEditor={renderEditor}
                 splitBlockId={splitting ? selectedBlockId : null}
                 onSplit={split}
+                proposal={proposal && proposal.read.lesson_id === data.id ? {
+                  proposal: proposal.read,
+                  chosen,
+                  onToggle: (id) => setChosen((current) => {
+                    const next = new Set(current);
+                    if (next.has(id)) next.delete(id);
+                    else next.add(id);
+                    return next;
+                  }),
+                } : null}
+              />
+              <LessonEnrichDialog
+                open={enrichOpen}
+                onOpenChange={setEnrichOpen}
+                projectId={projectId}
+                lesson={{ id: data.id, title: data.title, revision: revisionRef.current }}
+                selectedBlock={selected ? { id: selected.id, label: `блок ${selectedIndex + 1}` } : null}
+                onProposal={showProposal}
+              />
+              <LessonEnrichDialog
+                mode="practice"
+                open={practiceOpen}
+                onOpenChange={setPracticeOpen}
+                projectId={projectId}
+                lesson={{ id: data.id, title: data.title, revision: revisionRef.current }}
+                selectedBlock={null}
+                onProposal={showProposal}
+              />
+              <LessonPracticeRun
+                open={runOpen}
+                onOpenChange={(open) => { setRunOpen(open); if (!open) lesson.refresh(); }}
+                projectId={projectId}
+                lessonId={data.id}
+                title={data.title}
+                tasks={lessonTasks}
               />
             </>
           )}

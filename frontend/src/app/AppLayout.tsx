@@ -64,6 +64,9 @@ function backgroundJobPath(job: BackgroundJobRead): string | null {
       return "/setup?section=search&subsection=index";
     case "retrieval_model_install":
       return "/setup?section=search&subsection=models";
+    case "ai_lesson":
+      // Раздел «Уроки» по номеру задачи сам находит тему и готовый урок.
+      return job.project_id ? `/projects/${job.project_id}/lessons?job=${job.id}` : null;
     default:
       return null;
   }
@@ -76,9 +79,11 @@ function backgroundJobPath(job: BackgroundJobRead): string | null {
 function backgroundJobReviewPath(job: BackgroundJobRead): string | null {
   const path = backgroundJobPath(job);
   if (!path) return null;
-  const params = new URLSearchParams({ job: job.id });
+  const [base, query = ""] = path.split("?");
+  const params = new URLSearchParams(query);
+  params.set("job", job.id);
   if (job.kind === "ai_cleanup" && job.page_number) params.set("page", String(job.page_number));
-  return `${path}?${params.toString()}`;
+  return `${base}?${params.toString()}`;
 }
 
 /** Имя файла или проекта; огрызок UUID — только если сервер не дал ничего. */

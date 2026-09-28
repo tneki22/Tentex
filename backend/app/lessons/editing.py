@@ -42,6 +42,7 @@ from app.lessons.service import (
     _source_name,
     media_kind,
 )
+from app.lessons.task_store import sync_lesson_tasks
 from app.materials.storage import material_path, store_namespaced_upload
 from app.models import (
     Binding,
@@ -165,7 +166,7 @@ def _ref_data(ref: LessonSourceRef) -> dict:
         "from_fragment_id": str(ref.from_fragment_id) if ref.from_fragment_id else None,
         "to_fragment_id": str(ref.to_fragment_id) if ref.to_fragment_id else None,
         "region_bbox": ref.region_bbox, "always_pages": ref.always_pages,
-        "boundary_shifted": ref.boundary_shifted,
+        "boundary_shifted": ref.boundary_shifted, "citation_label": ref.citation_label,
     }
 
 
@@ -177,7 +178,7 @@ def _block_data(session: Session, block: LessonBlock) -> dict:
         "basis": block.basis.value if block.basis else None,
         "ai_run_id": str(block.ai_run_id) if block.ai_run_id else None,
         "activity_id": str(block.activity_id) if block.activity_id else None,
-        "media_path": block.media_path,
+        "media_path": block.media_path, "collapsed": block.collapsed,
         "bound_program_node_id": str(block.bound_program_node_id)
         if block.bound_program_node_id else None,
         "refs": [_ref_data(ref) for ref in session.scalars(
@@ -226,6 +227,7 @@ def _restore_refs(session: Session, block_id: UUID, refs: list[dict]) -> None:
         ref.region_bbox = data["region_bbox"]
         ref.always_pages = data["always_pages"]
         ref.boundary_shifted = data.get("boundary_shifted", False)
+        ref.citation_label = data.get("citation_label")
 
 
 def _restore_topics(session: Session, lesson: Lesson, topics: list[dict]) -> None:
@@ -290,8 +292,24 @@ def apply_blocks_undo(session: Session, project_id: UUID, data: dict) -> None:
             session.add(existing)
             session.flush()
         existing.sort_order = item["sort_order"]
+        existing.collapsed = item.get("collapsed", False)
         existing.bound_program_node_id = _uuid(item["bound_program_node_id"])
         _restore_refs(session, existing.id, item["refs"])
+    # Предложение модели переписывает пояснения и название — их отмена возвращает тоже.
+    for block_id, text in (data.get("texts") or {}).items():
+        block = session.get(LessonBlock, UUID(block_id))
+        if block is None or block.lesson_id != lesson.id:
+            continue
+        block.body_md = text["body_md"]
+        block.variant = LessonNoteVariant(text["variant"]) if text["variant"] else None
+        block.origin = LessonBlockOrigin(text["origin"])
+        block.basis = text["basis"]
+        block.ai_run_id = _uuid(text["ai_run_id"])
+    if "lesson" in data:
+        lesson.title = data["lesson"]["title"]
+        lesson.goal = data["lesson"]["goal"]
+    session.flush()
+    sync_lesson_tasks(session, lesson.id)
     lesson.revision += 1
     lesson.updated_at = utc_now()
 
@@ -309,9 +327,20 @@ def apply_unbind_undo(session: Session, project_id: UUID, data: dict) -> None:
 # --- привязки --------------------------------------------------------------------------
 
 
+#: Привязка куска по его происхождению (FR-L10): выбор человека — ручная, диапазон
+#: оглавления и выбор модели — машинные, которые проход 2 может подтвердить или оспорить.
+#: Смешанный кусок человек уже правил — его привязка ручная.
+BINDING_BY_ORIGIN: dict[LessonBlockOrigin, tuple[BindingStatus, BindingMechanism]] = {
+    LessonBlockOrigin.MANUAL: (BindingStatus.MANUAL, BindingMechanism.LESSON),
+    LessonBlockOrigin.MIXED: (BindingStatus.MANUAL, BindingMechanism.LESSON),
+    LessonBlockOrigin.OUTLINE: (BindingStatus.MACHINE, BindingMechanism.OUTLINE),
+    LessonBlockOrigin.MODEL: (BindingStatus.MACHINE, BindingMechanism.LESSON),
+}
+
+
 def _bind_fragments(
     session: Session, project_id: UUID, node_id: UUID, material_id: UUID,
-    fragment_ids: list[UUID], *, manual: bool,
+    fragment_ids: list[UUID], origin: LessonBlockOrigin,
 ) -> list[UUID]:
     """Существующая пара (тема, фрагмент) не меняется в любом статусе (§4.4)."""
     if not fragment_ids:
@@ -324,6 +353,7 @@ def _bind_fragments(
         select(MaterialFragment.id, MaterialFragment.block_id)
         .where(MaterialFragment.id.in_(fragment_ids))
     ).tuples().all())
+    status, mechanism = BINDING_BY_ORIGIN[origin]
     now = utc_now()
     created: list[UUID] = []
     for fragment_id in fragment_ids:
@@ -332,9 +362,7 @@ def _bind_fragments(
         binding = Binding(
             id=uuid4(), project_id=project_id, program_node_id=node_id,
             fragment_id=fragment_id, material_id=material_id, block_id=block_of.get(fragment_id),
-            status=BindingStatus.MANUAL if manual else BindingStatus.MACHINE,
-            mechanism=BindingMechanism.LESSON if manual else BindingMechanism.OUTLINE,
-            created_at=now, updated_at=now,
+            status=status, mechanism=mechanism, created_at=now, updated_at=now,
         )
         session.add(binding)
         existing.add(fragment_id)
@@ -444,7 +472,7 @@ def _add_manual_bounds(edit: _Edit, material: Material, link: ProjectMaterial,
     order = refs_module.load_order(edit.session, material, bounds.page_from, bounds.page_to)
     edit.binding_ids += _bind_fragments(
         edit.session, edit.lesson.project_id, node_id, material.id,
-        refs_module.content_fragment_ids(order, bounds), manual=True,
+        refs_module.content_fragment_ids(order, bounds), LessonBlockOrigin.MANUAL,
     )
 
 
@@ -474,7 +502,7 @@ def _add_region(edit: _Edit) -> None:
     edit.binding_ids += _bind_fragments(
         edit.session, edit.lesson.project_id, node_id, material.id,
         refs_module.fragments_in_region(edit.session, material, page, command.region_bbox),
-        manual=True,
+        LessonBlockOrigin.MANUAL,
     )
 
 
@@ -589,7 +617,8 @@ def _split(edit: _Edit) -> None:
         order, refs_module.bounds_of(ref), edit.command.fragment_id, edit.command.split_after_page
     )
     tail = edit.new_block(LessonBlockKind.SOURCE, origin=block.origin,
-                          bound_program_node_id=block.bound_program_node_id)
+                          bound_program_node_id=block.bound_program_node_id,
+                          collapsed=block.collapsed)
     edit.insert(tail, block.id)
     session.flush()
     session.add(LessonSourceRef(
@@ -640,6 +669,13 @@ def _set_always_pages(edit: _Edit) -> None:
     ref.always_pages = edit.command.always_pages
 
 
+def _set_collapsed(edit: _Edit) -> None:
+    """«Свернуть под пояснением»: кусок показывается строкой «▸ В учебнике: …»."""
+    if edit.command.collapsed is None:
+        raise _invalid("Не указано, свернуть ли кусок", "lesson_collapsed_required")
+    edit.block(LessonBlockKind.SOURCE).collapsed = edit.command.collapsed
+
+
 def _set_topic(edit: _Edit) -> None:
     """Смена темы куска: новые привязки по правилу пути, прежние — только предложением снять."""
     session = edit.session
@@ -656,8 +692,7 @@ def _set_topic(edit: _Edit) -> None:
     if material is not None:
         edit.binding_ids += _bind_fragments(
             session, edit.lesson.project_id, node_id, material.id,
-            sorted(_block_fragments(session, edit.lesson.project_id, block)),
-            manual=block.origin != LessonBlockOrigin.OUTLINE,
+            sorted(_block_fragments(session, edit.lesson.project_id, block)), block.origin,
         )
 
 
@@ -711,6 +746,7 @@ HANDLERS: dict[str, Callable[[_Edit], None]] = {
     "add_topic": _add_topic,
     "remove_topic": _remove_topic,
     "set_always_pages": _set_always_pages,
+    "set_collapsed": _set_collapsed,
 }
 
 
@@ -730,6 +766,7 @@ def _apply_edit(
         session.flush()
         for index, block in enumerate(edit.blocks):
             block.sort_order = index
+        sync_lesson_tasks(session, lesson.id)
         lesson.revision += 1
         lesson.updated_at = utc_now()
         session.add(ProjectActionLog(
@@ -808,6 +845,9 @@ def update_lesson_note(
             raise ProjectNotFoundError("Блок урока не найден")
         if block.kind not in {LessonBlockKind.NOTE, LessonBlockKind.MEDIA}:
             raise _invalid("Текст можно менять только у пояснения или медиа", "lesson_not_note")
+        if block.origin == LessonBlockOrigin.MODEL and command.body_md != block.body_md:
+            # Правленый человеком текст модели — уже не только её: FR-L5, «смешанное».
+            block.origin = LessonBlockOrigin.MIXED
         block.body_md = command.body_md
         if command.variant is not None and block.kind == LessonBlockKind.NOTE:
             block.variant = command.variant

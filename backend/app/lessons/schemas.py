@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
+from app.lessons.task_schemas import StudyTaskRead
 from app.models import (
     LessonBasis,
     LessonBlockKind,
@@ -20,6 +21,22 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
 
+#: Шаблон модельного урока — модуль промпта (`lessons/ai_prompts.py`), код сборки один.
+LessonTemplate = Literal["explain", "guide", "practice", "cheatsheet"]
+#: Глубина сборки: один вызов, план и шаги, то же с рецензентом.
+LessonLevel = Literal["draft", "standard", "detailed"]
+
+
+class LessonBuildRead(ApiModel):
+    """Как собран модельный урок — подпись в списках и во вкладке «Урок»."""
+
+    template: LessonTemplate
+    level: LessonLevel
+    basis: LessonBasis
+    model_id: str | None = None
+    cost_usd: str | None = None
+
+
 class LessonSummaryRead(ApiModel):
     id: UUID
     title: str
@@ -29,6 +46,7 @@ class LessonSummaryRead(ApiModel):
     needs_review: bool
     completed_at: datetime | None
     updated_at: datetime
+    build: LessonBuildRead | None = None
 
 
 class LessonsOverviewRead(ApiModel):
@@ -92,7 +110,7 @@ LessonBlockOperation = Literal[
     "add_note", "add_page", "add_outline", "add_fragments", "add_block", "add_link", "add_image",
     "add_region",
     "delete", "move_up", "move_down", "split", "merge",
-    "set_topic", "add_topic", "remove_topic", "set_always_pages",
+    "set_topic", "add_topic", "remove_topic", "set_always_pages", "set_collapsed",
 ]
 
 
@@ -118,6 +136,7 @@ class LessonBlockWrite(ApiModel):
     insert_note: bool = False
     program_node_id: UUID | None = None
     always_pages: bool | None = None
+    collapsed: bool | None = None
     media_url: str | None = Field(default=None, max_length=2000)
     caption: str | None = Field(default=None, max_length=2000)
     # add_region — доля страницы `[x0, y0, x1, y1]` в тех же координатах, что bbox фрагмента.
@@ -177,6 +196,8 @@ class LessonRefRead(ApiModel):
     boundary_shifted: bool
     # Режим «Страницы»: листы, которые рисует именно эта ссылка (без дублей по уроку).
     pages_shown: list[int]
+    # У опоры пояснения модели: `[S3]` в тексте блока открывает эту ссылку.
+    citation_label: str | None = None
 
 
 class LessonBlockRead(ApiModel):
@@ -191,7 +212,11 @@ class LessonBlockRead(ApiModel):
     media_kind: Literal["image", "link"] | None
     # Только у внешней ссылки; изображение отдаёт `GET …/media/{block_id}`.
     media_url: str | None
+    # Кусок материала свёрнут под пояснением строкой «▸ В учебнике: …».
+    collapsed: bool = False
     refs: list[LessonRefRead]
+    # Блок `activity`: задание урока с формой, ключом и последней попыткой.
+    task: StudyTaskRead | None = None
 
 
 class LessonTopicRead(ApiModel):
@@ -217,6 +242,7 @@ class LessonRead(ApiModel):
     undo_sequence: int | None
     topics: list[LessonTopicRead]
     blocks: list[LessonBlockRead]
+    build: LessonBuildRead | None = None
     created_at: datetime
     updated_at: datetime
 

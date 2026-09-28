@@ -298,6 +298,44 @@ ROLE_SPECS = {
             # Модель выбирается в композере чата, как у остальных чатов.
             True,
         ),
+        # Три роли Уроков: одна модель на всю сборку выбирается в диалоге запуска,
+        # поэтому override разрешён. Кэша нет: пересборка урока — это просьба о
+        # новом тексте, а не повтор прежнего ответа. Этап вызова сборки (черновик,
+        # план, шаг, рецензент) пишется в `context_manifest`, prompt_version одна.
+        AiRoleSpec(
+            "lesson_builder",
+            "Сборка урока",
+            "Составляет урок по теме из материалов проекта и знаний модели: план, "
+            "объяснение по шагам и рецензию черновика.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "lesson-builder-v1",
+            {"max_output_tokens": 8000},
+            True,
+        ),
+        AiRoleSpec(
+            "lesson_enrich",
+            "Дополнение урока",
+            "Предлагает пояснения, примеры и определения между блоками готового урока.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "lesson-enrich-v1",
+            {"max_output_tokens": 6000},
+            True,
+        ),
+        AiRoleSpec(
+            "lesson_practice",
+            "Задания урока",
+            "Составляет задания для самопроверки по материалу урока и упражнениям учебника.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "lesson-practice-v1",
+            {"max_output_tokens": 6000},
+            True,
+        ),
         AiRoleSpec(
             "settings_model_test",
             "Проверка модели",

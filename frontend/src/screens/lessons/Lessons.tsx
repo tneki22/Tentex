@@ -7,6 +7,7 @@ import { ProjectNav } from "../../components/domain/ProjectNav";
 import { Button, EmptyState, ErrorState, IconButton, LoadingState, PanelResizeHandle } from "../../components/ui";
 import { useLesson, useLessonsOverview } from "../../hooks/useLessons";
 import { buildProgramTree, flattenProgramTree } from "../programTree";
+import { LessonBuildDialog } from "./LessonBuildDialog";
 import { LessonBulkTable } from "./LessonBulkTable";
 import { insertPlacement, INSERT_AT_END, type LessonInsertPoint } from "./lessonBlocks";
 import type { PanelTab } from "./LessonMaterialPanel";
@@ -54,6 +55,10 @@ export function Lessons() {
   const [rangesKey, setRangesKey] = useState(0);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [insertPoint, setInsertPoint] = useState<LessonInsertPoint>(INSERT_AT_END);
+  /** «Собрать урок с ИИ»: открытый диалог и, если сборка уже идёт, её задача. */
+  const [build, setBuild] = useState<{ open: boolean; jobId: string | null }>({ open: false, jobId: null });
+  /** Готовое предложение «Дополнить урок», открытое из «Фона». */
+  const [proposalJobId, setProposalJobId] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -81,6 +86,8 @@ export function Lessons() {
   const topicParam = searchParams.get("topic");
   const lessonParam = searchParams.get("lesson");
   const panelParam = searchParams.get("panel") === "search" ? "search" : undefined;
+  const buildParam = searchParams.get("build") === "1";
+  const jobParam = searchParams.get("job");
   const [panelTabRequest, setPanelTabRequest] = useState<{ tab: PanelTab; nonce: number } | null>(null);
   const active = flat.find((node) => node.id === topicParam) ?? flat.find((node) => STUDY_TYPES.has(node.node_type)) ?? flat[0] ?? null;
   const activeLessonId = lessonParam ?? lessons.find((item) => item.program_node_ids.includes(active?.id ?? "") && item.status !== "archived")?.id ?? null;
@@ -105,6 +112,20 @@ export function Lessons() {
   useEffect(() => {
     if (panelParam) setLayout((current) => (current.panelOpen ? current : { ...current, panelOpen: true }));
   }, [panelParam]);
+
+  /* `?build=1` приходит из пустой вкладки «Урок», `?job=` — из панели «Фон».
+     Оба открывают диалог один раз, после чего параметр снимается с адреса. */
+  useEffect(() => {
+    if (!buildParam && !jobParam) return;
+    if (buildParam && !active) return;
+    setBuild({ open: true, jobId: jobParam });
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("build");
+      next.delete("job");
+      return next;
+    }, { replace: true });
+  }, [buildParam, jobParam, active, setSearchParams]);
 
   const updateLayout = useCallback((change: (current: LessonsLayout) => LessonsLayout) => {
     setLayout((current) => {
@@ -201,6 +222,19 @@ export function Lessons() {
     } finally { setBusy(false); }
   }
 
+  /** Готовый модельный черновик открывается в своей теме, даже если диалог звали из «Фона». */
+  async function openBuilt(lessonId: string) {
+    overview.refresh();
+    setRangesKey((value) => value + 1);
+    try {
+      const lesson = await getLesson(projectId, lessonId);
+      const topicId = lesson.topics[0]?.program_node_id ?? active?.id;
+      if (topicId) navigateTo(topicId, lessonId);
+    } catch (caught) {
+      setActionError(errorText(caught, "Урок собран, но не открылся"));
+    }
+  }
+
   /** Выбранный блок и место вставки — одно и то же: выбор в уроке виден в панели и наоборот. */
   function chooseBlock(blockId: string | null) {
     setSelectedBlockId(blockId);
@@ -283,12 +317,14 @@ export function Lessons() {
         onQuickLesson={() => void createLesson()}
         onFromSources={() => setSourcesOpen(true)}
         onManual={() => void createManual()}
+        onBuildWithAi={() => setBuild({ open: true, jobId: null })}
         onChanged={() => { overview.refresh(); setRangesKey((value) => value + 1); }}
         refreshKey={rangesKey}
         selectedBlockId={selectedBlockId}
         onSelectBlock={chooseBlock}
         panelToggle={panelToggle}
         actionError={actionError}
+        proposalJobId={proposalJobId}
         onFindInMaterials={() => {
           updateLayout((current) => (current.panelOpen ? current : { ...current, panelOpen: true }));
           setPanelTabRequest((current) => ({ tab: "search", nonce: (current?.nonce ?? 0) + 1 }));
@@ -372,6 +408,17 @@ export function Lessons() {
             </Suspense>
           </aside>
         </>
+      )}
+      {active && (build.jobId || active.node_type !== "section") && (
+        <LessonBuildDialog
+          open={build.open}
+          onOpenChange={(open) => setBuild((current) => ({ open, jobId: open ? current.jobId : null }))}
+          projectId={projectId}
+          topic={active}
+          jobId={build.jobId}
+          onBuilt={(lessonId) => void openBuilt(lessonId)}
+          onProposal={(jobId, lessonId) => { setProposalJobId(jobId); void openBuilt(lessonId); }}
+        />
       )}
       {active && active.node_type !== "section" && (
         <LessonSourcesDialog

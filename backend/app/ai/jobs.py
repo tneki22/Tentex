@@ -46,6 +46,8 @@ DEADLINE_SECONDS: dict[BackgroundJobKind, int] = {
     BackgroundJobKind.AI_PROGRAM_BUILD: 900,
     # Живой вызов с поиском в сети идёт до полутора-двух минут; запас — на один
     # повтор, если ответ не прошёл схему.
+    # Сборка урока «Подробный» — до 16 вызовов подряд, каждый с повтором схемы.
+    BackgroundJobKind.AI_LESSON: 1800,
 }
 
 
@@ -111,6 +113,11 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
         # Без Pydantic-команды из checkpoint["command"]: run_build читает и
         # дописывает checkpoint сам по пакетам (см. app/projects/program_chat.py).
         return await program_chat.run_build(session, gateway, job.project_id, job.id)
+    elif job.kind == BackgroundJobKind.AI_LESSON:
+        from app.lessons import ai_jobs
+
+        # Команда, паспорт урока и кандидаты заморожены в checkpoint при постановке.
+        return await ai_jobs.run(session, gateway, job.id)
     elif job.kind == BackgroundJobKind.AI_CLEANUP:
         assert job.material_id is not None
         page_number = int(job.checkpoint["page_number"])

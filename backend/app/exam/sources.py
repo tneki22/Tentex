@@ -25,6 +25,7 @@ from app.retrieval.schemas import (
     SearchStrategy,
 )
 from app.retrieval.search import HybridRetriever, resolve_scope
+from app.retrieval.vector import fuse_rankings
 
 #: Операции, которым нужны места из разных материалов.
 COMPARING_OPERATIONS: frozenset[str] = frozenset({"compare_sources", "find_discrepancies"})
@@ -36,7 +37,6 @@ STANDALONE_WORDS = 12
 SOURCES_LIMIT = 10
 #: Сколько мест добирается из других материалов, когда выдача из одного.
 SECOND_MATERIAL_LIMIT = 4
-_RRF_K = 60
 
 NO_SECOND_MATERIAL_NOTE = (
     "В выбранной области не нашлось второго материала по этому запросу: "
@@ -91,21 +91,6 @@ def ensure_scope_has_places(
     )
     if filter_.block_ids is not None and not filter_.block_ids:
         raise RetrievalScopeEmptyError()
-
-
-def _fuse(rankings: list[list[RetrievalHitRead]]) -> list[RetrievalHitRead]:
-    """Слить выдачи нескольких запросов по RRF; одно место — один раз."""
-    if len(rankings) == 1:
-        return rankings[0]
-    scores: dict[UUID, float] = {}
-    hits: dict[UUID, RetrievalHitRead] = {}
-    for ranking in rankings:
-        for rank, hit in enumerate(ranking):
-            chunk_id = hit.locator.chunk_id
-            hits.setdefault(chunk_id, hit)
-            scores[chunk_id] = scores.get(chunk_id, 0.0) + 1 / (_RRF_K + rank + 1)
-    order = sorted(scores, key=lambda chunk_id: scores[chunk_id], reverse=True)
-    return [hits[chunk_id] for chunk_id in order]
 
 
 def round_robin_by_material(hits: list[RetrievalHitRead]) -> list[RetrievalHitRead]:
@@ -198,7 +183,7 @@ async def find_sources(
     notes = list(
         dict.fromkeys(reason for result in results for reason in result.degradation_reasons)
     )
-    hits = _fuse([result.results for result in results])[:SOURCES_LIMIT]
+    hits = fuse_rankings([result.results for result in results])[:SOURCES_LIMIT]
 
     if operation in COMPARING_OPERATIONS:
         present = list(dict.fromkeys(hit.locator.material_id for hit in hits))

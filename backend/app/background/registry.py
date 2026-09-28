@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.background.schemas import BackgroundJobRead
@@ -53,6 +53,29 @@ REVIEW_REQUIRED_KINDS = {
     BackgroundJobKind.AI_ANSWER_SECTIONS,
     BackgroundJobKind.AI_CLEANUP,
 }
+#: У `ai_lesson` предложением заканчиваются только эти подвиды: план урока,
+#: дополнение и задания. Сборка урока создаёт черновик сама — проверять нечего.
+LESSON_REVIEW_SUBTYPES = ("plan", "enrich", "practice")
+
+
+def _review_kind(job: BackgroundJob) -> bool:
+    return job.kind in REVIEW_REQUIRED_KINDS or (
+        job.kind == BackgroundJobKind.AI_LESSON
+        and job.checkpoint.get("subtype") in LESSON_REVIEW_SUBTYPES
+    )
+
+
+def _review_kind_condition():
+    """То же условие, что `_review_kind`, для выборки из базы."""
+    return or_(
+        BackgroundJob.kind.in_(REVIEW_REQUIRED_KINDS),
+        and_(
+            BackgroundJob.kind == BackgroundJobKind.AI_LESSON,
+            func.json_extract(BackgroundJob.checkpoint, "$.subtype").in_(
+                LESSON_REVIEW_SUBTYPES
+            ),
+        ),
+    )
 
 
 def _needs_review(job: BackgroundJob) -> bool:
@@ -62,7 +85,7 @@ def _needs_review(job: BackgroundJob) -> bool:
     показывать её как ожидающую проверки значило бы звать в пустой диалог.
     """
     return (
-        job.kind in REVIEW_REQUIRED_KINDS
+        _review_kind(job)
         and job.state == BackgroundJobState.COMPLETED
         and job.reviewed_at is None
         and job.checkpoint.get("result") is not None
@@ -97,6 +120,10 @@ def _subject(session: Session, job: BackgroundJob) -> str:
         material = session.get(Material, job.material_id)
         if material is not None:
             return material_display_name(material)
+    if job.kind == BackgroundJobKind.AI_LESSON and job.checkpoint.get("subtype") == "bulk":
+        return f"Уроки с ИИ · {job.checkpoint.get('topic_title') or 'по списку тем'}"
+    if job.kind == BackgroundJobKind.AI_LESSON and job.checkpoint.get("topic_title"):
+        return f"Урок «{job.checkpoint['topic_title']}»"
     if job.project_id is not None:
         project = session.get(Project, job.project_id)
         if project is not None:
@@ -155,7 +182,7 @@ def _model_label(session: Session, job: BackgroundJob) -> str:
         return "Проверка хранилища"
     if job.kind == BackgroundJobKind.STORAGE_CLEANUP:
         return "Очистка временного"
-    if job.kind == BackgroundJobKind.IMAGE_DESCRIPTIONS:
+    if job.kind in {BackgroundJobKind.IMAGE_DESCRIPTIONS, BackgroundJobKind.AI_LESSON}:
         return str(job.checkpoint.get("model_label") or "внешняя модель")
     if job.kind in REVIEW_REQUIRED_KINDS:
         checkpoint = job.checkpoint
@@ -247,7 +274,7 @@ def list_jobs(
         if pending_review:
             buckets.append(
                 and_(
-                    BackgroundJob.kind.in_(REVIEW_REQUIRED_KINDS),
+                    _review_kind_condition(),
                     BackgroundJob.state == BackgroundJobState.COMPLETED,
                     BackgroundJob.reviewed_at.is_(None),
                 )
