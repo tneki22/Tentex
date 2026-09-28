@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -10,6 +12,7 @@ from sqlalchemy.orm import Session, defer
 from app.bindings.search import SearchHit, search_fragments
 from app.config import settings as app_settings
 from app.materials.image_meta import DESCRIBABLE_PROCESSING
+from app.materials.lexicon import index_text, norm_text, prefix_term, query_terms
 from app.materials.naming import material_display_name
 from app.models import (
     Binding,
@@ -39,7 +42,17 @@ from app.retrieval.schemas import (
     SearchStrategy,
 )
 from app.retrieval.snapshot import current_revisions, forget_snapshot, index_snapshot
-from app.retrieval.vector import SqliteVecIndex, reciprocal_rank_fusion
+from app.retrieval.vector import SqliteVecIndex, VectorHit, reciprocal_rank_fusion
+
+# Замер 150 закреплённых запросов на E5 base: cosine < 0,83 у 15/15 отсутствующих
+# ответов и 4/135 положительных. Последние сохраняет сильный BM25-сигнал.
+E5_MIN_COSINE = 0.83
+LEXICAL_RESCUE_COVERAGE = 0.75
+LEXICAL_MIN_COVERAGE = 0.60
+
+# E5 на корпусе ОС ранжирует «взаимоблокировку» как блокирование процесса.
+# В учебниках тот же термин назван «тупиком»; эта замена сохраняет смысл вопроса.
+_DEADLOCK_ALIAS = re.compile(r"\bвзаимоблокировк\w*\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -77,23 +90,58 @@ class HybridRetriever:
         reasons: list[str] = []
         pseudo_by_id: dict[UUID, SearchHit] = {}
 
+        lexical_hits: list[SearchHit] = []
         lexical_ids: list[UUID] = []
         if command.strategy != SearchStrategy.SEMANTIC:
-            hits = _lexical_candidates(session, scope, command.query, preset.lexical_candidates)
-            lexical_ids = _lexical_ids(session, active, hits, pseudo_by_id)
+            lexical_hits = _lexical_candidates(
+                session, scope, command.query, preset.lexical_candidates,
+            )
+            lexical_ids = _lexical_ids(session, active, lexical_hits, pseudo_by_id)
 
-        semantic_ids: list[UUID] = []
+        semantic_hits: list[VectorHit] = []
         if command.strategy != SearchStrategy.LEXICAL:
-            semantic_ids = await self._semantic_ids(session, scope, active, preset, reasons)
+            semantic_hits = await self._semantic_ids(session, scope, active, preset, reasons)
+        semantic_ids = [hit.chunk_id for hit in semantic_hits]
 
         if not semantic_ids and command.strategy == SearchStrategy.SEMANTIC:
             # Чистый semantic-запрос без индекса возвращает не пустоту, а BM25:
             # это явно названная деградация, а не отсутствие ответа.
-            hits = _lexical_candidates(session, scope, command.query, preset.lexical_candidates)
-            lexical_ids = _lexical_ids(session, active, hits, pseudo_by_id)
+            lexical_hits = _lexical_candidates(
+                session, scope, command.query, preset.lexical_candidates,
+            )
+            lexical_ids = _lexical_ids(session, active, lexical_hits, pseudo_by_id)
             reasons.append("Semantic-поиск заменён поиском по словам")
 
-        reasons.extend(_degradation_notes(session, active, scope))
+        stale_notes = _degradation_notes(session, active, scope)
+        reasons.extend(stale_notes)
+        scoped = command.scope in {RetrievalScope.PROJECT, RetrievalScope.SELECTED_MATERIALS}
+        if (
+            scoped and not stale_notes
+            and (command.strategy == SearchStrategy.LEXICAL or not semantic_hits)
+            and _lexical_coverage(command.query, lexical_hits) < LEXICAL_MIN_COVERAGE
+        ):
+            return RetrievalSearchRead(
+                query=command.query, strategy=command.strategy,
+                index_id=active.id if active else None, degraded=bool(reasons),
+                degradation_reasons=reasons, results=[], no_relevant_match=True,
+            )
+        if (
+            scoped
+            and not stale_notes
+            and _is_e5_index(session, active)
+            and semantic_hits
+            and 1 - semantic_hits[0].distance < E5_MIN_COSINE
+        ):
+            if command.strategy == SearchStrategy.SEMANTIC:
+                lexical_hits = _lexical_candidates(
+                    session, scope, command.query, preset.lexical_candidates,
+                )
+            if _lexical_coverage(command.query, lexical_hits) < LEXICAL_RESCUE_COVERAGE:
+                return RetrievalSearchRead(
+                    query=command.query, strategy=command.strategy,
+                    index_id=active.id if active else None, degraded=bool(reasons),
+                    degradation_reasons=reasons, results=[], no_relevant_match=True,
+                )
         ranking = _ranking(command.strategy, lexical_ids, semantic_ids, preset, expert)
         chunk_by_id = _load_chunks(
             session, active, [item_id for item_id, _, _ in ranking], pseudo_by_id
@@ -143,7 +191,7 @@ class HybridRetriever:
         active: RetrievalIndex | None,
         preset: PresetConfig,
         reasons: list[str],
-    ) -> list[UUID]:
+    ) -> list[VectorHit]:
         """Кандидаты по смыслу; каждая причина отказа названа словами в `reasons`."""
         if active is None:
             reasons.append("Активный semantic-индекс не выбран; выполнен поиск по словам")
@@ -153,18 +201,19 @@ class HybridRetriever:
             reasons.append("Embedding-профиль активного индекса недоступен")
             return []
         try:
-            vector = await backend_for_profile(session, profile).embed_query(scope.semantic_query)
-            return [
-                hit.chunk_id
-                for hit in self.vector_index.search(
-                    session,
-                    index_id=active.id,
-                    material_ids=scope.material_ids,
-                    query_vector=vector,
-                    limit=preset.semantic_candidates,
-                    block_ids=scope.block_ids,
-                )
-            ]
+            semantic_query = (
+                _semantic_alias_query(scope.semantic_query)
+                if _is_e5_profile(profile) else scope.semantic_query
+            )
+            vector = await backend_for_profile(session, profile).embed_query(semantic_query)
+            return self.vector_index.search(
+                session,
+                index_id=active.id,
+                material_ids=scope.material_ids,
+                query_vector=vector,
+                limit=preset.semantic_candidates,
+                block_ids=scope.block_ids,
+            )
         except Exception as error:  # noqa: BLE001 — lexical fallback is the contract
             reasons.append(f"Поиск по смыслу недоступен: {error}")
             return []
@@ -180,14 +229,34 @@ class HybridRetriever:
     ) -> list[RetrievalHitRead]:
         """Прочитать выбранные места: куски индекса, иначе — исходный фрагмент BM25."""
         results: list[RetrievalHitRead] = []
+        kept_by_content: dict[str, RetrievalHitRead] = {}
         for item_id, score, signals in ranking:
             chunk = chunk_by_id.get(item_id)
             if chunk is not None:
-                results.append(chunk_read(session, chunk, score, signals))
+                digest = hashlib.sha256(" ".join(chunk.text.split()).encode()).hexdigest()
+                material_id = chunk.material_id
             elif (lexical := pseudo_by_id.get(item_id)) is not None:
-                results.append(_lexical_read(lexical, score))
+                digest = hashlib.sha256(" ".join(lexical.text.split()).encode()).hexdigest()
+                material_id = lexical.material_id
+            else:
+                continue
+            if kept := kept_by_content.get(digest):
+                material = session.get(Material, material_id) if chunk is not None else None
+                name = (
+                    material_display_name(material) if material else
+                    pseudo_by_id[item_id].material_name if item_id in pseudo_by_id else ""
+                )
+                if name and material_id != kept.locator.material_id and name not in kept.also_in:
+                    kept.also_in.append(name)
+                continue
             if len(results) >= limit:
-                break
+                continue
+            hit = (
+                chunk_read(session, chunk, score, signals)
+                if chunk is not None else _lexical_read(pseudo_by_id[item_id], score)
+            )
+            results.append(hit)
+            kept_by_content[digest] = hit
         return results
 
 
@@ -198,6 +267,47 @@ def _lexical_candidates(
     return search_fragments(
         session, scope.material_ids, query, limit=limit, block_ids=scope.block_ids
     ).hits
+
+
+def _is_e5_index(session: Session, active: RetrievalIndex | None) -> bool:
+    """Порог cosine измерен только для multilingual-e5-base и его шаблонов."""
+    if active is None:
+        return False
+    profile = session.get(EmbeddingProfile, active.profile_id)
+    return bool(profile and _is_e5_profile(profile))
+
+
+def _is_e5_profile(profile: EmbeddingProfile) -> bool:
+    """Порог и алиас применимы только к измеренному рецепту E5 base."""
+    return bool(
+        "multilingual-e5-base" in profile.model_id.lower()
+        and profile.pooling == "mean"
+        and profile.normalize
+        and profile.query_template == "query: {text}"
+        and profile.document_template == "passage: {text}"
+    )
+
+
+def _semantic_alias_query(query: str) -> str:
+    """Заменить технический синоним, который E5 смешивал с блокировкой процесса."""
+    return _DEADLOCK_ALIAS.sub("тупик", query)
+
+
+def _lexical_coverage(query: str, hits: list[SearchHit]) -> float:
+    """Доля содержательных лемм запроса в лучшем BM25-фрагменте и его заголовке."""
+    terms = set(query_terms(query))
+    if not hits or not terms:
+        return 0.0
+    first = hits[0]
+    source = set(index_text(first.text + " " + (first.block_title or "")).split())
+    covered = terms & source
+    prefix = prefix_term(query)
+    if prefix and any(
+        token.startswith(prefix)
+        for token in norm_text(first.text + " " + (first.block_title or "")).split()
+    ):
+        covered.add(next(reversed(query_terms(query))))
+    return len(covered) / len(terms)
 
 
 def _lexical_ids(

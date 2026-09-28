@@ -71,6 +71,11 @@ _SERVICE_TITLE = re.compile(
 _TOC_LEADER = re.compile(r"[.…·](?:\s?[.…·]){5,}")
 #: Номер раздела «2.2.6.» и маркеры глав: по ним ищется родительский раздел.
 _NUMBERED = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3})*)\.?(?=\s|$)")
+_NUMBER_ONLY = re.compile(r"^\s*\d{1,3}(?:\.\d{1,3})*\.?\s*$")
+_HEADING_LABEL = re.compile(
+    r"^\s*(?:определение|теорема|доказательство|свойство|лемма|пример|примечание)"
+    r"\s*[.:]?\s*$", re.IGNORECASE,
+)
 _PART_MARK = re.compile(
     r"^\s*(?:часть|part|приложение|appendix)\s+[\dIVXLCА-ЯA-Z]{1,6}\b", re.IGNORECASE
 )
@@ -346,6 +351,31 @@ class _Outline:
         self._ranks = [_rank(section.title) for section in sections]
         self._parents: dict[int, int | None] = {}
 
+    def display_index(self, index: int) -> int:
+        """Служебная метка наследует путь ближайшего содержательного раздела."""
+        if not _HEADING_LABEL.fullmatch(self.sections[index].title or ""):
+            return index
+        for position in range(index - 1, -1, -1):
+            if self.sections[position].group != self.sections[index].group:
+                break
+            title = self.sections[position].title or ""
+            if title and not _HEADING_LABEL.fullmatch(title):
+                return position
+        return index
+
+    def display_title(self, index: int) -> str | None:
+        """Номер отдельной строкой относится к следующему настоящему заголовку."""
+        title = self.sections[index].title
+        if index and title and not _NUMBER_ONLY.fullmatch(title):
+            previous = self.sections[index - 1]
+            if (
+                previous.group == self.sections[index].group
+                and _NUMBER_ONLY.fullmatch(previous.title or "")
+                and not _HEADING_LABEL.fullmatch(title)
+            ):
+                return f"{previous.title} {title}"
+        return title
+
     def parent(self, index: int) -> int | None:
         if index not in self._parents:
             self._parents[index] = self._find_parent(index)
@@ -357,6 +387,10 @@ class _Outline:
             candidate, candidate_rank = self.sections[position], self._ranks[position]
             if candidate.group != target.group:
                 return None
+            if _HEADING_LABEL.fullmatch(candidate.title or ""):
+                continue
+            if position == index - 1 and _NUMBER_ONLY.fullmatch(candidate.title or ""):
+                continue
             if rank is not None:
                 # «2.2.6» входит в «2.2» или «2», но не в «1.» и не в соседний «2.2.5».
                 if candidate_rank is None or candidate_rank[0] >= rank[0]:
@@ -382,9 +416,10 @@ def _chunk_title(atoms: list[ChunkAtom], outline: _Outline) -> tuple[int, str | 
     for atom in atoms:
         weights[atom.section] += 0 if atom.heading else count_tokens(atom.text)
     main = max(weights, key=lambda index: (weights[index], -index))
-    title = _short(outline.sections[main].title)
-    parent_index = outline.parent(main)
-    parent = _short(outline.sections[parent_index].title) if parent_index is not None else None
+    display = outline.display_index(main)
+    title = _short(outline.display_title(display))
+    parent_index = outline.parent(display)
+    parent = _short(outline.display_title(parent_index)) if parent_index is not None else None
     if parent and title and parent != title:
         return main, f"{parent} › {title}"
     return main, title or parent

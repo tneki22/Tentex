@@ -199,6 +199,8 @@ async def find_sources(
         dict.fromkeys(reason for result in results for reason in result.degradation_reasons)
     )
     hits = _fuse([result.results for result in results])[:SOURCES_LIMIT]
+    if not hits and any(result.no_relevant_match for result in results):
+        notes.append("В материалах выбранной области не найдено достаточно надёжного ответа.")
 
     if operation in COMPARING_OPERATIONS:
         present = list(dict.fromkeys(hit.locator.material_id for hit in hits))

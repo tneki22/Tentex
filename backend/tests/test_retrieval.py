@@ -2,7 +2,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from conftest import add_page_with_fragments, make_material
+from conftest import add_page_with_fragments, link_material, make_exam_project, make_material
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -39,7 +39,15 @@ from app.models import (
 from app.projects.errors import ProjectConflictError, ProjectDomainError
 from app.retrieval import indexing as indexing_service
 from app.retrieval import local_models
-from app.retrieval.chunking import ChunkAtom, chunk_atoms, material_chunks
+from app.retrieval.chunking import (
+    ChunkAtom,
+    Section,
+    _chunk_title,
+    _Outline,
+    chunk_atoms,
+    material_chunks,
+)
+from app.retrieval.context import ContextAssembler
 from app.retrieval.embeddings import OpenAIEmbeddingBackend, _validate_vectors
 from app.retrieval.exhaustive import start_run
 from app.retrieval.indexing import (
@@ -58,9 +66,13 @@ from app.retrieval.schemas import (
     RetrievalIndexBuildWrite,
     RetrievalIndexMaterialsWrite,
     RetrievalScope,
+    RetrievalSearchRead,
+    RetrievalSearchWrite,
+    SearchStrategy,
 )
+from app.retrieval.search import HybridRetriever, _lexical_coverage
 from app.retrieval.settings import read_settings
-from app.retrieval.vector import reciprocal_rank_fusion
+from app.retrieval.vector import VectorHit, reciprocal_rank_fusion
 
 
 def _profile(session: Session, *, external: bool = False) -> EmbeddingProfile:
@@ -819,7 +831,7 @@ def test_lexical_hit_opens_the_chunk_that_contains_the_found_fragment(session: S
     import asyncio
 
     from app.bindings.search import reindex_material
-    from app.retrieval.schemas import RetrievalSearchWrite, SearchStrategy
+    from app.retrieval.schemas import SearchStrategy
     from app.retrieval.search import HybridRetriever
 
     material = make_material(session, "94")
@@ -884,4 +896,145 @@ def test_known_embedding_models_get_their_query_and_document_templates(
     assert (e5.query_template, e5.document_template) == ("query: {text}", "passage: {text}")
     assert qwen.pooling == "last_token" and qwen.query_template.startswith("Instruct: ")
     assert (manual.query_template, manual.document_template) == ("q {text}", "{text}")
+
+
+def test_search_collapses_duplicate_materials_and_keeps_chat_attribution(
+    session: Session,
+) -> None:
+    first, duplicate, other = [make_material(session, str(number)) for number in (701, 702, 703)]
+    first.display_name = "Первый"
+    duplicate.display_name = "Копия"
+    other.display_name = "Другой"
+    index = _index(session, _profile(session))
+    chunks = []
+    for order, (material, content) in enumerate(
+        [(first, "Общий текст"), (duplicate, "Общий  текст"), (other, "Другой текст")]
+    ):
+        chunk = RetrievalChunk(
+            index_id=index.id, material_id=material.id, revision=1,
+            kind=RetrievalChunkKind.TEXT, sort_order=order, text=content,
+            token_count=2, content_hash=str(order).rjust(64, "0"),
+            fragment_ids=[], locator={},
+        )
+        session.add(chunk)
+        chunks.append(chunk)
+    session.commit()
+
+    ranking = [(chunk.id, 1.0 / (rank + 1), ["semantic"]) for rank, chunk in enumerate(chunks)]
+    hits = HybridRetriever()._read_ranking(
+        session, ranking, {chunk.id: chunk for chunk in chunks}, {}, limit=2,
+    )
+    assert [hit.locator.material_id for hit in hits] == [first.id, other.id]
+    assert hits[0].also_in == ["Копия"]
+
+    assembled = ContextAssembler().assemble(
+        session,
+        RetrievalSearchRead(
+            query="общий", strategy=SearchStrategy.HYBRID, index_id=index.id,
+            degraded=False, degradation_reasons=[], results=hits,
+        ),
+        neighbor_window=0,
+    )
+    assert assembled.also_in[chunks[0].id] == ["Копия"]
+
+
+def test_chunk_title_uses_section_instead_of_generic_heading() -> None:
+    sections = [
+        Section(None, "ГЛАВА 3 Коммутация", [], True),
+        Section(None, "Коммутация пакетов", [], False),
+        Section(None, "ПРИМЕЧАНИЕ", [], False),
+    ]
+    outline = _Outline(sections)
+    assert _chunk_title([ChunkAtom("Содержание примечания", section=2)], outline)[1] == (
+        "ГЛАВА 3 Коммутация › Коммутация пакетов"
+    )
+
+
+def test_number_only_heading_joins_following_section_title() -> None:
+    sections = [
+        Section(None, "ГЛАВА 10 Алгебра", [], True),
+        Section(None, "10.1.", [], True),
+        Section(None, "Группы", [], False),
+        Section(None, "Определение", [], False),
+    ]
+    outline = _Outline(sections)
+    assert _chunk_title([ChunkAtom("Описание группы", section=2)], outline)[1] == (
+        "ГЛАВА 10 Алгебра › 10.1. Группы"
+    )
+    assert _chunk_title([ChunkAtom("Аксиомы группы", section=3)], outline)[1] == (
+        "ГЛАВА 10 Алгебра › 10.1. Группы"
+    )
+
+
+@pytest.mark.asyncio
+async def test_e5_low_evidence_returns_no_match(session: Session, monkeypatch) -> None:
+    """Слабая семантика и шумное слово не превращаются в десять ложных мест."""
+    project = make_exam_project(session)
+    material = make_material(session, "815")
+    link_material(session, project, material)
+    profile = _profile(session)
+    profile.model_id = "intfloat/multilingual-e5-base"
+    profile.query_template = "query: {text}"
+    profile.document_template = "passage: {text}"
+    index = _index(session, profile)
+    index.corpus_manifest = [
+        {"material_id": str(material.id), "revision": material.active_parse_revision}
+    ]
+    session.add(RetrievalSettings(id=1, active_index_id=index.id))
+    session.commit()
+
+    async def weak_semantic(*_args):
+        return [VectorHit(uuid4(), distance=.19)]
+
+    monkeypatch.setattr(HybridRetriever, "_semantic_ids", weak_semantic)
+    monkeypatch.setattr("app.retrieval.search._lexical_candidates", lambda *_args: [])
+    result = await HybridRetriever().search(session, RetrievalSearchWrite(
+        query="иерархия скоростей OTN", project_id=project.id,
+    ))
+    assert result.no_relevant_match
+    assert result.results == []
+    lexical = await HybridRetriever().search(session, RetrievalSearchWrite(
+        query="иерархия скоростей OTN", project_id=project.id,
+        strategy=SearchStrategy.LEXICAL,
+    ))
+    assert lexical.no_relevant_match
+
+
+def test_e5_gate_requires_the_measured_recipe(session: Session) -> None:
+    from app.retrieval.search import _is_e5_index
+
+    profile = _profile(session)
+    profile.model_id = "intfloat/multilingual-e5-base"
+    profile.query_template = "query: {text}"
+    profile.document_template = "passage: {text}"
+    index = _index(session, profile)
+
+    assert _is_e5_index(session, index)
+    profile.query_template = "{text}"
+    assert not _is_e5_index(session, index)
+
+
+def test_e5_semantic_alias_preserves_other_terms() -> None:
+    from app.retrieval.search import _semantic_alias_query
+
+    assert _semantic_alias_query("Как предотвратить взаимоблокировку процессов?") == (
+        "Как предотвратить тупик процессов?"
+    )
+    assert _semantic_alias_query("Формула Байеса") == "Формула Байеса"
+
+
+def test_lexical_rescue_requires_most_query_terms() -> None:
+    from types import SimpleNamespace
+
+    partial = SimpleNamespace(text="процессы сети", block_title="Сеть")
+    relevant = SimpleNamespace(
+        text="Иерархия скоростей OTN описывает уровни передачи",
+        block_title="Сети OTN",
+    )
+    query = "иерархия скоростей OTN"
+    assert _lexical_coverage(query, [partial]) < .75
+    assert _lexical_coverage(query, [relevant]) >= .75
+    assert _lexical_coverage("коммут", [SimpleNamespace(
+        text="Коммутатор передаёт кадр", block_title="Сети",
+    )]) == 1
 

@@ -574,7 +574,11 @@ export function Library() {
         contentStrategy,
       );
       setContentHits(response.results);
-      setContentReasons(response.degradation_reasons);
+      setContentReasons([
+        ...response.degradation_reasons,
+        ...(response.no_relevant_match
+          ? ["В выбранных материалах нет достаточно надёжного совпадения."] : []),
+      ]);
       setContentHistory((current) => [query, ...current.filter((item) => item !== query)].slice(0, 8));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Не удалось выполнить поиск по содержимому");
@@ -845,6 +849,7 @@ export function Library() {
                         </StatusBadge>
                       </span>
                       <small>{hit.locator.block_title ?? hit.locator.typst_path ?? "Фрагмент материала"}{pagesLabel(hit.locator.page_from, hit.locator.page_to)}</small>
+                      {(hit.also_in?.length ?? 0) > 0 && <small>Тот же текст: {hit.also_in?.join(", ")}</small>}
                       <span className={expandedHits.has(hit.locator.chunk_id) ? "is-expanded" : undefined}>{hit.text}</span>
                       {hit.warning && <em>{hit.warning}</em>}
                       <div className="lib-content-result-actions">

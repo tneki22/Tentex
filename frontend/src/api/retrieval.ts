@@ -90,6 +90,7 @@ export interface RetrievalHitRead {
   score: number;
   signals: Array<"lexical" | "semantic">;
   warning: string | null;
+  also_in: string[];
 }
 
 export interface RetrievalSearchRead {
@@ -98,6 +99,7 @@ export interface RetrievalSearchRead {
   index_id: string | null;
   degraded: boolean;
   degradation_reasons: string[];
+  no_relevant_match: boolean;
   results: RetrievalHitRead[];
 }
 

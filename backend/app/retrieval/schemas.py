@@ -98,6 +98,7 @@ class RetrievalHitRead(ApiModel):
     score: float
     signals: list[Literal["lexical", "semantic"]]
     warning: str | None = None
+    also_in: list[str] = Field(default_factory=list)
 
 
 class RetrievalSearchRead(ApiModel):
@@ -107,6 +108,7 @@ class RetrievalSearchRead(ApiModel):
     degraded: bool
     degradation_reasons: list[str]
     results: list[RetrievalHitRead]
+    no_relevant_match: bool = False
 
 
 class EmbeddingProfileWrite(ApiModel):

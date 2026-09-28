@@ -611,6 +611,7 @@ export function SearchSettingsSection({
           <div className="retrieval-quality-guide" aria-label="Метрики качества">
             <article><strong>Recall@10</strong><p>Доля известных релевантных мест, которые попали в первые десять результатов.</p></article>
             <article><strong>NDCG@10</strong><p>Учитывает порядок: полезные результаты выше дают большую оценку.</p></article>
+            <article><strong>Ложные находки</strong><p>Сколько запросов без ответа всё же получили результаты.</p></article>
             <article><strong>p95</strong><p>Время ответа для 95% запросов. Показывает задержку в тяжёлом сценарии.</p></article>
           </div>
           <div className="retrieval-benchmark-list">
@@ -618,8 +619,9 @@ export function SearchSettingsSection({
               <strong>NDCG@10 {((run.metrics.ndcg_at_10 ?? 0) * 100).toFixed(1)}%</strong>
               <span>Recall@10 {((run.metrics.recall_at_10 ?? 0) * 100).toFixed(1)}%</span>
               <span>MRR@10 {((run.metrics.mrr_at_10 ?? 0) * 100).toFixed(1)}%</span>
+              <span>Ложные находки {run.metrics.negative_false_positive ?? 0} / {run.metrics.negative_cases ?? 0}</span>
               <span>p95 {Math.round(run.metrics.p95_ms ?? 0)} мс</span>
-              <small>{run.case_count} контрольных запросов</small>
+              <small>{run.metrics.positive_cases ?? 0} с ответом · {run.metrics.negative_cases ?? 0} без ответа</small>
             </article>)}
             {benchmarks.length === 0 && <p className="ai-muted">Добавьте контрольные запросы через API — здесь появятся сравнимые запуски.</p>}
           </div>
