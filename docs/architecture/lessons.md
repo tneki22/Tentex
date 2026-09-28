@@ -235,14 +235,14 @@
 
 ## Модельные сценарии (28.09.2026)
 
-План и ход работ — `docs/superpowers/plans/2026-09-28-lessons-ai.md`. Сделан срез 1:
-«Собрать урок с ИИ» уровня «Черновик». «Обычный», «Подробный», «Дополнить урок», задания и
-массовая сборка с ИИ — следующие срезы.
+План и ход работ — `docs/superpowers/plans/2026-09-28-lessons-ai.md`. Сделаны срезы 1–2:
+«Собрать урок с ИИ» уровней «Черновик», «Обычный» и «Подробный» с планом. «Дополнить урок»,
+задания и массовая сборка с ИИ — следующие срезы.
 
 **Хранение — миграция `0071`.** `lessons.build_meta` (JSON: `template · level · basis ·
 model_id · cost_usd · concepts · job_id · ai_run_ids · dropped`); `lesson_blocks.collapsed`;
 `lesson_source_refs.citation_label` («S3» у опоры пояснения); вид задачи `ai_lesson` (подвид
-в `checkpoint.subtype`, сейчас `build`); Активность `study_task`, происхождение Активности
+в `checkpoint.subtype`: `plan` — предложение плана, `build` — сборка); Активность `study_task`, происхождение Активности
 `lesson` и таблица `study_tasks` (заведена для среза 4, пока пустая).
 
 **Роли** `lesson_builder`, `lesson_enrich`, `lesson_practice` — `structured_output`, выбор
@@ -254,7 +254,9 @@ model_id · cost_usd · concepts · job_id · ai_run_ids · dropped`); `lesson_b
 | Метод | Путь | Что |
 | --- | --- | --- |
 | POST | `/ai/preflight` `{program_node_id, template, level, basis, material_ids?, minutes?, wishes, use_conspect?, model?}` | Без модели: материалы проекта с выбором по умолчанию (с диапазоном темы, иначе все не справочные), число и токены кусков, состояние материала и причины деградации поиска, оценка трёх уровней, модель роли, `brief_text` — паспорт урока, который уйдёт в промпт. Модели выключены — `models_available = false` с причиной, остальное считается |
-| POST | `/ai/build` — тот же заказ плюс `max_cost_usd?`, `confirm_unknown_price` | 202 `{job_id}`. 422 `lesson_ai_level_unavailable` (пока всё, кроме `draft`), 409 `lesson_ai_no_material` (основа «только материалы» без кусков), 409 `ai_price_unknown`, ошибки шлюза (`ai_disabled` и др.). Итог задачи — `{lesson_id, dropped, cost_usd}`; `lesson_id = null`, если сборку отменили во время вызова |
+| POST | `/ai/plan` — заказ плюс `max_cost_usd?`, `confirm_unknown_price` | 202 `{job_id}` задачи `plan` («Обычный» и «Подробный»; у `draft` — 422 `lesson_ai_plan_level`). Итог — `LessonAiPlanRead`: название, цель, понятия, шаги `{kind, title, intent, sources: [C4…], collapsed, introduces}`, карта кусков для замены опор, `step_cost_usd`, `fixed_cost_usd`, `fixed_calls`, что сервер убрал. Задача ждёт проверки в «Фоне» |
+| POST | `/ai/build` — тот же заказ, `plan?` (`{job_id, title, goal, concepts, steps}`) | 202 `{job_id}` задачи `build`. С `plan` — паспорт и куски берутся из задачи плана (409 `lesson_ai_plan_missing`), план снимается с проверки; без `plan` у «Обычного»/«Подробного» план составляется внутри задачи и не показывается. 409 `lesson_ai_no_material`, 409 `ai_price_unknown`, ошибки шлюза. Итог — `{lesson_id, dropped, cost_usd}`; `lesson_id = null`, если сборку отменили |
+| POST | `/ai/jobs/{job_id}/resume` `{max_cost_usd?}` | Упавшая или отменённая сборка снова в очереди; готовые шаги в `checkpoint` не пересчитываются. 409 `lesson_ai_not_resumable` |
 
 **Этапы.** `lessons/candidates.py` без модели собирает куски в порядке доверия: диапазон
 темы по оглавлению (уточнённый `boundaries`), активные привязки темы, общий
@@ -280,6 +282,20 @@ model_id · cost_usd · concepts · job_id · ai_run_ids · dropped`); `lesson_b
 Урок — один черновик с одной записью `lesson_create`: «Отменить» уносит его и привязки.
 Повтор задачи не создаёт второй урок (`checkpoint.lesson_id`). Предел задачи —
 `budget_state` с верхом оценки, `DEADLINE_SECONDS[ai_lesson] = 1800`.
+
+**План и шаги** (`lessons/ai_steps.py`). План — один вызов по карте кусков `C1…Cn`
+(шапка и ≈120 слов начала каждого); опора вне карты убирается с причиной. Шаг — вызов с
+компактным паспортом, всем планом с отметкой текущего шага, понятиями «уже известно /
+вводит этот шаг / введут позже», текстом предыдущего шага и итогами остальных, полным
+текстом своих кусков и соседа по учебнику под метками `S1…Sk`; ответ сразу переводится в
+метки общего списка, ссылка вне опор шага убирается. Каждый шаг пишется в `checkpoint`
+(`steps`), `done/total` — прогресс «шаг N из M». У «Подробного» рецензент читает черновик и
+начало опор и называет до восьми проблем четырёх видов (термин раньше определения,
+логический скачок, противоречие опоре, повтор прошлого урока); до трёх шагов
+переписываются с замечанием (`review`, `rewritten`). Урок из шагов: заголовок шага,
+пояснение и его куски (у «Путеводителя» — куски перед пояснением). Этапы в
+`AiRun.context_manifest`: `plan · step · review · rewrite`. Отмена проверяется между
+вызовами.
 
 **Правка.** Операция `set_collapsed` `{block_id, collapsed}` в `POST /blocks` — «Свернуть
 под пояснением»; разрез свёрнутого куска наследует флаг, снимок отмены хранит `collapsed`
