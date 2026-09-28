@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { AlertTriangle, BookOpen, ChevronDown, ChevronRight, ExternalLink, FileText, Scissors } from "lucide-react";
 import { lessonMediaUrl, type LessonBlockRead, type LessonRead, type LessonRefRead } from "../../../api/lessons";
@@ -13,6 +13,7 @@ import { PageRegion, StructuredPage } from "../material-viewer";
 import { MachineMark } from "../MachineMark";
 import { QualityBadge } from "../QualityBadge";
 import { LessonMarkdown, refPages } from "./LessonMarkdown";
+import { LessonProposalCard, type LessonProposalView } from "./LessonProposalCard";
 
 export type LessonDocumentMode = "pages" | "text";
 
@@ -38,6 +39,8 @@ interface LessonDocumentProps {
   /** Позиция чтения: куда прокрутить при открытии и кому сообщать о новой. */
   startBlockId?: string | null;
   onReadBlock?: (blockId: string) => void;
+  /** Предложение модели: его изменения стоят на своих местах среди блоков. */
+  proposal?: LessonProposalView | null;
 }
 
 function pageRange(ref: LessonRefRead): number[] {
@@ -52,7 +55,7 @@ function pageRange(ref: LessonRefRead): number[] {
  * фрагменты активной ревизии с отсечением по граничным фрагментам; служебные
  * блоки скрыты.
  */
-export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selectedBlockId, onSelectBlock, blockMenuItems, tailMenuItems, renderNoteEditor, splitBlockId, onSplit, startBlockId, onReadBlock }: LessonDocumentProps) {
+export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selectedBlockId, onSelectBlock, blockMenuItems, tailMenuItems, renderNoteEditor, splitBlockId, onSplit, startBlockId, onReadBlock, proposal }: LessonDocumentProps) {
   const topicTitles = useMemo(
     () => new Map(lesson.topics.map((topic) => [topic.program_node_id, topic.current_title ?? topic.title_snapshot])),
     [lesson.topics],
@@ -72,7 +75,13 @@ export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selecte
       onMouseDown={onSelectBlock && ((event) => { if (event.button === 1) event.preventDefault(); })}
       onAuxClick={onSelectBlock && ((event) => { if (event.button === 1) onSelectBlock(null); })}
     >
+      {proposal?.proposal.ops.filter((op) => op.block_id === null).map((op) => (
+        <LessonProposalCard key={op.id} op={op} view={proposal} />
+      ))}
       {lesson.blocks.map((block) => {
+        const cards = proposal?.proposal.ops
+          .filter((op) => op.block_id === block.id)
+          .map((op) => <LessonProposalCard key={op.id} op={op} view={proposal} />);
         const body = (
           <section
             key={block.id}
@@ -105,8 +114,11 @@ export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selecte
             {block.kind === "media" && selectedBlockId === block.id && renderNoteEditor?.(block)}
           </section>
         );
-        if (!blockMenuItems) return body;
-        return <ContextMenu key={block.id} label={`Действия над блоком ${block.sort_order + 1}`} items={blockMenuItems(block)} trigger={body} />;
+        const wrapped = blockMenuItems
+          ? <ContextMenu key={block.id} label={`Действия над блоком ${block.sort_order + 1}`} items={blockMenuItems(block)} trigger={body} />
+          : body;
+        if (!cards?.length) return wrapped;
+        return <Fragment key={block.id}>{wrapped}{cards}</Fragment>;
       })}
       {tailMenuItems && (
         <ContextMenu

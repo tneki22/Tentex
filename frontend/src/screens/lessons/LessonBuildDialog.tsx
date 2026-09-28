@@ -13,6 +13,7 @@ import {
   type LessonAiPlanRead,
   type LessonAiPlanStep,
   type LessonAiPreflightRead,
+  type LessonProposalRead,
   type LessonBasis,
   type LessonLevel,
   type LessonTemplate,
@@ -36,6 +37,8 @@ interface LessonBuildDialogProps {
   jobId?: string | null;
   /** Черновик готов: родитель перечитывает уроки и открывает новый. */
   onBuilt(lessonId: string, dropped: string[]): void;
+  /** Из «Фона» открыли готовое предложение «Дополнить урок» — его показывает урок. */
+  onProposal?(jobId: string, lessonId: string): void;
 }
 
 const TEMPLATE_OPTIONS: Array<RadioCardOption<LessonTemplate>> = [
@@ -85,7 +88,7 @@ function calls(count: number): string {
  * изменении выбора; тот же паспорт показан в «Что увидит модель». Верх оценки
  * становится пределом расхода, и его можно поменять.
  */
-export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId: initialJobId = null, onBuilt }: LessonBuildDialogProps) {
+export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId: initialJobId = null, onBuilt, onProposal }: LessonBuildDialogProps) {
   const [template, setTemplate] = useState<LessonTemplate>("explain");
   const [basis, setBasis] = useState<LessonBasis>("sources_and_model");
   const [level, setLevel] = useState<LessonLevel>("draft");
@@ -167,9 +170,15 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
   useEffect(() => {
     if (!jobId || job?.state !== "completed") return;
     const controller = new AbortController();
-    getBackgroundJobResult<LessonAiBuildResult | LessonAiPlanRead>(jobId, controller.signal)
+    getBackgroundJobResult<LessonAiBuildResult | LessonAiPlanRead | LessonProposalRead>(jobId, controller.signal)
       .then((result) => {
         if (controller.signal.aborted) return;
+        if ("ops" in result) {
+          onProposal?.(jobId, result.lesson_id);
+          setJobId(null);
+          onOpenChange(false);
+          return;
+        }
         if ("steps" in result) {
           setPlan({ jobId, read: result });
           setPlanSteps(result.steps);

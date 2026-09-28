@@ -57,6 +57,8 @@ interface LessonMarkdownProps {
   /** Опоры пояснения модели: `[S3]` в тексте открывает свою. Без них ссылки — текст. */
   citations?: LessonRefRead[];
   projectId?: string;
+  /** Предложение модели ещё не в уроке: `[S3]` — метка с подписью куска, без окна. */
+  citationTitles?: Record<string, string>;
 }
 
 /**
@@ -64,10 +66,18 @@ interface LessonMarkdownProps {
  * Crepe пишет пустой абзац как `<br />` и экранирует знаки разметки `\*`:
  * общий разбор понимает и то и другое. Один Crepe на выбранном блоке, остальные — здесь (§3.7).
  */
-export function LessonMarkdown({ text, className = "", citations, projectId }: LessonMarkdownProps) {
+export function LessonMarkdown({ text, className = "", citations, projectId, citationTitles }: LessonMarkdownProps) {
   const [openKey, setOpenKey] = useState<string | null>(null);
   const options = useMemo<MarkdownOptions>(() => {
     const byLabel = new Map((citations ?? []).filter((ref) => ref.citation_label).map((ref) => [ref.citation_label!, ref]));
+    if (citationTitles) {
+      return {
+        renderImage: picture,
+        renderCitation: (id, key) => citationTitles[id]
+          ? <span key={key} className="chat-citation is-static" title={citationTitles[id]}>{id}</span>
+          : null,
+      };
+    }
     return {
       renderImage: picture,
       renderCitation: byLabel.size > 0 && projectId ? (id, key) => {
@@ -93,6 +103,6 @@ export function LessonMarkdown({ text, className = "", citations, projectId }: L
         );
       } : undefined,
     };
-  }, [citations, projectId, openKey]);
+  }, [citations, projectId, openKey, citationTitles]);
   return <MarkdownView text={text} className={`lesson-markdown ${className}`.trim()} options={options} />;
 }

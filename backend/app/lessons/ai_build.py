@@ -30,7 +30,7 @@ from app.ai.schemas import AiMessage, AiModelSelection
 from app.ai.settings import AiGatewayError, ResolvedModel, resolve_model
 from app.background.schemas import BackgroundJobStartRead
 from app.db import project_write_transaction
-from app.lessons import ai_context, ai_steps
+from app.lessons import ai_context, ai_enrich, ai_steps
 from app.lessons import candidates as candidates_module
 from app.lessons.ai_prompts import DraftLesson, LessonPlan, PlanStep, draft_instructions
 from app.lessons.ai_schemas import (
@@ -704,6 +704,8 @@ async def run(session: Session, gateway: ModelGateway, job_id: UUID) -> BaseMode
     subtype = job.checkpoint.get("subtype")
     if subtype == SUBTYPE_PLAN:
         return await _run_plan(session, gateway, job)
+    if subtype == ai_enrich.SUBTYPE:
+        return await ai_enrich.run(session, gateway, job_id)
     if subtype != SUBTYPE_BUILD:
         raise AssertionError(f"Неизвестный подвид ai_lesson: {subtype}")
     if (ready := existing_result(session, job)) is not None:

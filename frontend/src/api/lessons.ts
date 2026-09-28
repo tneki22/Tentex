@@ -511,3 +511,91 @@ export const resumeLessonAiBuild = (
   `${lessonsPath(projectId)}/ai/jobs/${encodeURIComponent(jobId)}/resume`,
   { method: "POST", body: JSON.stringify({ max_cost_usd: maxCostUsd }) },
 );
+
+export type LessonEnrichDepth = "economy" | "full";
+export type LessonEnrichOpKind = "insert_note" | "rewrite_note" | "set_collapsed" | "rename_lesson" | "set_goal";
+
+/** Что выбрано в окне «Дополнить с ИИ». */
+export interface LessonEnrichOrder {
+  basis: LessonBasis;
+  depth: LessonEnrichDepth;
+  request: string;
+  /** Выбран блок — просьба касается только его. */
+  block_id: string | null;
+  model: { provider_id: string; model_id: string } | null;
+}
+
+export interface LessonEnrichPreflightRead {
+  portions: number;
+  calls: number;
+  input_tokens: number;
+  cost_usd: string | null;
+  models_available: boolean;
+  models_unavailable_reason: string | null;
+  model_label: string | null;
+  price_known: boolean;
+}
+
+export interface LessonProposalOp {
+  id: string;
+  op: LessonEnrichOpKind;
+  block_id: string | null;
+  /** Вставка внутрь куска: разрез после этого фрагмента. */
+  after_fragment_id: string | null;
+  variant: LessonNoteVariant | null;
+  body_md: string | null;
+  supports: string[];
+  basis: LessonBasis | null;
+  collapsed: boolean | null;
+  text: string | null;
+  reason: string;
+}
+
+export interface LessonProposalSource {
+  label: string;
+  block_id: string;
+  source_name: string;
+  page_from: number;
+  page_to: number;
+}
+
+/** Итог задачи «Дополнить урок»: изменения ждут решения человека. */
+export interface LessonProposalRead {
+  kind: "enrich";
+  lesson_id: string;
+  program_node_id: string;
+  lesson_revision: number;
+  summary: string;
+  basis: LessonBasis;
+  ops: LessonProposalOp[];
+  sources: LessonProposalSource[];
+  dropped: string[];
+  cost_usd: string | null;
+}
+
+export interface LessonProposalApplyResult extends LessonChangeResult {
+  /** Выбранные изменения, которые урок уже не принимает: блок пропал, разрез не лёг. */
+  conflicts: string[];
+}
+
+export const previewLessonEnrich = (
+  projectId: string, lessonId: string, order: LessonEnrichOrder, signal?: AbortSignal,
+): Promise<LessonEnrichPreflightRead> => request(
+  `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/ai/enrich/preflight`,
+  { method: "POST", body: JSON.stringify(order), signal },
+);
+
+export const startLessonEnrich = (
+  projectId: string, lessonId: string,
+  command: LessonEnrichOrder & { expected_revision: number; max_cost_usd: string | null; confirm_unknown_price: boolean },
+): Promise<{ job_id: string }> => request(
+  `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/ai/enrich`,
+  { method: "POST", body: JSON.stringify(command) },
+);
+
+export const applyLessonProposal = (
+  projectId: string, lessonId: string, jobId: string, command: { op_ids: string[]; expected_revision: number },
+): Promise<LessonProposalApplyResult> => request(
+  `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/proposals/${encodeURIComponent(jobId)}/apply`,
+  { method: "POST", body: JSON.stringify(command) },
+);

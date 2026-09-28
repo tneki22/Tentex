@@ -318,10 +318,15 @@ def _material_line(item: dict[str, Any]) -> str:
 
 
 def _order_lines(order: dict[str, Any]) -> list[str]:
-    template: LessonTemplate = order["template"]
+    """Заказ урока. У дополнения готового урока шаблона и уровня нет — строк тоже нет."""
+    template: LessonTemplate | None = order.get("template")
+    lines = []
+    if template:
+        lines.append(_line("Шаблон", TEMPLATE_TITLE[template]))
+    if order.get("level"):
+        lines.append(_line("Уровень", LEVEL_TITLE[order["level"]]))
     return [
-        _line("Шаблон", TEMPLATE_TITLE[template]),
-        _line("Уровень", LEVEL_TITLE[order["level"]]),
+        *lines,
         _line("Основа", BASIS_TITLE[order["basis"]]),
         _line("Длина", f"≈{order['minutes']} мин чтения" if order.get("minutes") else None),
         _line("Пожелания к уроку", order.get("wishes")),

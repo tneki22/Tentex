@@ -5,10 +5,11 @@ import {
   FilePlus2, Image, LibraryBig, Link2, Pencil, Plus, RotateCcw, Scissors, Search, Sparkles, SquareDashed, Trash2, Undo2, X,
 } from "lucide-react";
 import {
-  confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, LESSON_TEMPLATE_LABELS, unbindLessonBindings,
+  applyLessonProposal, confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, LESSON_TEMPLATE_LABELS, unbindLessonBindings,
   updateLesson, updateLessonNote, uploadLessonImage, type LessonBlockCommand, type LessonBlockRead,
-  type LessonChangeResult, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
+  type LessonChangeResult, type LessonProposalRead, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
 } from "../../api/lessons";
+import { getBackgroundJobResult, resolveBackgroundJob } from "../../api/backgroundJobs";
 import { undoProjectAction } from "../../api/projects";
 import { LessonDocument } from "../../components/domain/lesson/LessonDocument";
 import { TopicMaterialFinderDialog } from "../../components/domain/TopicMaterialFinderDialog";
@@ -20,6 +21,8 @@ import {
 import { useLesson } from "../../hooks/useLessons";
 import { useLessonViewMode } from "../../hooks/useLessonViewMode";
 import type { ProgramTreeNode } from "../programTree";
+import { LessonEnrichDialog } from "./LessonEnrichDialog";
+import { LessonProposalBar } from "./LessonProposalBar";
 import { NOTE_VARIANTS } from "./lessonBlocks";
 import { VIEW_MODE_TABS } from "./LessonTab";
 import { errorText } from "./lessonTree";
@@ -50,6 +53,8 @@ interface LessonTopicPaneProps {
   actionError: string;
   /** Открыть вкладку «Поиск» правой панели: найденные страницы становятся уроком. */
   onFindInMaterials(): void;
+  /** Готовое предложение «Дополнить урок» из «Фона» — показать его в уроке. */
+  proposalJobId?: string | null;
 }
 
 const STATUS_TONE: Record<LessonStatus, "warning" | "success" | "neutral"> = {
@@ -97,7 +102,7 @@ function ToolButton({ icon, label, hint, variant = "ghost", disabled, destructiv
 }
 
 /** Центр для одной темы: формулировка, уроки темы и открытый урок (записка §2, бриф §12). */
-export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onBuildWithAi, onChanged, refreshKey, selectedBlockId, onSelectBlock, panelToggle, actionError, onFindInMaterials }: LessonTopicPaneProps) {
+export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onBuildWithAi, onChanged, refreshKey, selectedBlockId, onSelectBlock, panelToggle, actionError, onFindInMaterials, proposalJobId = null }: LessonTopicPaneProps) {
   const topicLessons = lessons.filter((lesson) => lesson.program_node_ids.includes(topic.id));
   const defaultLesson = topicLessons.find((lesson) => lesson.status !== "archived") ?? topicLessons[0];
   const openId = topicLessons.some((lesson) => lesson.id === lessonId) ? lessonId : defaultLesson?.id ?? null;
@@ -118,6 +123,11 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const hasRange = topic.source_page_ranges.length > 0;
   const [finderOpen, setFinderOpen] = useState(false);
+  const [enrichOpen, setEnrichOpen] = useState(false);
+  // Предложение модели к открытому уроку: изменения стоят в документе, решение — в шапке.
+  const [proposal, setProposal] = useState<{ jobId: string; read: LessonProposalRead } | null>(null);
+  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [proposalNote, setProposalNote] = useState("");
   const data = lesson.data && lesson.data.id === openId ? lesson.data : null;
   const selected = data?.blocks.find((block) => block.id === selectedBlockId) ?? null;
   const selectedIndex = selected ? data!.blocks.indexOf(selected) : -1;
@@ -163,6 +173,44 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
   useEffect(() => {
     setError("");
   }, [openId]);
+
+  useEffect(() => {
+    if (!proposalJobId) return;
+    const controller = new AbortController();
+    getBackgroundJobResult<LessonProposalRead>(proposalJobId, controller.signal)
+      .then((read) => { if (!controller.signal.aborted && read.kind === "enrich") showProposal(proposalJobId, read); })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [proposalJobId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function showProposal(jobId: string, read: LessonProposalRead) {
+    setProposal({ jobId, read });
+    setChosen(new Set(read.ops.map((op) => op.id)));
+    setProposalNote("");
+  }
+
+  function applyProposal() {
+    if (!proposal || !data) return;
+    const current = proposal;
+    void run(async () => {
+      const result = await applyLessonProposal(projectId, data.id, current.jobId, {
+        op_ids: current.read.ops.filter((op) => chosen.has(op.id)).map((op) => op.id),
+        expected_revision: revisionRef.current,
+      });
+      setProposal(null);
+      setProposalNote(result.conflicts.length
+        ? `Не легли на урок: ${result.conflicts.length} — блок пропал или разрез не встал. Остальное принято; «Отменить» уберёт всё разом.`
+        : "Изменения приняты. «Отменить» уберёт их одним действием.");
+      return result;
+    }, "Предложение не применилось");
+  }
+
+  function rejectProposal() {
+    if (!proposal) return;
+    const current = proposal;
+    setProposal(null);
+    void resolveBackgroundJob(current.jobId).catch(() => undefined);
+  }
 
   async function run(action: () => Promise<LessonChangeResult | void>, fallback: string) {
     setSaving(true);
@@ -490,7 +538,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                   <ToolButton icon={<Combine size={14} />} label="Склеить" hint="Склеить со следующим куском" disabled={!selectedRef || nextBlock?.kind !== "source" || saving} onClick={() => void edit({ operation: "merge", block_id: selectedBlockId ?? undefined })} />
                   <ToolButton icon={<Trash2 size={14} />} label="Удалить" hint="Удалить выбранный блок" disabled={!selected || saving} onClick={() => void edit({ operation: "delete", block_id: selectedBlockId ?? undefined })} />
                   <ToolButton icon={<SquareDashed size={14} />} label="Снять выбор" hint="Снять выбор блока — то же делает средняя кнопка мыши" disabled={!selectedBlockId} onClick={() => onSelectBlock(null)} />
-                  <StageButton icon={<Sparkles size={14} />} label="Дополнить с ИИ" stage="5 — ИИ «Дополнить урок»" />
+                  <ToolButton icon={<Sparkles size={14} />} label="Дополнить с ИИ" hint={selected ? "Предложить изменения для выбранного блока или всего урока" : "Предложить пояснения, примеры и определения"} disabled={saving || Boolean(proposal)} onClick={() => setEnrichOpen(true)} />
                   <StageButton icon={<Dumbbell size={14} />} label="Добавить практику" stage="6 — задания" />
                 </div>
 
@@ -531,6 +579,11 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                   </div>
                 )}
                 {error && <p className="inline-error" role="alert">{error}</p>}
+                {proposal && proposal.read.lesson_id === data.id && (
+                  <LessonProposalBar proposal={proposal.read} chosen={chosen.size} busy={saving}
+                    onApply={applyProposal} onReject={rejectProposal} />
+                )}
+                {proposalNote && <p className="lesson-proposal-note" role="status">{proposalNote}</p>}
               </header>
               <LessonDocument projectId={projectId} lesson={data} mode={mode} hiddenHeading={topic.title}
                 selectedBlockId={selectedBlockId} onSelectBlock={onSelectBlock}
@@ -538,6 +591,24 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                 renderNoteEditor={renderEditor}
                 splitBlockId={splitting ? selectedBlockId : null}
                 onSplit={split}
+                proposal={proposal && proposal.read.lesson_id === data.id ? {
+                  proposal: proposal.read,
+                  chosen,
+                  onToggle: (id) => setChosen((current) => {
+                    const next = new Set(current);
+                    if (next.has(id)) next.delete(id);
+                    else next.add(id);
+                    return next;
+                  }),
+                } : null}
+              />
+              <LessonEnrichDialog
+                open={enrichOpen}
+                onOpenChange={setEnrichOpen}
+                projectId={projectId}
+                lesson={{ id: data.id, title: data.title, revision: revisionRef.current }}
+                selectedBlock={selected ? { id: selected.id, label: `блок ${selectedIndex + 1}` } : null}
+                onProposal={showProposal}
               />
             </>
           )}

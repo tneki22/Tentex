@@ -294,6 +294,19 @@ def apply_blocks_undo(session: Session, project_id: UUID, data: dict) -> None:
         existing.collapsed = item.get("collapsed", False)
         existing.bound_program_node_id = _uuid(item["bound_program_node_id"])
         _restore_refs(session, existing.id, item["refs"])
+    # Предложение модели переписывает пояснения и название — их отмена возвращает тоже.
+    for block_id, text in (data.get("texts") or {}).items():
+        block = session.get(LessonBlock, UUID(block_id))
+        if block is None or block.lesson_id != lesson.id:
+            continue
+        block.body_md = text["body_md"]
+        block.variant = LessonNoteVariant(text["variant"]) if text["variant"] else None
+        block.origin = LessonBlockOrigin(text["origin"])
+        block.basis = text["basis"]
+        block.ai_run_id = _uuid(text["ai_run_id"])
+    if "lesson" in data:
+        lesson.title = data["lesson"]["title"]
+        lesson.goal = data["lesson"]["goal"]
     lesson.revision += 1
     lesson.updated_at = utc_now()
 

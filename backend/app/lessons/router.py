@@ -7,13 +7,26 @@ from sqlalchemy.orm import Session
 
 from app.background.schemas import BackgroundJobStartRead
 from app.db import get_session
-from app.lessons import ai_build, bulk, editing, from_search, progress, service
+from app.lessons import (
+    ai_build,
+    ai_enrich,
+    bulk,
+    editing,
+    from_search,
+    progress,
+    proposals,
+    service,
+)
 from app.lessons.ai_schemas import (
     LessonAiBuildWrite,
     LessonAiOrder,
     LessonAiPreflightRead,
     LessonAiResumeWrite,
     LessonAiRunWrite,
+    LessonEnrichOrder,
+    LessonEnrichPreflightRead,
+    LessonEnrichWrite,
+    LessonProposalApplyWrite,
 )
 from app.lessons.schemas import (
     LessonBlockWrite,
@@ -108,6 +121,33 @@ def resume_lesson_ai_build(
 ) -> BackgroundJobStartRead:
     """Продолжить упавшую сборку с места сбоя, при нужде с новым пределом расхода."""
     return ai_build.resume(session, project_id, job_id, command)
+
+
+@router.post("/{lesson_id}/ai/enrich/preflight", response_model=LessonEnrichPreflightRead)
+async def lesson_enrich_preflight(
+    project_id: UUID, lesson_id: UUID, command: LessonEnrichOrder, session: SessionDependency
+) -> LessonEnrichPreflightRead:
+    """Сколько порций урока уйдёт в модель и во что это обойдётся — без вызова."""
+    return await ai_enrich.preflight(session, project_id, lesson_id, command)
+
+
+@router.post("/{lesson_id}/ai/enrich", response_model=BackgroundJobStartRead, status_code=202)
+async def start_lesson_enrich(
+    project_id: UUID, lesson_id: UUID, command: LessonEnrichWrite, session: SessionDependency
+) -> BackgroundJobStartRead:
+    """«Дополнить урок» фоном; итог задачи — предложение для решения человека."""
+    return await ai_enrich.start(session, project_id, lesson_id, command)
+
+
+@router.post(
+    "/{lesson_id}/proposals/{job_id}/apply", response_model=proposals.LessonProposalApplyResult
+)
+def apply_lesson_proposal(
+    project_id: UUID, lesson_id: UUID, job_id: UUID, command: LessonProposalApplyWrite,
+    session: SessionDependency,
+) -> proposals.LessonProposalApplyResult:
+    """Применить выбранные изменения предложения одной записью с одной отменой."""
+    return proposals.apply_proposal(session, project_id, lesson_id, job_id, command)
 
 
 @router.post("/{lesson_id}/blocks", response_model=LessonChangeResult)

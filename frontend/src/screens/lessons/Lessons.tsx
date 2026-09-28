@@ -57,6 +57,8 @@ export function Lessons() {
   const [insertPoint, setInsertPoint] = useState<LessonInsertPoint>(INSERT_AT_END);
   /** «Собрать урок с ИИ»: открытый диалог и, если сборка уже идёт, её задача. */
   const [build, setBuild] = useState<{ open: boolean; jobId: string | null }>({ open: false, jobId: null });
+  /** Готовое предложение «Дополнить урок», открытое из «Фона». */
+  const [proposalJobId, setProposalJobId] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -322,6 +324,7 @@ export function Lessons() {
         onSelectBlock={chooseBlock}
         panelToggle={panelToggle}
         actionError={actionError}
+        proposalJobId={proposalJobId}
         onFindInMaterials={() => {
           updateLayout((current) => (current.panelOpen ? current : { ...current, panelOpen: true }));
           setPanelTabRequest((current) => ({ tab: "search", nonce: (current?.nonce ?? 0) + 1 }));
@@ -414,6 +417,7 @@ export function Lessons() {
           topic={active}
           jobId={build.jobId}
           onBuilt={(lessonId) => void openBuilt(lessonId)}
+          onProposal={(jobId, lessonId) => { setProposalJobId(jobId); void openBuilt(lessonId); }}
         />
       )}
       {active && active.node_type !== "section" && (

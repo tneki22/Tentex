@@ -1816,3 +1816,133 @@
 @media (max-width: 900px) {
   .lesson-storyboard-line { grid-template-columns: 1fr; }
 }
+
+/* «Дополнить с ИИ»: быстрые просьбы чипами и двухколоночный ряд модели и цены. */
+.dialog.lesson-enrich-dialog {
+  width: min(46rem, calc(100vw - var(--space-8)));
+}
+
+.lesson-build-row.is-two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+
+.lesson-enrich-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.lesson-enrich-chip {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.lesson-enrich-chip:hover,
+.lesson-enrich-chip.is-active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .lesson-build-row.is-two { grid-template-columns: 1fr; }
+}
+
+/* Шапка предложения модели: сколько изменений, основа, цена и два решения. */
+.lesson-proposal-bar {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: var(--radius-md);
+  background: var(--accent-wash);
+}
+
+.lesson-proposal-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--accent);
+  font-size: var(--text-sm);
+}
+
+.lesson-proposal-bar-row strong { color: var(--ink); }
+.lesson-proposal-bar-row > span:not(.lesson-proposal-bar-actions) { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.lesson-proposal-bar-actions { display: inline-flex; gap: var(--space-2); margin-left: auto; }
+
+.lesson-proposal-summary {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.lesson-proposal-dropped {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lesson-proposal-note {
+  margin: var(--space-2) 0 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+/* Изменение предложения на своём месте в уроке — «призрачный» блок с флажком. */
+.lesson-proposal-card {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-wash) 45%, var(--paper));
+  opacity: .72;
+  transition: opacity 120ms ease, border-color 120ms ease;
+}
+
+.lesson-proposal-card.is-chosen {
+  border-style: solid;
+  opacity: 1;
+}
+
+.lesson-proposal-card header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.lesson-proposal-card header .machine-mark { font-size: var(--text-xs); font-weight: 400; }
+.lesson-proposal-card .lesson-note { margin: 0; }
+
+.lesson-proposal-cut {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lesson-proposal-reason {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-style: italic;
+}
+
+/* Ссылка [S2] в ещё не принятом тексте: опора видна, окна страницы пока нет. */
+.chat-citation.is-static { cursor: default; }
+.chat-citation.is-static:hover { background: var(--accent-wash); }
