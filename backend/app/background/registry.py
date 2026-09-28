@@ -120,6 +120,8 @@ def _subject(session: Session, job: BackgroundJob) -> str:
         material = session.get(Material, job.material_id)
         if material is not None:
             return material_display_name(material)
+    if job.kind == BackgroundJobKind.AI_LESSON and job.checkpoint.get("subtype") == "bulk":
+        return f"Уроки с ИИ · {job.checkpoint.get('topic_title') or 'по списку тем'}"
     if job.kind == BackgroundJobKind.AI_LESSON and job.checkpoint.get("topic_title"):
         return f"Урок «{job.checkpoint['topic_title']}»"
     if job.project_id is not None:

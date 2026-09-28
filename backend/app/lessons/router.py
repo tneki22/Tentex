@@ -11,6 +11,7 @@ from app.background.schemas import BackgroundJobStartRead
 from app.db import get_session
 from app.lessons import (
     ai_build,
+    ai_bulk,
     ai_enrich,
     ai_practice,
     bulk,
@@ -23,6 +24,9 @@ from app.lessons import (
 )
 from app.lessons.ai_schemas import (
     LessonAiBuildWrite,
+    LessonAiBulkOrder,
+    LessonAiBulkPreflightRead,
+    LessonAiBulkWrite,
     LessonAiOrder,
     LessonAiPreflightRead,
     LessonAiResumeWrite,
@@ -124,6 +128,22 @@ async def start_lesson_ai_build(
 ) -> BackgroundJobStartRead:
     """Сборка урока фоном; итог задачи — `{lesson_id, dropped, cost_usd}`."""
     return await ai_build.start(session, project_id, command)
+
+
+@router.post("/ai/bulk/preflight", response_model=LessonAiBulkPreflightRead)
+async def lesson_ai_bulk_preflight(
+    project_id: UUID, command: LessonAiBulkOrder, session: SessionDependency
+) -> LessonAiBulkPreflightRead:
+    """Куски каждой темы списка и общая оценка черновиков — без вызова модели."""
+    return await ai_bulk.preflight(session, project_id, command)
+
+
+@router.post("/ai/bulk", response_model=BackgroundJobStartRead, status_code=202)
+async def start_lesson_ai_bulk(
+    project_id: UUID, command: LessonAiBulkWrite, session: SessionDependency
+) -> BackgroundJobStartRead:
+    """Черновики по списку тем одной задачей в порядке программы."""
+    return await ai_bulk.start(session, project_id, command)
 
 
 @router.post("/ai/jobs/{job_id}/resume", response_model=BackgroundJobStartRead, status_code=202)

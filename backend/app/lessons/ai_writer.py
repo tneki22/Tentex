@@ -281,11 +281,19 @@ def existing_result(session: Session, job: BackgroundJob) -> LessonAiBuildResult
 def save_lesson(
     session: Session, job: BackgroundJob, draft: LessonDraft, *,
     model_id: str, cost: Decimal | None,
+    command: LessonAiBuildWrite | None = None, candidates: list[Candidate] | None = None,
 ) -> LessonAiBuildResult:
-    """Новый черновик одной записью `lesson_create`: отмена уносит урок и привязки."""
+    """Новый черновик одной записью `lesson_create`: отмена уносит урок и привязки.
+
+    Сборка по списку тем передаёт заказ и куски темы сама; номер урока тогда в
+    чекпоинт не пишется — у такой задачи уроков много, их ведёт она сама.
+    """
     checkpoint = job.checkpoint
-    command = LessonAiBuildWrite.model_validate(checkpoint["command"])
-    items = labelled([Candidate.from_json(item) for item in checkpoint["candidates"]])
+    single = command is None
+    command = command or LessonAiBuildWrite.model_validate(checkpoint["command"])
+    items = labelled(candidates if candidates is not None else [
+        Candidate.from_json(item) for item in checkpoint["candidates"]
+    ])
     project_id = job.project_id
     assert project_id is not None
     with project_write_transaction(session, project_id):
@@ -323,8 +331,9 @@ def save_lesson(
                 "binding_ids": [str(item) for item in writer.edit.binding_ids],
             },
         ))
-        stored = session.get(BackgroundJob, job.id)
-        assert stored is not None
-        stored.checkpoint = {**stored.checkpoint, "lesson_id": str(lesson.id)}
+        if single:
+            stored = session.get(BackgroundJob, job.id)
+            assert stored is not None
+            stored.checkpoint = {**stored.checkpoint, "lesson_id": str(lesson.id)}
         session.flush()
         return LessonAiBuildResult(lesson_id=lesson.id, dropped=writer.dropped, cost_usd=cost)

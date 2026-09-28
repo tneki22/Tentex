@@ -246,3 +246,56 @@ class LessonProposalRead(ApiModel):
 class LessonProposalApplyWrite(ApiModel):
     op_ids: list[str] = Field(min_length=1, max_length=50)
     expected_revision: int = Field(ge=1)
+
+
+# --- массовая сборка -------------------------------------------------------------------
+
+
+class LessonAiBulkOrder(ApiModel):
+    """«с ИИ» в таблице массовой подготовки: один шаблон и основа на все темы, «Черновик»."""
+
+    program_node_ids: list[UUID] = Field(min_length=1, max_length=50)
+    template: LessonTemplate = "explain"
+    basis: LessonBasis = LessonBasis.SOURCES_AND_MODEL
+    model: AiModelSelection | None = None
+
+
+class LessonAiBulkWrite(LessonAiBulkOrder):
+    max_cost_usd: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=6)
+    confirm_unknown_price: bool = False
+
+
+class LessonAiBulkTopicRead(ApiModel):
+    program_node_id: UUID
+    title: str
+    candidates: int
+    sources_available: bool
+
+
+class LessonAiBulkPreflightRead(ApiModel):
+    """Темы в порядке программы, куски каждой и общая оценка — без вызова модели."""
+
+    topics: list[LessonAiBulkTopicRead]
+    calls: int
+    cost_usd: Decimal | None
+    models_available: bool
+    models_unavailable_reason: str | None
+    model_label: str | None
+    price_known: bool
+
+
+class LessonAiBulkTopicResult(ApiModel):
+    program_node_id: UUID
+    topic_title: str
+    # Нет урока — тему пропустили: `skipped` говорит почему.
+    lesson_id: UUID | None
+    skipped: str | None
+    dropped: list[str]
+
+
+class LessonAiBulkResult(ApiModel):
+    """Итог задачи `ai_lesson/bulk`: черновики по темам в порядке программы."""
+
+    kind: Literal["bulk"] = "bulk"
+    lessons: list[LessonAiBulkTopicResult]
+    cost_usd: Decimal | None

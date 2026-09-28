@@ -744,3 +744,42 @@ export const startLessonPractice = (
   `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/ai/practice`,
   { method: "POST", body: JSON.stringify(command) },
 );
+
+// --- массовая сборка с ИИ ---------------------------------------------------------------
+
+/** «с ИИ» в таблице массовой подготовки: шаблон и основа на все темы, уровень «Черновик». */
+export interface LessonAiBulkOrder {
+  program_node_ids: string[];
+  template: LessonTemplate;
+  basis: LessonBasis;
+  model: { provider_id: string; model_id: string } | null;
+}
+
+export interface LessonAiBulkPreflightRead {
+  topics: Array<{ program_node_id: string; title: string; candidates: number; sources_available: boolean }>;
+  calls: number;
+  cost_usd: string | null;
+  models_available: boolean;
+  models_unavailable_reason: string | null;
+  model_label: string | null;
+  price_known: boolean;
+}
+
+/** Итог задачи массовой сборки: черновики по темам в порядке программы. */
+export interface LessonAiBulkResult {
+  kind: "bulk";
+  lessons: Array<{ program_node_id: string; topic_title: string; lesson_id: string | null; skipped: string | null; dropped: string[] }>;
+  cost_usd: string | null;
+}
+
+export const previewLessonAiBulk = (
+  projectId: string, order: LessonAiBulkOrder, signal?: AbortSignal,
+): Promise<LessonAiBulkPreflightRead> => request(`${lessonsPath(projectId)}/ai/bulk/preflight`, {
+  method: "POST", body: JSON.stringify(order), signal,
+});
+
+export const startLessonAiBulk = (
+  projectId: string, command: LessonAiBulkOrder & { max_cost_usd: string | null; confirm_unknown_price: boolean },
+): Promise<{ job_id: string }> => request(`${lessonsPath(projectId)}/ai/bulk`, {
+  method: "POST", body: JSON.stringify(command),
+});

@@ -114,10 +114,10 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
         # дописывает checkpoint сам по пакетам (см. app/projects/program_chat.py).
         return await program_chat.run_build(session, gateway, job.project_id, job.id)
     elif job.kind == BackgroundJobKind.AI_LESSON:
-        from app.lessons import ai_build
+        from app.lessons import ai_jobs
 
         # Команда, паспорт урока и кандидаты заморожены в checkpoint при постановке.
-        return await ai_build.run(session, gateway, job.id)
+        return await ai_jobs.run(session, gateway, job.id)
     elif job.kind == BackgroundJobKind.AI_CLEANUP:
         assert job.material_id is not None
         page_number = int(job.checkpoint["page_number"])

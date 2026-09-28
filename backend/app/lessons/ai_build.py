@@ -23,14 +23,14 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai.gateway import AiTextRequest, ModelGateway
+from app.ai.gateway import AiResult, AiTextRequest, ModelGateway
 from app.ai.job_budget import KEY as BUDGET_KEY
 from app.ai.job_budget import JobBudget, budget_state
 from app.ai.schemas import AiMessage, AiModelSelection
 from app.ai.settings import AiGatewayError, ResolvedModel, resolve_model
 from app.background.schemas import BackgroundJobStartRead
 from app.db import project_write_transaction
-from app.lessons import ai_context, ai_enrich, ai_practice, ai_steps
+from app.lessons import ai_context, ai_practice, ai_steps
 from app.lessons import candidates as candidates_module
 from app.lessons.ai_prompts import DraftLesson, LessonPlan, PlanStep, draft_instructions
 from app.lessons.ai_schemas import (
@@ -646,6 +646,14 @@ async def _run_draft(
         return LessonAiBuildResult(
             lesson_id=None, dropped=[], cost_usd=result.usage.actual_cost_usd
         )
+    return save_lesson(
+        session, job, draft_of(result), model_id=result.actual_model_id,
+        cost=result.usage.actual_cost_usd,
+    )
+
+
+def draft_of(result: AiResult[DraftLesson]) -> LessonDraft:
+    """Ответ «Черновика» → шаги урока: куски по меткам и пояснения как есть."""
     draft = LessonDraft(goal=result.value.goal, concepts=list(result.value.concepts),
                         run_ids=[result.run_id])
     for step in result.value.steps:
@@ -653,10 +661,7 @@ async def _run_draft(
             draft.items.append(SourceItem(step.source or "", step.collapsed))
         else:
             draft.items.append(NoteItem(step.variant, step.body_md or "", result.run_id))
-    return save_lesson(
-        session, job, draft, model_id=result.actual_model_id,
-        cost=result.usage.actual_cost_usd,
-    )
+    return draft
 
 
 def _plan_read(job: BackgroundJob, plan: LessonPlan, dropped: list[str]) -> LessonAiPlanRead:
@@ -700,16 +705,12 @@ async def _run_plan(
 
 
 async def run(session: Session, gateway: ModelGateway, job_id: UUID) -> BaseModel:
-    """Выполнить задачу `ai_lesson` из очереди по её подвиду и уровню."""
+    """План или сборка одного урока; остальные подвиды ведёт `lessons.ai_jobs`."""
     job = session.get(BackgroundJob, job_id)
     assert job is not None and job.project_id is not None
     subtype = job.checkpoint.get("subtype")
     if subtype == SUBTYPE_PLAN:
         return await _run_plan(session, gateway, job)
-    if subtype == ai_enrich.SUBTYPE:
-        return await ai_enrich.run(session, gateway, job_id)
-    if subtype == ai_practice.SUBTYPE:
-        return await ai_practice.run(session, gateway, job_id)
     if subtype != SUBTYPE_BUILD:
         raise AssertionError(f"Неизвестный подвид ai_lesson: {subtype}")
     if job.checkpoint["command"]["level"] == "draft":

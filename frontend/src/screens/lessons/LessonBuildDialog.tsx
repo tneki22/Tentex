@@ -12,6 +12,7 @@ import {
   type LessonAiBuildResult,
   type LessonAiPlanRead,
   type LessonAiPlanStep,
+  type LessonAiBulkResult,
   type LessonAiPreflightRead,
   type LessonProposalRead,
   type LessonBasis,
@@ -170,9 +171,17 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
   useEffect(() => {
     if (!jobId || job?.state !== "completed") return;
     const controller = new AbortController();
-    getBackgroundJobResult<LessonAiBuildResult | LessonAiPlanRead | LessonProposalRead>(jobId, controller.signal)
+    getBackgroundJobResult<LessonAiBuildResult | LessonAiPlanRead | LessonProposalRead | LessonAiBulkResult>(jobId, controller.signal)
       .then((result) => {
         if (controller.signal.aborted) return;
+        if ("lessons" in result) {
+          // Массовая сборка из «Фона»: открыть первый собранный черновик.
+          const first = result.lessons.find((item) => item.lesson_id);
+          if (first?.lesson_id) onBuilt(first.lesson_id, first.dropped);
+          setJobId(null);
+          onOpenChange(false);
+          return;
+        }
         if ("ops" in result) {
           onProposal?.(jobId, result.lesson_id);
           setJobId(null);
