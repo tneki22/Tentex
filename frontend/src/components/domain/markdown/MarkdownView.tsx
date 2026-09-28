@@ -43,7 +43,9 @@ export function MathNode({ tex, display, className }: { tex: string; display: bo
   if (html === null) {
     return <code className="md-math-source is-error" title="Формула не распознана">{source}</code>;
   }
-  const Tag = display ? "div" : "span";
+  // `$$…$$` посреди абзаца стоит внутри `<p>`, а `<div>` там недопустим: блоком
+  // её делает класс `md-math-display`, а тег остаётся строчным.
+  const Tag = display && !className?.includes("is-inline") ? "div" : "span";
   return (
     <Tag
       className={className ?? (display ? "md-math-display" : "md-math-inline")}

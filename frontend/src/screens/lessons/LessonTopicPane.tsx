@@ -135,6 +135,9 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
       : `тема «${item.title_snapshot}» больше не в программе`),
     ...(data.blocks.some((block) => block.refs.some((ref) => ref.boundary_shifted)) ? ["разрез сдвинут после нового распознавания"] : []),
   ] : [];
+  /* Куски урока из файла другой установки: без своего учебника они — снимки текста. */
+  const snapshotRefs = (data?.blocks ?? []).flatMap((block) => block.refs.filter((ref) => ref.role === "content" && ref.snapshot_md));
+  const relinkable = snapshotRefs.filter((ref) => ref.can_relink).length;
 
   // useLesson сам загружает урок при монтировании.
   useEffect(() => { if (refreshKey > 0) lesson.refresh(); }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -511,6 +514,22 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                     <Button variant="secondary" disabled={saving} onClick={() => void run(() => confirmLesson(projectId, data.id, revisionRef.current), "Не удалось подтвердить")}>
                       <CheckCircle2 size={14} />Подтвердить
                     </Button>
+                  </div>
+                )}
+
+                {snapshotRefs.length > 0 && (
+                  <div className="lessons-review-notice is-snapshot" role="status">
+                    <Link2 size={15} aria-hidden="true" />
+                    <span>
+                      {relinkable > 0
+                        ? `Учебник кусков из файла уроков есть в проекте: связать можно ${relinkable} из ${snapshotRefs.length}.`
+                        : `Кусков снимком текста: ${snapshotRefs.length}. Добавьте тот же файл учебника в проект — и их можно будет связать.`}
+                    </span>
+                    {relinkable > 0 && (
+                      <Button variant="secondary" disabled={saving} onClick={() => void edit({ operation: "relink" })}>
+                        <Link2 size={14} />Связать с материалом
+                      </Button>
+                    )}
                   </div>
                 )}
 

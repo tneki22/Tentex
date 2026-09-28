@@ -2243,3 +2243,222 @@
   color: var(--ink-soft);
   font-size: var(--text-xs);
 }
+
+/* --- Экспорт и импорт уроков --- */
+
+/* Кнопка меню переноса занимает третью колонку шапки дерева. */
+.workspace-tree-title.is-textbook.has-actions {
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+}
+
+.dialog.lesson-export-dialog,
+.dialog.lesson-import-dialog {
+  width: min(56rem, calc(100vw - var(--space-8)));
+}
+
+.lesson-export-dialog .dialog-actions,
+.lesson-import-dialog .dialog-actions {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.lesson-export-dialog .dialog-actions .inline-error,
+.lesson-import-dialog .dialog-actions .inline-error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.lesson-export-count {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.lesson-export-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.lesson-export-pick,
+.lesson-export-options {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.lesson-export-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.lesson-export-tools .workspace-tree-search { flex: 1; }
+
+.lesson-export-list {
+  max-height: 24rem;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.lesson-export-group + .lesson-export-group { margin-top: var(--space-3); }
+
+.lesson-export-topic {
+  margin: 0 0 var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.lesson-export-topic span {
+  color: color-mix(in srgb, var(--accent) 70%, var(--muted));
+  font-variant-numeric: tabular-nums;
+}
+
+.lesson-export-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 30px;
+}
+
+.lesson-export-row .checkbox-row { min-width: 0; }
+
+.lesson-export-status {
+  flex: none;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.lesson-export-status.is-ready { color: var(--tone-success); }
+
+.lesson-export-status.is-archived { color: var(--muted); }
+
+.lesson-export-empty {
+  margin: var(--space-2) 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.lesson-export-formats.is-rows { gap: var(--space-2); }
+
+.lesson-export-settings {
+  display: grid;
+  gap: var(--space-3);
+  transition: opacity var(--ease-fast);
+}
+
+.lesson-export-settings.is-disabled { opacity: 0.5; }
+
+.lesson-export-field {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.lesson-export-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.lesson-import-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.lesson-import-preview {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.lesson-import-heading {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.lesson-import-lessons {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.lesson-import-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 18rem);
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.lesson-import-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lesson-import-title small {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lesson-import-title strong {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lesson-import-topic { width: 100%; }
+
+.lesson-import-result {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.lesson-import-result ul {
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+/* Кусок из файла уроков без своего учебника: снимок текста в рамке «чужого». */
+.lesson-source.is-snapshot .lesson-source-head { color: var(--tone-warning); }
+
+.lesson-source-snapshot {
+  padding-left: var(--space-3);
+  border-left: 2px dashed color-mix(in srgb, var(--tone-warning) 45%, var(--line));
+}
+
+.lessons-review-notice.is-snapshot {
+  border-color: color-mix(in srgb, var(--tone-info) 40%, var(--line));
+  background: color-mix(in srgb, var(--tone-info) 8%, transparent);
+}
+
+.lessons-review-notice.is-snapshot > svg { color: var(--tone-info); }
+
+@media (max-width: 900px) {
+  .lesson-export-body,
+  .lesson-import-row { grid-template-columns: 1fr; }
+}

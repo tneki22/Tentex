@@ -1,14 +1,16 @@
 import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from "react";
-import { ArrowLeft, GraduationCap, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { ArrowLeft, FileDown, FileUp, FolderInput, GraduationCap, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { createLessonFromSearch, createManualLesson, createQuickLesson, editLessonBlocks, getLesson, type FoundPage, type LessonBlockCommand } from "../../api/lessons";
 import { getProject, ProjectApiError, type ProjectDetail } from "../../api/projects";
 import { ProjectNav } from "../../components/domain/ProjectNav";
-import { Button, EmptyState, ErrorState, IconButton, LoadingState, PanelResizeHandle } from "../../components/ui";
+import { Button, EmptyState, ErrorState, IconButton, LoadingState, Menu, PanelResizeHandle } from "../../components/ui";
 import { useLesson, useLessonsOverview } from "../../hooks/useLessons";
 import { buildProgramTree, flattenProgramTree } from "../programTree";
 import { LessonBuildDialog } from "./LessonBuildDialog";
 import { LessonBulkTable } from "./LessonBulkTable";
+import { LessonExportDialog } from "./LessonExportDialog";
+import { LessonImportDialog } from "./LessonImportDialog";
 import { insertPlacement, INSERT_AT_END, type LessonInsertPoint } from "./lessonBlocks";
 import type { PanelTab } from "./LessonMaterialPanel";
 import { LessonSectionOverview } from "./LessonSectionOverview";
@@ -59,6 +61,8 @@ export function Lessons() {
   const [build, setBuild] = useState<{ open: boolean; jobId: string | null }>({ open: false, jobId: null });
   /** Готовое предложение «Дополнить урок», открытое из «Фона». */
   const [proposalJobId, setProposalJobId] = useState<string | null>(null);
+  /** Экспорт и импорт уроков — диалоги из меню в шапке раздела. */
+  const [transfer, setTransfer] = useState<"export" | "import" | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -82,6 +86,7 @@ export function Lessons() {
     catch (caught) { return { tree: [], error: errorText(caught, "Программа повреждена") }; }
   }, [deferredNodes]);
   const flat = useMemo(() => flattenProgramTree(treeResult.tree).filter(isVisible), [treeResult.tree]);
+  const studyNodes = useMemo(() => flat.filter((node) => STUDY_TYPES.has(node.node_type)), [flat]);
 
   const topicParam = searchParams.get("topic");
   const lessonParam = searchParams.get("lesson");
@@ -309,7 +314,7 @@ export function Lessons() {
       <LessonTopicPane
         projectId={projectId}
         topic={active}
-        studyNodes={flat.filter((node) => STUDY_TYPES.has(node.node_type))}
+        studyNodes={studyNodes}
         lessons={lessons}
         lessonId={lessonParam}
         busy={busy}
@@ -342,9 +347,18 @@ export function Lessons() {
     <div className="lessons-screen" style={{ gridTemplateColumns: columns } as CSSProperties}>
       <aside className="workspace-tree-panel lessons-tree-panel">
         <header className="workspace-tree-head">
-          <div className="workspace-tree-title is-textbook">
+          <div className="workspace-tree-title is-textbook has-actions">
             <Link className="workspace-back-button" to={`/projects/${projectId}${active ? `?topic=${active.id}` : ""}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link>
             <strong>{detail.project.name}</strong>
+            <Menu
+              label="Экспорт и импорт уроков"
+              tooltip="Экспорт и импорт уроков"
+              trigger={<IconButton label="Экспорт и импорт уроков" hideNativeTitle><FolderInput size={15} /></IconButton>}
+              items={[
+                { label: "Экспорт уроков…", icon: <FileDown size={14} />, onSelect: () => setTransfer("export") },
+                { label: "Импорт из файла…", icon: <FileUp size={14} />, onSelect: () => setTransfer("import") },
+              ]}
+            />
           </div>
         </header>
         <LessonsTree
@@ -409,6 +423,22 @@ export function Lessons() {
           </aside>
         </>
       )}
+      <LessonExportDialog
+        projectId={projectId}
+        open={transfer === "export"}
+        onOpenChange={(open) => setTransfer(open ? "export" : null)}
+        lessons={lessons}
+        topics={studyNodes}
+        currentLessonId={activeLessonId}
+      />
+      <LessonImportDialog
+        projectId={projectId}
+        open={transfer === "import"}
+        onOpenChange={(open) => setTransfer(open ? "import" : null)}
+        topics={studyNodes}
+        onImported={() => { overview.refresh(); setRangesKey((value) => value + 1); }}
+        onOpenLesson={(topicId, lessonId) => navigateTo(topicId, lessonId)}
+      />
       {active && (build.jobId || active.node_type !== "section") && (
         <LessonBuildDialog
           open={build.open}
