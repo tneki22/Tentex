@@ -251,13 +251,13 @@ function NoteOrigin({ block, supports }: { block: LessonBlockRead; supports: Les
   if (block.basis === "model_only" || supports.length === 0) {
     return <div className="lesson-note-origin is-model"><MachineMark origin={`${who} · знания модели — не подтверждено материалами`} /></div>;
   }
-  const bySource = new Map<string, string[]>();
-  for (const ref of supports) {
-    const pages = bySource.get(ref.source_name) ?? [];
-    pages.push(refPages(ref).replace("стр. ", ""));
-    bySource.set(ref.source_name, pages);
-  }
-  const where = [...bySource].map(([name, pages]) => `${name}, с. ${[...new Set(pages)].join(", ")}`).join("; ");
+  const bySource = new Map<string, LessonRefRead[]>();
+  for (const ref of supports) bySource.set(ref.source_name, [...(bySource.get(ref.source_name) ?? []), ref]);
+  const where = [...bySource].map(([name, refs]) => {
+    const pages = [...refs].sort((a, b) => a.page_from - b.page_from || a.page_to - b.page_to)
+      .map((ref) => refPages(ref).replace("стр. ", ""));
+    return `${name}, с. ${[...new Set(pages)].join(", ")}`;
+  }).join("; ");
   return <div className="lesson-note-origin"><MachineMark origin={`${who} · по материалам: ${where}`} /></div>;
 }
 

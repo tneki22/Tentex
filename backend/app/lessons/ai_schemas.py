@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import Field
 
 from app.ai.schemas import AiModelSelection
+from app.lessons.ai_prompts import StepKind
 from app.lessons.schemas import ApiModel, LessonLevel, LessonTemplate
 from app.models import LessonBasis, SourceRole
 
@@ -29,10 +30,42 @@ class LessonAiOrder(ApiModel):
     model: AiModelSelection | None = None
 
 
-class LessonAiBuildWrite(LessonAiOrder):
+class LessonAiPlanStep(ApiModel):
+    """Шаг плана — как его вернула модель и как его правят в редакторе плана."""
+
+    kind: StepKind
+    title: str = Field(min_length=1, max_length=120)
+    intent: str = Field(min_length=1, max_length=500)
+    # Метки кусков карты плана: `C4`.
+    sources: list[str] = Field(default_factory=list, max_length=3)
+    collapsed: bool | None = None
+    introduces: list[str] = Field(default_factory=list, max_length=6)
+
+
+class LessonAiPlanWrite(ApiModel):
+    """Правленый план: сборка берёт паспорт и куски из задачи плана `job_id`."""
+
+    job_id: UUID
+    title: str = Field(min_length=1, max_length=200)
+    goal: str = Field(default="", max_length=600)
+    concepts: list[str] = Field(default_factory=list, max_length=30)
+    steps: list[LessonAiPlanStep] = Field(min_length=1, max_length=16)
+
+
+class LessonAiRunWrite(LessonAiOrder):
     # Предел расхода запуска; без него — верхняя граница оценки.
     max_cost_usd: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=6)
     confirm_unknown_price: bool = False
+
+
+class LessonAiBuildWrite(LessonAiRunWrite):
+    # Есть — собрать по этому плану; нет — «Черновик» или план внутри той же задачи.
+    plan: LessonAiPlanWrite | None = None
+
+
+class LessonAiResumeWrite(ApiModel):
+    # Предел исчерпан — продолжить можно с новым, большим.
+    max_cost_usd: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=6)
 
 
 class LessonAiMaterialRead(ApiModel):
@@ -94,3 +127,35 @@ class LessonAiBuildResult(ApiModel):
     lesson_id: UUID | None
     dropped: list[str]
     cost_usd: Decimal | None
+
+
+class LessonAiCandidateRead(ApiModel):
+    """Кусок карты плана — чем можно заменить опору шага (⇄)."""
+
+    label: str
+    material_name: str
+    title: str | None
+    page_from: int
+    page_to: int
+    tokens: int
+    signals: list[str]
+
+
+class LessonAiPlanRead(ApiModel):
+    """Итог задачи `ai_lesson/plan`: план для редактора и цена сборки по нему."""
+
+    title: str
+    goal: str
+    concepts: list[str]
+    steps: list[LessonAiPlanStep]
+    candidates: list[LessonAiCandidateRead]
+    template: LessonTemplate
+    level: LessonLevel
+    basis: LessonBasis
+    minutes: int | None
+    dropped: list[str]
+    # Верх цены одного шага и неизменной части (рецензент с правками у «Подробного»):
+    # редактор пересчитывает стоимость, пока в плане меняют шаги.
+    step_cost_usd: Decimal | None
+    fixed_cost_usd: Decimal | None
+    fixed_calls: int

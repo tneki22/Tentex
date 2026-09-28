@@ -13,7 +13,7 @@ from app.ai.gateway import ModelGateway
 from app.ai.jobs import process_ai_job
 from app.ai.provider import FakeTransport, ProviderCompletion, ProviderUsage
 from app.lessons import ai_build, ai_context, editing
-from app.lessons.ai_schemas import LessonAiBuildWrite, LessonAiOrder
+from app.lessons.ai_schemas import LessonAiBuildWrite, LessonAiOrder, LessonAiRunWrite
 from app.lessons.schemas import LessonBlockWrite, LessonNoteWrite
 from app.models import (
     AiRun,
@@ -176,8 +176,8 @@ def test_preflight_estimates_draft_and_lists_candidates(session, project):
     assert result.candidates == 2 and result.sources_available
     draft, standard, detailed = result.levels
     assert draft.available and draft.calls == 1 and draft.cost_usd > 0
-    assert not standard.available and standard.calls == 8
-    assert detailed.calls > standard.calls
+    assert standard.available and standard.calls == 9
+    assert detailed.calls > standard.calls and detailed.cost_usd > standard.cost_usd
     assert [item.selected for item in result.materials] == [True]
 
 
@@ -268,15 +268,15 @@ def test_sources_only_without_material_is_refused(session, project):
     assert error.value.code == "lesson_ai_no_material"
 
 
-def test_levels_beyond_draft_are_not_started_yet(session, project):
+def test_draft_has_no_plan_stage(session, project):
     _, node = _ethernet(session, project)
 
     with pytest.raises(ProjectDomainError) as error:
-        asyncio.run(ai_build.start(session, project.id, LessonAiBuildWrite(
-            program_node_id=node.id, level="standard",
+        asyncio.run(ai_build.start_plan(session, project.id, LessonAiRunWrite(
+            program_node_id=node.id, level="draft",
         )))
 
-    assert error.value.code == "lesson_ai_level_unavailable"
+    assert error.value.code == "lesson_ai_plan_level"
 
 
 def test_cancel_during_call_creates_no_lesson(session, project):

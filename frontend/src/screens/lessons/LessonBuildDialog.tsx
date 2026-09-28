@@ -5,9 +5,13 @@ import { getBackgroundJobResult } from "../../api/backgroundJobs";
 import {
   LESSON_BASIS_LABELS,
   previewLessonAi,
+  resumeLessonAiBuild,
   SOURCE_ROLE_LABELS,
   startLessonAiBuild,
+  startLessonAiPlan,
   type LessonAiBuildResult,
+  type LessonAiPlanRead,
+  type LessonAiPlanStep,
   type LessonAiPreflightRead,
   type LessonBasis,
   type LessonLevel,
@@ -20,6 +24,7 @@ import {
 } from "../../components/ui";
 import { useBackgroundJob } from "../../hooks/useBackgroundJob";
 import { ChatModelControl } from "../workspace/chat/ChatModelControl";
+import { LessonStoryboard, storyboardCost } from "./LessonStoryboard";
 import { errorText } from "./lessonTree";
 
 interface LessonBuildDialogProps {
@@ -97,12 +102,18 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState("");
   const [jobId, setJobId] = useState<string | null>(initialJobId);
-  const { job } = useBackgroundJob(jobId);
+  const { job, refresh: refreshJob } = useBackgroundJob(jobId);
+  // «Обычный» и «Подробный» сначала показывают план; флажок пропускает этот шаг.
+  const [skipPlan, setSkipPlan] = useState(false);
+  const [plan, setPlan] = useState<{ jobId: string; read: LessonAiPlanRead } | null>(null);
+  const [planSteps, setPlanSteps] = useState<LessonAiPlanStep[]>([]);
+  const [planLimit, setPlanLimit] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setJobId(initialJobId);
     setStartError("");
+    setPlan(null);
     if (!initialJobId) {
       setMaterialIds(null);
       setUseConspect(null);
@@ -152,13 +163,21 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
     if (basis === "sources" && preview && !preview.sources_available) setBasis("sources_and_model");
   }, [basis, preview]);
 
-  // Готово: читаем итог задачи и отдаём урок родителю.
+  // Готово: план уходит в редактор плана, урок — родителю.
   useEffect(() => {
     if (!jobId || job?.state !== "completed") return;
     const controller = new AbortController();
-    getBackgroundJobResult<LessonAiBuildResult>(jobId, controller.signal)
+    getBackgroundJobResult<LessonAiBuildResult | LessonAiPlanRead>(jobId, controller.signal)
       .then((result) => {
-        if (controller.signal.aborted || !result.lesson_id) return;
+        if (controller.signal.aborted) return;
+        if ("steps" in result) {
+          setPlan({ jobId, read: result });
+          setPlanSteps(result.steps);
+          setPlanLimit(null);
+          setJobId(null);
+          return;
+        }
+        if (!result.lesson_id) return;
         onBuilt(result.lesson_id, result.dropped);
         setJobId(null);
         onOpenChange(false);
@@ -181,21 +200,55 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
     setMaterialIds(checked ? [...current, id] : current.filter((item) => item !== id));
   }
 
-  async function start() {
+  async function launch(action: () => Promise<{ job_id: string }>, fallback: string): Promise<boolean> {
     setStarting(true);
     setStartError("");
     try {
-      const result = await startLessonAiBuild(projectId, {
-        ...order,
-        max_cost_usd: limit.trim() ? limit.trim() : null,
-        confirm_unknown_price: confirmUnknown,
-      });
+      const result = await action();
       setJobId(result.job_id);
+      return true;
     } catch (caught) {
-      setStartError(errorText(caught, "Сборка не запустилась"));
+      setStartError(errorText(caught, fallback));
+      return false;
     } finally {
       setStarting(false);
     }
+  }
+
+  const command = () => ({
+    ...order,
+    max_cost_usd: limit.trim() ? limit.trim() : null,
+    confirm_unknown_price: confirmUnknown,
+  });
+  const showsPlan = level !== "draft" && !skipPlan;
+
+  function start() {
+    void launch(
+      () => (showsPlan ? startLessonAiPlan(projectId, command()) : startLessonAiBuild(projectId, command())),
+      showsPlan ? "План не запустился" : "Сборка не запустилась",
+    );
+  }
+
+  function buildFromPlan() {
+    if (!plan) return;
+    const limitValue = planLimit ?? storyboardCost(plan.read, planSteps).limit;
+    const current = plan;
+    void launch(() => startLessonAiBuild(projectId, {
+      ...command(),
+      max_cost_usd: limitValue || null,
+      plan: {
+        job_id: current.jobId, title: current.read.title, goal: current.read.goal,
+        concepts: current.read.concepts,
+        steps: planSteps.map((step) => ({ ...step, title: step.title.trim(), intent: step.intent.trim() })),
+      },
+    }), "Сборка не запустилась").then((started) => { if (started) setPlan(null); });
+  }
+
+  function resume() {
+    if (!jobId) return;
+    const current = jobId;
+    void launch(() => resumeLessonAiBuild(projectId, current, null), "Сборку не удалось продолжить")
+      .then(() => refreshJob());
   }
 
   const running = Boolean(jobId && job && (job.state === "queued" || job.state === "running" || job.state === "paused"));
@@ -210,19 +263,29 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
     extra: <span className="lesson-build-cost">{calls(item.calls)} · {usd(item.cost_usd)}</span>,
   }));
 
+  const planInvalid = planSteps.some((step) => !step.title.trim() || !step.intent.trim());
   const footer = jobId ? (
     <>
-      <Button variant="ghost" onClick={() => onOpenChange(false)}>{running ? "Свернуть — сборка идёт в «Фоне»" : "Закрыть"}</Button>
-      {failed && <Button onClick={() => { setJobId(null); }}>Собрать заново</Button>}
+      <Button variant="ghost" onClick={() => onOpenChange(false)}>{running ? "Свернуть — идёт в «Фоне»" : "Закрыть"}</Button>
+      {failed && <Button variant="secondary" onClick={() => { setJobId(null); }}>Начать заново</Button>}
+      {failed && <Button disabled={starting} onClick={resume}>Продолжить с места сбоя</Button>}
+    </>
+  ) : plan ? (
+    <>
+      <Button variant="ghost" onClick={() => { setPlan(null); }}>Назад к настройкам</Button>
+      <Button disabled={starting || planInvalid || planSteps.length === 0} onClick={buildFromPlan}>
+        <Sparkles size={15} />{starting ? "Ставим…" : "Собрать урок"}
+      </Button>
     </>
   ) : (
     <>
       <Button variant="ghost" onClick={() => onOpenChange(false)}>Отмена</Button>
-      <Button disabled={!preview || Boolean(offline) || starting || priceBlocked || !chosenLevel?.available} onClick={() => void start()}>
-        <Sparkles size={15} />{starting ? "Ставим…" : "Собрать урок"}
+      <Button disabled={!preview || Boolean(offline) || starting || priceBlocked || !chosenLevel?.available} onClick={start}>
+        <Sparkles size={15} />{starting ? "Ставим…" : showsPlan ? "Составить план" : "Собрать урок"}
       </Button>
     </>
   );
+  const stage = job && job.total > 1 ? ` · шаг ${Math.min(job.done + 1, job.total)} из ${job.total}` : "";
 
   return (
     <Dialog
@@ -233,12 +296,15 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
       description={jobId ? "Урок собирается фоном." : `«${topic.title}». Модель составит новый черновик; ваши уроки она не трогает.`}
       footer={footer}
     >
-      {jobId ? (
+      {!jobId && plan ? (
+        <LessonStoryboard plan={plan.read} steps={planSteps} onStepsChange={setPlanSteps}
+          limit={planLimit} onLimitChange={setPlanLimit} />
+      ) : jobId ? (
         <div className="lesson-build-progress" role="status">
           {!job && <LoadingState label="Узнаём состояние сборки" />}
           {running && job && (
             <>
-              <p>Собираем урок{job.model_label ? ` · ${job.model_label}` : ""}. Можно закрыть окно — сборка продолжится в «Фоне», а урок появится в списке темы.</p>
+              <p>Модель работает{job.model_label ? ` · ${job.model_label}` : ""}{stage}. Можно закрыть окно — работа продолжится в «Фоне»: план вернётся в «ждут проверки», урок появится в списке темы.</p>
               <Progress value={job.done} max={Math.max(job.total, 1)} label="Сборка урока" />
             </>
           )}
@@ -290,6 +356,10 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
           <Field label="Глубина">
             {preview ? <RadioCards label="Глубина урока" value={level} options={levelOptions} onChange={setLevel} className="lesson-build-levels" /> : <LoadingState label="Оцениваем стоимость" />}
           </Field>
+          {level !== "draft" && (
+            <Checkbox checked={skipPlan} onCheckedChange={setSkipPlan}
+              label="Собрать сразу, без плана — модель составит план сама и не покажет его" />
+          )}
 
           <div className="lesson-build-row">
             <Field label="Длина, мин" hint={preview?.default_minutes ? `из паспорта: ${preview.default_minutes}` : "по объёму материала"}>

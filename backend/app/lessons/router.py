@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 from app.background.schemas import BackgroundJobStartRead
 from app.db import get_session
 from app.lessons import ai_build, bulk, editing, from_search, progress, service
-from app.lessons.ai_schemas import LessonAiBuildWrite, LessonAiOrder, LessonAiPreflightRead
+from app.lessons.ai_schemas import (
+    LessonAiBuildWrite,
+    LessonAiOrder,
+    LessonAiPreflightRead,
+    LessonAiResumeWrite,
+    LessonAiRunWrite,
+)
 from app.lessons.schemas import (
     LessonBlockWrite,
     LessonBulkResult,
@@ -80,12 +86,28 @@ async def lesson_ai_preflight(
     return await ai_build.preflight(session, project_id, command)
 
 
+@router.post("/ai/plan", response_model=BackgroundJobStartRead, status_code=202)
+async def start_lesson_ai_plan(
+    project_id: UUID, command: LessonAiRunWrite, session: SessionDependency
+) -> BackgroundJobStartRead:
+    """План урока «Обычный»/«Подробный» фоном; итог задачи — план для редактора."""
+    return await ai_build.start_plan(session, project_id, command)
+
+
 @router.post("/ai/build", response_model=BackgroundJobStartRead, status_code=202)
 async def start_lesson_ai_build(
     project_id: UUID, command: LessonAiBuildWrite, session: SessionDependency
 ) -> BackgroundJobStartRead:
     """Сборка урока фоном; итог задачи — `{lesson_id, dropped, cost_usd}`."""
     return await ai_build.start(session, project_id, command)
+
+
+@router.post("/ai/jobs/{job_id}/resume", response_model=BackgroundJobStartRead, status_code=202)
+def resume_lesson_ai_build(
+    project_id: UUID, job_id: UUID, command: LessonAiResumeWrite, session: SessionDependency
+) -> BackgroundJobStartRead:
+    """Продолжить упавшую сборку с места сбоя, при нужде с новым пределом расхода."""
+    return ai_build.resume(session, project_id, job_id, command)
 
 
 @router.post("/{lesson_id}/blocks", response_model=LessonChangeResult)

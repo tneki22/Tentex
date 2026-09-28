@@ -425,7 +425,89 @@ export const previewLessonAi = (
 
 export const startLessonAiBuild = (
   projectId: string,
-  command: LessonAiOrder & { max_cost_usd: string | null; confirm_unknown_price: boolean },
+  command: LessonAiOrder & {
+    max_cost_usd: string | null;
+    confirm_unknown_price: boolean;
+    /** Правленый план: сборка по нему, а не «Черновик» и не план внутри задачи. */
+    plan?: LessonAiPlanWrite;
+  },
 ): Promise<{ job_id: string }> => request(`${lessonsPath(projectId)}/ai/build`, {
   method: "POST", body: JSON.stringify(command),
 });
+
+export type LessonPlanStepKind =
+  | "intro" | "prerequisites" | "concept" | "overview" | "example" | "errors" | "summary"
+  | "check" | "reading";
+
+export const LESSON_STEP_KIND_LABELS: Record<LessonPlanStepKind, string> = {
+  intro: "Вступление",
+  prerequisites: "Предпосылки",
+  concept: "Объяснение",
+  overview: "Как работает целиком",
+  example: "Пример",
+  errors: "Ошибки",
+  summary: "Итог",
+  check: "Проверь себя",
+  reading: "Чтение учебника",
+};
+
+/** Шаг плана урока — как его предложила модель и как его правят в редакторе плана. */
+export interface LessonAiPlanStep {
+  kind: LessonPlanStepKind;
+  title: string;
+  intent: string;
+  /** Метки кусков карты плана: `C4`. */
+  sources: string[];
+  collapsed: boolean | null;
+  introduces: string[];
+}
+
+export interface LessonAiCandidateRead {
+  label: string;
+  material_name: string;
+  title: string | null;
+  page_from: number;
+  page_to: number;
+  tokens: number;
+  signals: string[];
+}
+
+/** Итог задачи плана: сам план, карта кусков для замены опор и цена сборки по нему. */
+export interface LessonAiPlanRead {
+  title: string;
+  goal: string;
+  concepts: string[];
+  steps: LessonAiPlanStep[];
+  candidates: LessonAiCandidateRead[];
+  template: LessonTemplate;
+  level: LessonLevel;
+  basis: LessonBasis;
+  minutes: number | null;
+  dropped: string[];
+  step_cost_usd: string | null;
+  fixed_cost_usd: string | null;
+  fixed_calls: number;
+}
+
+export interface LessonAiPlanWrite {
+  job_id: string;
+  title: string;
+  goal: string;
+  concepts: string[];
+  steps: LessonAiPlanStep[];
+}
+
+export const startLessonAiPlan = (
+  projectId: string,
+  command: LessonAiOrder & { max_cost_usd: string | null; confirm_unknown_price: boolean },
+): Promise<{ job_id: string }> => request(`${lessonsPath(projectId)}/ai/plan`, {
+  method: "POST", body: JSON.stringify(command),
+});
+
+/** Продолжить упавшую сборку с места сбоя; готовые шаги не пересчитываются. */
+export const resumeLessonAiBuild = (
+  projectId: string, jobId: string, maxCostUsd: string | null,
+): Promise<{ job_id: string }> => request(
+  `${lessonsPath(projectId)}/ai/jobs/${encodeURIComponent(jobId)}/resume`,
+  { method: "POST", body: JSON.stringify({ max_cost_usd: maxCostUsd }) },
+);

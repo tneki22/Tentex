@@ -158,3 +158,139 @@ def draft_instructions(template: LessonTemplate, level: LessonLevel, basis: str)
         "из списка целиком: `source` — его метка, `collapsed` — свернуть ли его под "
         "пояснением. Один кусок ставь в урок не больше одного раза.",
     ])
+
+
+# --- уровни «Обычный» и «Подробный»: план, шаги, рецензент ------------------------------
+
+PlanLabel = Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^C\d{1,3}$")]
+StepKind = Literal[
+    "intro", "prerequisites", "concept", "overview", "example", "errors", "summary", "check",
+    "reading",
+]
+#: Подпись вида шага в редакторе плана и оформление его пояснения по умолчанию.
+STEP_KINDS: dict[str, tuple[str, str]] = {
+    "intro": ("Вступление", "explanation"),
+    "prerequisites": ("Предпосылки", "important"),
+    "concept": ("Объяснение", "explanation"),
+    "overview": ("Как работает целиком", "explanation"),
+    "example": ("Пример", "example"),
+    "errors": ("Ошибки", "warning"),
+    "summary": ("Итог", "important"),
+    "check": ("Проверь себя", "text"),
+    "reading": ("Чтение учебника", "explanation"),
+}
+
+
+class PlanStep(BaseModel):
+    """Шаг плана: вид, короткое имя, что сделать, на какие куски опереться."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: StepKind
+    title: str = Field(min_length=1, max_length=120)
+    intent: str = Field(min_length=1, max_length=500)
+    sources: list[PlanLabel] = Field(max_length=3)
+    # Свернуть куски шага под его пояснением; null — как принято в шаблоне.
+    collapsed: bool | None
+    # Понятия, которые вводит этот шаг, — остальные шаги не должны их опережать.
+    introduces: list[Annotated[str, StringConstraints(max_length=120)]] = Field(max_length=6)
+
+
+class LessonPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=200)
+    goal: str = Field(max_length=600)
+    concepts: list[Annotated[str, StringConstraints(max_length=120)]] = Field(max_length=30)
+    steps: list[PlanStep] = Field(min_length=1, max_length=16)
+
+
+class StepText(BaseModel):
+    """Текст одного шага урока по его опорам."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    variant: Literal["text", "explanation", "important", "example", "definition", "warning"]
+    body_md: str = Field(min_length=1, max_length=12_000)
+    # Одна строка итога шага — её видят следующие вызовы вместо всего текста.
+    summary: str = Field(max_length=400)
+
+
+class ReviewIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    step: int = Field(ge=1, le=16)
+    problem: Literal[
+        "term_before_definition", "logic_gap", "contradicts_source", "repeats_previous",
+    ]
+    comment: str = Field(min_length=1, max_length=600)
+
+
+class LessonReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    issues: list[ReviewIssue] = Field(max_length=8)
+
+
+REVIEW_PROBLEMS = {
+    "term_before_definition": "термин использован раньше определения",
+    "logic_gap": "логический скачок",
+    "contradicts_source": "противоречие опоре",
+    "repeats_previous": "повтор предыдущего урока",
+}
+
+STEP_COUNT = {
+    "standard": "Шагов 6–10.",
+    "detailed": "Шагов 9–14: отдельные шаги для предпосылок и разбора типичных ошибок.",
+}
+
+
+def plan_instructions(template: LessonTemplate, level: LessonLevel, basis: str) -> str:
+    spec = TEMPLATES[template]
+    return "\n\n".join([
+        SYSTEM_RULES,
+        f"Шаблон «{spec.title}». Скелет урока: {spec.skeleton}",
+        spec.material_rule,
+        BASIS_RULES[basis],
+        "Сейчас нужен только план урока — тексты шагов напишут потом, по одному шагу за "
+        "вызов, по полному тексту кусков, которые ты назначишь шагу.",
+        STEP_COUNT[level],
+        "Ответ — JSON: название урока, цель одной фразой, понятия урока в порядке "
+        "зависимости и шаги. У шага: `kind` — вид (intro, prerequisites, concept, overview, "
+        "example, errors, summary, check, reading — чтение куска учебника с тем, на что "
+        "обратить внимание), `title` — короткое имя шага, `intent` — что шаг должен "
+        "объяснить или сделать (1–2 фразы), `sources` — до трёх меток кусков вида C4 из "
+        "карты (пусто, если шаг не опирается на материал), `collapsed` — свернуть ли "
+        "куски под пояснением, `introduces` — понятия, которые шаг вводит впервые. Каждое "
+        "понятие урока вводит ровно один шаг, и раньше него понятие не используется.",
+    ])
+
+
+def step_instructions(template: LessonTemplate, level: LessonLevel, basis: str) -> str:
+    spec = TEMPLATES[template]
+    return "\n\n".join([
+        SYSTEM_RULES,
+        f"Шаблон «{spec.title}». {spec.material_rule}",
+        BASIS_RULES[basis],
+        LEVEL_RULES[level],
+        "Напиши текст одного шага плана — того, что отмечен «← сейчас». Опирайся на полный "
+        "текст кусков шага в <sources> и ссылайся на них их метками. Не вводи понятия из "
+        "списка «введут позже» и не повторяй уже написанные шаги. Ответ — JSON: `variant` — "
+        "оформление (definition для определения, example для примера, warning для ошибок, "
+        "important для главного, explanation для объяснения, text для вопросов), `body_md` — "
+        "текст шага без заголовка, `summary` — одна строка: что шаг дал читателю.",
+    ])
+
+
+def review_instructions() -> str:
+    return "\n\n".join([
+        SYSTEM_RULES,
+        "Ты рецензент. Прочитай черновик урока целиком глазами читателя из паспорта и найди "
+        "только четыре вида проблем: термин использован раньше определения; логический "
+        "скачок (пропущен шаг рассуждения); противоречие опоре (текст шага спорит с началом "
+        "куска, на который он ссылается); повтор того, что уже было в предыдущих уроках. "
+        "Стиль, длину и вкусовые правки не предлагай. Нет проблем — пустой список.",
+        "Ответ — JSON: `issues` — до восьми замечаний; у каждого номер шага, вид проблемы "
+        "(term_before_definition, logic_gap, contradicts_source, repeats_previous) и что "
+        "именно исправить.",
+    ])
