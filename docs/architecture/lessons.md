@@ -235,9 +235,10 @@
 
 ## Модельные сценарии (28.09.2026)
 
-План и ход работ — `docs/superpowers/plans/2026-09-28-lessons-ai.md`. Сделаны срезы 1–4:
-«Собрать урок с ИИ» уровней «Черновик», «Обычный» и «Подробный» с планом, «Дополнить урок»
-и задания урока. Массовая сборка с ИИ — следующий срез.
+План и ход работ — `docs/superpowers/plans/2026-09-28-lessons-ai.md`. Сделаны все пять
+срезов: «Собрать урок с ИИ» уровней «Черновик», «Обычный» и «Подробный» с планом,
+«Дополнить урок», задания урока и массовая сборка с ИИ. Задачу `ai_lesson` по подвиду
+(`plan · build · enrich · practice · bulk`) разводит `lessons/ai_jobs.py`.
 
 **Хранение — миграция `0071`.** `lessons.build_meta` (JSON: `template · level · basis ·
 model_id · cost_usd · concepts · job_id · ai_run_ids · dropped`); `lesson_blocks.collapsed`;
@@ -256,6 +257,8 @@ model_id · cost_usd · concepts · job_id · ai_run_ids · dropped`); `lesson_b
 | POST | `/ai/preflight` `{program_node_id, template, level, basis, material_ids?, minutes?, wishes, use_conspect?, model?}` | Без модели: материалы проекта с выбором по умолчанию (с диапазоном темы, иначе все не справочные), число и токены кусков, состояние материала и причины деградации поиска, оценка трёх уровней, модель роли, `brief_text` — паспорт урока, который уйдёт в промпт. Модели выключены — `models_available = false` с причиной, остальное считается |
 | POST | `/ai/plan` — заказ плюс `max_cost_usd?`, `confirm_unknown_price` | 202 `{job_id}` задачи `plan` («Обычный» и «Подробный»; у `draft` — 422 `lesson_ai_plan_level`). Итог — `LessonAiPlanRead`: название, цель, понятия, шаги `{kind, title, intent, sources: [C4…], collapsed, introduces}`, карта кусков для замены опор, `step_cost_usd`, `fixed_cost_usd`, `fixed_calls`, что сервер убрал. Задача ждёт проверки в «Фоне» |
 | POST | `/ai/build` — тот же заказ, `plan?` (`{job_id, title, goal, concepts, steps}`) | 202 `{job_id}` задачи `build`. С `plan` — паспорт и куски берутся из задачи плана (409 `lesson_ai_plan_missing`), план снимается с проверки; без `plan` у «Обычного»/«Подробного» план составляется внутри задачи и не показывается. 409 `lesson_ai_no_material`, 409 `ai_price_unknown`, ошибки шлюза. Итог — `{lesson_id, dropped, cost_usd}`; `lesson_id = null`, если сборку отменили |
+| POST | `/ai/bulk/preflight` `{program_node_ids ≤ 50, template, basis, model?}` | Без модели: темы в порядке программы с числом кусков, число вызовов (тема без материала при основе «только материалы» вызова не получает), общая оценка «Черновиков» |
+| POST | `/ai/bulk` — тот же заказ, `max_cost_usd?`, `confirm_unknown_price` | 202 `{job_id}` задачи `bulk`. Итог — `LessonAiBulkResult`: по теме `lesson_id` или `skipped` с причиной, `dropped`, общая цена. 409 `lesson_ai_no_material`, `ai_price_unknown`, `ai_disabled` |
 | POST | `/ai/jobs/{job_id}/resume` `{max_cost_usd?}` | Упавшая или отменённая сборка снова в очереди; готовые шаги в `checkpoint` не пересчитываются. 409 `lesson_ai_not_resumable` |
 | POST | `/{lesson_id}/ai/enrich/preflight` `{basis, depth, request, block_id?, model?}` | Без модели: число порций и вызовов, оценка цены, модель роли `lesson_enrich`, доступность моделей |
 | POST | `/{lesson_id}/ai/enrich` — тот же заказ, `expected_revision`, `max_cost_usd?`, `confirm_unknown_price` | 202 `{job_id}` задачи `enrich`; 409 `lesson_ai_empty` у урока без блоков. Итог — `LessonProposalRead`: `lesson_id`, `lesson_revision`, основа, сводка, операции `{id, op, block_id, after_fragment_id, variant, body_md, supports, basis, collapsed, text, reason}`, опоры `S*` с источником и страницами, что сервер отбросил, цена. Задача ждёт проверки в «Фоне» |
@@ -351,6 +354,14 @@ model_id · cost_usd · concepts · job_id · ai_run_ids · dropped`); `lesson_b
 снимает столько же, сколько даёт верный; порядок и сопоставление — частичный зачёт по
 пунктам. Открытый ответ проверяет `exam.judge.judge_attempt` без изменений: снимок попытки
 несёт условие, образец с пунктами, опоры и уровень читателя.
+
+**Массовая сборка** (`lessons/ai_bulk.py`). Темы списка сортируются по программе. Паспорт
+темы строится перед её вызовом, а не при постановке: понятия уроков, собранных этой же
+задачей, попадают в «уже известно» следующих тем. Тема — «Черновик» одним вызовом и свой
+урок со своей записью `lesson_create` (`ai_writer.save_lesson` с заказом и кусками темы);
+готовые темы лежат в `checkpoint.topics`, поэтому продолжение после сбоя или исчерпанного
+предела их не пересобирает. Тема без материала при основе «только материалы» пропускается
+с причиной. В «Фоне» задача — «Уроки с ИИ · N тем».
 
 **Метки кусков в промптах.** `ai_enrich.lesson_view` метит кусок сквозной меткой урока из
 опор пояснений (`ai_writer.citation_labels`), остальные — следующими номерами: `[S1]` в
