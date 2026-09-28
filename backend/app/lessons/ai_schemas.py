@@ -12,6 +12,7 @@ from pydantic import Field
 from app.ai.schemas import AiModelSelection
 from app.lessons.ai_prompts import EnrichOpKind, StepKind
 from app.lessons.schemas import ApiModel, LessonLevel, LessonTemplate
+from app.lessons.task_schemas import StudyTaskDraftRead
 from app.models import LessonBasis, SourceRole
 
 
@@ -165,6 +166,8 @@ class LessonAiPlanRead(ApiModel):
 # --- «Дополнить урок» -------------------------------------------------------------------
 
 EnrichDepth = Literal["economy", "full"]
+#: Операции предложения: пять «Дополнить» и вставка задания «Добавить практику».
+ProposalOpKind = Literal[EnrichOpKind, "insert_task"]
 
 
 class LessonEnrichOrder(ApiModel):
@@ -208,7 +211,7 @@ class LessonProposalSource(ApiModel):
 
 class LessonProposalOp(ApiModel):
     id: str
-    op: EnrichOpKind
+    op: ProposalOpKind
     block_id: UUID | None
     # Вставка внутрь куска: разрез после этого фрагмента.
     after_fragment_id: UUID | None
@@ -221,12 +224,14 @@ class LessonProposalOp(ApiModel):
     reason: str
     # Вызов модели, который предложил изменение, — у вставленного пояснения.
     run_id: UUID | None = None
+    # insert_task: задание с ключом; `block_id` — после какого блока, null — в конец.
+    task: StudyTaskDraftRead | None = None
 
 
 class LessonProposalRead(ApiModel):
-    """Итог задачи `ai_lesson/enrich`: изменения урока, которые ждут решения человека."""
+    """Итог задачи `ai_lesson/enrich` или `practice`: изменения урока, которые ждут решения."""
 
-    kind: Literal["enrich"] = "enrich"
+    kind: Literal["enrich", "practice"] = "enrich"
     lesson_id: UUID
     program_node_id: UUID
     lesson_revision: int

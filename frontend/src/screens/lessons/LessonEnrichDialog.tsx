@@ -5,7 +5,9 @@ import { getBackgroundJobResult } from "../../api/backgroundJobs";
 import {
   LESSON_BASIS_LABELS,
   previewLessonEnrich,
+  previewLessonPractice,
   startLessonEnrich,
+  startLessonPractice,
   type LessonBasis,
   type LessonEnrichDepth,
   type LessonEnrichPreflightRead,
@@ -18,6 +20,8 @@ import { ChatModelControl } from "../workspace/chat/ChatModelControl";
 import { errorText } from "./lessonTree";
 
 interface LessonEnrichDialogProps {
+  /** «Дополнить урок» — пояснения и примеры; «Добавить практику» — задания с проверкой. */
+  mode?: "enrich" | "practice";
   open: boolean;
   onOpenChange(open: boolean): void;
   projectId: string;
@@ -33,6 +37,11 @@ const BASIS_ORDER: LessonBasis[] = ["sources_and_model", "sources", "model_only"
 const DEPTH_TABS: Array<{ value: LessonEnrichDepth; label: string; tooltip: string }> = [
   { value: "economy", label: "Экономно", tooltip: "Одна порция текста урока — один вызов" },
   { value: "full", label: "Полностью", tooltip: "Весь урок, до четырёх порций" },
+];
+const COUNT_TABS: Array<{ value: string; label: string; tooltip: string }> = [
+  { value: "3", label: "3", tooltip: "Три задания — быстрая проверка" },
+  { value: "5", label: "5", tooltip: "Пять заданий разных форм" },
+  { value: "8", label: "8", tooltip: "Восемь заданий — от «вспомнить» до «применить»" },
 ];
 const MODEL_KEY = (projectId: string) => `tentex:lesson-ai-model:${projectId}`;
 
@@ -56,9 +65,11 @@ function usd(value: string | null): string {
  * определения между блоками. Предложение приходит в документ урока — там его
  * принимают частично и отменяют одним действием; материал модель не удаляет.
  */
-export function LessonEnrichDialog({ open, onOpenChange, projectId, lesson, selectedBlock, onProposal }: LessonEnrichDialogProps) {
+export function LessonEnrichDialog({ mode = "enrich", open, onOpenChange, projectId, lesson, selectedBlock, onProposal }: LessonEnrichDialogProps) {
+  const practice = mode === "practice";
   const [basis, setBasis] = useState<LessonBasis>("sources_and_model");
   const [depth, setDepth] = useState<LessonEnrichDepth>("economy");
+  const [count, setCount] = useState("5");
   const [request, setRequest] = useState("");
   const [onlySelected, setOnlySelected] = useState(true);
   const [model, setModel] = useState<AiModelSelection | null>(() => readModel(projectId));
@@ -82,17 +93,21 @@ export function LessonEnrichDialog({ open, onOpenChange, projectId, lesson, sele
     block_id: onlySelected && selectedBlock ? selectedBlock.id : null,
     model,
   }), [basis, depth, request, onlySelected, selectedBlock, model]);
+  const practiceOrder = useMemo(() => ({ basis, count: Number(count), request: request.trim(), model }),
+    [basis, count, request, model]);
 
   useEffect(() => {
     if (!open || jobId) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      previewLessonEnrich(projectId, lesson.id, order, controller.signal)
+      (practice
+        ? previewLessonPractice(projectId, lesson.id, practiceOrder, controller.signal)
+        : previewLessonEnrich(projectId, lesson.id, order, controller.signal))
         .then((value) => { if (!controller.signal.aborted) { setPreview(value); setPreviewError(""); } })
         .catch((caught) => { if (!controller.signal.aborted) setPreviewError(errorText(caught, "Оценка не посчиталась")); });
     }, 300);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [open, jobId, projectId, lesson.id, order]);
+  }, [open, jobId, projectId, lesson.id, order, practiceOrder, practice]);
 
   useEffect(() => {
     if (!jobId || job?.state !== "completed") return;
@@ -120,12 +135,13 @@ export function LessonEnrichDialog({ open, onOpenChange, projectId, lesson, sele
     setStartError("");
     try {
       const upper = preview?.cost_usd ? (Math.ceil(Number(preview.cost_usd) * 1000) / 1000).toFixed(3) : null;
-      const result = await startLessonEnrich(projectId, lesson.id, {
-        ...order, expected_revision: lesson.revision, max_cost_usd: upper, confirm_unknown_price: confirmUnknown,
-      });
+      const limits = { expected_revision: lesson.revision, max_cost_usd: upper, confirm_unknown_price: confirmUnknown };
+      const result = practice
+        ? await startLessonPractice(projectId, lesson.id, { ...practiceOrder, ...limits })
+        : await startLessonEnrich(projectId, lesson.id, { ...order, ...limits });
       setJobId(result.job_id);
     } catch (caught) {
-      setStartError(errorText(caught, "Дополнение не запустилось"));
+      setStartError(errorText(caught, practice ? "Задания не запустились" : "Дополнение не запустилось"));
     } finally {
       setStarting(false);
     }
@@ -141,8 +157,10 @@ export function LessonEnrichDialog({ open, onOpenChange, projectId, lesson, sele
       open={open}
       onOpenChange={onOpenChange}
       className="lesson-enrich-dialog"
-      title="Дополнить урок с ИИ"
-      description={`«${lesson.title}». Изменения придут предложением: вы выберете, что принять, и отмените их одним действием.`}
+      title={practice ? "Добавить практику с ИИ" : "Дополнить урок с ИИ"}
+      description={practice
+        ? `«${lesson.title}». Задания с проверкой ответа придут предложением: вы выберете, какие оставить, и отмените их одним действием.`
+        : `«${lesson.title}». Изменения придут предложением: вы выберете, что принять, и отмените их одним действием.`}
       footer={jobId ? (
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>{running ? "Свернуть — идёт в «Фоне»" : "Закрыть"}</Button>
@@ -152,7 +170,7 @@ export function LessonEnrichDialog({ open, onOpenChange, projectId, lesson, sele
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Отмена</Button>
           <Button disabled={!preview || Boolean(offline) || starting || priceBlocked} onClick={() => void start()}>
-            <Sparkles size={15} />{starting ? "Ставим…" : "Предложить изменения"}
+            <Sparkles size={15} />{starting ? "Ставим…" : practice ? "Предложить задания" : "Предложить изменения"}
           </Button>
         </>
       )}
@@ -162,8 +180,8 @@ export function LessonEnrichDialog({ open, onOpenChange, projectId, lesson, sele
           {!job && <LoadingState label="Узнаём состояние" />}
           {running && job && (
             <>
-              <p>Модель читает урок{job.model_label ? ` · ${job.model_label}` : ""}. Можно закрыть окно — предложение вернётся в «ждут проверки».</p>
-              <Progress value={job.done} max={Math.max(job.total, 1)} label="Дополнение урока" />
+              <p>Модель {practice ? "составляет задания" : "читает урок"}{job.model_label ? ` · ${job.model_label}` : ""}. Можно закрыть окно — предложение вернётся в «ждут проверки».</p>
+              <Progress value={job.done} max={Math.max(job.total, 1)} label={practice ? "Задания урока" : "Дополнение урока"} />
             </>
           )}
           {failed && job && <ErrorState title={job.state === "cancelled" ? "Отменено" : "Не удалось"} message={job.error ?? "Предложения нет"} />}
@@ -177,24 +195,37 @@ export function LessonEnrichDialog({ open, onOpenChange, projectId, lesson, sele
             <SegmentedTabs label="Основа дополнения" value={basis} onChange={setBasis}
               tabs={BASIS_ORDER.map((value) => ({ value, label: LESSON_BASIS_LABELS[value] }))} />
           </Field>
-          <Field label="Сколько урока читать">
-            <SegmentedTabs label="Глубина дополнения" value={depth} onChange={setDepth} tabs={DEPTH_TABS} />
-          </Field>
-          <Field label="Просьба" hint="Необязательно. Пусто — модель сама найдёт, где читателю не хватает пояснений">
-            <input value={request} maxLength={1000} onChange={(event) => setRequest(event.target.value)} placeholder="Например: объясни формат кадра на примере" />
-          </Field>
-          <div className="lesson-enrich-quick" aria-label="Быстрые просьбы">
-            {QUICK_REQUESTS.map((item) => (
-              <button key={item} type="button" className={`lesson-enrich-chip${request === item ? " is-active" : ""}`} onClick={() => setRequest(item)}>{item}</button>
-            ))}
-          </div>
-          {selectedBlock && (
-            <Checkbox checked={onlySelected} onCheckedChange={setOnlySelected} label={`Только выбранный блок: ${selectedBlock.label}`} />
+          {practice ? (
+            <>
+              <Field label="Сколько заданий" hint="Формы подбираются по шаблону урока: выбор, пропуски, сопоставление, числовой, порядок, открытый ответ">
+                <SegmentedTabs label="Число заданий" value={count} onChange={setCount} tabs={COUNT_TABS} />
+              </Field>
+              <Field label="Просьба" hint="Необязательно">
+                <input value={request} maxLength={1000} onChange={(event) => setRequest(event.target.value)} placeholder="Например: больше задач на применение" />
+              </Field>
+            </>
+          ) : (
+            <>
+              <Field label="Сколько урока читать">
+                <SegmentedTabs label="Глубина дополнения" value={depth} onChange={setDepth} tabs={DEPTH_TABS} />
+              </Field>
+              <Field label="Просьба" hint="Необязательно. Пусто — модель сама найдёт, где читателю не хватает пояснений">
+                <input value={request} maxLength={1000} onChange={(event) => setRequest(event.target.value)} placeholder="Например: объясни формат кадра на примере" />
+              </Field>
+              <div className="lesson-enrich-quick" aria-label="Быстрые просьбы">
+                {QUICK_REQUESTS.map((item) => (
+                  <button key={item} type="button" className={`lesson-enrich-chip${request === item ? " is-active" : ""}`} onClick={() => setRequest(item)}>{item}</button>
+                ))}
+              </div>
+              {selectedBlock && (
+                <Checkbox checked={onlySelected} onCheckedChange={setOnlySelected} label={`Только выбранный блок: ${selectedBlock.label}`} />
+              )}
+            </>
           )}
           <div className="lesson-build-row is-two">
-            <Field label="Модель" hint={model || !preview?.model_label ? "Модель роли «Дополнение урока»" : `Auto — ${preview.model_label}`}>
+            <Field label="Модель" hint={model || !preview?.model_label ? `Модель роли «${practice ? "Задания урока" : "Дополнение урока"}»` : `Auto — ${preview.model_label}`}>
               <div className="lesson-build-model">
-                <ChatModelControl role="lesson_enrich" capabilities={["structured_output"]} value={model} parameters={{}} messageCount={0} onChange={(value) => chooseModel(value)} />
+                <ChatModelControl role={practice ? "lesson_practice" : "lesson_enrich"} capabilities={["structured_output"]} value={model} parameters={{}} messageCount={0} onChange={(value) => chooseModel(value)} />
               </div>
             </Field>
             <Field label="Оценка">

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import project_write_transaction
@@ -51,6 +52,26 @@ from app.retrieval.citations import CITATION_GROUP, cited_ids
 
 #: Группа ссылок вместе с пробелом перед ней: убранная ссылка не оставляет «текст .».
 _CITATION_WITH_SPACE = re.compile(r"([ \t]*)" + CITATION_GROUP.pattern)
+
+
+def ref_key(ref: LessonSourceRef) -> tuple:
+    """Одна и та же опора — тот же материал, страницы и границы по фрагментам."""
+    return (ref.material_id, ref.page_from, ref.page_to, ref.from_fragment_id,
+            ref.to_fragment_id)
+
+
+def citation_labels(session: Session, block_ids: list[UUID]) -> dict[tuple, str]:
+    """Сквозные номера опор урока: та же опора получает тот же S-ID."""
+    labels: dict[tuple, str] = {}
+    if not block_ids:
+        return labels
+    for ref in session.scalars(select(LessonSourceRef).where(
+        LessonSourceRef.block_id.in_(block_ids),
+        LessonSourceRef.role == LessonRefRole.SUPPORT,
+        LessonSourceRef.citation_label.is_not(None),
+    )):
+        labels[ref_key(ref)] = ref.citation_label
+    return labels
 
 
 def labels_in_order(text: str) -> list[str]:

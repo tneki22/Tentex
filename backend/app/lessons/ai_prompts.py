@@ -270,6 +270,8 @@ def plan_instructions(template: LessonTemplate, level: LessonLevel, basis: str) 
         "Сейчас нужен только план урока — тексты шагов напишут потом, по одному шагу за "
         "вызов, по полному тексту кусков, которые ты назначишь шагу.",
         STEP_COUNT[level],
+        "Шаг «Проверь себя» (check) не планируй: задания с проверкой ответа добавятся в урок "
+        "после сборки.",
         "Ответ — JSON: название урока, цель одной фразой, понятия урока в порядке "
         "зависимости и шаги. У шага: `kind` — вид (intro, prerequisites, concept, overview, "
         "example, errors, summary, check, reading — чтение куска учебника с тем, на что "
@@ -372,4 +374,101 @@ def enrich_instructions(basis: str, focus: str | None) -> str:
         "новое название или цель урока в `text`. Удалять блоки и куски нельзя. У каждой "
         "операции `reason` — зачем она читателю, одной фразой. Ссылайся на куски их "
         "метками S*. Ничего полезного — пустой список операций.",
+    ])
+
+
+# --- задания урока ----------------------------------------------------------------------
+
+TaskForm = Literal[
+    "single_choice", "multiple_choice", "fill_blanks", "numeric", "ordering", "matching",
+    "open_answer",
+]
+TASK_FORM_RULES = """Формы заданий и их поля (поля чужой формы — null):
+- single_choice — выбор одного: `options` 3–5 вариантов, `correct` — номер верного (с 1).
+  Неверные варианты правдоподобны: это типичные ошибки новичка, а не очевидная чепуха.
+- multiple_choice — несколько верных: `options` 4–6, `correct` — номера всех верных (2+).
+- fill_blanks — пропуски: в `prompt_md` места пропусков помечены {{1}}, {{2}}…; `blanks` —
+  по списку допустимых ответов на каждый пропуск по порядку. Пропуск — одно-два слова, а
+  не фраза; в список — все естественные варианты: формы слова, синонимы, сокращение,
+  ответ без слова, которое уже стоит в условии («физическому» и «физическому уровню»).
+- numeric — числовой ответ: `value` — число, `tolerance` — допуск, `relative` — допуск в
+  долях (true) или в единицах (false), `unit` — единица или null. Только если в теме есть
+  величины и расчёт.
+- ordering — порядок шагов: `steps` — 3–7 шагов в верном порядке (сервер их перемешает).
+- matching — сопоставление: `pairs` — 3–6 пар «левое → правое» (термин → определение,
+  уровень → функция); правые части не повторяются.
+- open_answer — открытый ответ «объясни своими словами»: `reference_md` — образцовый
+  ответ в 2–5 предложениях, `points` — 2–5 пунктов, которые должны быть в ответе."""
+
+#: Смесь форм по шаблону урока: объяснение — на понимание, практика — на применение.
+FORM_MIX = {
+    "explain": "single_choice, fill_blanks, matching, multiple_choice, open_answer",
+    "guide": "single_choice, fill_blanks, open_answer",
+    "practice": "numeric, ordering, single_choice, open_answer, fill_blanks",
+    "cheatsheet": "matching, fill_blanks, single_choice, numeric",
+}
+
+
+class MatchPair(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    left: str = Field(min_length=1, max_length=300)
+    right: str = Field(min_length=1, max_length=300)
+
+
+class TaskDraft(BaseModel):
+    """Задание в ответе модели: общие поля и поля своей формы, остальные — null."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    form: TaskForm
+    prompt_md: str = Field(min_length=1, max_length=3_000)
+    options: list[Annotated[str, StringConstraints(max_length=400)]] | None = Field(
+        max_length=8)
+    correct: list[int] | None = Field(max_length=8)
+    blanks: list[list[Annotated[str, StringConstraints(max_length=120)]]] | None = Field(
+        max_length=8)
+    value: float | None
+    tolerance: float | None
+    relative: bool | None
+    unit: str | None = Field(max_length=40)
+    steps: list[Annotated[str, StringConstraints(max_length=400)]] | None = Field(max_length=8)
+    pairs: list[MatchPair] | None = Field(max_length=8)
+    reference_md: str | None = Field(max_length=3_000)
+    points: list[Annotated[str, StringConstraints(max_length=300)]] | None = Field(max_length=6)
+    # Почему ответ такой — читатель видит после проверки. Ссылки [S*] — на куски урока.
+    explanation_md: str = Field(min_length=1, max_length=2_000)
+    hint_md: str | None = Field(max_length=600)
+    difficulty: Literal["remember", "understand", "apply"]
+    # После какого блока урока поставить задание; null — в конец, в «Практику».
+    after_block: BlockLabel | None
+
+
+class PracticeReply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = Field(max_length=1_000)
+    tasks: list[TaskDraft] = Field(max_length=10)
+
+
+def practice_instructions(template: str | None, basis: str, count: int) -> str:
+    mix = FORM_MIX.get(template or "", FORM_MIX["explain"])
+    return "\n\n".join([
+        SYSTEM_RULES,
+        BASIS_RULES[basis],
+        f"Ты составляешь задания с проверкой ответа к готовому уроку: ровно {count}. Урок дан "
+        "блоками B1, B2, … по порядку. Задания проверяют понимание урока, а не память на "
+        "формулировки: по возможности — ситуация, в которой нужно применить понятие. Упражнения "
+        "учебника из кусков урока — лучшая основа. Каждое задание решается по тексту урока; "
+        "не спрашивай того, чего в уроке нет. Не повторяй уже имеющиеся задания урока и друг "
+        "друга.",
+        f"Смесь форм — по порядку предпочтения: {mix}. Одна форма — не больше половины "
+        "заданий. Сложность растёт: сначала remember, затем understand, в конце apply.",
+        TASK_FORM_RULES,
+        "Размещение: 1–2 задания «проверь себя» — `after_block` сразу после блока, который "
+        "объясняет проверяемое; остальные — в конец урока (`after_block` = null). "
+        "`explanation_md` — почему верный ответ верен и в чём ловушка неверных, 1–3 "
+        "предложения со ссылкой [S*] на кусок, если он есть. `hint_md` — наводящая подсказка "
+        "без ответа.",
+        "Ответ — JSON: `summary` — одна фраза о наборе заданий, `tasks` — задания.",
     ])

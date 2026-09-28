@@ -5,17 +5,21 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.ai.dependencies import get_model_gateway
+from app.ai.gateway import ModelGateway
 from app.background.schemas import BackgroundJobStartRead
 from app.db import get_session
 from app.lessons import (
     ai_build,
     ai_enrich,
+    ai_practice,
     bulk,
     editing,
     from_search,
     progress,
     proposals,
     service,
+    tasks,
 )
 from app.lessons.ai_schemas import (
     LessonAiBuildWrite,
@@ -45,8 +49,15 @@ from app.lessons.schemas import (
     LessonUnbindWrite,
     LessonUpdateWrite,
 )
+from app.lessons.task_schemas import (
+    LessonPracticeOrder,
+    LessonPracticeWrite,
+    StudyTaskAttemptRead,
+    StudyTaskAttemptWrite,
+)
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
 router = APIRouter(prefix="/api/projects/{project_id}/lessons", tags=["lessons"])
 
 
@@ -137,6 +148,56 @@ async def start_lesson_enrich(
 ) -> BackgroundJobStartRead:
     """«Дополнить урок» фоном; итог задачи — предложение для решения человека."""
     return await ai_enrich.start(session, project_id, lesson_id, command)
+
+
+@router.post("/{lesson_id}/ai/practice/preflight", response_model=LessonEnrichPreflightRead)
+async def lesson_practice_preflight(
+    project_id: UUID, lesson_id: UUID, command: LessonPracticeOrder, session: SessionDependency
+) -> LessonEnrichPreflightRead:
+    """Во что обойдутся задания к уроку — без вызова модели."""
+    return await ai_practice.preflight(session, project_id, lesson_id, command)
+
+
+@router.post("/{lesson_id}/ai/practice", response_model=BackgroundJobStartRead, status_code=202)
+async def start_lesson_practice(
+    project_id: UUID, lesson_id: UUID, command: LessonPracticeWrite, session: SessionDependency
+) -> BackgroundJobStartRead:
+    """«Добавить практику» фоном; итог задачи — задания предложением."""
+    return await ai_practice.start(session, project_id, lesson_id, command)
+
+
+@router.post(
+    "/{lesson_id}/tasks/{activity_id}/attempts", response_model=StudyTaskAttemptRead
+)
+async def submit_study_task_attempt(
+    project_id: UUID, lesson_id: UUID, activity_id: UUID, command: StudyTaskAttemptWrite,
+    session: SessionDependency, gateway: GatewayDependency,
+) -> StudyTaskAttemptRead:
+    """Ответ на задание: ключ проверяет сразу, открытый ответ — модель или позже."""
+    return await tasks.submit_attempt(session, gateway, project_id, lesson_id, activity_id,
+                                      command)
+
+
+@router.get(
+    "/{lesson_id}/tasks/{activity_id}/attempts", response_model=list[StudyTaskAttemptRead]
+)
+def list_study_task_attempts(
+    project_id: UUID, lesson_id: UUID, activity_id: UUID, session: SessionDependency
+) -> list[StudyTaskAttemptRead]:
+    return tasks.list_attempts(session, project_id, lesson_id, activity_id)
+
+
+@router.post(
+    "/{lesson_id}/tasks/{activity_id}/attempts/{attempt_id}/check",
+    response_model=StudyTaskAttemptRead,
+)
+async def check_study_task_attempt(
+    project_id: UUID, lesson_id: UUID, activity_id: UUID, attempt_id: UUID,
+    session: SessionDependency, gateway: GatewayDependency,
+) -> StudyTaskAttemptRead:
+    """Проверить открытый ответ, сохранённый без моделей."""
+    return await tasks.check_pending(session, gateway, project_id, lesson_id, activity_id,
+                                     attempt_id)
 
 
 @router.post(

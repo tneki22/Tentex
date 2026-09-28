@@ -34,6 +34,7 @@ from app.lessons.schemas import (
     LessonUnbindOffer,
     LessonUpdateWrite,
 )
+from app.lessons.task_store import retire_lesson_tasks, task_reads
 from app.materials.naming import material_display_name, project_material_display_name
 from app.models import (
     Binding,
@@ -436,6 +437,9 @@ def _lesson_read(session: Session, lesson: Lesson) -> LessonRead:
         if ref.role == LessonRefRole.CONTENT
     ]
     shown = refs_module.shown_pages(session, content_refs)
+    task_by_activity = task_reads(
+        session, [block.activity_id for block in blocks if block.activity_id is not None]
+    )
     topics = _topic_reads(session, lesson.id)
     action = _latest_action(session, lesson.project_id)
     undo_sequence = (
@@ -475,6 +479,7 @@ def _lesson_read(session: Session, lesson: Lesson) -> LessonRead:
                     _ref_read(session, lesson.project_id, ref, shown.get(ref.id, []))
                     for ref in sorted(refs_by_block[block.id], key=_ref_order)
                 ],
+                task=task_by_activity.get(block.activity_id) if block.activity_id else None,
             )
             for block in blocks
         ],
@@ -888,6 +893,7 @@ def delete_lesson(session: Session, project_id: UUID, lesson_id: UUID) -> None:
         ):
             if action.inverse_data.get("lesson_id") == str(lesson_id):
                 action.undone_at = now
+        retire_lesson_tasks(session, lesson.id)
         session.execute(delete(Lesson).where(Lesson.id == lesson.id))
 
 
@@ -906,5 +912,6 @@ def apply_undo(session: Session, project_id: UUID, data: dict) -> None:
     for raw_id in raw_lessons:
         lesson = session.get(Lesson, UUID(raw_id))
         if lesson is not None and lesson.project_id == project_id:
+            retire_lesson_tasks(session, lesson.id)
             session.execute(delete(Lesson).where(Lesson.id == lesson.id))
             session.expunge(lesson)

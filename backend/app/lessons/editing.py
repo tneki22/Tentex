@@ -42,6 +42,7 @@ from app.lessons.service import (
     _source_name,
     media_kind,
 )
+from app.lessons.task_store import sync_lesson_tasks
 from app.materials.storage import material_path, store_namespaced_upload
 from app.models import (
     Binding,
@@ -307,6 +308,8 @@ def apply_blocks_undo(session: Session, project_id: UUID, data: dict) -> None:
     if "lesson" in data:
         lesson.title = data["lesson"]["title"]
         lesson.goal = data["lesson"]["goal"]
+    session.flush()
+    sync_lesson_tasks(session, lesson.id)
     lesson.revision += 1
     lesson.updated_at = utc_now()
 
@@ -763,6 +766,7 @@ def _apply_edit(
         session.flush()
         for index, block in enumerate(edit.blocks):
             block.sort_order = index
+        sync_lesson_tasks(session, lesson.id)
         lesson.revision += 1
         lesson.updated_at = utc_now()
         session.add(ProjectActionLog(

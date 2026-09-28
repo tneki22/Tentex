@@ -96,6 +96,8 @@ export interface LessonBlockRead {
   /** Кусок свёрнут под пояснением строкой «В учебнике: …». */
   collapsed: boolean;
   refs: LessonRefRead[];
+  /** Блок `activity`: задание с формой, ключом и последней попыткой. */
+  task?: StudyTaskRead | null;
 }
 
 export interface LessonTopicRead {
@@ -513,7 +515,7 @@ export const resumeLessonAiBuild = (
 );
 
 export type LessonEnrichDepth = "economy" | "full";
-export type LessonEnrichOpKind = "insert_note" | "rewrite_note" | "set_collapsed" | "rename_lesson" | "set_goal";
+export type LessonEnrichOpKind = "insert_note" | "rewrite_note" | "set_collapsed" | "rename_lesson" | "set_goal" | "insert_task";
 
 /** Что выбрано в окне «Дополнить с ИИ». */
 export interface LessonEnrichOrder {
@@ -549,6 +551,8 @@ export interface LessonProposalOp {
   collapsed: boolean | null;
   text: string | null;
   reason: string;
+  /** insert_task: задание с ключом; `block_id` — после какого блока, null — в конец. */
+  task?: StudyTaskDraftRead | null;
 }
 
 export interface LessonProposalSource {
@@ -559,9 +563,9 @@ export interface LessonProposalSource {
   page_to: number;
 }
 
-/** Итог задачи «Дополнить урок»: изменения ждут решения человека. */
+/** Итог задачи «Дополнить урок» или «Добавить практику»: изменения ждут решения человека. */
 export interface LessonProposalRead {
-  kind: "enrich";
+  kind: "enrich" | "practice";
   lesson_id: string;
   program_node_id: string;
   lesson_revision: number;
@@ -597,5 +601,146 @@ export const applyLessonProposal = (
   projectId: string, lessonId: string, jobId: string, command: { op_ids: string[]; expected_revision: number },
 ): Promise<LessonProposalApplyResult> => request(
   `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/proposals/${encodeURIComponent(jobId)}/apply`,
+  { method: "POST", body: JSON.stringify(command) },
+);
+
+// --- задания урока -------------------------------------------------------------------
+
+export type StudyTaskForm =
+  | "single_choice" | "multiple_choice" | "fill_blanks" | "numeric" | "ordering" | "matching" | "open_answer";
+export type StudyTaskDifficulty = "remember" | "understand" | "apply";
+
+export const STUDY_TASK_FORM_LABELS: Record<StudyTaskForm, string> = {
+  single_choice: "Выбор одного",
+  multiple_choice: "Несколько верных",
+  fill_blanks: "Пропуски",
+  numeric: "Числовой ответ",
+  ordering: "Порядок шагов",
+  matching: "Сопоставление",
+  open_answer: "Открытый ответ",
+};
+
+/**
+ * Условие по форме: `options` у выбора, `blanks` — число пропусков `{{1}}…`,
+ * `unit` у числа, `items` — шаги вперемешку, `left`/`right` — части пар.
+ */
+export interface StudyTaskPayload {
+  options?: string[];
+  blanks?: number;
+  unit?: string | null;
+  items?: string[];
+  left?: string[];
+  right?: string[];
+}
+
+/** Ключ по форме: `correct` у выбора, `answers` у пропусков, `value` у числа, `order`, `match`, `points`. */
+export interface StudyTaskKey {
+  correct?: number[];
+  answers?: string[][];
+  value?: number;
+  tolerance?: number;
+  relative?: boolean;
+  order?: number[];
+  match?: number[];
+  points?: string[];
+}
+
+export interface StudyTaskDraftRead {
+  form: StudyTaskForm;
+  prompt_md: string;
+  payload: StudyTaskPayload;
+  answer_key: StudyTaskKey;
+  reference_md: string | null;
+  explanation_md: string;
+  hint_md: string | null;
+  difficulty: StudyTaskDifficulty;
+  basis: LessonBasis;
+  supports: string[];
+}
+
+/** Ответ по форме; у открытого ответа — `text` попытки. */
+export interface StudyTaskAnswer {
+  choice?: number;
+  choices?: number[];
+  blanks?: string[];
+  value?: string;
+  order?: number[];
+  pairs?: Array<number | null>;
+}
+
+export type AttemptOutcome = "passed" | "partial" | "failed" | "unscored";
+
+export interface StudyTaskAttemptRead {
+  id: string;
+  activity_id: string;
+  ordinal: number;
+  answer: StudyTaskAnswer | { text: string } | null;
+  text: string | null;
+  /** null — открытый ответ сохранён, но ещё не проверен. */
+  outcome: AttemptOutcome | null;
+  method: string | null;
+  score: number | null;
+  items: boolean[];
+  summary: string;
+  credited: string[];
+  missed: string[];
+  wrong: string[];
+  pending_reason: string | null;
+  created_at: string;
+}
+
+export interface StudyTaskRead {
+  activity_id: string;
+  form: StudyTaskForm;
+  prompt_md: string;
+  payload: StudyTaskPayload;
+  answer_key: StudyTaskKey;
+  reference_md: string | null;
+  explanation_md: string | null;
+  hint_md: string | null;
+  difficulty: StudyTaskDifficulty;
+  basis: LessonBasis;
+  sources: Array<{ source_name: string; page_from: number; page_to: number }>;
+  attempts: number;
+  last_attempt: StudyTaskAttemptRead | null;
+}
+
+const taskPath = (projectId: string, lessonId: string, activityId: string) =>
+  `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/tasks/${encodeURIComponent(activityId)}`;
+
+export const submitStudyTaskAttempt = (
+  projectId: string, lessonId: string, activityId: string,
+  command: { answer?: StudyTaskAnswer; text?: string; active_seconds?: number | null },
+): Promise<StudyTaskAttemptRead> => request(`${taskPath(projectId, lessonId, activityId)}/attempts`, {
+  method: "POST", body: JSON.stringify(command),
+});
+
+export const checkStudyTaskAttempt = (
+  projectId: string, lessonId: string, activityId: string, attemptId: string,
+): Promise<StudyTaskAttemptRead> => request(
+  `${taskPath(projectId, lessonId, activityId)}/attempts/${encodeURIComponent(attemptId)}/check`,
+  { method: "POST" },
+);
+
+/** «Добавить практику»: сколько заданий, на чём основаны, какой моделью. */
+export interface LessonPracticeOrder {
+  basis: LessonBasis;
+  count: number;
+  request: string;
+  model: { provider_id: string; model_id: string } | null;
+}
+
+export const previewLessonPractice = (
+  projectId: string, lessonId: string, order: LessonPracticeOrder, signal?: AbortSignal,
+): Promise<LessonEnrichPreflightRead> => request(
+  `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/ai/practice/preflight`,
+  { method: "POST", body: JSON.stringify(order), signal },
+);
+
+export const startLessonPractice = (
+  projectId: string, lessonId: string,
+  command: LessonPracticeOrder & { expected_revision: number; max_cost_usd: string | null; confirm_unknown_price: boolean },
+): Promise<{ job_id: string }> => request(
+  `${lessonsPath(projectId)}/${encodeURIComponent(lessonId)}/ai/practice`,
   { method: "POST", body: JSON.stringify(command) },
 );

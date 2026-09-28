@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "rea
 import { Link } from "react-router";
 import {
   AlertTriangle, Archive, ArrowDown, ArrowRightLeft, ArrowUp, CheckCircle2, ChevronDown, Combine, Dumbbell, ExternalLink,
-  FilePlus2, Image, LibraryBig, Link2, Pencil, Plus, RotateCcw, Scissors, Search, Sparkles, SquareDashed, Trash2, Undo2, X,
+  FilePlus2, Image, LibraryBig, Link2, ListChecks, Pencil, Plus, RotateCcw, Scissors, Search, Sparkles, SquareDashed, Trash2, Undo2, X,
 } from "lucide-react";
 import {
   applyLessonProposal, confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, LESSON_TEMPLATE_LABELS, unbindLessonBindings,
@@ -22,6 +22,7 @@ import { useLesson } from "../../hooks/useLessons";
 import { useLessonViewMode } from "../../hooks/useLessonViewMode";
 import type { ProgramTreeNode } from "../programTree";
 import { LessonEnrichDialog } from "./LessonEnrichDialog";
+import { LessonPracticeRun } from "./LessonPracticeRun";
 import { LessonProposalBar } from "./LessonProposalBar";
 import { NOTE_VARIANTS } from "./lessonBlocks";
 import { VIEW_MODE_TABS } from "./LessonTab";
@@ -62,14 +63,6 @@ const STATUS_TONE: Record<LessonStatus, "warning" | "success" | "neutral"> = {
   ready: "success",
   archived: "neutral",
 };
-
-function StageButton({ icon, label, stage }: { icon: ReactNode; label: string; stage: string }) {
-  return (
-    <Tooltip label={`Появится на этапе ${stage}`} side="bottom">
-      <span><Button variant="ghost" disabled aria-label={label}>{icon}<span className="toolbar-label toolbar-label-stage">{label}</span></Button></span>
-    </Tooltip>
-  );
-}
 
 interface ToolButtonProps {
   icon: ReactNode;
@@ -124,6 +117,8 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
   const hasRange = topic.source_page_ranges.length > 0;
   const [finderOpen, setFinderOpen] = useState(false);
   const [enrichOpen, setEnrichOpen] = useState(false);
+  const [practiceOpen, setPracticeOpen] = useState(false);
+  const [runOpen, setRunOpen] = useState(false);
   // Предложение модели к открытому уроку: изменения стоят в документе, решение — в шапке.
   const [proposal, setProposal] = useState<{ jobId: string; read: LessonProposalRead } | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
@@ -131,6 +126,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
   const data = lesson.data && lesson.data.id === openId ? lesson.data : null;
   const selected = data?.blocks.find((block) => block.id === selectedBlockId) ?? null;
   const selectedIndex = selected ? data!.blocks.indexOf(selected) : -1;
+  const lessonTasks = (data?.blocks ?? []).flatMap((block) => (block.task ? [block.task] : []));
   const selectedRef = selected?.kind === "source" ? selected.refs.find((ref) => ref.role === "content") ?? null : null;
   const nextBlock = selectedIndex >= 0 ? data!.blocks[selectedIndex + 1] : undefined;
   const reviewReasons = data ? [
@@ -198,9 +194,10 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
         expected_revision: revisionRef.current,
       });
       setProposal(null);
+      const accepted = current.read.kind === "practice" ? "Задания добавлены" : "Изменения приняты";
       setProposalNote(result.conflicts.length
         ? `Не легли на урок: ${result.conflicts.length} — блок пропал или разрез не встал. Остальное принято; «Отменить» уберёт всё разом.`
-        : "Изменения приняты. «Отменить» уберёт их одним действием.");
+        : `${accepted}. «Отменить» уберёт их одним действием.`);
       return result;
     }, "Предложение не применилось");
   }
@@ -458,6 +455,9 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                       ? <ToolButton variant="secondary" icon={<CheckCircle2 size={14} />} label="Готов" hint="Урок готов — снять пометку черновика" disabled={saving} onClick={() => void change({ status: "ready" })} />
                       : <ToolButton variant="secondary" icon={<RotateCcw size={14} />} label="Вернуть в черновики" disabled={saving} onClick={() => void change({ status: "draft" })} />}
                     {data.status !== "archived" && <ToolButton icon={<Archive size={14} />} label="В архив" disabled={saving} onClick={() => void change({ status: "archived" })} />}
+                    {lessonTasks.length > 0 && (
+                      <ToolButton variant="secondary" icon={<ListChecks size={14} />} label={`Пройти задания · ${lessonTasks.length}`} hint="Задания урока по одному, в конце — сводка" onClick={() => setRunOpen(true)} />
+                    )}
                     <ToolButton
                       icon={<Undo2 size={14} />}
                       label="Отменить"
@@ -539,7 +539,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                   <ToolButton icon={<Trash2 size={14} />} label="Удалить" hint="Удалить выбранный блок" disabled={!selected || saving} onClick={() => void edit({ operation: "delete", block_id: selectedBlockId ?? undefined })} />
                   <ToolButton icon={<SquareDashed size={14} />} label="Снять выбор" hint="Снять выбор блока — то же делает средняя кнопка мыши" disabled={!selectedBlockId} onClick={() => onSelectBlock(null)} />
                   <ToolButton icon={<Sparkles size={14} />} label="Дополнить с ИИ" hint={selected ? "Предложить изменения для выбранного блока или всего урока" : "Предложить пояснения, примеры и определения"} disabled={saving || Boolean(proposal)} onClick={() => setEnrichOpen(true)} />
-                  <StageButton icon={<Dumbbell size={14} />} label="Добавить практику" stage="6 — задания" />
+                  <ToolButton icon={<Dumbbell size={14} />} label="Добавить практику" hint="Предложить задания с проверкой ответа по тексту урока" disabled={saving || Boolean(proposal)} onClick={() => setPracticeOpen(true)} />
                 </div>
 
                 {selectedRef && selected && (
@@ -609,6 +609,23 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                 lesson={{ id: data.id, title: data.title, revision: revisionRef.current }}
                 selectedBlock={selected ? { id: selected.id, label: `блок ${selectedIndex + 1}` } : null}
                 onProposal={showProposal}
+              />
+              <LessonEnrichDialog
+                mode="practice"
+                open={practiceOpen}
+                onOpenChange={setPracticeOpen}
+                projectId={projectId}
+                lesson={{ id: data.id, title: data.title, revision: revisionRef.current }}
+                selectedBlock={null}
+                onProposal={showProposal}
+              />
+              <LessonPracticeRun
+                open={runOpen}
+                onOpenChange={(open) => { setRunOpen(open); if (!open) lesson.refresh(); }}
+                projectId={projectId}
+                lessonId={data.id}
+                title={data.title}
+                tasks={lessonTasks}
               />
             </>
           )}

@@ -176,7 +176,8 @@ def test_preflight_estimates_draft_and_lists_candidates(session, project):
     assert result.candidates == 2 and result.sources_available
     draft, standard, detailed = result.levels
     assert draft.available and draft.calls == 1 and draft.cost_usd > 0
-    assert standard.available and standard.calls == 9
+    # План, восемь шагов и задания урока.
+    assert standard.available and standard.calls == 10
     assert detailed.calls > standard.calls and detailed.cost_usd > standard.cost_usd
     assert [item.selected for item in result.materials] == [True]
 

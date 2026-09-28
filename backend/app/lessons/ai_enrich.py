@@ -37,7 +37,12 @@ from app.lessons.ai_schemas import (
     LessonProposalSource,
 )
 from app.lessons.ai_steps import update_checkpoint
-from app.lessons.ai_writer import labels_in_order, rewrite_citations
+from app.lessons.ai_writer import (
+    citation_labels,
+    labels_in_order,
+    ref_key,
+    rewrite_citations,
+)
 from app.lessons.service import (
     _require_lesson,
     _require_lessons_project,
@@ -60,6 +65,7 @@ from app.models import (
     ProgramNode,
     Project,
     ProjectMaterial,
+    StudyTask,
 )
 from app.projects.errors import ProjectConflictError, ProjectDomainError
 from app.retrieval.chunking import count_tokens
@@ -120,7 +126,11 @@ def lesson_view(session: Session, lesson: Lesson) -> list[dict[str, Any]]:
         .order_by(LessonBlock.sort_order)
     ))
     view: list[dict[str, Any]] = []
-    source_number = 0
+    # Кусок носит ту же метку, что стоит в тексте пояснений урока: иначе `[S1]` в
+    # пояснении и кусок S1 в списке оказались бы разными страницами.
+    labels = citation_labels(session, [block.id for block in blocks])
+    used: set[str] = set()
+    free = max((int(item[1:]) for item in labels.values() if item[1:].isdigit()), default=0)
     for index, block in enumerate(blocks, start=1):
         item: dict[str, Any] = {
             "label": f"B{index}", "block_id": str(block.id), "kind": block.kind.value,
@@ -132,10 +142,17 @@ def lesson_view(session: Session, lesson: Lesson) -> list[dict[str, Any]]:
             ))
             if ref is None:
                 continue
-            source_number += 1
-            item.update(_source_view(session, lesson.project_id, ref), source=f"S{source_number}")
+            label = labels.get(ref_key(ref))
+            if label is None or label in used:
+                free += 1
+                label = f"S{free}"
+            used.add(label)
+            item.update(_source_view(session, lesson.project_id, ref), source=label)
         elif block.kind == LessonBlockKind.MEDIA:
             item["text"] = f"(медиа) {block.body_md or ''}".strip()
+        elif block.kind == LessonBlockKind.ACTIVITY:
+            task = session.get(StudyTask, block.activity_id) if block.activity_id else None
+            item["text"] = task.prompt_md if task else "(задание)"
         else:
             item["text"] = block.body_md or ""
         item["tokens"] = count_tokens(item["text"])

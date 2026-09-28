@@ -76,6 +76,20 @@ def _plan_job(session, project, node, payload, level="standard"):
     return job
 
 
+def _tasks(*tasks):
+    return {"summary": "задания", "tasks": list(tasks)}
+
+
+def _choice(prompt, correct=(2,)):
+    return {
+        "form": "single_choice", "prompt_md": prompt, "options": ["все сразу", "одна станция"],
+        "correct": list(correct), "blanks": None, "value": None, "tolerance": None,
+        "relative": None, "unit": None, "steps": None, "pairs": None, "reference_md": None,
+        "points": None, "explanation_md": "Среда общая [S1].", "hint_md": None,
+        "difficulty": "remember", "after_block": None,
+    }
+
+
 def _notes(session, job):
     lesson = session.get(Lesson, UUID(job.checkpoint["result"]["lesson_id"]))
     return [
@@ -97,7 +111,8 @@ def test_plan_is_a_proposal_waiting_for_review(session, project):
     assert [step["sources"] for step in result["steps"]] == [["C1"], ["C2"]]
     assert result["dropped"] == ["Шаг 1: опоры C9 не было в карте"]
     assert [item["label"] for item in result["candidates"]] == ["C1", "C2"]
-    assert Decimal(result["step_cost_usd"]) > 0 and result["fixed_calls"] == 0
+    # Неизменная часть «Обычного» — вызов заданий урока.
+    assert Decimal(result["step_cost_usd"]) > 0 and result["fixed_calls"] == 1
     assert registry.get_job(session, job.id).needs_review
     run = session.scalars(select(AiRun).where(AiRun.job_id == job.id)).one()
     assert run.context_manifest[0] == {"kind": "stage", "stage": "plan"}
@@ -124,17 +139,23 @@ def test_build_follows_edited_plan_and_resolves_it(session, project):
         session, started.job_id,
         _reply(_text("Станции делят одну среду [S1].")),
         _reply(_text("Одновременная передача — коллизия [S1] [S3].", "definition")),
+        _reply(_tasks(_choice("Кто передаёт в общей среде?"),
+                      _choice("Сломанное", correct=[5]))),
     )
 
     assert job.state == BackgroundJobState.COMPLETED, job.error
-    assert transport.complete_calls == 2
+    assert transport.complete_calls == 3
     lesson = session.get(Lesson, UUID(job.checkpoint["result"]["lesson_id"]))
     blocks = _lesson_read(session, lesson).blocks
     assert [(block.kind, block.variant) for block in blocks] == [
         (LessonBlockKind.NOTE, "heading"), (LessonBlockKind.NOTE, "explanation"),
         (LessonBlockKind.SOURCE, None),
         (LessonBlockKind.NOTE, "heading"), (LessonBlockKind.NOTE, "definition"),
+        (LessonBlockKind.NOTE, "heading"), (LessonBlockKind.ACTIVITY, None),
     ]
+    assert blocks[5].body_md == "## Практика"
+    assert blocks[6].task.prompt_md == "Кто передаёт в общей среде?"
+    assert any("Задание 2" in reason for reason in lesson.build_meta["dropped"])
     assert blocks[0].body_md == "## Общая среда"
     assert blocks[4].body_md == "Одновременная передача — коллизия [S1]."
     assert any("S3" in reason for reason in job.checkpoint["result"]["dropped"])
@@ -158,10 +179,11 @@ def test_failed_step_resumes_without_repeating_done_steps(session, project):
     assert list(job.checkpoint["steps"]) == ["0"]
 
     ai_build.resume(session, project.id, job.id, LessonAiResumeWrite())
-    job, transport = _process(session, job.id, _reply(_text("Второй шаг [S1].")))
+    job, transport = _process(session, job.id, _reply(_text("Второй шаг [S1].")),
+                              _reply(_tasks()))
 
     assert job.state == BackgroundJobState.COMPLETED, job.error
-    assert transport.complete_calls == 1
+    assert transport.complete_calls == 2
     assert _notes(session, job) == ["Первый шаг [S1].", "Второй шаг [S2]."]
 
 
@@ -180,16 +202,17 @@ def test_detailed_review_rewrites_flagged_step(session, project):
         _reply(_text("Черновой текст [S1].")),
         _reply(review),
         _reply(_text("Исправленный текст [S1].", "definition")),
+        _reply(_tasks()),
     )
 
     assert job.state == BackgroundJobState.COMPLETED, job.error
     assert job.checkpoint["rewritten"] == [1]
-    rewrite = transport.complete_requests[-1]["messages"][-1]["content"]
+    rewrite = transport.complete_requests[-2]["messages"][-1]["content"]
     assert "термин не объяснён до использования" in rewrite
     assert _notes(session, job) == ["Среда общая [S1].", "Исправленный текст [S2]."]
     stages = [run.context_manifest[0]["stage"] for run in session.scalars(
         select(AiRun).where(AiRun.job_id == job.id).order_by(AiRun.created_at))]
-    assert stages == ["plan", "step", "step", "review", "rewrite"]
+    assert stages == ["plan", "step", "step", "review", "rewrite", "practice"]
 
 
 def test_cancel_between_steps_creates_no_lesson(session, project):

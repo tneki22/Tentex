@@ -1,8 +1,9 @@
 import { Scissors } from "lucide-react";
-import type { LessonProposalOp, LessonProposalRead } from "../../../api/lessons";
+import { STUDY_TASK_FORM_LABELS, type LessonProposalOp, type LessonProposalRead } from "../../../api/lessons";
 import { Checkbox } from "../../ui";
 import { MachineMark } from "../MachineMark";
 import { LessonMarkdown } from "./LessonMarkdown";
+import { TaskCard } from "./tasks/TaskCard";
 
 /** Предложение модели в документе урока: что выбрано к принятию и кто что переключает. */
 export interface LessonProposalView {
@@ -36,6 +37,8 @@ function title(op: LessonProposalOp): string {
       return `Новое название: «${op.text}»`;
     case "set_goal":
       return `Цель урока: ${op.text}`;
+    case "insert_task":
+      return `+ Задание · ${op.task ? STUDY_TASK_FORM_LABELS[op.task.form].toLowerCase() : ""}`;
   }
 }
 
@@ -61,13 +64,22 @@ export function LessonProposalCard({ op, view }: { op: LessonProposalOp; view: L
       onClick={(event) => event.stopPropagation()}>
       <header>
         <Checkbox checked={chosen} onCheckedChange={() => view.onToggle(op.id)} label={title(op)} />
-        {op.body_md !== null && <MachineMark origin={origin} />}
+        {(op.body_md !== null || op.task) && <MachineMark origin={origin} />}
       </header>
       {op.op === "insert_note" && op.after_fragment_id && (
         <p className="lesson-proposal-cut"><Scissors size={12} aria-hidden="true" /> кусок разрежется, пояснение встанет внутрь</p>
       )}
       {op.body_md && (
         <LessonMarkdown className={`lesson-note is-${op.variant ?? "explanation"}`} text={op.body_md} citationTitles={titles} />
+      )}
+      {op.task && (
+        <TaskCard
+          label="Задание"
+          task={{
+            ...op.task,
+            sources: op.task.supports.map((label) => sources.get(label)).filter((item) => item !== undefined),
+          }}
+        />
       )}
       <p className="lesson-proposal-reason">{op.reason}</p>
     </aside>

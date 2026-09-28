@@ -12,16 +12,22 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.db import project_write_transaction
+from app.lessons import tasks
 from app.lessons.ai_schemas import (
     LessonProposalApplyWrite,
     LessonProposalOp,
     LessonProposalRead,
 )
-from app.lessons.ai_writer import labels_in_order, rewrite_citations
+from app.lessons.ai_writer import (
+    citation_labels,
+    labels_in_order,
+    ref_key,
+    rewrite_citations,
+)
 from app.lessons.editing import (
     _block_data,
     _content_ref,
@@ -38,6 +44,7 @@ from app.lessons.service import (
     _require_lessons_project,
     _require_revision,
 )
+from app.lessons.task_store import sync_lesson_tasks
 from app.models import (
     BackgroundJob,
     BackgroundJobKind,
@@ -54,7 +61,7 @@ from app.models import (
 )
 from app.projects.errors import ProjectConflictError, ProjectDomainError
 
-PROPOSAL_SUBTYPES = {"enrich"}
+PROPOSAL_SUBTYPES = {"enrich", "practice"}
 
 
 class LessonProposalApplyResult(LessonChangeResult):
@@ -82,29 +89,13 @@ def _proposal_job(session: Session, project_id: UUID, lesson_id: UUID, job_id: U
     return job, proposal
 
 
-def _existing_labels(session: Session, blocks: list[LessonBlock]) -> dict[tuple, str]:
-    """Сквозные номера опор урока: та же опора получает тот же S-ID."""
-    labels: dict[tuple, str] = {}
-    for ref in session.scalars(select(LessonSourceRef).where(
-        LessonSourceRef.block_id.in_([block.id for block in blocks]),
-        LessonSourceRef.role == LessonRefRole.SUPPORT,
-        LessonSourceRef.citation_label.is_not(None),
-    )):
-        labels[_ref_key(ref)] = ref.citation_label
-    return labels
-
-
-def _ref_key(ref: LessonSourceRef) -> tuple:
-    return (ref.material_id, ref.page_from, ref.page_to, ref.from_fragment_id,
-            ref.to_fragment_id)
-
-
 class _Conflict(Exception):
     """Операция не ложится на урок, каким он стал."""
 
 
 class _Applier:
-    def __init__(self, session: Session, lesson: Lesson, proposal: LessonProposalRead) -> None:
+    def __init__(self, session: Session, lesson: Lesson, proposal: LessonProposalRead,
+                 profile: dict) -> None:
         self.session = session
         self.lesson = lesson
         self.proposal = proposal
@@ -112,7 +103,9 @@ class _Applier:
             expected_revision=lesson.revision, operation="add_note",
         ))
         self.sources = {item.label: item.block_id for item in proposal.sources}
-        self.labels = _existing_labels(session, self.edit.blocks)
+        self.tasks = tasks.TaskPlacer(session, lesson, proposal.program_node_id, self.sources,
+                                      profile, heading=False, edit=self.edit)
+        self.labels = citation_labels(session, [block.id for block in self.edit.blocks])
         self.texts: dict[str, dict] = {}
         self.conflicts: list[str] = []
 
@@ -128,7 +121,7 @@ class _Applier:
             if block is None or block.kind != LessonBlockKind.SOURCE:
                 continue
             content = _content_ref(self.session, block)
-            key = _ref_key(content)
+            key = ref_key(content)
             if key not in self.labels:
                 taken = {int(item[1:]) for item in self.labels.values() if item[1:].isdigit()}
                 self.labels[key] = f"S{max(taken, default=0) + 1}"
@@ -206,6 +199,10 @@ class _Applier:
             raise _Conflict
         block.collapsed = op.collapsed
 
+    def insert_task(self, op: LessonProposalOp) -> None:
+        if op.task is None or self.tasks.place(op) is None:
+            raise _Conflict
+
     def rename_lesson(self, op: LessonProposalOp) -> None:
         self.lesson.title = (op.text or self.lesson.title)[:200]
 
@@ -232,7 +229,8 @@ def apply_proposal(
         before = [_block_data(session, block) for block in _ordered_blocks(session, lesson.id)]
         topics = _topics_data(session, lesson.id)
         lesson_before = {"title": lesson.title, "goal": lesson.goal}
-        applier = _Applier(session, lesson, proposal)
+        applier = _Applier(session, lesson, proposal,
+                           tasks.profile_of(job.checkpoint.get("brief") or {}))
         applied: list[str] = []
         for op in proposal.ops:
             if op.id not in chosen:
@@ -246,6 +244,8 @@ def apply_proposal(
             session.flush()
         for index, block in enumerate(applier.edit.blocks):
             block.sort_order = index
+        session.flush()
+        sync_lesson_tasks(session, lesson.id)
         if applied:
             lesson.revision += 1
             lesson.updated_at = utc_now()

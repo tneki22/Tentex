@@ -1,7 +1,9 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { AlertTriangle, BookOpen, ChevronDown, ChevronRight, ExternalLink, FileText, Scissors } from "lucide-react";
-import { lessonMediaUrl, type LessonBlockRead, type LessonRead, type LessonRefRead } from "../../../api/lessons";
+import {
+  checkStudyTaskAttempt, lessonMediaUrl, submitStudyTaskAttempt, type LessonBlockRead, type LessonRead, type LessonRefRead,
+} from "../../../api/lessons";
 import {
   getMaterialPage,
   materialFragmentAssetUrl,
@@ -14,6 +16,7 @@ import { MachineMark } from "../MachineMark";
 import { QualityBadge } from "../QualityBadge";
 import { LessonMarkdown, refPages } from "./LessonMarkdown";
 import { LessonProposalCard, type LessonProposalView } from "./LessonProposalCard";
+import { TaskCard } from "./tasks/TaskCard";
 
 export type LessonDocumentMode = "pages" | "text";
 
@@ -236,6 +239,18 @@ function LessonBlockView({ projectId, lessonId, block, mode, hiddenHeading, topi
     );
   }
   if (block.kind === "media") return <LessonMediaView projectId={projectId} lessonId={lessonId} block={block} />;
+  if (block.kind === "activity") {
+    const task = block.task;
+    if (!task) return <p className="lesson-note is-text is-empty">Задание удалено.</p>;
+    return (
+      <TaskCard
+        task={task}
+        onSubmit={(answer) => submitStudyTaskAttempt(projectId, lessonId, task.activity_id,
+          task.form === "open_answer" ? { text: answer.text } : { answer })}
+        onCheckPending={(attemptId) => checkStudyTaskAttempt(projectId, lessonId, task.activity_id, attemptId)}
+      />
+    );
+  }
   if (block.kind !== "source") return null;
   const pieces = block.refs.filter((ref) => ref.role === "content");
   const view = pieces.map((ref) => (

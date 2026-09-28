@@ -420,8 +420,8 @@ def _assemble(plan: LessonPlan, done: dict[str, dict], template: str, count: int
 
 
 def planned_calls(level: str, steps: int) -> int:
-    """Вызовов по плану: шаги, у «Подробного» ещё рецензент и до трёх правок."""
-    return steps + (1 + MAX_REWRITES if level == "detailed" else 0)
+    """Вызовов по плану: шаги, у «Подробного» рецензент и до трёх правок, задания урока."""
+    return steps + (1 + MAX_REWRITES if level == "detailed" else 0) + 1
 
 
 async def run_staged(

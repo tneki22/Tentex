@@ -30,7 +30,7 @@ from app.ai.schemas import AiMessage, AiModelSelection
 from app.ai.settings import AiGatewayError, ResolvedModel, resolve_model
 from app.background.schemas import BackgroundJobStartRead
 from app.db import project_write_transaction
-from app.lessons import ai_context, ai_enrich, ai_steps
+from app.lessons import ai_context, ai_enrich, ai_practice, ai_steps
 from app.lessons import candidates as candidates_module
 from app.lessons.ai_prompts import DraftLesson, LessonPlan, PlanStep, draft_instructions
 from app.lessons.ai_schemas import (
@@ -293,13 +293,18 @@ def _price(model: AiModelCatalogEntry | None, calls: list[tuple[int, int]]) -> D
     )
 
 
-def _level_calls(level: str, steps: int | None = None) -> list[tuple[int, int]]:
-    """Вызовы уровня до плана: план, шаги, у «Подробного» рецензент и до трёх правок."""
-    count = steps if steps is not None else EXPECTED_STEPS[level]
-    calls = [PLAN_CALL] + [STEP_CALL[level]] * count
+def _fixed_calls(level: str) -> list[tuple[int, int]]:
+    """Вызовы сборки по плану сверх шагов: рецензент с правками и задания урока."""
+    calls = [ai_practice.BUILD_CALL]
     if level == "detailed":
-        calls += [REVIEW_CALL] + [STEP_CALL[level]] * ai_steps.MAX_REWRITES
+        calls = [REVIEW_CALL] + [STEP_CALL[level]] * ai_steps.MAX_REWRITES + calls
     return calls
+
+
+def _level_calls(level: str, steps: int | None = None) -> list[tuple[int, int]]:
+    """Вызовы уровня до плана: план, шаги, у «Подробного» рецензент с правками, задания."""
+    count = steps if steps is not None else EXPECTED_STEPS[level]
+    return [PLAN_CALL] + [STEP_CALL[level]] * count + _fixed_calls(level)
 
 
 def _level_estimate(model: AiModelCatalogEntry | None, level: str) -> LessonAiLevelRead:
@@ -315,10 +320,7 @@ def _level_estimate(model: AiModelCatalogEntry | None, level: str) -> LessonAiLe
 def _step_costs(model: AiModelCatalogEntry | None, level: str
                 ) -> tuple[Decimal | None, Decimal | None, int]:
     """Цена шага и неизменной части сборки по плану — для пересчёта в редакторе плана."""
-    fixed = (
-        [REVIEW_CALL] + [STEP_CALL[level]] * ai_steps.MAX_REWRITES
-        if level == "detailed" else []
-    )
+    fixed = _fixed_calls(level)
     return _price(model, [STEP_CALL[level]]), _price(model, fixed), len(fixed)
 
 
@@ -706,10 +708,11 @@ async def run(session: Session, gateway: ModelGateway, job_id: UUID) -> BaseMode
         return await _run_plan(session, gateway, job)
     if subtype == ai_enrich.SUBTYPE:
         return await ai_enrich.run(session, gateway, job_id)
+    if subtype == ai_practice.SUBTYPE:
+        return await ai_practice.run(session, gateway, job_id)
     if subtype != SUBTYPE_BUILD:
         raise AssertionError(f"Неизвестный подвид ai_lesson: {subtype}")
-    if (ready := existing_result(session, job)) is not None:
-        return ready
     if job.checkpoint["command"]["level"] == "draft":
-        return await _run_draft(session, gateway, job)
-    return await ai_steps.run_staged(session, gateway, job_id)
+        return existing_result(session, job) or await _run_draft(session, gateway, job)
+    built = existing_result(session, job) or await ai_steps.run_staged(session, gateway, job_id)
+    return await ai_practice.attach_to_build(session, gateway, job_id, built)

@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
+from app.lessons.task_schemas import StudyTaskRead
 from app.models import (
     LessonBasis,
     LessonBlockKind,
@@ -214,6 +215,8 @@ class LessonBlockRead(ApiModel):
     # Кусок материала свёрнут под пояснением строкой «▸ В учебнике: …».
     collapsed: bool = False
     refs: list[LessonRefRead]
+    # Блок `activity`: задание урока с формой, ключом и последней попыткой.
+    task: StudyTaskRead | None = None
 
 
 class LessonTopicRead(ApiModel):
