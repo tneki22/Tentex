@@ -51,10 +51,12 @@ interface LessonTabProps {
   node: ProgramNodeRead;
   preferredLessonId: string | null;
   onLessonsChanged?: () => void;
+  trackingGroupId?: string;
+  onTrackingLessonChange?: (groupId: string, lessonId: string | null) => void;
 }
 
 /** Вкладка «Урок» Рабочей области: чтение урока темы (записка «Уроки» §4.6). */
-export function LessonTab({ projectId, node, preferredLessonId, onLessonsChanged }: LessonTabProps) {
+export function LessonTab({ projectId, node, preferredLessonId, onLessonsChanged, trackingGroupId, onTrackingLessonChange }: LessonTabProps) {
   const overview = useLessonsOverview(projectId);
   const { mode, setMode } = useLessonViewMode(projectId);
   const lessons = useMemo(() => readableLessons(overview.data?.lessons ?? [], node.id), [overview.data, node.id]);
@@ -73,6 +75,18 @@ export function LessonTab({ projectId, node, preferredLessonId, onLessonsChanged
     overview.refresh();
     onLessonsChanged?.();
   });
+  const trackableId = lesson.data?.id === selectedId && lesson.data.status === "ready"
+    && lesson.data.blocks.some((block) =>
+      (block.kind === "source" && block.refs.length > 0)
+      || (block.kind === "note" && Boolean(block.body_md?.trim()))
+      || (block.kind === "media" && Boolean(block.media_kind))
+      || block.kind === "activity"
+    ) ? selectedId : null;
+  useEffect(() => {
+    if (!trackingGroupId || !onTrackingLessonChange) return;
+    onTrackingLessonChange(trackingGroupId, trackableId);
+    return () => onTrackingLessonChange(trackingGroupId, null);
+  }, [trackingGroupId, onTrackingLessonChange, trackableId]);
 
   async function quickLesson() {
     setCreating(true);

@@ -28,6 +28,7 @@
 | Чат «Поиск в интернете» в Материалах: SearXNG, план запросов по программе, карточки источников; общие сессии проектных чатов | `source-search-chat.md` | pytest (`test_source_search_chat.py`, `test_web_search.py`), `frontend/free-study-wizard.spec.ts` |
 | Конспекты | `conspects.md` | pytest |
 | Уроки: быстрый урок, чтение, ручной редактор, массовая подготовка и прохождение | `lessons.md` | pytest (`test_lessons.py`, `test_lesson_editing.py`, `test_lesson_progress.py`), typecheck/build |
+| Планирование готовых уроков и активное время учебника | `lesson-planning.md` | pytest (`test_lesson_planning.py`), typecheck, сценарий браузера |
 | Карточки и сохраняемый сеанс | `cards.md` | pytest, миграции, typecheck/build |
 | Фоновые операции | `background-jobs.md` | pytest |
 | Хранилище, резервные копии и перенос проектов | `storage-backups.md` | pytest (`test_storage_backups.py`), `check_storage_backups.py` |

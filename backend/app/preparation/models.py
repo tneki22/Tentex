@@ -104,12 +104,18 @@ class StudyInterval(Base):
     """Сырые интервалы доставляются идемпотентно; отчёты объединяют пересечения."""
 
     __tablename__ = "study_intervals"
-    __table_args__ = (Index("ix_study_intervals_project_time", "project_id", "started_at"),)
+    __table_args__ = (
+        Index("ix_study_intervals_project_time", "project_id", "started_at"),
+        Index("ix_study_intervals_lesson", "project_id", "lesson_id"),
+    )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     project_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("projects.id", ondelete="CASCADE"))
     node_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("program_nodes.id", ondelete="SET NULL"), nullable=True
     )
+    # Историческое время переживает удаление урока; имя хранится рядом снимком.
+    lesson_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    lesson_title: Mapped[str | None] = mapped_column(String, nullable=True)
     session_id: Mapped[UUID] = mapped_column(Uuid, index=True)
     kind: Mapped[str] = mapped_column(String)
     started_at: Mapped[datetime] = mapped_column(DateTime)
