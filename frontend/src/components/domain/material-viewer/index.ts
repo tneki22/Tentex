@@ -16,6 +16,7 @@ export { TimedTranscript, formatTime } from "./TimedTranscript";
 export { ViewerToolbar, PageNumberInput } from "./ViewerToolbar";
 export type { ViewerToolbarProps } from "./ViewerToolbar";
 export { getMaterialPresentation } from "./sourcePresentation";
+export { MaterialSourceView, MaterialTextView } from "./MaterialSourceView";
 export type {
   MaterialPresentation,
   MaterialPresentationKind,

@@ -37,9 +37,9 @@ import type { BindingFragmentRead, HeadingSuggestion, NodeBindingSummary } from 
 import { listBindings, resolveAnswersHeading } from "../api/bindings";
 import {
   getMaterialPage,
+  getLibraryMaterial,
   importMaterialReferenceAnswers,
   materialFragmentAssetUrl,
-  materialPageImageUrl,
   searchLibraryMaterial,
   updateMaterialPageText,
 } from "../api/materials";
@@ -49,6 +49,7 @@ import type {
   MaterialPageRead,
   MaterialPurpose,
   MaterialRead,
+  LibraryMaterialDetailRead,
   MaterialUpdateCommand,
   SourceRole,
 } from "../api/materials";
@@ -98,10 +99,23 @@ import { materialRoleText, pagesSummary, parseModeShort, progressSuffix, topicsL
 import { ProjectFileUploadStatus } from "./materials/ProjectFileUploadStatus";
 import { MaterialProcessingPanels } from "./materials/MaterialProcessingPanels";
 import { MaterialsWebSearch, type MaterialsWebSearchHandle } from "./materials/MaterialsWebSearch";
-import { DocumentSearchField, PageNumberInput, StructuredPage } from "../components/domain/material-viewer";
+import {
+  DocumentSearchField,
+  DocumentStage,
+  getMaterialPresentation,
+  MaterialSourceView,
+  PageNumberInput,
+  PdfOutline,
+  StructuredPage,
+  type MaterialViewMode,
+} from "../components/domain/material-viewer";
 
 const EMPTY_STRING_SET: Set<string> = new Set();
 const EMPTY_TITLES_MAP: Map<string, string[]> = new Map();
+// После этих границ в центре помещаются соответственно две читаемые половины
+// и оглавление рядом с ними; меряем центр, а не всё окно с боковыми панелями.
+const COMPARE_MIN_WIDTH = 760;
+const INLINE_OUTLINE_MIN_WIDTH = 1080;
 
 const STUDY_NODE_TYPES = new Set(["topic", "subpoint"]);
 const isStudyNode = (node: ProgramTreeNode): boolean =>
@@ -566,30 +580,15 @@ function DocumentView({
   projectId,
   material,
   page,
-  viewMode,
   terms,
   binding,
 }: {
   projectId: string;
   material: MaterialRead;
   page: MaterialPageRead;
-  viewMode: "original" | "text";
   terms: string[];
   binding: DocumentBindingProps;
 }) {
-  if (viewMode === "original" && (material.media_type === "application/pdf" || material.media_type.startsWith("image/"))) {
-    return (
-      <div className="materials-original-page">
-        <div className="materials-original-canvas">
-          <img src={materialPageImageUrl(projectId, material.id, page.page_number)} alt={`Страница ${page.page_number} файла ${material.display_name}`} />
-          <div className="materials-bbox-layer" aria-hidden="true">
-            {page.fragments.map((fragment) => <span key={fragment.id} style={{ left: `${fragment.bbox[0] * 100}%`, top: `${fragment.bbox[1] * 100}%`, width: `${(fragment.bbox[2] - fragment.bbox[0]) * 100}%`, height: `${(fragment.bbox[3] - fragment.bbox[1]) * 100}%` }} />)}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   const blockById = new Map(page.blocks.map((block) => [block.id, block]));
   const firstFragmentByBlock = new Set<string>();
   const seenBlocks = new Set<string>();
@@ -1311,13 +1310,20 @@ function MaterialSurface() {
   const [pageNumber, setPageNumber] = useState(1);
   const [page, setPage] = useState<MaterialPageRead | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"original" | "text">("original");
+  const [viewMode, setViewMode] = useState<MaterialViewMode>("source");
+  const [libraryDetail, setLibraryDetail] = useState<LibraryMaterialDetailRead | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [documentWidth, setDocumentWidth] = useState(0);
+  const documentObserver = useRef<ResizeObserver | null>(null);
+  const [inlineOutlineOpen, setInlineOutlineOpen] = useState(true);
+  const [overlayOutlineOpen, setOverlayOutlineOpen] = useState(false);
   const [notice, setNotice] = useState<NoticeState | null>(null);
   /** «fit» — вписать страницу целиком: с ним документ открывается, а не с обрезанного 100%. */
   const [zoom, setZoom] = useState<number | "fit">("fit");
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const { fullscreen, setFullscreen } = useViewerFullscreen();
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const textScrollRef = useRef<HTMLDivElement | null>(null);
   const scrollObserver = useRef<ResizeObserver | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editText, setEditText] = useState("");
@@ -1360,8 +1366,19 @@ function MaterialSurface() {
   const answersMaterial = store.materials.find(
     (item) => item.purposes.includes("reference_answers"),
   ) ?? null;
-  const hasOriginal = material?.media_type === "application/pdf"
-    || material?.media_type.startsWith("image/");
+  const presentation = material ? getMaterialPresentation(material.presentation_kind) : null;
+  const viewerDetail = libraryDetail && material && libraryDetail.id === material.id
+    ? { ...libraryDetail, display_name: material.display_name }
+    : null;
+  const hasOriginal = material?.presentation_kind === "pdf"
+    || material?.presentation_kind === "image"
+    || material?.presentation_kind === "typst";
+  const hasSource = Boolean(material && material.presentation_kind !== "audio" && material.presentation_kind !== "youtube");
+  const compareAvailable = Boolean(viewerDetail?.capabilities.can_compare) && documentWidth >= COMPARE_MIN_WIDTH;
+  const outlineAvailable = viewMode !== "compare" && Boolean(presentation?.supportsOutline && viewerDetail?.outline.length);
+  const inlineOutline = outlineAvailable && documentWidth >= INLINE_OUTLINE_MIN_WIDTH && inlineOutlineOpen;
+  const overlayOutline = outlineAvailable && documentWidth < INLINE_OUTLINE_MIN_WIDTH && overlayOutlineOpen;
+  const showOutline = inlineOutline || overlayOutline;
   const textbook = project?.project.workspace_variant === "textbook";
   // Вопросы и ответы бывают только в учебниковом шаблоне; экзамен и свободное
   // изучение держат одни учебные источники (решение 27.09.2026 в SCREENS.md).
@@ -1382,8 +1399,44 @@ function MaterialSurface() {
   const documentBindingEnabled = !textbook && !isExamStructureFile;
 
   useEffect(() => {
-    setViewMode(hasOriginal ? "original" : "text");
+    setViewMode(hasOriginal ? "source" : "text");
+    setInlineOutlineOpen(true);
+    setOverlayOutlineOpen(false);
   }, [hasOriginal, material?.id]);
+
+  useEffect(() => {
+    if (!material) {
+      setLibraryDetail(null);
+      setDetailError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setLibraryDetail(null);
+    setDetailError(null);
+    void getLibraryMaterial(material.id, controller.signal)
+      .then(setLibraryDetail)
+      .catch((caught) => {
+        if (!controller.signal.aborted) setDetailError(caught instanceof Error ? caught.message : "Не удалось открыть исходник");
+      });
+    return () => controller.abort();
+  }, [material?.id, material?.active_parse_revision]);
+
+  const attachDocumentArea = useCallback((node: HTMLElement | null) => {
+    documentObserver.current?.disconnect();
+    if (!node) return;
+    const measure = () => setDocumentWidth(node.clientWidth);
+    measure();
+    documentObserver.current = new ResizeObserver(measure);
+    documentObserver.current.observe(node);
+  }, []);
+
+  useEffect(() => {
+    if (documentWidth < INLINE_OUTLINE_MIN_WIDTH) setOverlayOutlineOpen(false);
+  }, [documentWidth]);
+
+  useEffect(() => {
+    if (documentWidth < COMPARE_MIN_WIDTH && viewMode === "compare") setViewMode("source");
+  }, [documentWidth, viewMode]);
 
   useEffect(() => { if (answersReviewJob) setAiPlanOpen(true); }, [answersReviewJob]);
   // «Найти в интернете» у темы ведёт сюда с `?search=1&topic=…`: блок раскрывается
@@ -1414,17 +1467,21 @@ function MaterialSurface() {
   );
 
   const pageCount = material?.page_count ?? 1;
-  // Размеры листа заданы в layout.css (.materials-page): держим их синхронно,
-  // иначе «вписать страницу» промахнётся.
+  const displayedPage = page?.page_number === pageNumber ? page : null;
+  // Замеряется именно половина исходника: оглавление и текст не должны
+  // участвовать в вычислении масштаба листа.
   const fitZoom = useMemo(() => {
     if (viewport.width === 0 || viewport.height === 0) return 1;
-    const byWidth = (viewport.width - 96) / 680;
-    const byHeight = (viewport.height - 96) / 900;
-    return Math.min(2, Math.max(0.5, Math.min(byWidth, byHeight)));
-  }, [viewport]);
+    const aspect = displayedPage && displayedPage.width > 0 ? displayedPage.height / displayedPage.width : 900 / 680;
+    const byWidth = (viewport.width - 48) / 680;
+    const byHeight = (viewport.height - 48) / (680 * aspect);
+    return Math.min(2, Math.max(0.1, Math.min(byWidth, byHeight)));
+  }, [viewport, displayedPage?.width, displayedPage?.height]);
   // В режиме «Текст» лист тянется по ширине колонки, вписывать нечего:
   // там «по размеру» — это обычный масштаб, а зум меняет кегль.
-  const effectiveZoom = zoom === "fit" ? (viewMode === "original" ? fitZoom : 1) : zoom;
+  const sourceZoom = zoom === "fit" ? fitZoom : zoom;
+  const textZoom = zoom === "fit" ? 1 : zoom;
+  const effectiveZoom = viewMode === "text" ? textZoom : sourceZoom;
 
   /* Ref-колбэк, а не эффект: область прокрутки появляется позже материала,
      и эффект по materialId её уже не застаёт. Меряем сразу при появлении узла,
@@ -1460,7 +1517,10 @@ function MaterialSurface() {
   const goToPage = useCallback((next: number) => {
     setPageNumber((current) => {
       const target = Math.min(Math.max(1, next), Math.max(1, pageCount));
-      if (target !== current) scrollRef.current?.scrollTo({ top: 0 });
+      if (target !== current) {
+        scrollRef.current?.scrollTo({ top: 0 });
+        textScrollRef.current?.scrollTo({ top: 0 });
+      }
       return target;
     });
   }, [pageCount]);
@@ -2028,7 +2088,7 @@ function MaterialSurface() {
         conspectSummaryActive={conspectSummaryActive}
         menu={menuActions}
       />
-      <main className="materials-document-area">
+      <main className="materials-document-area" ref={attachDocumentArea}>
         {store.error && <p className="materials-action-note" role="alert">{store.error}</p>}
         {conspectSummaryActive ? (
           <div className="materials-conspect-summary">
@@ -2071,8 +2131,17 @@ function MaterialSurface() {
             <header className="materials-document-toolbar">
               <div className="materials-toolbar-slot" />
               <div className="materials-toolbar-tools">
-                <Button disabled={!hasOriginal} variant={viewMode === "original" ? "secondary" : "ghost"} onClick={() => setViewMode("original")}>Оригинал</Button>
-                <Button variant={viewMode === "text" ? "secondary" : "ghost"} onClick={() => setViewMode("text")}>Текст</Button>
+                <SegmentedTabs
+                  className="materials-view-mode-tabs"
+                  label="Что показать"
+                  value={viewMode}
+                  tabs={[
+                    ...(compareAvailable ? [{ value: "compare" as const, label: "Сравнение" }] : []),
+                    ...(hasSource ? [{ value: "source" as const, label: presentation?.sourceLabel ?? "Оригинал" }] : []),
+                    { value: "text" as const, label: "Текст" },
+                  ]}
+                  onChange={setViewMode}
+                />
                 <div className="materials-page-tools">
                   <IconButton label="Предыдущая страница" disabled={pageNumber <= 1} onClick={() => goToPage(pageNumber - 1)}><ChevronLeft size={15} /></IconButton>
                   <PageNumberInput page={pageNumber} pageCount={pageCount} onPageChange={goToPage} />
@@ -2085,9 +2154,9 @@ function MaterialSurface() {
                   onQueryChange={search.setQuery}
                   onQuerySubmit={search.step}
                 />
-                <div className="materials-zoom-tools">
+                {(presentation?.supportsZoom || viewMode === "text") && <div className="materials-zoom-tools">
                   <IconButton label="Уменьшить" disabled={effectiveZoom <= 0.5} onClick={() => setZoom(Math.max(0.5, Number((effectiveZoom - 0.25).toFixed(2))))}><ZoomOut size={15} /></IconButton>
-                  <Tooltip label={viewMode === "original" ? "Вписать страницу в окно" : "Вернуть обычный кегль"}>
+                  <Tooltip label={viewMode === "text" ? "Вернуть обычный кегль" : "Вписать страницу в окно"}>
                     <button
                       type="button"
                       className={`materials-zoom-readout ${zoom === "fit" ? "is-active" : ""}`.trim()}
@@ -2097,7 +2166,7 @@ function MaterialSurface() {
                     </button>
                   </Tooltip>
                   <IconButton label="Увеличить" disabled={effectiveZoom >= 2} onClick={() => setZoom(Math.min(2, Number((effectiveZoom + 0.25).toFixed(2))))}><ZoomIn size={15} /></IconButton>
-                </div>
+                </div>}
                 {/* Ручная привязка к вопросам — инструмент экзамена; в учебнике кнопки нет. */}
                 {!textbook && <Tooltip label={isExamStructureFile ? "Список вопросов не привязывается по фрагментам" : "Режим привязки (B)"}>
                   <IconButton
@@ -2114,6 +2183,16 @@ function MaterialSurface() {
                 )}
               </div>
               <div className="materials-toolbar-end">
+                {outlineAvailable && <Tooltip label={showOutline ? "Скрыть оглавление" : "Показать оглавление"}>
+                  <IconButton
+                    label="Оглавление"
+                    aria-pressed={showOutline}
+                    onClick={() => {
+                      if (documentWidth >= INLINE_OUTLINE_MIN_WIDTH) setInlineOutlineOpen((value) => !value);
+                      else setOverlayOutlineOpen((value) => !value);
+                    }}
+                  ><ListTree size={15} /></IconButton>
+                </Tooltip>}
                 <Tooltip label={!page ? "Текст страницы станет доступен после разбора" : !(page.markdown || page.text).trim() ? "На странице нет текста для уборки" : "Предложить исправление оформления и спорных мест"}>
                   <IconButton label="Прибрать текст с ИИ" disabled={!page || !(page.markdown || page.text).trim()} onClick={() => setCleanupOpen(true)}>
                     <Sparkles size={15} />
@@ -2130,70 +2209,87 @@ function MaterialSurface() {
                 </Tooltip>
               </div>
             </header>
-            <div className="materials-document-stage">
-              {pageCount > 1 && (
-                <>
-                  <button
-                    type="button"
-                    className="materials-page-zone is-prev"
-                    aria-label="Предыдущая страница"
-                    disabled={pageNumber <= 1}
-                    onClick={() => goToPage(pageNumber - 1)}
-                  >
-                    <ChevronLeft size={22} aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    className="materials-page-zone is-next"
-                    aria-label="Следующая страница"
-                    disabled={pageNumber >= pageCount}
-                    onClick={() => goToPage(pageNumber + 1)}
-                  >
-                    <ChevronRight size={22} aria-hidden="true" />
-                  </button>
-                </>
+            <div className={`materials-document-stage ${inlineOutline ? "has-outline" : ""} ${overlayOutline ? "has-overlay-outline" : ""}`.trim()}>
+              {showOutline && viewerDetail && (
+                <PdfOutline
+                  outline={viewerDetail.outline}
+                  outlineSource={viewerDetail.outline_source}
+                  page={pageNumber}
+                  pageCount={pageCount}
+                  pageStates={viewerDetail.page_states}
+                  showOcrReview={viewerDetail.parser_mode !== "fast"}
+                  storageKey={material.id}
+                  onPageChange={(next) => {
+                    goToPage(next);
+                    setOverlayOutlineOpen(false);
+                  }}
+                />
               )}
-              <div ref={attachScroll} className="materials-document-scroll" style={{ "--materials-zoom": effectiveZoom } as React.CSSProperties}>
-                {pageError ? (
-                  <div className="materials-document-center"><ErrorState message={pageError} /></div>
-                ) : page ? (
-                  <DocumentView
-                    projectId={projectId}
-                    material={material}
-                    page={page}
-                    viewMode={viewMode}
+              <DocumentStage
+                mode={viewMode}
+                storageKey={material.id}
+                sourceLabel={presentation?.sourceLabel ?? "Исходник"}
+                textLabel={presentation?.textLabel ?? "Текст"}
+                canPrevPage={pageNumber > 1}
+                canNextPage={pageNumber < pageCount}
+                onPrevPage={pageCount > 1 ? () => goToPage(pageNumber - 1) : undefined}
+                onNextPage={pageCount > 1 ? () => goToPage(pageNumber + 1) : undefined}
+                source={viewerDetail ? (
+                  <MaterialSourceView
+                    material={viewerDetail}
+                    page={displayedPage}
+                    pageNumber={pageNumber}
+                    revision={null}
                     terms={search.forms}
-                    binding={{
-                      bindingMode: bindingMode && documentBindingEnabled,
-                      activeNodeId: documentBindingEnabled ? activeNodeId : null,
-                      boundFragmentIds: documentBindingEnabled ? boundFragmentIds : EMPTY_STRING_SET,
-                      activeNodeFragmentIds: documentBindingEnabled ? activeNodeFragmentIds : EMPTY_STRING_SET,
-                      selectedFragmentIds: documentBindingEnabled ? selectedFragmentIdSet : EMPTY_STRING_SET,
-                      onFragmentActivate: handleFragmentActivate,
-                      onBindBlock: handleBindBlock,
-                      onFragmentUnbind: handleFragmentUnbind,
-                      fragmentBindingTitles: documentBindingEnabled ? fragmentBindingTitles : EMPTY_TITLES_MAP,
-                    }}
+                    zoom={sourceZoom}
+                    showRegions
+                    focusedFragmentId={focusedFragmentId}
+                    currentTime={0}
+                    onTimeUpdate={() => undefined}
+                    flow="paged"
+                    pageCount={pageCount}
+                    pageAspect={displayedPage && displayedPage.width > 0 ? displayedPage.height / displayedPage.width : 900 / 680}
+                    scrollRef={attachScroll}
                   />
-                ) : viewMode === "original" && hasOriginal ? (
-                  <div className="materials-original-page">
-                    <div className="materials-original-canvas">
-                      <img
-                        src={materialPageImageUrl(projectId, material.id, pageNumber)}
-                        alt={`Страница ${pageNumber} файла ${material.display_name}`}
+                ) : (
+                  <div className="materials-document-center">
+                    {detailError ? <ErrorState message={detailError} /> : <LoadingState label="Открываем исходник" />}
+                  </div>
+                )}
+                text={
+                  <div ref={textScrollRef} className="materials-document-scroll is-project-text" style={{ "--materials-zoom": textZoom } as React.CSSProperties}>
+                    {pageError ? (
+                      <div className="materials-document-center"><ErrorState message={pageError} /></div>
+                    ) : displayedPage ? (
+                      <DocumentView
+                        projectId={projectId}
+                        material={material}
+                        page={displayedPage}
+                        terms={search.forms}
+                        binding={{
+                          bindingMode: bindingMode && documentBindingEnabled,
+                          activeNodeId: documentBindingEnabled ? activeNodeId : null,
+                          boundFragmentIds: documentBindingEnabled ? boundFragmentIds : EMPTY_STRING_SET,
+                          activeNodeFragmentIds: documentBindingEnabled ? activeNodeFragmentIds : EMPTY_STRING_SET,
+                          selectedFragmentIds: documentBindingEnabled ? selectedFragmentIdSet : EMPTY_STRING_SET,
+                          onFragmentActivate: handleFragmentActivate,
+                          onBindBlock: handleBindBlock,
+                          onFragmentUnbind: handleFragmentUnbind,
+                          fragmentBindingTitles: documentBindingEnabled ? fragmentBindingTitles : EMPTY_TITLES_MAP,
+                        }}
                       />
-                    </div>
+                    ) : material.status !== "ready" ? (
+                      <div className="materials-processing-placeholder">
+                        <StatusBadge tone={STATUS[material.status].tone}>{STATUS[material.status].label}</StatusBadge>
+                        <h1>{material.display_name}</h1>
+                        <p>{material.status === "ready_to_process"
+                          ? "Текст ещё не подготовлен: запустите разбор на вкладке «Обработка»."
+                          : "Страница ещё обрабатывается. Готовые страницы появляются здесь по мере разбора."}</p>
+                      </div>
+                    ) : <div className="materials-document-center"><LoadingState label="Открываем страницу" /></div>}
                   </div>
-                ) : material.status !== "ready" ? (
-                  <div className="materials-processing-placeholder">
-                    <StatusBadge tone={STATUS[material.status].tone}>{STATUS[material.status].label}</StatusBadge>
-                    <h1>{material.display_name}</h1>
-                    <p>{material.status === "ready_to_process"
-                      ? "Текст ещё не подготовлен: запустите разбор на вкладке «Обработка»."
-                      : "Страница ещё обрабатывается. Готовые страницы появляются здесь по мере разбора."}</p>
-                  </div>
-                ) : <div className="materials-document-center"><LoadingState label="Открываем страницу" /></div>}
-              </div>
+                }
+              />
             </div>
           </>
         )}

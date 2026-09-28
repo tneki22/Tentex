@@ -1,5 +1,5 @@
 import { forwardRef } from "react";
-import { librarySourceUrl, type LibraryMaterialDetailRead } from "../../api/materials";
+import { librarySourceUrl, type LibraryMaterialDetailRead } from "../../../api/materials";
 
 interface AudioTranscriptViewProps {
   material: LibraryMaterialDetailRead;
