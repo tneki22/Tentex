@@ -539,9 +539,15 @@ class _DraftWriter:
             return
         note_variant = LessonNoteVariant(variant or LessonNoteVariant.EXPLANATION.value)
         if note_variant == LessonNoteVariant.HEADING:
-            text, supports = _heading(_rewrite_citations(body, {})), []
-        else:
-            text, supports = self._supports(body)
+            # Заголовок с абзацем под ним — два блока: у текста свои опоры и метка основы.
+            title, _, rest = body.partition("\n")
+            self._add_block(LessonNoteVariant.HEADING, _heading(_rewrite_citations(title, {})), [])
+            if rest.strip():
+                self.add_note(LessonNoteVariant.EXPLANATION.value, rest)
+            return
+        self._add_block(note_variant, *self._supports(body))
+
+    def _add_block(self, note_variant: LessonNoteVariant, text: str, supports: list[str]) -> None:
         basis = self.basis if supports or self.basis == LessonBasis.MODEL_ONLY else (
             LessonBasis.MODEL_ONLY
         )

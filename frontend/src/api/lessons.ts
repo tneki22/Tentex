@@ -6,6 +6,19 @@ export type LessonBlockKind = "source" | "note" | "media" | "activity";
 export type LessonNoteVariant =
   | "text" | "heading" | "explanation" | "important" | "example" | "definition" | "warning";
 export type LessonBlockOrigin = "manual" | "outline" | "model" | "mixed";
+export type LessonBasis = "sources" | "sources_and_model" | "model_only";
+/** Шаблон модельного урока — модуль промпта на бэкенде (`lessons/ai_prompts.py`). */
+export type LessonTemplate = "explain" | "guide" | "practice" | "cheatsheet";
+export type LessonLevel = "draft" | "standard" | "detailed";
+
+/** Как собран модельный урок; у быстрого и ручного урока — `null`. */
+export interface LessonBuildRead {
+  template: LessonTemplate;
+  level: LessonLevel;
+  basis: LessonBasis;
+  model_id: string | null;
+  cost_usd: string | null;
+}
 
 export interface LessonSummaryRead {
   id: string;
@@ -16,6 +29,7 @@ export interface LessonSummaryRead {
   needs_review: boolean;
   completed_at: string | null;
   updated_at: string;
+  build: LessonBuildRead | null;
 }
 
 export interface LessonsOverviewRead {
@@ -63,6 +77,8 @@ export interface LessonRefRead {
   boundary_shifted: boolean;
   /** Листы, которые в режиме «Страницы» рисует именно эта ссылка — без дублей по уроку. */
   pages_shown: number[];
+  /** У опоры пояснения модели: `[S3]` в тексте блока открывает эту ссылку. */
+  citation_label: string | null;
 }
 
 export interface LessonBlockRead {
@@ -72,11 +88,13 @@ export interface LessonBlockRead {
   variant: LessonNoteVariant | null;
   body_md: string | null;
   origin: LessonBlockOrigin;
-  basis: "sources" | "sources_and_model" | "model_only" | null;
+  basis: LessonBasis | null;
   bound_program_node_id: string | null;
   media_kind: "image" | "link" | null;
   /** Только у внешней ссылки; изображение — `lessonMediaUrl`. */
   media_url: string | null;
+  /** Кусок свёрнут под пояснением строкой «В учебнике: …». */
+  collapsed: boolean;
   refs: LessonRefRead[];
 }
 
@@ -103,6 +121,7 @@ export interface LessonRead {
   undo_sequence: number | null;
   topics: LessonTopicRead[];
   blocks: LessonBlockRead[];
+  build: LessonBuildRead | null;
   created_at: string;
   updated_at: string;
 }
@@ -175,7 +194,7 @@ export type LessonBlockOperation =
   | "add_note" | "add_page" | "add_outline" | "add_fragments" | "add_block" | "add_link"
   | "add_region"
   | "delete" | "move_up" | "move_down" | "split" | "merge"
-  | "set_topic" | "add_topic" | "remove_topic" | "set_always_pages";
+  | "set_topic" | "add_topic" | "remove_topic" | "set_always_pages" | "set_collapsed";
 
 export interface LessonBlockCommand {
   expected_revision: number;
@@ -197,6 +216,7 @@ export interface LessonBlockCommand {
   insert_note?: boolean;
   program_node_id?: string;
   always_pages?: boolean;
+  collapsed?: boolean;
   media_url?: string;
   caption?: string;
   /** add_region — доля страницы `[x0, y0, x1, y1]`. */
@@ -298,3 +318,114 @@ export const SOURCE_ROLE_LABELS: Record<SourceRole, string> = {
   additional: "дополнительный",
   reference: "справочный",
 };
+
+export const LESSON_TEMPLATE_LABELS: Record<LessonTemplate, string> = {
+  explain: "Объяснение с нуля",
+  guide: "Путеводитель",
+  practice: "Через практику",
+  cheatsheet: "Шпаргалка",
+};
+
+/** Подпись урока в списках: «Объяснение с нуля · ≈25 мин · Черновик». */
+export function lessonCaption(lesson: Pick<LessonSummaryRead, "build" | "duration_minutes" | "status">): string {
+  return [
+    lesson.build ? LESSON_TEMPLATE_LABELS[lesson.build.template] : null,
+    lesson.duration_minutes ? `≈${lesson.duration_minutes} мин` : null,
+    LESSON_STATUS_LABELS[lesson.status],
+  ].filter(Boolean).join(" · ");
+}
+
+export const LESSON_LEVEL_LABELS: Record<LessonLevel, string> = {
+  draft: "Черновик",
+  standard: "Обычный",
+  detailed: "Подробный",
+};
+
+export const LESSON_BASIS_LABELS: Record<LessonBasis, string> = {
+  sources_and_model: "Материалы + знания модели",
+  sources: "Только материалы",
+  model_only: "Только знания модели",
+};
+
+/** Что пользователь выбрал в диалоге «Собрать урок с ИИ». */
+export interface LessonAiOrder {
+  program_node_id: string;
+  template: LessonTemplate;
+  level: LessonLevel;
+  basis: LessonBasis;
+  /** `null` — материалы по умолчанию: с диапазоном темы, иначе все не справочные. */
+  material_ids: string[] | null;
+  minutes: number | null;
+  wishes: string;
+  /** `null` — конспект учитывается, если он не пуст. */
+  use_conspect: boolean | null;
+  model: { provider_id: string; model_id: string } | null;
+}
+
+export interface LessonAiMaterialRead {
+  material_id: string;
+  name: string;
+  role: SourceRole;
+  priority: number;
+  instruction: string | null;
+  kind: string;
+  is_parsed: boolean;
+  page_from: number | null;
+  page_to: number | null;
+  selected: boolean;
+}
+
+export interface LessonAiLevelRead {
+  level: LessonLevel;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  /** Верхняя граница: весь предел ответа каждого вызова; `null` — цена модели неизвестна. */
+  cost_usd: string | null;
+  available: boolean;
+  unavailable_reason: string | null;
+}
+
+export interface LessonAiPreflightRead {
+  program_node_id: string;
+  topic_title: string;
+  materials: LessonAiMaterialRead[];
+  candidates: number;
+  candidate_tokens: number;
+  material_state: string;
+  notes: string[];
+  sources_available: boolean;
+  default_minutes: number | null;
+  conspect_words: number;
+  use_conspect: boolean;
+  models_available: boolean;
+  models_unavailable_reason: string | null;
+  provider_id: string | null;
+  model_id: string | null;
+  model_label: string | null;
+  price_known: boolean;
+  prices_from: string | null;
+  levels: LessonAiLevelRead[];
+  /** «Что увидит модель» — тот же паспорт урока, что уйдёт в промпт. */
+  brief_text: string;
+}
+
+/** Итог задачи сборки: `lesson_id` пуст, если сборку отменили во время вызова. */
+export interface LessonAiBuildResult {
+  lesson_id: string | null;
+  dropped: string[];
+  cost_usd: string | null;
+}
+
+export const previewLessonAi = (
+  projectId: string, order: LessonAiOrder, signal?: AbortSignal,
+): Promise<LessonAiPreflightRead> => request(`${lessonsPath(projectId)}/ai/preflight`, {
+  method: "POST", body: JSON.stringify(order), signal,
+});
+
+export const startLessonAiBuild = (
+  projectId: string,
+  command: LessonAiOrder & { max_cost_usd: string | null; confirm_unknown_price: boolean },
+): Promise<{ job_id: string }> => request(`${lessonsPath(projectId)}/ai/build`, {
+  method: "POST", body: JSON.stringify(command),
+});

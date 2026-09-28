@@ -828,6 +828,9 @@ def update_lesson_note(
             raise ProjectNotFoundError("Блок урока не найден")
         if block.kind not in {LessonBlockKind.NOTE, LessonBlockKind.MEDIA}:
             raise _invalid("Текст можно менять только у пояснения или медиа", "lesson_not_note")
+        if block.origin == LessonBlockOrigin.MODEL and command.body_md != block.body_md:
+            # Правленый человеком текст модели — уже не только её: FR-L5, «смешанное».
+            block.origin = LessonBlockOrigin.MIXED
         block.body_md = command.body_md
         if command.variant is not None and block.kind == LessonBlockKind.NOTE:
             block.variant = command.variant

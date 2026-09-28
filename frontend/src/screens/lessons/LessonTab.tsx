@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import { CheckCircle2, GraduationCap, PencilLine, RotateCcw, Search, Zap } from "lucide-react";
+import { CheckCircle2, GraduationCap, PencilLine, RotateCcw, Search, Sparkles, Zap } from "lucide-react";
 import {
   createQuickLesson,
-  LESSON_STATUS_LABELS,
+  lessonCaption,
   saveLessonPosition,
   setLessonCompleted,
   type LessonRead,
@@ -107,6 +107,7 @@ export function LessonTab({ projectId, node, preferredLessonId, onLessonsChanged
             {hasRange
               ? <Button onClick={() => void quickLesson()} disabled={creating}><Zap size={15} />{creating ? "Создаём…" : "Быстрый урок"}</Button>
               : <Link className="primary-button" to={`${sectionLink}&panel=search`}><Search size={15} />Найти в материалах</Link>}
+            <Link className="secondary-button" to={`${sectionLink}&build=1`}><Sparkles size={15} />Собрать с ИИ</Link>
             <Link className="secondary-button" to={sectionLink}>Собрать вручную</Link>
           </div>
           {createError && <p className="inline-error" role="alert">{createError}</p>}
@@ -123,7 +124,7 @@ export function LessonTab({ projectId, node, preferredLessonId, onLessonsChanged
           <Select
             ariaLabel="Урок темы"
             value={current.id}
-            options={lessons.map((item) => ({ value: item.id, label: `${item.title} · ${LESSON_STATUS_LABELS[item.status]}` }))}
+            options={lessons.map((item) => ({ value: item.id, label: `${item.title} · ${lessonCaption(item)}` }))}
             onValueChange={(value) => {
               if (!value) return;
               saveChoice(projectId, node.id, value);

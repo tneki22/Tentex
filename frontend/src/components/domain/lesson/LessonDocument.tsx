@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import { AlertTriangle, BookOpen, ExternalLink, FileText, Scissors } from "lucide-react";
+import { AlertTriangle, BookOpen, ChevronDown, ChevronRight, ExternalLink, FileText, Scissors } from "lucide-react";
 import { lessonMediaUrl, type LessonBlockRead, type LessonRead, type LessonRefRead } from "../../../api/lessons";
 import {
   getMaterialPage,
@@ -10,8 +10,9 @@ import {
 } from "../../../api/materials";
 import { ContextMenu, ErrorState, type ContextMenuItem } from "../../ui";
 import { PageRegion, StructuredPage } from "../material-viewer";
+import { MachineMark } from "../MachineMark";
 import { QualityBadge } from "../QualityBadge";
-import { LessonMarkdown } from "./LessonMarkdown";
+import { LessonMarkdown, refPages } from "./LessonMarkdown";
 
 export type LessonDocumentMode = "pages" | "text";
 
@@ -214,23 +215,67 @@ function LessonBlockView({ projectId, lessonId, block, mode, hiddenHeading, topi
       );
     }
     if (!body) return <div className={`lesson-note is-${block.variant ?? "text"} is-empty`}>Пустое пояснение — выберите блок, чтобы написать текст.</div>;
-    return <LessonMarkdown className={`lesson-note is-${block.variant ?? "text"}`} text={body} />;
+    const supports = block.refs.filter((ref) => ref.role === "support");
+    return (
+      <>
+        <LessonMarkdown className={`lesson-note is-${block.variant ?? "text"}`} text={body} citations={supports} projectId={projectId} />
+        <NoteOrigin block={block} supports={supports} />
+      </>
+    );
   }
   if (block.kind === "media") return <LessonMediaView projectId={projectId} lessonId={lessonId} block={block} />;
   if (block.kind !== "source") return null;
+  const pieces = block.refs.filter((ref) => ref.role === "content");
+  const view = pieces.map((ref) => (
+    <LessonSourceView
+      key={ref.id}
+      projectId={projectId}
+      sourceRef={ref}
+      mode={mode}
+      topicTitle={topicTitle}
+      onSplit={onSplit}
+    />
+  ));
+  // Разрез выбирают по тексту куска — свёрнутый в этот момент раскрыт.
+  if (!block.collapsed || onSplit) return <>{view}</>;
+  return <CollapsedSource pieces={pieces}>{view}</CollapsedSource>;
+}
+
+/**
+ * Откуда пояснение: модель по материалам или из своих знаний. Метка обязательна —
+ * текст модели без опоры не должен выглядеть как текст учебника (FR-L5).
+ */
+function NoteOrigin({ block, supports }: { block: LessonBlockRead; supports: LessonRefRead[] }) {
+  if ((block.origin !== "model" && block.origin !== "mixed") || !block.basis) return null;
+  const who = block.origin === "mixed" ? "ИИ, правлено вами" : "ИИ";
+  if (block.basis === "model_only" || supports.length === 0) {
+    return <div className="lesson-note-origin is-model"><MachineMark origin={`${who} · знания модели — не подтверждено материалами`} /></div>;
+  }
+  const bySource = new Map<string, string[]>();
+  for (const ref of supports) {
+    const pages = bySource.get(ref.source_name) ?? [];
+    pages.push(refPages(ref).replace("стр. ", ""));
+    bySource.set(ref.source_name, pages);
+  }
+  const where = [...bySource].map(([name, pages]) => `${name}, с. ${[...new Set(pages)].join(", ")}`).join("; ");
+  return <div className="lesson-note-origin"><MachineMark origin={`${who} · по материалам: ${where}`} /></div>;
+}
+
+/** «▸ В учебнике: Олифер, стр. 150–153» — кусок под пояснением, раскрывается по нажатию. */
+function CollapsedSource({ pieces, children }: { pieces: LessonRefRead[]; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const label = pieces.map((ref) => `${ref.source_name}, ${refPages(ref)}`).join("; ");
   return (
-    <>
-      {block.refs.filter((ref) => ref.role === "content").map((ref) => (
-        <LessonSourceView
-          key={ref.id}
-          projectId={projectId}
-          sourceRef={ref}
-          mode={mode}
-          topicTitle={topicTitle}
-          onSplit={onSplit}
-        />
-      ))}
-    </>
+    <div className={`lesson-source-collapsed${open ? " is-open" : ""}`}>
+      <button type="button" className="lesson-source-toggle" aria-expanded={open}
+        onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }}>
+        {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+        <BookOpen size={13} aria-hidden="true" />
+        <span>В учебнике: {label}</span>
+        <small>{open ? "Свернуть" : "Раскрыть"}</small>
+      </button>
+      {open && children}
+    </div>
   );
 }
 

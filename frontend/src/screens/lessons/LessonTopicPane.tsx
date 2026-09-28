@@ -5,7 +5,7 @@ import {
   FilePlus2, Image, LibraryBig, Link2, Pencil, Plus, RotateCcw, Scissors, Search, Sparkles, SquareDashed, Trash2, Undo2, X,
 } from "lucide-react";
 import {
-  confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, unbindLessonBindings,
+  confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, LESSON_TEMPLATE_LABELS, unbindLessonBindings,
   updateLesson, updateLessonNote, uploadLessonImage, type LessonBlockCommand, type LessonBlockRead,
   type LessonChangeResult, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
 } from "../../api/lessons";
@@ -39,6 +39,8 @@ interface LessonTopicPaneProps {
   onQuickLesson(): void;
   onFromSources(): void;
   onManual(): void;
+  /** Диалог «Собрать урок с ИИ» по этой теме. */
+  onBuildWithAi(): void;
   onChanged(): void;
   refreshKey: number;
   selectedBlockId: string | null;
@@ -95,7 +97,7 @@ function ToolButton({ icon, label, hint, variant = "ghost", disabled, destructiv
 }
 
 /** Центр для одной темы: формулировка, уроки темы и открытый урок (записка §2, бриф §12). */
-export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onChanged, refreshKey, selectedBlockId, onSelectBlock, panelToggle, actionError, onFindInMaterials }: LessonTopicPaneProps) {
+export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onBuildWithAi, onChanged, refreshKey, selectedBlockId, onSelectBlock, panelToggle, actionError, onFindInMaterials }: LessonTopicPaneProps) {
   const topicLessons = lessons.filter((lesson) => lesson.program_node_ids.includes(topic.id));
   const defaultLesson = topicLessons.find((lesson) => lesson.status !== "archived") ?? topicLessons[0];
   const openId = topicLessons.some((lesson) => lesson.id === lessonId) ? lessonId : defaultLesson?.id ?? null;
@@ -318,7 +320,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
         { label: "Из источников…", icon: <ArrowRightLeft size={14} />, disabled: !hasRange, onSelect: onFromSources },
         { label: "Из найденного в материалах…", icon: <Search size={14} />, onSelect: onFindInMaterials },
         { label: "Вручную", icon: <Pencil size={14} />, onSelect: onManual },
-        { label: "Собрать с ИИ — этап 7", icon: <Sparkles size={14} />, disabled: true, onSelect: () => undefined },
+        { label: "Собрать с ИИ…", icon: <Sparkles size={14} />, onSelect: onBuildWithAi },
       ]}
     />
   );
@@ -353,6 +355,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
             <li key={item.id}>
               <button type="button" className={item.id === openId ? "is-active" : ""} onClick={() => onSelectLesson(item.id)}>
                 <strong>{item.title}</strong>
+                {item.build && <span className="lessons-lesson-template"><Sparkles size={12} aria-hidden="true" />{LESSON_TEMPLATE_LABELS[item.build.template]}</span>}
                 <StatusBadge tone={STATUS_TONE[item.status]}>{LESSON_STATUS_LABELS[item.status]}</StatusBadge>
                 {item.needs_review && <StatusBadge tone="warning">Требует проверки</StatusBadge>}
                 <span>{item.duration_minutes ? `≈ ${item.duration_minutes} мин` : "длительность не оценена"}</span>
@@ -367,15 +370,19 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
 
       {topicLessons.length === 0 && (hasRange ? (
         <EmptyState title="У темы ещё нет урока">
-          <p>Быстрый урок соберёт страницы темы из оглавления без модели.</p>
-          <Button variant="secondary" disabled={busy} onClick={onManual}><Pencil size={15} />Собрать вручную</Button>
-          <div className="lessons-topic-actions"><Button onClick={onQuickLesson} disabled={busy}><FilePlus2 size={15} />Быстрый урок</Button></div>
+          <p>Быстрый урок соберёт страницы темы из оглавления без модели. С ИИ — объяснение по этим страницам: модель выберет куски и напишет пояснения между ними.</p>
+          <div className="lessons-topic-actions">
+            <Button onClick={onQuickLesson} disabled={busy}><FilePlus2 size={15} />Быстрый урок</Button>
+            <Button variant="secondary" disabled={busy} onClick={onBuildWithAi}><Sparkles size={15} />Собрать с ИИ</Button>
+            <Button variant="ghost" disabled={busy} onClick={onManual}><Pencil size={15} />Собрать вручную</Button>
+          </div>
         </EmptyState>
       ) : (
         <EmptyState title="У темы пока нет материала из оглавления">
-          <p>Найдите тему в материалах проекта и отметьте подходящие страницы — из них соберётся урок. Если в проекте нужного нет, подберите материал в Библиотеке.</p>
+          <p>Найдите тему в материалах проекта и отметьте подходящие страницы — из них соберётся урок. С ИИ модель сама найдёт куски поиском или напишет урок из своих знаний. Если в проекте нужного нет, подберите материал в Библиотеке.</p>
           <div className="lessons-topic-actions">
             <Button disabled={busy} onClick={onFindInMaterials}><Search size={15} />Найти в материалах проекта</Button>
+            <Button variant="secondary" disabled={busy} onClick={onBuildWithAi}><Sparkles size={15} />Собрать с ИИ</Button>
             <Button variant="secondary" disabled={busy} onClick={() => setFinderOpen(true)}><LibraryBig size={15} />Подобрать материал</Button>
             <Button variant="ghost" disabled={busy} onClick={onManual}><Pencil size={15} />Собрать вручную</Button>
           </div>
@@ -493,6 +500,11 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
                       <input type="checkbox" checked={selectedRef.always_pages} disabled={saving}
                         onChange={(event) => void edit({ operation: "set_always_pages", block_id: selected.id, always_pages: event.target.checked })} />
                       Всегда показывать страницами
+                    </label>
+                    <label className="lessons-inline-check">
+                      <input type="checkbox" checked={selected.collapsed} disabled={saving}
+                        onChange={(event) => void edit({ operation: "set_collapsed", block_id: selected.id, collapsed: event.target.checked })} />
+                      Свернуть под пояснением
                     </label>
                     {data.topics.length > 1 && (
                       <label className="lessons-inline-select">

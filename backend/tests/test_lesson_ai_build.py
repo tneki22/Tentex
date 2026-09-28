@@ -14,7 +14,7 @@ from app.ai.jobs import process_ai_job
 from app.ai.provider import FakeTransport, ProviderCompletion, ProviderUsage
 from app.lessons import ai_build, ai_context, editing
 from app.lessons.ai_schemas import LessonAiBuildWrite, LessonAiOrder
-from app.lessons.schemas import LessonBlockWrite
+from app.lessons.schemas import LessonBlockWrite, LessonNoteWrite
 from app.models import (
     AiRun,
     BackgroundJob,
@@ -355,3 +355,28 @@ def test_brief_render_compact_keeps_reader_topic_and_order():
 
     assert "## Читатель" in compact and "## Заказ" in compact
     assert "## Материалы" not in compact and "Путеводитель по материалу" in compact
+
+
+def test_heading_with_text_becomes_heading_and_note(session, project):
+    _, node = _ethernet(session, project)
+    payload = _draft(_note("Что узнаешь\n\nКак станции делят среду [S1].", variant="heading"))
+
+    job = _build(session, project, node, payload)
+
+    _, blocks = _blocks(session, UUID(job.checkpoint["result"]["lesson_id"]))
+    heading, note = blocks
+    assert heading.variant == "heading" and heading.body_md == "## Что узнаешь"
+    assert note.variant == "explanation" and note.body_md == "Как станции делят среду [S1]."
+    assert note.basis == LessonBasis.SOURCES_AND_MODEL
+
+
+def test_edited_model_note_becomes_mixed(session, project):
+    _, node = _ethernet(session, project)
+    job = _build(session, project, node, _draft(_note("Текст модели [S1]")))
+    lesson, [note] = _blocks(session, UUID(job.checkpoint["result"]["lesson_id"]))
+
+    result = editing.update_lesson_note(session, project.id, lesson.id, note.id, LessonNoteWrite(
+        expected_revision=lesson.revision, body_md="Мой текст [S1]",
+    ))
+
+    assert result.lesson.blocks[0].origin == LessonBlockOrigin.MIXED
