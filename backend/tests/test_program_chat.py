@@ -139,6 +139,9 @@ def test_create_session_requires_textbook_project_but_allows_draft(
     assert chat.program_node_id is None
     assert chat.mode == ChatMode.PROGRAM
     assert chat.context_flags == program_chat.CHANNEL.fresh_flags()
+    tree = next(entry for entry in program_chat.context_preview(
+        session, draft_project.id, chat.id).manifest if entry.kind == "program_tree")
+    assert tree.chars > 0 and tree.bytes > tree.chars
 
 
 @pytest.mark.asyncio

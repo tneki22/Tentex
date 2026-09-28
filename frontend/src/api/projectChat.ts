@@ -33,6 +33,7 @@ export interface ProjectChatManifestEntry {
   included: boolean;
   truncated: boolean;
   bytes: number;
+  chars: number;
   count: number | null;
   reason: string | null;
   flag_key: string | null;

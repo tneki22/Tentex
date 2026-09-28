@@ -20,11 +20,11 @@ import { parsePayload } from "./payload";
 // `streaming` требовать незачем (так же на бэкенде, `program_chat.py`).
 const PROGRAM_MODEL_CAPABILITIES = ["structured_output"];
 
-const FLAG_META: Record<string, { title: string; icon: typeof BookOpen }> = {
-  profile: { title: "Профиль цели", icon: Target },
-  primary_sources: { title: "Оглавления основных", icon: BookOpen },
-  secondary_sources: { title: "Оглавления дополнительных", icon: BookOpen },
-  reference_sources: { title: "Оглавления справочных", icon: BookOpen },
+const FLAG_META: Record<string, { title: string; icon: typeof BookOpen; description: string }> = {
+  profile: { title: "Профиль цели", icon: Target, description: "Цель и предпочтения из паспорта проекта." },
+  primary_sources: { title: "Оглавления основных", icon: BookOpen, description: "Только пункты оглавлений. Посмотреть их можно в «Материалах»." },
+  secondary_sources: { title: "Оглавления дополнительных", icon: BookOpen, description: "Только пункты оглавлений. Посмотреть их можно в «Материалах»." },
+  reference_sources: { title: "Оглавления справочных", icon: BookOpen, description: "Только пункты оглавлений. Посмотреть их можно в «Материалах»." },
 };
 
 function buildProgramChipList(
@@ -47,12 +47,13 @@ function buildProgramChipList(
     const included = entriesInManifest
       ? entries.some((entry) => entry.included)
       : contextFlags[flagKey] ?? flagKey !== "reference_sources";
-    const bytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
+    const chars = entries.reduce((sum, entry) => sum + (entry.included ? entry.chars ?? 0 : 0), 0);
     const count = flagKey === "profile" ? null : entries.length;
     const reason = entries.find((entry) => !entry.included)?.reason ?? null;
     const title = count !== null && count > 0 ? `${meta.title} · ${count}` : meta.title;
     return {
-      key: flagKey, icon: meta.icon, title, flagKey, included, bytes, count, reason,
+      key: flagKey, icon: meta.icon, title, flagKey, included, chars, count, reason,
+      description: meta.description,
     };
   });
 }

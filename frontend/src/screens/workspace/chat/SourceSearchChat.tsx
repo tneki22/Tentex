@@ -53,7 +53,7 @@ function contextChips(manifest: ProjectChatManifestEntry[] | undefined, variant:
       title: count ? `${meta.title} · ${count}` : meta.title,
       flagKey: meta.flag,
       included: entry?.included ?? false,
-      bytes: entry?.bytes ?? 0,
+      chars: entry?.chars ?? 0,
       count,
       reason: entry?.reason ?? null,
       description: meta.description,

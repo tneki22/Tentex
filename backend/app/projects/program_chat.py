@@ -485,6 +485,7 @@ def build_program_context(session: Session, chat: ChatSession) -> ProgramChatCon
             "id": str(chat.project_id),
             "included": bool(profile),
             "bytes": len(json.dumps(profile, ensure_ascii=False).encode()),
+            "chars": len(json.dumps(profile, ensure_ascii=False)),
             "reason": None if flags.get("profile", True) else "excluded_by_user",
             "flag_key": "profile",
         },
@@ -493,6 +494,7 @@ def build_program_context(session: Session, chat: ChatSession) -> ProgramChatCon
             "id": str(chat.project_id),
             "included": True,
             "bytes": len(tree_text.encode()),
+            "chars": len(tree_text),
         },
     ]
 
@@ -513,16 +515,16 @@ def build_program_context(session: Session, chat: ChatSession) -> ProgramChatCon
             "label": source.display_name,
         }
         if not flags.get(flag_key, True):
-            entry.update(included=False, bytes=0, reason="excluded_by_user")
+            entry.update(included=False, bytes=0, chars=0, reason="excluded_by_user")
             manifest.append(entry)
             continue
         size = sum(len(item.title) + 20 for item in source.outline)
         if size > budget:
-            entry.update(included=False, bytes=0, reason="context_budget_exceeded")
+            entry.update(included=False, bytes=0, chars=0, reason="context_budget_exceeded")
             manifest.append(entry)
             continue
         budget -= size
-        entry.update(included=True, bytes=size)
+        entry.update(included=True, bytes=size, chars=len(_source_text(source)))
         manifest.append(entry)
         included_sources.append(source)
 
@@ -565,6 +567,21 @@ def _role_label(role: SourceRole) -> str:
     ]
 
 
+def _source_text(source: SourceContext) -> str:
+    """Текст одного оглавления в запросе и число его символов в манифесте."""
+    header = (
+        f'<source material_id="{source.material_id}" role="{_role_label(source.source_role)}" '
+        f'priority="{source.priority}" name="{source.display_name}">'
+    )
+    if source.instruction:
+        header += f"\nИнструкция: {source.instruction}"
+    items = "\n".join(
+        f'  - key="{item.outline_item_key}" level={item.level} page={item.page}: {item.title}'
+        for item in source.outline
+    ) or "  (оглавление не найдено)"
+    return f"{header}\n{items}\n</source>"
+
+
 def _sources_block(sources: list[SourceContext]) -> str:
     if not sources:
         return "(оглавления источников не переданы в этот запрос)"
@@ -572,18 +589,7 @@ def _sources_block(sources: list[SourceContext]) -> str:
         "Ниже переданы только оглавления источников, а не их полный текст. "
         "Используй названия пунктов и страницы как карту содержания."
     ]
-    for source in sources:
-        header = (
-            f'<source material_id="{source.material_id}" role="{_role_label(source.source_role)}" '
-            f'priority="{source.priority}" name="{source.display_name}">'
-        )
-        if source.instruction:
-            header += f"\nИнструкция: {source.instruction}"
-        items = "\n".join(
-            f'  - key="{item.outline_item_key}" level={item.level} page={item.page}: {item.title}'
-            for item in source.outline
-        ) or "  (оглавление не найдено)"
-        parts.append(f"{header}\n{items}\n</source>")
+    parts.extend(_source_text(source) for source in sources)
     return "\n".join(parts)
 
 

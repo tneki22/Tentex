@@ -173,6 +173,7 @@ def _budget_fragments(
             "page_number": fragment.page_number,
             "sha256": _sha256(fragment.text),
             "bytes": len(fragment.text.encode()),
+            "chars": size,
         }
         if exhausted:
             entry["included"] = False
@@ -197,6 +198,7 @@ def _budget_fragments(
             )
             entry["included"] = True
             entry["truncated"] = True
+            entry["chars"] = len(truncated_text)
         else:
             entry["included"] = False
         entries.append(entry)
@@ -248,6 +250,7 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
                 "included": False,
                 "reason": "excluded_by_user",
                 "bytes": 0,
+                "chars": 0,
             }
         ]
 
@@ -257,6 +260,7 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
             "id": str(node.id) if node else str(chat.project_id),
             "sha256": _sha256(question),
             "bytes": len(question.encode()),
+            "chars": len(question),
             "included": True,
         },
         {
@@ -264,6 +268,7 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
             "id": str(chat.project_id),
             "sha256": _sha256(json.dumps(profile, ensure_ascii=False, sort_keys=True)),
             "bytes": len(json.dumps(profile, ensure_ascii=False).encode()),
+            "chars": len(json.dumps(profile, ensure_ascii=False)),
             "included": include_profile and bool(profile),
             "reason": (
                 "excluded_by_user" if not include_profile else None if profile else "profile_empty"
@@ -275,6 +280,7 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
             "revision": answer.revision if answer is not None else None,
             "sha256": _sha256(reference_text) if reference_text is not None else None,
             "bytes": len(reference_text.encode()) if reference_text is not None else 0,
+            "chars": len(reference_text) if reference_text is not None else 0,
             "included": reference_text is not None,
             "reason": (
                 None
@@ -290,6 +296,7 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
             "id": str(chat.id),
             "count": len(tail),
             "bytes": sum(len(message.text.encode()) for message in tail),
+            "chars": sum(len(message.text) for message in tail),
             "included": bool(tail),
         },
         {

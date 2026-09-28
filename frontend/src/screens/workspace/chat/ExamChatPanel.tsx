@@ -58,38 +58,42 @@ function buildExamContextChips(
   return [
     {
       key: "question", icon: FileQuestion, title: "Вопрос", flagKey: null,
-      included: true, bytes: node?.bytes ?? 0, count: null, reason: null,
+      included: true, chars: node?.chars ?? 0, count: null, reason: null,
+      description: "Название текущего вопроса или темы.",
     },
     {
       key: "profile", icon: MessageSquareText, title: "Профиль", flagKey: "profile",
-      included: Boolean(profile?.included), bytes: profile?.bytes ?? 0, count: null,
+      included: Boolean(profile?.included), chars: profile?.chars ?? 0, count: null,
       reason: profile?.reason ?? null,
+      description: "Подготовка и предпочтения из профиля проекта.",
     },
     {
       key: "reference", icon: ScrollText, title: "Ответ", flagKey: "reference",
-      included: Boolean(reference?.included), bytes: reference?.bytes ?? 0, count: null,
+      included: Boolean(reference?.included), chars: reference?.chars ?? 0, count: null,
       reason: reference?.reason ?? null,
+      description: "Ответ, сохранённый для этого вопроса.",
     },
     {
       // Только привязки темы; найденное поиском — отдельный чип ниже.
       key: "fragments", icon: ListChecks, title: `Привязанные материалы · ${fragmentCount}`, flagKey: "fragments",
-      included: fragmentCount > 0, bytes: fragmentEntries.reduce((sum, e) => sum + e.bytes, 0),
+      included: fragmentCount > 0, chars: fragmentEntries.reduce((sum, e) => sum + (e.included ? e.chars : 0), 0),
       count: fragmentCount, reason: fragmentEntries.length === 0 ? null : (fragmentEntries[0]?.reason ?? null),
+      description: "Фрагменты, привязанные к вопросу. Открыть их можно в «Материалах».",
     },
     ...(search ? [{
       key: "retrieval", icon: Search, title: `Поиск по материалам · ${search.count}`, flagKey: "retrieval",
-      included: search.enabled, bytes: 0, count: search.count,
+      included: search.enabled, chars: 0, count: search.count,
       reason: search.enabled ? null : "excluded_by_user",
       description: "Места из материалов, найденные под вопрос. Число — сколько вошло в последний ответ.",
     }] : []),
     {
       key: "attempts", icon: History, title: "Попытки", flagKey: "attempts",
-      included: false, bytes: 0, count: null, reason: attempts?.reason ?? "not_implemented",
+      included: false, chars: 0, count: null, reason: attempts?.reason ?? "not_implemented",
       futureNote: "Появится вместе с историей попыток раздела",
     },
     {
       key: "section_memory", icon: History, title: "История раздела", flagKey: "section_memory",
-      included: false, bytes: 0, count: null, reason: sectionMemory?.reason ?? "not_implemented",
+      included: false, chars: 0, count: null, reason: sectionMemory?.reason ?? "not_implemented",
       futureNote: "Появится вместе со сжатой памятью раздела",
     },
   ];

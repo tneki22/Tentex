@@ -250,6 +250,7 @@ export interface ManifestEntry {
   included: boolean;
   truncated: boolean;
   bytes: number;
+  chars: number;
   count: number | null;
   reason: string | null;
 }

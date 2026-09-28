@@ -591,6 +591,7 @@ def _with_manifest(ctx: SearchContext, chat: ChatSession) -> SearchContext:
             "kind": "profile", "id": str(chat.project_id), "flag_key": "profile",
             "included": bool(ctx.profile),
             "bytes": len(json.dumps(ctx.profile, ensure_ascii=False).encode()),
+            "chars": len(json.dumps(ctx.profile, ensure_ascii=False)),
             "preview": [f"{key}: {value}" for key, value in ctx.profile.items()],
             "reason": excluded("profile"),
         },
@@ -598,6 +599,7 @@ def _with_manifest(ctx: SearchContext, chat: ChatSession) -> SearchContext:
             "kind": "program_tree", "id": str(chat.project_id), "flag_key": "program",
             "included": flags["program"], "truncated": truncated,
             "bytes": min(program_bytes, CONTEXT_CHARS),
+            "chars": len(program_text[:CONTEXT_CHARS]),
             "count": sum(topic.node_type != NodeType.SECTION for topic in ctx.topics),
             "preview": _program_text(ctx)[:CONTEXT_CHARS].splitlines() if flags["program"] else [],
             "reason": excluded("program"),
@@ -606,6 +608,7 @@ def _with_manifest(ctx: SearchContext, chat: ChatSession) -> SearchContext:
             "kind": "topic_queries", "id": str(chat.project_id), "flag_key": "topic_queries",
             "included": flags["topic_queries"] and flags["program"] and bool(hint_lines),
             "bytes": sum(len(line.encode()) for line in hint_lines),
+            "chars": sum(len(line) for line in hint_lines),
             "count": sum(line.count("«") for line in hint_lines),
             "preview": hint_lines,
             "reason": excluded("topic_queries") or excluded("program"),
@@ -616,6 +619,7 @@ def _with_manifest(ctx: SearchContext, chat: ChatSession) -> SearchContext:
             "included": bool(ctx.attached),
             "bytes": sum(len(name.encode()) + len((url or "").encode())
                          for name, url in ctx.attached),
+            "chars": sum(len(name) + len(url or "") for name, url in ctx.attached),
             "count": len(ctx.attached),
             "preview": [f"{name} — {url}" if url else name for name, url in ctx.attached],
             "reason": excluded("attached_materials"),
@@ -624,6 +628,8 @@ def _with_manifest(ctx: SearchContext, chat: ChatSession) -> SearchContext:
             "kind": "time_budget", "id": str(chat.project_id), "flag_key": "time_budget",
             "included": bool(ctx.time_budget),
             "bytes": len(json.dumps(ctx.time_budget, ensure_ascii=False).encode())
+            if ctx.time_budget else 0,
+            "chars": len(json.dumps(ctx.time_budget, ensure_ascii=False))
             if ctx.time_budget else 0,
             "reason": (
                 excluded("time_budget") or ("deadline_missing" if not ctx.time_budget else None)

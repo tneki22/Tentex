@@ -3,10 +3,10 @@ import { useState, type ReactNode } from "react";
 import { Disclosure, Popover, Switch } from "../../../components/ui";
 
 const CONTEXT_OPEN_KEY = "tentex:chat-context-open";
+// Приближение по длине текста совпадает с оценкой входа в AI gateway.
+const ESTIMATED_CHARS_PER_TOKEN = 3;
 
-function bytesLabel(bytes: number): string {
-  return bytes < 1024 ? `${bytes} Б` : `${(bytes / 1024).toFixed(1)} КБ`;
-}
+const numberFormat = new Intl.NumberFormat("ru-RU");
 
 /** Один чип состава контекста. Список строит вызывающий экран (exam и
  * program-чат показывают разный набор источников контекста) — сам компонент
@@ -17,7 +17,7 @@ export interface ChipDef {
   title: string;
   flagKey: string | null;
   included: boolean;
-  bytes: number;
+  chars: number;
   count: number | null;
   reason: string | null;
   futureNote?: string;
@@ -79,7 +79,12 @@ export function ContextChips({ chips, contextFlags, onToggleFlag, controls, labe
           >
             <div className="chat-context-chip-detail">
               {chip.included ? (
-                <p>Включено · {bytesLabel(chip.bytes)}</p>
+                chip.chars > 0 ? (
+                  <div>
+                    <p>Включено · символов: {numberFormat.format(chip.chars)}</p>
+                    <p>Оценка: ≈ {numberFormat.format(Math.ceil(chip.chars / ESTIMATED_CHARS_PER_TOKEN))} токенов</p>
+                  </div>
+                ) : <p>Включено · объём определится при отправке</p>
               ) : (
                 <p className="chat-context-chip-reason">
                   Не включено{chip.reason ? ` — ${CONTEXT_REASON_LABELS[chip.reason] ?? chip.reason}` : ""}

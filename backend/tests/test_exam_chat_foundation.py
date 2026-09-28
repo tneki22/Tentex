@@ -270,12 +270,15 @@ def test_judge_never_receives_chat_tail(session: Session) -> None:
 
 def test_preview_and_actual_request_share_fingerprint(session: Session) -> None:
     project = make_exam_project(session)
-    topic = make_topic_node(session, project, title="Fingerprint")
+    topic = make_topic_node(session, project, title="Отпечаток")
     chat = chat_service.create_session(session, project.id, topic.id)
 
     preview = chat_service.context_preview(session, project.id, chat.id)
     ctx = build_context(session, chat, for_judge=False)
     assert preview.fingerprint == ctx.fingerprint
+    question = next(entry for entry in preview.manifest if entry.kind == "program_node")
+    assert question.chars == len(topic.title)
+    assert question.bytes > question.chars
 
 
 def test_answers_file_binding_is_not_duplicated_in_chat_context(session: Session) -> None:

@@ -354,6 +354,7 @@ def test_context_flags_shape_the_request(
     preview = {entry.kind: entry for entry in source_search_chat.context_preview(
         session, project.id, chat.id).manifest}
     assert preview["program_tree"].included and preview["program_tree"].count == 3
+    assert 0 < preview["program_tree"].chars < preview["program_tree"].bytes
     assert preview["topic_queries"].count == 2
     assert preview["attached_materials"].count == 1
 

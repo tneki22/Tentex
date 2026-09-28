@@ -60,6 +60,7 @@ class ManifestEntryRead(BaseModel):
     included: bool
     truncated: bool = False
     bytes: int = 0
+    chars: int = 0
     count: int | None = None
     reason: str | None = None
     # Program-чат группирует записи источников по флагу контекста и подписывает
