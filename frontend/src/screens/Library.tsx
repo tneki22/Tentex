@@ -577,7 +577,10 @@ export function Library() {
       setContentReasons([
         ...response.degradation_reasons,
         ...(response.no_relevant_match
-          ? ["В выбранных материалах нет достаточно надёжного совпадения."] : []),
+          ? [response.missing_terms.length
+            ? `В выбранных материалах не встречается: ${response.missing_terms.map((term) => `«${term}»`).join(", ")}.`
+            : "В выбранных материалах нет достаточно надёжного совпадения."]
+          : []),
       ]);
       setContentHistory((current) => [query, ...current.filter((item) => item !== query)].slice(0, 8));
     } catch (caught) {

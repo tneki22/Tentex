@@ -109,6 +109,9 @@ class RetrievalSearchRead(ApiModel):
     degradation_reasons: list[str]
     results: list[RetrievalHitRead]
     no_relevant_match: bool = False
+    # Имена и термины вопроса, которых нет ни в одном фрагменте области: причина
+    # отказа, которую видно пользователю («взаимоблокировка» вместо «тупика»).
+    missing_terms: list[str] = Field(default_factory=list)
 
 
 class EmbeddingProfileWrite(ApiModel):

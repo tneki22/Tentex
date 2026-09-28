@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -9,10 +9,18 @@ import httpx
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, defer
 
-from app.bindings.search import SearchHit, search_fragments
+from app.bindings.search import SearchHit, mentions_term, search_fragments
 from app.config import settings as app_settings
 from app.materials.image_meta import DESCRIBABLE_PROCESSING
-from app.materials.lexicon import index_text, norm_text, prefix_term, query_terms
+from app.materials.lexicon import (
+    content_terms,
+    index_text,
+    norm_text,
+    prefix_term,
+    query_terms,
+    specific_terms,
+    with_synonyms,
+)
 from app.materials.naming import material_display_name
 from app.models import (
     Binding,
@@ -49,10 +57,8 @@ from app.retrieval.vector import SqliteVecIndex, VectorHit, reciprocal_rank_fusi
 E5_MIN_COSINE = 0.83
 LEXICAL_RESCUE_COVERAGE = 0.75
 LEXICAL_MIN_COVERAGE = 0.60
-
-# E5 на корпусе ОС ранжирует «взаимоблокировку» как блокирование процесса.
-# В учебниках тот же термин назван «тупиком»; эта замена сохраняет смысл вопроса.
-_DEADLOCK_ALIAS = re.compile(r"\bвзаимоблокировк\w*\b", re.IGNORECASE)
+# Граница решения самого reranker: вероятность «кусок отвечает на вопрос» 0,5.
+RERANK_MIN_PROBABILITY = 0.5
 
 # В OCR формулы хранятся как LaTeX-команды. Запрос с символами проверяем и без
 # раскрытия, и с ним: добавление частых команд иногда вытесняет редкий термин.
@@ -96,6 +102,22 @@ class HybridRetriever:
         expert = settings.expert_parameters if settings else {}
         reasons: list[str] = []
         pseudo_by_id: dict[UUID, SearchHit] = {}
+        scoped = command.scope in {RetrievalScope.PROJECT, RetrievalScope.SELECTED_MATERIALS}
+
+        def no_match(missing_terms: list[str] | None = None) -> RetrievalSearchRead:
+            return RetrievalSearchRead(
+                query=command.query, strategy=command.strategy,
+                index_id=active.id if active else None, degraded=bool(reasons),
+                degradation_reasons=reasons, results=[], no_relevant_match=True,
+                missing_terms=missing_terms or [],
+            )
+
+        reasons.extend(_unprocessed_notes(session, scope))
+        if scoped and (missing := _missing_terms(session, scope, command.query)):
+            # Вопрос называет то, чего в материалах нет вовсе: любое найденное
+            # место было бы ответом на другой вопрос. Проверка идёт по FTS, где
+            # есть и материалы вне индекса, поэтому устаревшие ревизии ей не мешают.
+            return no_match(missing)
 
         lexical_hits: list[SearchHit] = []
         lexical_ids: list[UUID] = []
@@ -121,39 +143,14 @@ class HybridRetriever:
 
         stale_notes = _degradation_notes(session, active, scope)
         reasons.extend(stale_notes)
-        scoped = command.scope in {RetrievalScope.PROJECT, RetrievalScope.SELECTED_MATERIALS}
-        if (
-            scoped and not stale_notes
-            and (command.strategy == SearchStrategy.LEXICAL or not semantic_hits)
-            and _lexical_coverage(command.query, lexical_hits) < LEXICAL_MIN_COVERAGE
-        ):
-            return RetrievalSearchRead(
-                query=command.query, strategy=command.strategy,
-                index_id=active.id if active else None, degraded=bool(reasons),
-                degradation_reasons=reasons, results=[], no_relevant_match=True,
-            )
-        if (
-            scoped
-            and not stale_notes
-            and _is_e5_index(session, active)
-            and semantic_hits
-            and 1 - semantic_hits[0].distance < E5_MIN_COSINE
-        ):
-            if command.strategy == SearchStrategy.SEMANTIC:
-                lexical_hits = _lexical_candidates(
-                    session, scope, command.query, preset.lexical_candidates,
-                )
-            if _lexical_coverage(command.query, lexical_hits) < LEXICAL_RESCUE_COVERAGE:
-                return RetrievalSearchRead(
-                    query=command.query, strategy=command.strategy,
-                    index_id=active.id if active else None, degraded=bool(reasons),
-                    degradation_reasons=reasons, results=[], no_relevant_match=True,
-                )
+        if scoped and not lexical_hits and not semantic_hits:
+            return no_match()
         ranking = _ranking(command.strategy, lexical_ids, semantic_ids, preset, expert)
         chunk_by_id = _load_chunks(
             session, active, [item_id for item_id, _, _ in ranking], pseudo_by_id
         )
 
+        judged = False
         if preset.rerank_depth and ranking:
             try:
                 ranking = await _rerank(
@@ -166,6 +163,17 @@ class HybridRetriever:
                 )
             except Exception as error:  # noqa: BLE001 — RRF remains a valid result
                 reasons.append(f"Reranker недоступен; сохранён порядок RRF: {error}")
+            else:
+                judged = True
+        if scoped and judged and ranking[0][1] < RERANK_MIN_PROBABILITY:
+            # Reranker читает вопрос и кусок вместе и отвечает вероятностью,
+            # что кусок отвечает на вопрос. Если ни одно из проверенных мест
+            # не набрало половины, модель сама считает ответа в них нет.
+            return no_match()
+        if scoped and not judged and not stale_notes and _weak_signal(
+            session, scope, active, preset, command, lexical_hits, semantic_hits
+        ):
+            return no_match()
 
         results = self._read_ranking(
             session, ranking, chunk_by_id, pseudo_by_id,
@@ -208,11 +216,11 @@ class HybridRetriever:
             reasons.append("Embedding-профиль активного индекса недоступен")
             return []
         try:
-            semantic_query = (
-                _semantic_alias_query(scope.semantic_query)
-                if _is_e5_profile(profile) else scope.semantic_query
+            # E5 ранжировал «взаимоблокировку» как блокирование процесса: запрос
+            # по смыслу получает термин в том виде, как его пишет учебник.
+            vector = await backend_for_profile(session, profile).embed_query(
+                with_synonyms(scope.semantic_query)
             )
-            vector = await backend_for_profile(session, profile).embed_query(semantic_query)
             return self.vector_index.search(
                 session,
                 index_id=active.id,
@@ -281,9 +289,11 @@ def _lexical_candidates(
         session, scope.material_ids, expanded_query,
         limit=limit, block_ids=scope.block_ids,
     ).hits
-    if _single_lexical_coverage(expanded_query, expanded_hits) > _single_lexical_coverage(
-        query, plain_hits
-    ):
+    # Вариант выбирается по всем словам запроса: глагол «заключить» здесь отличает
+    # вывод формулы от случайного текста с теми же буквами A и B.
+    if _single_lexical_coverage(
+        expanded_query, expanded_hits, query_terms
+    ) > _single_lexical_coverage(query, plain_hits, query_terms):
         return expanded_hits
     return plain_hits
 
@@ -307,11 +317,6 @@ def _is_e5_profile(profile: EmbeddingProfile) -> bool:
     )
 
 
-def _semantic_alias_query(query: str) -> str:
-    """Заменить технический синоним, который E5 смешивал с блокировкой процесса."""
-    return _DEADLOCK_ALIAS.sub("тупик", query)
-
-
 def _lexical_coverage(query: str, hits: list[SearchHit]) -> float:
     """Доля содержательных лемм запроса в лучшем BM25-фрагменте и его заголовке."""
     plain = _single_lexical_coverage(query, hits)
@@ -321,20 +326,30 @@ def _lexical_coverage(query: str, hits: list[SearchHit]) -> float:
     return max(plain, _single_lexical_coverage(expanded_query, hits))
 
 
-def _single_lexical_coverage(query: str, hits: list[SearchHit]) -> float:
-    """Оценить один вариант записи запроса для выбора BM25-кандидатов."""
-    terms = set(query_terms(query))
+def _single_lexical_coverage(
+    query: str,
+    hits: list[SearchHit],
+    terms_of: Callable[[str], list[str]] = content_terms,
+) -> float:
+    """Доля слов запроса в лучшем BM25-фрагменте.
+
+    Для решения об отказе считаются содержательные слова: «Что утверждает закон
+    Оукена?» полностью покрыт текстом о законе Оукена, хотя слова «утверждать»
+    в нём нет.
+    """
+    terms = set(terms_of(query))
     if not hits or not terms:
         return 0.0
     first = hits[0]
     source = set(index_text(first.text + " " + (first.block_title or "")).split())
     covered = terms & source
     prefix = prefix_term(query)
-    if prefix and any(
+    last = next(reversed(query_terms(query)), None)
+    if prefix and last in terms and any(
         token.startswith(prefix)
         for token in norm_text(first.text + " " + (first.block_title or "")).split()
     ):
-        covered.add(next(reversed(query_terms(query))))
+        covered.add(last)
     return len(covered) / len(terms)
 
 
@@ -394,6 +409,58 @@ def _load_chunks(
         # Снимок указал на уже заменённый кусок: следующий запрос соберёт его заново.
         forget_snapshot(active.id)
     return chunks
+
+
+def _weak_signal(
+    session: Session,
+    scope: ScopeFilter,
+    active: RetrievalIndex | None,
+    preset: PresetConfig,
+    command: RetrievalSearchWrite,
+    lexical_hits: list[SearchHit],
+    semantic_hits: list[VectorHit],
+) -> bool:
+    """Сигнал слишком слаб для ответа, а reranker места не читал.
+
+    Reranker, если он отработал, судит сам: косинус E5 не сравнивает вопрос с
+    куском по смыслу так же точно и отклонял бы то, что reranker признал бы
+    ответом. Поиск по словам по выбору пользователя показывает совпадения слов.
+    Гибрид без смыслового сигнала отвечает чату, и ему нужен фрагмент с большей
+    частью содержательных слов вопроса; слабый косинус проверенного E5 спасает
+    только ещё большее покрытие.
+    """
+    if command.strategy == SearchStrategy.LEXICAL:
+        return False
+    if not semantic_hits:
+        return _lexical_coverage(command.query, lexical_hits) < LEXICAL_MIN_COVERAGE
+    if not _is_e5_index(session, active) or 1 - semantic_hits[0].distance >= E5_MIN_COSINE:
+        return False
+    if command.strategy == SearchStrategy.SEMANTIC:
+        lexical_hits = _lexical_candidates(
+            session, scope, command.query, preset.lexical_candidates,
+        )
+    return _lexical_coverage(command.query, lexical_hits) < LEXICAL_RESCUE_COVERAGE
+
+
+def _missing_terms(session: Session, scope: ScopeFilter, query: str) -> list[str]:
+    """Имена, аббревиатуры и термины вопроса, которых нет ни в одном фрагменте области."""
+    return [
+        term for term in specific_terms(with_synonyms(query))
+        if not mentions_term(session, scope.material_ids, term)
+    ]
+
+
+def _unprocessed_notes(session: Session, scope: ScopeFilter) -> list[str]:
+    """Материалы области без распознанного текста: искать в них нечего."""
+    names = [
+        material_display_name(material)
+        for material in session.scalars(
+            select(Material)
+            .where(Material.id.in_(scope.material_ids), Material.active_parse_revision == 0)
+            .options(defer(Material.outline), defer(Material.diagnostics))
+        )
+    ]
+    return ["Не обработаны и в поиске не участвуют: " + ", ".join(names)] if names else []
 
 
 def _degradation_notes(
@@ -628,8 +695,18 @@ def _lexical_read(hit: SearchHit, score: float) -> RetrievalHitRead:
 def _stale_material_names(
     session: Session, index: RetrievalIndex, material_ids: list[UUID]
 ) -> list[str]:
+    """Материалы с текстом, которого нет в индексе: их ищет только BM25.
+
+    Материал без распознанного текста сюда не входит: он не ищется и словами, а
+    пометка «устарел» отключала отказ по всему проекту из-за одного
+    необработанного файла.
+    """
     revisions = {UUID(item["material_id"]): item["revision"] for item in index.corpus_manifest}
-    materials = list(session.scalars(select(Material).where(Material.id.in_(material_ids))))
+    materials = list(session.scalars(
+        select(Material)
+        .where(Material.id.in_(material_ids), Material.active_parse_revision > 0)
+        .options(defer(Material.outline), defer(Material.diagnostics))
+    ))
     return [
         material_display_name(material)
         for material in materials

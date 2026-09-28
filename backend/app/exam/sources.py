@@ -201,6 +201,10 @@ async def find_sources(
     hits = _fuse([result.results for result in results])[:SOURCES_LIMIT]
     if not hits and any(result.no_relevant_match for result in results):
         notes.append("В материалах выбранной области не найдено достаточно надёжного ответа.")
+        missing = list(dict.fromkeys(term for result in results for term in result.missing_terms))
+        if missing:
+            quoted = ", ".join(f"«{term}»" for term in missing)
+            notes.append(f"В них не встречается: {quoted}.")
 
     if operation in COMPARING_OPERATIONS:
         present = list(dict.fromkeys(hit.locator.material_id for hit in hits))

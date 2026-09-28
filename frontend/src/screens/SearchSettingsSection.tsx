@@ -651,9 +651,11 @@ export function SearchSettingsSection({
           <p className="retrieval-neutral-note">{({
             fast: "Быстро: минимум кандидатов и без reranker — подходит для коротких запросов и слабого компьютера.",
             balanced: "Сбалансированно: равный вклад поиска по словам и смыслу, обычно лучший повседневный режим.",
-            accurate: "Точно: больше кандидатов и локальный reranker — медленнее, зато лучше для сложных формулировок.",
+            accurate: "Точно: локальный Qwen3 Reranker перечитывает 10 лучших мест вместе с вопросом, ставит выше отвечающие и отказывает, если ответа нет ни в одном. Нужна установленная модель; на процессоре это ≈ 15–20 с на запрос.",
           } as Record<RetrievalPreset, string>)[settings.preset]}</p>
-          <p className="retrieval-neutral-note">Chunking активного индекса: цель 384, максимум 480, overlap 64 токена. Для изменения нужна пересборка.</p>
+          {settings.active_index && (
+            <p className="retrieval-neutral-note">Нарезка активного индекса: цель {settings.active_index.chunk_target_tokens}, максимум {settings.active_index.chunk_max_tokens}, перекрытие {settings.active_index.chunk_overlap_tokens} токенов. Для изменения нужна пересборка.</p>
+          )}
         </section>
       </div>
     </div>

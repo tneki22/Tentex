@@ -111,6 +111,111 @@ def query_terms(query: str) -> list[str]:
     return [lemma for lemma in lemmas if lemma not in _SKIP_WORDS]
 
 
+#: Словарь синонимов терминологии (как synonym filter в Lucene): программа
+#: курса и учебник называют одно понятие по-разному. Пара попадает сюда только
+#: после проверки на реальных материалах: программа ОС спрашивает про
+#: «взаимоблокировку», учебник Кузнецова говорит «тупик».
+TERM_SYNONYMS: dict[str, str] = {"взаимоблокировка": "тупик"}
+
+
+def with_synonyms(query: str) -> str:
+    """Заменить термины запроса их названием из учебника, остальное не трогать."""
+    parts: list[str] = []
+    position = 0
+    for token, start, end in tokenize_with_positions(query):
+        synonym = TERM_SYNONYMS.get(_lemmatize_token(token))
+        if synonym:
+            parts += [query[position:start], synonym]
+            position = end
+    return "".join([*parts, query[position:]])
+
+
+#: Части речи, которые называют предмет вопроса. Глагол («утверждает»,
+#: «называют») задаёт форму вопроса, а в ответе стоит иначе или отсутствует.
+_CONTENT_POS = frozenset({"NOUN", "ADJF", "ADJS", "COMP", "PRTF"})
+
+
+def content_terms(query: str) -> list[str]:
+    """Леммы существительных, прилагательных, латиницы, чисел и слов вне словаря.
+
+    Часть речи незнакомого слова pymorphy3 угадывает («Херфиндаля» — деепричастие),
+    поэтому такое слово считается содержательным всегда. Запрос из одних глаголов
+    и служебных слов возвращает все свои леммы.
+    """
+    analyzer = _get_analyzer()
+    lemmas = [
+        lemma
+        for token in normalize(query)
+        if (lemma := _lemmatize_token(token)) not in _SKIP_WORDS
+        and (
+            not _CYRILLIC_RE.search(token)
+            or not analyzer.word_is_known(token)
+            or analyzer.parse(token)[0].tag.POS in _CONTENT_POS
+        )
+    ]
+    return lemmas or query_terms(query)
+
+
+#: Граммемы pymorphy3 для имён собственных: фамилия, имя, отчество, топоним,
+#: организация, торговая марка.
+_PROPER_NAME = frozenset({"Surn", "Name", "Patr", "Geox", "Orgn", "Trad"})
+_LATIN_NAME_RE = re.compile(r"[0-9A-Za-z]+(?:[-_][0-9A-Za-z]+)*")
+
+
+def _latin_names(query: str) -> list[tuple[int, str]]:
+    """Латинские слова и имена из частей через «_» или «-» с позицией в запросе.
+
+    `io_uring`, `IS-LM`, `Wi-Fi`, `SHA-256` — одно имя: токенизатор режет их на
+    части, и «IS» с «LM» по отдельности короче порога. Через дефис части
+    склеиваются, только если каждая не короче двух знаков: `A-B` — формула, а
+    `B-tree` учебник пишет «B-дерево».
+    """
+    names: list[tuple[int, str]] = []
+    for match in _LATIN_NAME_RE.finditer(query):
+        pieces = match.group(0).split("-")
+        if all(len(piece) >= 2 for piece in pieces):
+            names.append((match.start(), match.group(0)))
+            continue
+        offset = match.start()
+        for piece in pieces:
+            names.append((offset, piece))
+            offset += len(piece) + 1
+    return names
+
+
+def specific_terms(query: str) -> list[str]:
+    """Имена, аббревиатуры и слова вне общего словаря в том виде, как их написали.
+
+    Такие слова называют предмет вопроса: если их нет в материалах, материалы
+    не о нём. Общеупотребительное слово («привилегия», «протокол») может быть
+    синонимом формулировки учебника, поэтому сюда не входит. То же с английским
+    словом строчными: «likelihood» или «dropout» русский конспект пишет
+    по-русски. Латиница — аббревиатуры, названия и идентификаторы (`ZFC`,
+    `WireGuard`, `io_uring`, `IS-LM`, `v2`): с заглавной буквой, цифрой или
+    подчёркиванием; от трёх символов или с цифрой, чтобы не считать терминами
+    переменные формул. Кириллица — слово, которого нет в словаре
+    pymorphy3, или имя собственное.
+    """
+    analyzer = _get_analyzer()
+    found: list[tuple[int, str]] = []
+    for start, written in _latin_names(query):
+        has_digit = any(char.isdigit() for char in written)
+        if not written.isdigit() and (len(written) >= 3 or has_digit) and (
+            has_digit or "_" in written or any(char.isupper() for char in written)
+        ):
+            found.append((start, written))
+    for token, start, end in tokenize_with_positions(query):
+        if _CYRILLIC_RE.search(token) and len(token) >= 3 and (
+            not analyzer.word_is_known(token)
+            or analyzer.parse(token)[0].tag.grammemes & _PROPER_NAME
+        ):
+            found.append((start, query[start:end]))
+    terms: dict[str, str] = {}
+    for _, written in sorted(found):
+        terms.setdefault(fold(written), written)
+    return list(terms.values())
+
+
 def prefix_term(query: str) -> str | None:
     """Последний токен запроса как недопечатанное слово, если он не слишком короток."""
     tokens = normalize(query)

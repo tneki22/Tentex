@@ -1055,13 +1055,13 @@ def test_e5_gate_requires_the_measured_recipe(session: Session) -> None:
     assert not _is_e5_index(session, index)
 
 
-def test_e5_semantic_alias_preserves_other_terms() -> None:
-    from app.retrieval.search import _semantic_alias_query
+def test_term_synonyms_replace_only_the_known_term() -> None:
+    from app.materials.lexicon import with_synonyms
 
-    assert _semantic_alias_query("Как предотвратить взаимоблокировку процессов?") == (
+    assert with_synonyms("Как предотвратить взаимоблокировку процессов?") == (
         "Как предотвратить тупик процессов?"
     )
-    assert _semantic_alias_query("Формула Байеса") == "Формула Байеса"
+    assert with_synonyms("Формула Байеса") == "Формула Байеса"
 
 
 def test_lexical_rescue_requires_most_query_terms() -> None:
@@ -1111,3 +1111,166 @@ def test_formula_query_expands_symbols_only_when_the_answer_signal_is_stronger(
     assert _lexical_candidates(None, scope, query_with_name, 10) == [named]
     assert _lexical_coverage(query_with_answer, [formula]) > .75
 
+
+
+def test_specific_terms_are_names_acronyms_and_words_outside_the_dictionary() -> None:
+    """Общее слово может быть синонимом учебника, имя и аббревиатура — нет."""
+    from app.materials.lexicon import specific_terms
+
+    assert specific_terms("Как работает протокол QUIC v2 согласно RFC 9369?") == [
+        "QUIC", "v2", "RFC",
+    ]
+    assert specific_terms("Что такое бутстреп и шардирование?") == ["бутстреп", "шардирование"]
+    assert specific_terms("Сформулируйте теорему Тьюринга") == ["Тьюринга"]
+    assert specific_terms("Почему привилегии процесса меняются?") == []
+    assert specific_terms("Найдите P(x) и F₁ при n = 17") == []
+    # Английское слово строчными конспект мог написать по-русски; имя — нет.
+    assert specific_terms("Что такое likelihood и self-attention?") == []
+    assert specific_terms("Как WireGuard и io_uring работают в Linux?") == [
+        "WireGuard", "io_uring", "Linux",
+    ]
+    # Части через дефис — одно имя, если каждая не короче двух знаков.
+    assert specific_terms("Как определяется равновесие в модели IS-LM?") == ["IS-LM"]
+    assert specific_terms("Чем B-tree отличается от A-B?") == []
+
+
+def _economics_material(session: Session) -> Material:
+    from app.bindings.search import reindex_material
+
+    material = make_material(session, "92")
+    add_page_with_fragments(
+        session, material, page_number=1, revision=1, block_title="Безработица",
+        fragments=["Закон Оукена связывает рост ВНП и норму безработицы.",
+                   "Тупик в распределении ресурсов предотвращают заранее."],
+    )
+    reindex_material(session, material.id)
+    session.commit()
+    return material
+
+
+def test_question_naming_an_absent_term_is_refused_with_that_term(session: Session) -> None:
+    """Любое найденное место отвечало бы на другой вопрос — выдача пуста и объяснима."""
+    import asyncio
+
+    material = _economics_material(session)
+
+    def search(query: str) -> RetrievalSearchRead:
+        return asyncio.run(HybridRetriever().search(session, RetrievalSearchWrite(
+            query=query, scope=RetrievalScope.SELECTED_MATERIALS, material_ids=[material.id],
+        )))
+
+    absent = search("Как рассчитать индекс Херфиндаля?")
+    assert absent.no_relevant_match and absent.results == []
+    assert absent.missing_terms == ["Херфиндаля"]
+    # Имя через дефис уходит в FTS строкой в кавычках: без них это ошибка синтаксиса.
+    assert search("Равновесие в модели IS-LM").missing_terms == ["IS-LM"]
+    assert search("Метод Metropolis-Hastings").missing_terms == ["Metropolis-Hastings"]
+    # Основа слова находит другую форму: «Оукена» в вопросе, «Оукена» и «Оукен» в тексте.
+    assert search("Что утверждает закон Оукена?").results
+    # Синоним из словаря терминов не считается отсутствующим словом.
+    assert not search("Как предотвратить взаимоблокировку?").missing_terms
+
+
+def test_unprocessed_material_does_not_switch_off_refusal(session: Session, monkeypatch) -> None:
+    """Файл без текста не «устарел»: он не ищется вовсе и отказ по проекту не отменяет."""
+    import asyncio
+
+    project = make_exam_project(session)
+    material = make_material(session, "816")
+    link_material(session, project, material)
+    pending = make_material(session, "817")
+    pending.display_name = "Хабр.md"
+    pending.status = MaterialState.READY_TO_PROCESS
+    pending.active_parse_revision = 0
+    link_material(session, project, pending)
+    profile = _profile(session)
+    profile.model_id = "intfloat/multilingual-e5-base"
+    profile.query_template = "query: {text}"
+    profile.document_template = "passage: {text}"
+    index = _index(session, profile)
+    index.corpus_manifest = [
+        {"material_id": str(material.id), "revision": material.active_parse_revision}
+    ]
+    session.add(RetrievalSettings(id=1, active_index_id=index.id))
+    session.commit()
+
+    async def weak_semantic(*_args):
+        return [VectorHit(uuid4(), distance=.19)]
+
+    monkeypatch.setattr(HybridRetriever, "_semantic_ids", weak_semantic)
+    monkeypatch.setattr("app.retrieval.search._lexical_candidates", lambda *_args: [])
+    result = asyncio.run(HybridRetriever().search(session, RetrievalSearchWrite(
+        query="иерархия скоростей передачи", project_id=project.id,
+    )))
+
+    assert result.no_relevant_match
+    assert result.degradation_reasons == ["Не обработаны и в поиске не участвуют: Хабр.md"]
+
+
+def test_accurate_preset_refuses_when_reranker_rejects_every_place(
+    session: Session, monkeypatch
+) -> None:
+    """Reranker читает вопрос и кусок вместе; вероятность ниже 0,5 у всех — ответа нет."""
+    import asyncio
+
+    material = _economics_material(session)
+    session.add(RetrievalSettings(id=1, preset=RetrievalPreset.ACCURATE))
+    session.commit()
+    probability = .2
+
+    async def rerank(_query, ranking, *_args, **_kwargs):
+        return [(item_id, probability, signals) for item_id, _, signals in ranking]
+
+    monkeypatch.setattr("app.retrieval.search._rerank", rerank)
+
+    def search() -> RetrievalSearchRead:
+        return asyncio.run(HybridRetriever().search(session, RetrievalSearchWrite(
+            query="норма безработицы", strategy=SearchStrategy.LEXICAL,
+            scope=RetrievalScope.SELECTED_MATERIALS, material_ids=[material.id],
+        )))
+
+    assert search().no_relevant_match
+    probability = .9
+    assert search().results
+
+
+def test_reranker_verdict_replaces_the_cosine_threshold(session: Session, monkeypatch) -> None:
+    """Прочитав места, reranker решает сам; без него действует порог cosine E5."""
+    import asyncio
+
+    material = _economics_material(session)
+    profile = _profile(session)
+    profile.model_id = "intfloat/multilingual-e5-base"
+    profile.query_template = "query: {text}"
+    profile.document_template = "passage: {text}"
+    index = _index(session, profile)
+    index.corpus_manifest = [
+        {"material_id": str(material.id), "revision": material.active_parse_revision}
+    ]
+    session.add(RetrievalSettings(
+        id=1, active_index_id=index.id, preset=RetrievalPreset.ACCURATE,
+    ))
+    session.commit()
+    available = True
+
+    async def weak_semantic(*_args):
+        return [VectorHit(uuid4(), distance=.19)]
+
+    async def rerank(_query, ranking, *_args, **_kwargs):
+        if not available:
+            raise ConnectionError("модель не установлена")
+        return [(item_id, .9, signals) for item_id, _, signals in ranking]
+
+    monkeypatch.setattr(HybridRetriever, "_semantic_ids", weak_semantic)
+    monkeypatch.setattr("app.retrieval.search._rerank", rerank)
+
+    def search() -> RetrievalSearchRead:
+        # Покрытие 2/3 ниже 0,75, cosine 0,81 ниже 0,83: без reranker — отказ.
+        return asyncio.run(HybridRetriever().search(session, RetrievalSearchWrite(
+            query="Как связаны рост ВНП и занятость?",
+            scope=RetrievalScope.SELECTED_MATERIALS, material_ids=[material.id],
+        )))
+
+    assert search().results
+    available = False
+    assert search().no_relevant_match
