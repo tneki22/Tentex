@@ -17,6 +17,7 @@ from app.lessons.export import importer
 from app.lessons.export import service as export_service
 from app.lessons.export.markdown_in import parse_markdown
 from app.lessons.export.pdf import normalize_tex
+from app.lessons.export.render_latex import LatexRenderer, katex_renders
 from app.lessons.schemas import LessonBlockWrite, LessonNoteWrite
 from app.models import (
     Binding,
@@ -203,6 +204,15 @@ def test_note_markdown_follows_the_app_renderer():
     assert kinds == ["Paragraph", "MathBlock"]
     names = [type(node).__name__ for node in blocks[0].content]
     assert "Citation" in names and "Math" in names
+
+
+def test_latex_prints_formulas_katex_cannot_draw_as_source():
+    assert katex_renders("\\frac{a}{b} + \\mathsf{P}(A) \\begin{cases} x \\\\ y \\end{cases}")
+    assert not katex_renders("\\foobar{x}")
+    assert not katex_renders("\\begin{weird} x \\end{weird}")
+    doc = parse_markdown("Ошибка OCR $\\b x$ и верная $x^2$.")
+    text = LatexRenderer().blocks(doc)
+    assert "\\texttt{\\$\\textbackslash{}b x\\$}" in text and "$x^2$" in text
 
 
 def test_tex_is_normalized_for_mitex():

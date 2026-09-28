@@ -7,8 +7,35 @@
 
 from __future__ import annotations
 
+import re
+from functools import lru_cache
+from pathlib import Path
+
 from app.lessons.export import ir
 from app.lessons.export.render_markdown import AssetNames
+
+_COMMAND = re.compile(r"\\([A-Za-z]+)")
+_ENVIRONMENT = re.compile(r"\\begin\{([A-Za-z]+\*?)\}")
+
+
+@lru_cache(maxsize=1)
+def _katex_names() -> frozenset[str]:
+    """Команды KaTeX фронтенда; список обновляет `frontend/scripts/katex-commands.mjs`."""
+    path = Path(__file__).with_name("katex_commands.txt")
+    return frozenset(line for line in path.read_text(encoding="utf-8").splitlines()
+                     if line and not line.startswith("#"))
+
+
+def katex_renders(tex: str) -> bool:
+    """Формулу нарисует KaTeX урока: все команды и окружения ему известны.
+
+    Урок показывает непонятую формулу исходником. В .tex её надо вывести так же:
+    одна неизвестная `\\b` из распознавания иначе роняет сборку всего документа.
+    """
+    names = _katex_names()
+    if any(f"env:{name}" not in names for name in _ENVIRONMENT.findall(tex)):
+        return False
+    return all(name in names for name in _COMMAND.findall(tex))
 
 _SPECIAL = {
     "\\": r"\textbackslash{}",
@@ -52,10 +79,15 @@ PREAMBLE = r"""% Экспорт уроков Tentex. Собирается pdflat
   \usepackage[T2A]{fontenc}
   \usepackage[utf8]{inputenc}
 \else
+  % Шрифты по именам файлов пакета cm-unicode: так их находят и TeX Live, и MiKTeX,
+  % и Tectonic, даже без системной базы шрифтов.
   \usepackage{fontspec}
-  \setmainfont{CMU Serif}
-  \setsansfont{CMU Sans Serif}
-  \setmonofont{CMU Typewriter Text}
+  \setmainfont{cmunrm}[Extension=.otf, BoldFont=cmunbx, ItalicFont=cmunti,
+    BoldItalicFont=cmunbi]
+  \setsansfont{cmunss}[Extension=.otf, BoldFont=cmunsx, ItalicFont=cmunsi,
+    BoldItalicFont=cmunso]
+  \setmonofont{cmuntt}[Extension=.otf, BoldFont=cmuntb, ItalicFont=cmunit,
+    BoldItalicFont=cmuntx]
 \fi
 \usepackage[russian]{babel}
 \usepackage[margin=2cm]{geometry}
@@ -81,11 +113,7 @@ PREAMBLE = r"""% Экспорт уроков Tentex. Собирается pdflat
 \providecommand{\degree}{^\circ}
 \providecommand{\argmax}{\operatorname*{arg\,max}}
 \providecommand{\argmin}{\operatorname*{arg\,min}}
-\providecommand{\tg}{\operatorname{tg}}
-\providecommand{\ctg}{\operatorname{ctg}}
-\providecommand{\arctg}{\operatorname{arctg}}
-\providecommand{\sh}{\operatorname{sh}}
-\providecommand{\ch}{\operatorname{ch}}
+% \tg, \ctg, \arctg, \sh, \ch объявляет babel с русским языком — как и KaTeX.
 
 \newenvironment{lessoncallout}[1]%
   {\begin{quote}\textbf{#1.}\ }%
@@ -130,6 +158,9 @@ class LatexRenderer:
                     parts.append(f"\\sout{{{self.inline(children)}}}")
                 case ir.Code(text):
                     parts.append(f"\\texttt{{{escape(text)}}}")
+                case ir.Math(tex, display) if not katex_renders(tex):
+                    source = f"$${tex}$$" if display else f"${tex}$"
+                    parts.append(f"\\texttt{{{escape(source)}}}")
                 case ir.Math(tex, display):
                     parts.append(f"\\[{tex}\\]" if display else f"${tex}$")
                 case ir.Link(href, children):
@@ -170,6 +201,8 @@ class LatexRenderer:
                 # verbatim не умеет `\end{verbatim}` внутри себя — разрываем такую строку.
                 safe = text.replace("\\end{verbatim}", "\\end {verbatim}")
                 return f"\\begin{{verbatim}}\n{safe}\n\\end{{verbatim}}"
+            case ir.MathBlock(tex) if not katex_renders(tex):
+                return self.block(ir.CodeBlock(f"$${tex}$$"))
             case ir.MathBlock(tex):
                 return f"\\[\n{tex}\n\\]"
             case ir.Table():
