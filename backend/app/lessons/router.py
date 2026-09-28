@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.background.schemas import BackgroundJobStartRead
 from app.db import get_session
-from app.lessons import bulk, editing, from_search, progress, service
+from app.lessons import ai_build, bulk, editing, from_search, progress, service
+from app.lessons.ai_schemas import LessonAiBuildWrite, LessonAiOrder, LessonAiPreflightRead
 from app.lessons.schemas import (
     LessonBlockWrite,
     LessonBulkResult,
@@ -68,6 +70,22 @@ def create_bulk_lessons(
     project_id: UUID, command: LessonBulkWrite, session: SessionDependency
 ) -> LessonBulkResult:
     return bulk.create_bulk_lessons(session, project_id, command)
+
+
+@router.post("/ai/preflight", response_model=LessonAiPreflightRead)
+async def lesson_ai_preflight(
+    project_id: UUID, command: LessonAiOrder, session: SessionDependency
+) -> LessonAiPreflightRead:
+    """Материалы, кандидаты, паспорт урока и оценка уровней — без вызова модели."""
+    return await ai_build.preflight(session, project_id, command)
+
+
+@router.post("/ai/build", response_model=BackgroundJobStartRead, status_code=202)
+async def start_lesson_ai_build(
+    project_id: UUID, command: LessonAiBuildWrite, session: SessionDependency
+) -> BackgroundJobStartRead:
+    """Сборка урока фоном; итог задачи — `{lesson_id, dropped, cost_usd}`."""
+    return await ai_build.start(session, project_id, command)
 
 
 @router.post("/{lesson_id}/blocks", response_model=LessonChangeResult)

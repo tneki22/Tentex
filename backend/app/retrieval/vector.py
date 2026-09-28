@@ -8,7 +8,11 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.retrieval.schemas import RetrievalHitRead
 from app.retrieval.snapshot import current_revisions, index_snapshot
+
+#: Константа RRF из статьи Cormack et al. (2009); та же у слияния слов и смысла.
+RRF_K = 60
 
 
 class VectorUnavailableError(RuntimeError):
@@ -61,7 +65,7 @@ def reciprocal_rank_fusion(
     lexical_ids: list[UUID],
     semantic_ids: list[UUID],
     *,
-    k: int = 60,
+    k: int = RRF_K,
     lexical_weight: float = 1.0,
     semantic_weight: float = 1.0,
 ) -> list[tuple[UUID, float, list[str]]]:
@@ -80,3 +84,23 @@ def reciprocal_rank_fusion(
         key=lambda item: item[1],
         reverse=True,
     )
+
+
+def fuse_rankings(rankings: list[list[RetrievalHitRead]]) -> list[RetrievalHitRead]:
+    """Слить выдачи нескольких запросов по RRF; одно место — один раз.
+
+    Учебный чат ищет по вопросу и по нему же с прошлым вопросом, урок — по теме,
+    подпунктам и подсказке «Где искать»; ранги разных запросов несопоставимы
+    по score, но сопоставимы по месту в выдаче.
+    """
+    if len(rankings) == 1:
+        return rankings[0]
+    scores: dict[UUID, float] = {}
+    hits: dict[UUID, RetrievalHitRead] = {}
+    for ranking in rankings:
+        for rank, hit in enumerate(ranking):
+            chunk_id = hit.locator.chunk_id
+            hits.setdefault(chunk_id, hit)
+            scores[chunk_id] = scores.get(chunk_id, 0.0) + 1 / (RRF_K + rank + 1)
+    order = sorted(scores, key=lambda chunk_id: scores[chunk_id], reverse=True)
+    return [hits[chunk_id] for chunk_id in order]

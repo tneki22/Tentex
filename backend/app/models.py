@@ -253,6 +253,9 @@ class BackgroundJobKind(StrEnum):
     STORAGE_VERIFY = "storage_verify"
     STORAGE_CLEANUP = "storage_cleanup"
     IMAGE_DESCRIPTIONS = "image_descriptions"
+    # Модельные сценарии Уроков; подвид (`plan · build · enrich · practice`) —
+    # в `checkpoint.subtype`, как у `ai_preparation`.
+    AI_LESSON = "ai_lesson"
 
 
 class BackgroundJobState(StrEnum):
@@ -403,6 +406,24 @@ class LessonRefRole(StrEnum):
     SUPPORT = "support"
 
 
+class StudyTaskForm(StrEnum):
+    """Формы задания урока; все, кроме открытого ответа, проверяются по ключу."""
+
+    SINGLE_CHOICE = "single_choice"
+    MULTIPLE_CHOICE = "multiple_choice"
+    FILL_BLANKS = "fill_blanks"
+    NUMERIC = "numeric"
+    ORDERING = "ordering"
+    MATCHING = "matching"
+    OPEN_ANSWER = "open_answer"
+
+
+class StudyTaskDifficulty(StrEnum):
+    REMEMBER = "remember"
+    UNDERSTAND = "understand"
+    APPLY = "apply"
+
+
 class ChatMessageRole(StrEnum):
     USER = "user"
     EXAMINER = "examiner"
@@ -482,12 +503,15 @@ class ActivityKind(StrEnum):
 
     FREE_ANSWER = "free_answer"
     CARD = "card"
+    # Задание урока учебникового режима (FR-L11): форма и ключ — в `study_tasks`.
+    STUDY_TASK = "study_task"
 
 
 class ActivityOrigin(StrEnum):
     MANUAL = "manual"
     FRAGMENT = "fragment"
     EXAM_CHAT = "exam_chat"
+    LESSON = "lesson"
 
 
 class CardState(StrEnum):
@@ -2331,6 +2355,9 @@ class Lesson(Base):
     # Позиция чтения: пользователь один, отдельная таблица прохождения не нужна.
     last_block_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Как собран модельный урок: шаблон, уровень, основа, модель, введённые
+    # понятия (`concepts` — «уже известно» следующим урокам), стоимость, задача.
+    build_meta: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
@@ -2391,6 +2418,8 @@ class LessonBlock(Base):
     )
     media_path: Mapped[str | None] = mapped_column(String, nullable=True)
     bound_program_node_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    # Кусок материала свёрнут под пояснением: «▸ В учебнике: …» и «Раскрыть».
+    collapsed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
@@ -2429,6 +2458,53 @@ class LessonSourceRef(Base):
     always_pages: Mapped[bool] = mapped_column(Boolean, default=False)
     # Граничный фрагмент не нашёлся в новой ревизии — граница стала границей страницы.
     boundary_shifted: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Метка опорной ссылки пояснения модели: `[S3]` в тексте блока открывает её.
+    # Номера сквозные по уроку, поэтому одна и та же опора в разных блоках — один S-ID.
+    citation_label: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class StudyTask(Base):
+    """Задание урока — Активность `study_task` с формой, ключом и опорами (FR-L11).
+
+    Первичный ключ — сама Активность: у задания нет жизни отдельно от неё, а
+    попытки и оценки уже висят на `activities`. Удаление мягкое: попытки
+    удалённого задания остаются в истории.
+    """
+
+    __tablename__ = "study_tasks"
+    __table_args__ = (
+        Index("ix_study_tasks_lesson", "lesson_id"),
+        Index("ix_study_tasks_project", "project_id"),
+    )
+
+    activity_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("activities.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    )
+    lesson_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("lessons.id", ondelete="SET NULL"), nullable=True
+    )
+    form: Mapped[StudyTaskForm] = mapped_column(enum_type(StudyTaskForm, "study_task_form"))
+    prompt_md: Mapped[str] = mapped_column(Text)
+    # Варианты, пропуски, пункты, пары, единица и допуск — по форме задания.
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    answer_key: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    reference_md: Mapped[str | None] = mapped_column(Text, nullable=True)
+    explanation_md: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hint_md: Mapped[str | None] = mapped_column(Text, nullable=True)
+    difficulty: Mapped[StudyTaskDifficulty] = mapped_column(
+        enum_type(StudyTaskDifficulty, "study_task_difficulty")
+    )
+    basis: Mapped[LessonBasis] = mapped_column(enum_type(LessonBasis, "study_task_basis"))
+    supporting_fragment_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    source_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    ai_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 # Регистрация таблиц подсистемы для create_all и Alembic.

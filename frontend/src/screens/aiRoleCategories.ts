@@ -39,6 +39,12 @@ export const AI_ROLE_CATEGORIES: readonly AiRoleCategory[] = [
     ],
   },
   {
+    id: "lessons",
+    title: "Уроки",
+    description: "Сборка урока по теме, дополнение готового урока и задания для самопроверки.",
+    roles: ["lesson_builder", "lesson_enrich", "lesson_practice"],
+  },
+  {
     id: "preparation",
     title: "План подготовки",
     description: "Нагрузка, учебные блоки, распределение по дням и рекомендация на сегодня.",

@@ -20,6 +20,7 @@ from app.lessons import refs as refs_module
 from app.lessons.boundaries import FragmentView, NextItem, OutlineRange, Pages, Piece, Position
 from app.lessons.schemas import (
     LessonBlockRead,
+    LessonBuildRead,
     LessonChangeResult,
     LessonManualWrite,
     LessonQuickWrite,
@@ -395,7 +396,23 @@ def _ref_read(
             and (ref.from_fragment_id is not None or ref.to_fragment_id is not None)
         ),
         pages_shown=pages_shown,
+        citation_label=ref.citation_label,
     )
+
+
+def _ref_order(ref: LessonSourceRef) -> tuple[str, int]:
+    """Сначала содержимое куска, затем опоры пояснения по номеру: S2 раньше S10."""
+    label = ref.citation_label or ""
+    return ref.role.value, int(label[1:]) if label[1:].isdigit() else 0
+
+
+def build_read(lesson: Lesson) -> LessonBuildRead | None:
+    """Подпись модельного урока; у ручного и быстрого урока её нет."""
+    meta = lesson.build_meta or {}
+    if "template" not in meta:
+        return None
+    fields = LessonBuildRead.model_fields
+    return LessonBuildRead.model_validate({key: meta.get(key) for key in fields if key in meta})
 
 
 def _lesson_read(session: Session, lesson: Lesson) -> LessonRead:
@@ -453,13 +470,15 @@ def _lesson_read(session: Session, lesson: Lesson) -> LessonRead:
                 bound_program_node_id=block.bound_program_node_id,
                 media_kind=media_kind(block),
                 media_url=block.media_path if media_kind(block) == "link" else None,
+                collapsed=block.collapsed,
                 refs=[
                     _ref_read(session, lesson.project_id, ref, shown.get(ref.id, []))
-                    for ref in sorted(refs_by_block[block.id], key=lambda item: item.role.value)
+                    for ref in sorted(refs_by_block[block.id], key=_ref_order)
                 ],
             )
             for block in blocks
         ],
+        build=build_read(lesson),
         created_at=lesson.created_at,
         updated_at=lesson.updated_at,
     )
@@ -516,6 +535,7 @@ def lessons_overview(session: Session, project_id: UUID) -> LessonsOverviewRead:
                 needs_review=any(needs_review(topic) for topic in topics_by_lesson[lesson.id]),
                 completed_at=lesson.completed_at,
                 updated_at=lesson.updated_at,
+                build=build_read(lesson),
             )
             for lesson in lessons
         ]

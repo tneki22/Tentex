@@ -97,6 +97,8 @@ def _subject(session: Session, job: BackgroundJob) -> str:
         material = session.get(Material, job.material_id)
         if material is not None:
             return material_display_name(material)
+    if job.kind == BackgroundJobKind.AI_LESSON and job.checkpoint.get("topic_title"):
+        return f"Урок «{job.checkpoint['topic_title']}»"
     if job.project_id is not None:
         project = session.get(Project, job.project_id)
         if project is not None:
@@ -155,7 +157,7 @@ def _model_label(session: Session, job: BackgroundJob) -> str:
         return "Проверка хранилища"
     if job.kind == BackgroundJobKind.STORAGE_CLEANUP:
         return "Очистка временного"
-    if job.kind == BackgroundJobKind.IMAGE_DESCRIPTIONS:
+    if job.kind in {BackgroundJobKind.IMAGE_DESCRIPTIONS, BackgroundJobKind.AI_LESSON}:
         return str(job.checkpoint.get("model_label") or "внешняя модель")
     if job.kind in REVIEW_REQUIRED_KINDS:
         checkpoint = job.checkpoint
