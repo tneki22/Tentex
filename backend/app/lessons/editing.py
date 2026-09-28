@@ -19,6 +19,7 @@ from app.bindings.service import ACTIVE_STATUSES
 from app.db import project_write_transaction
 from app.lessons import boundaries
 from app.lessons import refs as refs_module
+from app.lessons.export.resolve import resolve_bounds
 from app.lessons.refs import Bounds
 from app.lessons.schemas import (
     LessonBlockWrite,
@@ -41,6 +42,7 @@ from app.lessons.service import (
     _require_study_node,
     _source_name,
     media_kind,
+    relink_material,
 )
 from app.lessons.task_store import sync_lesson_tasks
 from app.materials.storage import material_path, store_namespaced_upload
@@ -167,6 +169,8 @@ def _ref_data(ref: LessonSourceRef) -> dict:
         "to_fragment_id": str(ref.to_fragment_id) if ref.to_fragment_id else None,
         "region_bbox": ref.region_bbox, "always_pages": ref.always_pages,
         "boundary_shifted": ref.boundary_shifted, "citation_label": ref.citation_label,
+        "snapshot_md": ref.snapshot_md, "material_sha256": ref.material_sha256,
+        "snapshot_anchors": ref.snapshot_anchors,
     }
 
 
@@ -228,6 +232,9 @@ def _restore_refs(session: Session, block_id: UUID, refs: list[dict]) -> None:
         ref.always_pages = data["always_pages"]
         ref.boundary_shifted = data.get("boundary_shifted", False)
         ref.citation_label = data.get("citation_label")
+        ref.snapshot_md = data.get("snapshot_md")
+        ref.material_sha256 = data.get("material_sha256")
+        ref.snapshot_anchors = data.get("snapshot_anchors")
 
 
 def _restore_topics(session: Session, lesson: Lesson, topics: list[dict]) -> None:
@@ -729,6 +736,52 @@ def _remove_topic(edit: _Edit) -> None:
         session.get(LessonTopic, (edit.lesson.id, topic_id)).sort_order = index
 
 
+def _relink(edit: _Edit) -> None:
+    """Куски из файла уроков — снова на материал проекта с тем же файлом (SHA-256).
+
+    Границы переносятся по якорям текста абзацев; не нашедшаяся граница становится
+    краем страницы с «Разрез сдвинут». Привязки — как у ручного добавления куска.
+    """
+    session, project_id = edit.session, edit.lesson.project_id
+    linked = 0
+    topics = edit.topic_ids()
+    for block in edit.blocks:
+        for ref in session.scalars(select(LessonSourceRef).where(
+            LessonSourceRef.block_id == block.id
+        )):
+            pair = relink_material(session, project_id, ref)
+            if pair is None:
+                continue
+            material, link = pair
+            resolved = resolve_bounds(session, material, ref.page_from, ref.page_to,
+                                      ref.snapshot_anchors)
+            if resolved is None:
+                continue
+            bounds = resolved.bounds
+            ref.material_id = material.id
+            ref.source_name_snapshot = _source_name(material, link, ref.source_name_snapshot)
+            ref.material_revision = material.active_parse_revision or None
+            ref.page_from, ref.page_to = bounds.page_from, bounds.page_to
+            ref.from_fragment_id = bounds.from_fragment_id
+            ref.to_fragment_id = bounds.to_fragment_id
+            ref.boundary_shifted = resolved.shifted
+            ref.snapshot_md = ref.material_sha256 = ref.snapshot_anchors = None
+            linked += 1
+            node_id = block.bound_program_node_id or (topics[0] if topics else None)
+            if ref.role != LessonRefRole.CONTENT or node_id is None:
+                continue
+            if ref.region_bbox is not None:
+                fragment_ids = refs_module.fragments_in_region(
+                    session, material, bounds.page_from, ref.region_bbox)
+            else:
+                order = refs_module.load_order(session, material, bounds.page_from, bounds.page_to)
+                fragment_ids = refs_module.content_fragment_ids(order, bounds)
+            edit.binding_ids += _bind_fragments(
+                session, project_id, node_id, material.id, fragment_ids, block.origin)
+    if linked == 0:
+        raise _invalid("В проекте нет материалов для кусков этого урока", "lesson_relink_nothing")
+
+
 HANDLERS: dict[str, Callable[[_Edit], None]] = {
     "add_note": _add_note,
     "add_page": _add_page,
@@ -747,6 +800,7 @@ HANDLERS: dict[str, Callable[[_Edit], None]] = {
     "remove_topic": _remove_topic,
     "set_always_pages": _set_always_pages,
     "set_collapsed": _set_collapsed,
+    "relink": _relink,
 }
 
 
