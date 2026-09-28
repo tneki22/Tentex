@@ -185,7 +185,7 @@ def test_detailed_review_rewrites_flagged_step(session, project):
     assert job.state == BackgroundJobState.COMPLETED, job.error
     assert job.checkpoint["rewritten"] == [1]
     rewrite = transport.complete_requests[-1]["messages"][-1]["content"]
-    assert "термин использован раньше определения" in rewrite
+    assert "термин не объяснён до использования" in rewrite
     assert _notes(session, job) == ["Среда общая [S1].", "Исправленный текст [S2]."]
     stages = [run.context_manifest[0]["stage"] for run in session.scalars(
         select(AiRun).where(AiRun.job_id == job.id).order_by(AiRun.created_at))]
