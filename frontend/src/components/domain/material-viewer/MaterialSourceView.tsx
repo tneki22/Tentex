@@ -9,14 +9,12 @@ import {
   type LibraryMaterialDetailRead,
   type MaterialPageRead,
   type ParserMode,
-} from "../../api/materials";
-import {
-  PageFlow,
-  StructuredPage,
-  TimedTranscript,
-  type PageFlowMode,
-} from "../../components/domain/material-viewer";
-import { EmptyState, LoadingState, Switch } from "../../components/ui";
+} from "../../../api/materials";
+import { EmptyState, LoadingState, Switch } from "../../ui";
+import { PageFlow } from "./PageFlow";
+import { StructuredPage } from "./StructuredPage";
+import { TimedTranscript } from "./TimedTranscript";
+import type { PageFlowMode } from "./types";
 import { AudioTranscriptView } from "./AudioTranscriptView";
 import { WebSnapshotView } from "./WebSnapshotView";
 

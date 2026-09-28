@@ -9084,8 +9084,30 @@ button.wizard-back-projects {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 0;
+  grid-template-columns: minmax(0, 1fr);
   overflow: hidden;
+}
+
+.materials-document-stage.has-outline {
+  grid-template-columns: var(--materials-outline-width) minmax(0, 1fr);
+}
+
+.materials-document-stage > .viewer-stage {
+  min-width: 0;
+  min-height: 0;
+}
+
+.materials-document-stage > .viewer-outline {
+  min-width: 0;
+  background: var(--paper);
+}
+
+.materials-document-stage.has-overlay-outline > .viewer-outline {
+  position: absolute;
+  z-index: 3;
+  inset: 0 auto 0 0;
+  width: min(var(--materials-outline-width), calc(100% - var(--space-12)));
+  box-shadow: var(--shadow-lg);
 }
 
 /* Обзор материалов — без тулбара, единственный ребёнок .materials-document-area:
@@ -9101,53 +9123,6 @@ button.wizard-back-projects {
   background: transparent;
 }
 
-/* Зоны листания по краям: попасть мышью в поля листа проще, чем в кнопку тулбара. */
-.materials-page-zone {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  z-index: 2;
-  /* Уже, чем поля листа: зона не должна перехватывать клики по тексту,
-     которыми ставят привязки. */
-  width: clamp(32px, 5%, 64px);
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity var(--motion-fast) var(--motion-ease-out);
-}
-
-.materials-page-zone.is-prev { left: 0; --page-zone-fade: right; }
-/* Отступ справа оставляет полосу прокрутки доступной мыши. */
-.materials-page-zone.is-next { right: 14px; --page-zone-fade: left; }
-
-.materials-page-zone > svg {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  padding: 6px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  background: var(--paper-strong);
-  box-shadow: var(--shadow-md);
-}
-
-.materials-page-zone:hover,
-.materials-page-zone:focus-visible {
-  opacity: 1;
-  background: linear-gradient(to var(--page-zone-fade), var(--surface-sunken), transparent);
-}
-
-.materials-page-zone:disabled {
-  cursor: default;
-  pointer-events: none;
-}
-
 .materials-document-center {
   min-height: 100%;
   display: grid;
@@ -9160,6 +9135,7 @@ button.wizard-back-projects {
 }
 
 .materials-document-scroll {
+  flex: 1;
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -10793,37 +10769,6 @@ button.wizard-back-projects {
   resize: vertical;
   font-family: var(--font-serif);
   line-height: var(--leading-relaxed);
-}
-
-.materials-original-page {
-  width: fit-content;
-  max-width: calc(100% - var(--space-8));
-  min-height: calc(100% - var(--space-8));
-  display: grid;
-  place-items: center;
-  margin: var(--space-4) auto;
-  padding: var(--space-4);
-}
-
-/* Высота листа считается от той же условной страницы в 900px, что и в режиме
-   «Текст», — иначе «вписать в окно» показывало бы разный масштаб в двух режимах. */
-.materials-original-page img {
-  display: block;
-  width: auto;
-  max-width: 100%;
-  height: calc(900px * var(--materials-zoom, 1));
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--paper);
-  box-shadow: var(--shadow-md);
-}
-
-.materials-original-canvas { position: relative; width: fit-content; max-width: 100%; }
-.materials-bbox-layer { position: absolute; inset: 0; pointer-events: none; }
-.materials-bbox-layer span {
-  position: absolute;
-  border: 1px solid color-mix(in srgb, var(--accent) 58%, transparent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 .materials-page-editor { display: grid; gap: var(--space-2); font-weight: 650; }

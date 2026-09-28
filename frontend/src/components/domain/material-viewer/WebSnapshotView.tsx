@@ -1,5 +1,5 @@
 import { ExternalLink, Globe } from "lucide-react";
-import type { LibraryMaterialDetailRead } from "../../api/materials";
+import type { LibraryMaterialDetailRead } from "../../../api/materials";
 
 interface WebSnapshotViewProps {
   material: LibraryMaterialDetailRead;

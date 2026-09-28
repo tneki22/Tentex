@@ -21,6 +21,8 @@ import { indexLibraryMaterial } from "../../api/retrieval";
 import {
   DocumentStage,
   getMaterialPresentation,
+  MaterialSourceView,
+  MaterialTextView,
   PdfOutline,
   ViewerToolbar,
   type MaterialViewMode,
@@ -42,7 +44,6 @@ import { AiCleanupPanel } from "../AiCleanupPanel";
 import { HeaderFooterDialog } from "../HeaderFooterDialog";
 import { AddToProjectDialog } from "./AddToProjectDialog";
 import { LibraryMaterialInspector, type InspectorTab } from "./LibraryMaterialInspector";
-import { MaterialSourceView, MaterialTextView } from "./MaterialSourceView";
 import { editablePageText, PageTextEditor } from "./PageTextEditor";
 import { removeYoutubeTimestamps } from "./youtubeTranscript";
 
