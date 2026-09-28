@@ -48,6 +48,7 @@ class IndexSnapshot:
         self.refs: list[ChunkRef] = []
         self.by_fragment: dict[str, int] = {}
         self._positions: dict[tuple[UUID, int], list[int]] = {}
+        self._mapped_materials: set[tuple[UUID, int]] = set()
         self._lock = threading.Lock()
         self._vectors = sqlite3.connect(":memory:", check_same_thread=False)
         _load_vec(self._vectors)
@@ -65,14 +66,18 @@ class IndexSnapshot:
             )
             self.refs.append(ref)
             self._positions.setdefault((ref.material_id, ref.revision), []).append(position)
-            for fragment_id in json.loads(str(fragments or "[]")):
+            fragment_ids = json.loads(str(fragments or "[]"))
+            if fragment_ids:
+                self._mapped_materials.add((ref.material_id, ref.revision))
+            for fragment_id in fragment_ids:
                 self.by_fragment.setdefault(fragment_id, position)
             if blob is not None:
                 vectors.append((position, bytes(blob)))
         self._vectors.executemany("INSERT INTO v VALUES (?, ?)", vectors)
 
-    def indexed(self, material_id: UUID, revision: int | None) -> bool:
-        return revision is not None and (material_id, revision) in self._positions
+    def maps_fragments(self, material_id: UUID, revision: int | None) -> bool:
+        """Есть ли у кусков ревизии связь с исходными FTS-фрагментами."""
+        return revision is not None and (material_id, revision) in self._mapped_materials
 
     def chunk_for(self, fragment_ids: list[UUID], revisions: dict[UUID, int]) -> UUID | None:
         """Первый кусок текущей ревизии, где лежит один из фрагментов."""

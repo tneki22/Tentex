@@ -70,7 +70,12 @@ from app.retrieval.schemas import (
     RetrievalSearchWrite,
     SearchStrategy,
 )
-from app.retrieval.search import HybridRetriever, _lexical_coverage
+from app.retrieval.search import (
+    HybridRetriever,
+    ScopeFilter,
+    _lexical_candidates,
+    _lexical_coverage,
+)
 from app.retrieval.settings import read_settings
 from app.retrieval.vector import VectorHit, reciprocal_rank_fusion
 
@@ -874,6 +879,42 @@ def test_lexical_hit_opens_the_chunk_that_contains_the_found_fragment(session: S
     assert [hit.locator.chunk_id for hit in result.results] == [second]
 
 
+def test_lexical_search_keeps_fts_place_when_index_has_no_fragment_links(
+    session: Session,
+) -> None:
+    """Отдельно индексируемый исходник не должен скрывать PDF-фрагменты из FTS."""
+    import asyncio
+
+    from app.bindings.search import reindex_material
+
+    material = make_material(session, "93")
+    page = add_page_with_fragments(
+        session, material, page_number=1, revision=1,
+        block_title="Раскраска графа",
+        fragments=["Минимальное число цветов называют хроматическим числом графа."],
+    )
+    reindex_material(session, material.id)
+    index = _index(session, _profile(session))
+    index.state = RetrievalIndexState.ACTIVE
+    session.add(RetrievalSettings(id=1, active_index_id=index.id))
+    session.add(RetrievalChunk(
+        index_id=index.id, material_id=material.id, revision=1,
+        block_id=page.block_id, kind=RetrievalChunkKind.TEXT, sort_order=0,
+        text="Отдельно прочитанный исходник.", token_count=4,
+        content_hash="a" * 64, fragment_ids=[],
+    ))
+    session.commit()
+
+    result = asyncio.run(HybridRetriever().search(session, RetrievalSearchWrite(
+        query="хроматическое число", strategy=SearchStrategy.LEXICAL,
+        scope=RetrievalScope.SELECTED_MATERIALS, material_ids=[material.id],
+    )))
+
+    assert len(result.results) == 1
+    assert result.results[0].locator.chunk_id == page.fragment_ids[0]
+    assert "Минимальное число цветов" in result.results[0].text
+
+
 def test_known_embedding_models_get_their_query_and_document_templates(
     session: Session,
 ) -> None:
@@ -1037,4 +1078,36 @@ def test_lexical_rescue_requires_most_query_terms() -> None:
     assert _lexical_coverage("коммут", [SimpleNamespace(
         text="Коммутатор передаёт кадр", block_title="Сети",
     )]) == 1
+
+
+def test_formula_query_expands_symbols_only_when_the_answer_signal_is_stronger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LaTeX-команды помогают формулам, но не вытесняют имена и редкие термины."""
+    from types import SimpleNamespace
+
+    formula = SimpleNamespace(
+        text=r"Из $\neg A \to B$ и $\neg A \to \neg B$ следует $A$.",
+        block_title="Приведение к абсурду",
+    )
+    weak = SimpleNamespace(text="Из A и B заключают A", block_title="")
+    named = SimpleNamespace(
+        text="Робинсон открыл правило резолюции: из G и F получают H.",
+        block_title="Резолюция",
+    )
+    symbols_only = SimpleNamespace(text=r"$G \lor F, H \lor \neg F$", block_title="")
+    query_with_answer = "Как из ¬A → B и ¬A → ¬B заключить A?"
+    query_with_name = "Какое правило вывода открыл Робинсон и что получается из G ∨ F и H ∨ ¬F?"
+
+    def candidates(_session, _ids, query, **_kwargs):
+        if "Робинсон" in query:
+            return SimpleNamespace(hits=[symbols_only if " lor " in query else named])
+        return SimpleNamespace(hits=[formula if " neg " in query else weak])
+
+    monkeypatch.setattr("app.retrieval.search.search_fragments", candidates)
+    scope = ScopeFilter([uuid4()], None, "")
+
+    assert _lexical_candidates(None, scope, query_with_answer, 10) == [formula]
+    assert _lexical_candidates(None, scope, query_with_name, 10) == [named]
+    assert _lexical_coverage(query_with_answer, [formula]) > .75
 

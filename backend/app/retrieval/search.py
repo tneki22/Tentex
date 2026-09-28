@@ -54,6 +54,13 @@ LEXICAL_MIN_COVERAGE = 0.60
 # В учебниках тот же термин назван «тупиком»; эта замена сохраняет смысл вопроса.
 _DEADLOCK_ALIAS = re.compile(r"\bвзаимоблокировк\w*\b", re.IGNORECASE)
 
+# В OCR формулы хранятся как LaTeX-команды. Запрос с символами проверяем и без
+# раскрытия, и с ним: добавление частых команд иногда вытесняет редкий термин.
+_MATH_SYMBOLS = str.maketrans({
+    "∀": " forall ", "∃": " exists ", "¬": " neg ",
+    "∧": " land ", "∨": " lor ", "→": " to ", "↔": " leftrightarrow ",
+})
+
 
 @dataclass(frozen=True)
 class ScopeFilter:
@@ -264,9 +271,21 @@ def _lexical_candidates(
     session: Session, scope: ScopeFilter, query: str, limit: int
 ) -> list[SearchHit]:
     """Кандидаты BM25 внутри границ области: блоки темы фильтруются до лимита."""
-    return search_fragments(
+    plain_hits = search_fragments(
         session, scope.material_ids, query, limit=limit, block_ids=scope.block_ids
     ).hits
+    expanded_query = query.translate(_MATH_SYMBOLS)
+    if expanded_query == query:
+        return plain_hits
+    expanded_hits = search_fragments(
+        session, scope.material_ids, expanded_query,
+        limit=limit, block_ids=scope.block_ids,
+    ).hits
+    if _single_lexical_coverage(expanded_query, expanded_hits) > _single_lexical_coverage(
+        query, plain_hits
+    ):
+        return expanded_hits
+    return plain_hits
 
 
 def _is_e5_index(session: Session, active: RetrievalIndex | None) -> bool:
@@ -295,6 +314,15 @@ def _semantic_alias_query(query: str) -> str:
 
 def _lexical_coverage(query: str, hits: list[SearchHit]) -> float:
     """Доля содержательных лемм запроса в лучшем BM25-фрагменте и его заголовке."""
+    plain = _single_lexical_coverage(query, hits)
+    expanded_query = query.translate(_MATH_SYMBOLS)
+    if expanded_query == query:
+        return plain
+    return max(plain, _single_lexical_coverage(expanded_query, hits))
+
+
+def _single_lexical_coverage(query: str, hits: list[SearchHit]) -> float:
+    """Оценить один вариант записи запроса для выбора BM25-кандидатов."""
     terms = set(query_terms(query))
     if not hits or not terms:
         return 0.0
@@ -320,11 +348,11 @@ def _lexical_ids(
 
     Место — кусок, в котором лежит найденный фрагмент, а не первый кусок его
     блока: иначе совпадение в середине длинного раздела показывало его начало.
-    Фрагмент есть в поиске по словам, но не попал в куски проиндексированного
-    материала — это колонтитул или номер страницы, такое место не выдаётся.
-    Материала нет в индексе — например, он переиндексируется прямо сейчас, —
-    и место остаётся под id своего фрагмента в `pseudo_by_id`: BM25 продолжает
-    отвечать и без готового индекса.
+    Если у индексированной ревизии вообще нет связей с FTS-фрагментами (например,
+    исходник Typst индексировался отдельно от PDF), BM25-место остаётся своим
+    фрагментом. Если связи есть, но именно этот фрагмент не попал в куски, это
+    колонтитул или номер страницы: такое место не выдаётся. При отсутствии
+    материала в индексе BM25 тоже отвечает через исходный фрагмент.
     """
     snapshot = index_snapshot(session, active.id) if active is not None and hits else None
     revisions = current_revisions(session, {hit.material_id for hit in hits}) if snapshot else {}
@@ -332,7 +360,9 @@ def _lexical_ids(
     for hit in hits:
         chunk_id = snapshot.chunk_for(hit.fragment_ids, revisions) if snapshot else None
         if chunk_id is None:
-            if snapshot and snapshot.indexed(hit.material_id, revisions.get(hit.material_id)):
+            if snapshot and snapshot.maps_fragments(
+                hit.material_id, revisions.get(hit.material_id)
+            ):
                 continue
             chunk_id = hit.fragment_ids[0]
             pseudo_by_id[chunk_id] = hit
