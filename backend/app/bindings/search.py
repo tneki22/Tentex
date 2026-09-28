@@ -30,6 +30,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session, defer
 
 from app.materials.lexicon import (
+    fold,
     index_text,
     lemmatize,
     norm_text,
@@ -284,6 +285,35 @@ def matches_query(fragment_text: str, terms: set[str], prefix: str | None) -> bo
     return bool(prefix) and any(
         token.startswith(prefix) for token in norm_text(fragment_text).split()
     )
+
+
+def mentions_term(session: Session, material_ids: Sequence[UUID], term: str) -> bool:
+    """Встречается ли слово хоть в одном фрагменте материалов.
+
+    Лемма незнакомого слова у pymorphy3 зависит от формы («Херфиндаля» →
+    «херфиндалить»), поэтому длинное слово ищется и по основе без окончания —
+    так «Оукена» из вопроса находит «Оукен» в тексте.
+    """
+    if not material_ids:
+        return False
+    token = fold(term)
+    stem = token[: max(4, len(token) - 3)] if len(token) > 5 else None
+    # Строка в кавычках: имя через дефис (`IS-LM`) без них — синтаксис FTS5.
+    expression = f'lemmas:"{lemmatize([token])[0]}" OR ' + (
+        f'norm:"{stem}"*' if stem else f'norm:"{token}"'
+    )
+    placeholders = ", ".join(f":m{index}" for index in range(len(material_ids)))
+    params: dict[str, object] = {
+        f"m{index}": material_id.hex for index, material_id in enumerate(material_ids)
+    }
+    params["q"] = expression
+    return session.execute(
+        text(
+            "SELECT 1 FROM fragment_search WHERE fragment_search MATCH :q "
+            f"AND material_id IN ({placeholders}) LIMIT 1"
+        ),
+        params,
+    ).first() is not None
 
 
 def search_fragments(

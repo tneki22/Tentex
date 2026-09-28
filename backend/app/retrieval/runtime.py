@@ -47,12 +47,18 @@ def _embedding_model(model_id: str):
 
 @lru_cache(maxsize=1)
 def _reranker(model_id: str):
+    import torch
     from sentence_transformers import CrossEncoder
 
     path = model_path(validate_model_id(model_id))
     if not path.is_dir():
         raise FileNotFoundError(f"Модель {model_id} не установлена")
-    return CrossEncoder(str(path), trust_remote_code=False, local_files_only=True, device="cpu")
+    # Qwen3 Reranker хранится в bfloat16; на CPU без аппаратного bf16 это в 4 раза
+    # медленнее float32 (≈ 5 с против 1,2 с на кусок).
+    return CrossEncoder(
+        str(path), trust_remote_code=False, local_files_only=True, device="cpu",
+        model_kwargs={"dtype": torch.float32},
+    )
 
 
 @lru_cache(maxsize=2)
@@ -147,9 +153,18 @@ def internal_embeddings(command: InternalEmbeddingWrite) -> dict[str, object]:
 
 @app.post("/rerank")
 def rerank(command: RerankWrite) -> dict[str, object]:
+    """Оценки — вероятность «документ отвечает на запрос» у любого reranker.
+
+    Классификатор (BGE) по умолчанию отдаёт сигмоиду, Qwen3 Reranker — разность
+    логитов «yes» и «no». Общая сигмоида приводит обе шкалы к вероятности, и
+    порог отказа 0,5 не зависит от модели.
+    """
+    from torch import nn
+
     try:
         scores = _reranker(command.model).predict(
-            [(command.query, document) for document in command.documents]
+            [(command.query, document) for document in command.documents],
+            activation_fn=nn.Sigmoid(),
         )
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error

@@ -90,6 +90,7 @@ export interface RetrievalHitRead {
   score: number;
   signals: Array<"lexical" | "semantic">;
   warning: string | null;
+  also_in: string[];
 }
 
 export interface RetrievalSearchRead {
@@ -98,6 +99,9 @@ export interface RetrievalSearchRead {
   index_id: string | null;
   degraded: boolean;
   degradation_reasons: string[];
+  no_relevant_match: boolean;
+  /** Имена и термины запроса, которых нет ни в одном фрагменте выбранных материалов. */
+  missing_terms: string[];
   results: RetrievalHitRead[];
 }
 
@@ -189,13 +193,9 @@ export const buildRetrievalIndex = (command: {
   material_ids?: string[];
 }): Promise<{ index: RetrievalIndexRead; job_id: string }> => request("/api/retrieval/indexes", {
   method: "POST",
-  body: JSON.stringify({
-    ...command,
-    chunk_target_tokens: 384,
-    chunk_max_tokens: 480,
-    chunk_overlap_tokens: 64,
-    material_ids: command.material_ids ?? [],
-  }),
+  // Размеры кусков не передаются: их задаёт сервер под окно модели
+  // (retrieval/chunking.py), и старые 384/480 здесь перекрывали его значения.
+  body: JSON.stringify({ ...command, material_ids: command.material_ids ?? [] }),
 });
 
 export const pauseRetrievalIndexBuild = (jobId: string): Promise<BackgroundJobRead> => request(
