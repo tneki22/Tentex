@@ -260,7 +260,7 @@ export function FreeStudyWizard({
         icon: "book-open" as const,
         color: 4,
         deadline: nullable(form.deadline),
-        enabled_modules: ["plan", "lessons", "repetitions"] as ModuleKey[],
+        enabled_modules: ["lessons", "repetitions"] as ModuleKey[],
       },
       goal_passport: passport(),
       state: {

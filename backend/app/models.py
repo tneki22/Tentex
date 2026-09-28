@@ -340,6 +340,7 @@ class ModuleKey(StrEnum):
     """
 
     PLAN = "plan"
+    LESSON_PLANNING = "lesson_planning"
     LESSONS = "lessons"
     CARDS = "cards"
     REPETITIONS = "repetitions"
@@ -575,6 +576,7 @@ class Project(Base):
     coverage_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     deadline: Mapped[date | None] = mapped_column(Date, nullable=True)
     enabled_modules: Mapped[list[str]] = mapped_column(JSON, default=list)
+    lesson_planning_disabled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)

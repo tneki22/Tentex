@@ -17,6 +17,7 @@ export const SCREEN_VIEWS: Record<string, ComponentType> = {
   "source-viewer": lazy(() => import("../screens/Materials").then((module) => ({ default: module.SourceViewer }))),
   program: lazy(() => import("../screens/Program").then((module) => ({ default: module.Program }))),
   plan: lazy(() => import("../screens/Plan").then((module) => ({ default: module.Plan }))),
+  "lesson-planning": lazy(() => import("../screens/LessonPlanning").then((module) => ({ default: module.LessonPlanning }))),
   cards: lazy(() => import("../screens/cards/Cards").then((module) => ({ default: module.Cards }))),
   "coverage-map": lazy(() => import("../screens/CoverageMap").then((module) => ({ default: module.CoverageMap }))),
   "textbook-coverage": lazy(() => import("../screens/coverage/CoverageOverview").then((module) => ({ default: module.CoverageOverviewScreen }))),

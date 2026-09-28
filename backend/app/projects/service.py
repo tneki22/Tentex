@@ -19,6 +19,7 @@ from app.models import (
     Lesson,
     Material,
     MaterialState,
+    ModuleKey,
     ParserMode,
     ProgramNode,
     Project,
@@ -540,7 +541,18 @@ def update_project_settings(
         project_data = command.project.model_dump(mode="python", exclude={"enabled_modules"})
         for field, value in project_data.items():
             setattr(project, field, value.value if hasattr(value, "value") else value)
-        project.enabled_modules = [module.value for module in command.project.enabled_modules]
+        new_modules = [module.value for module in command.project.enabled_modules]
+        if (
+            ModuleKey.LESSON_PLANNING.value in new_modules
+            and project.workspace_variant != WorkspaceVariant.TEXTBOOK
+        ):
+            raise ProjectInvariantError("Планирование уроков доступно только в учебниковом проекте")
+        if (
+            ModuleKey.LESSON_PLANNING.value in (project.enabled_modules or [])
+            and ModuleKey.LESSON_PLANNING.value not in new_modules
+        ):
+            project.lesson_planning_disabled_at = now
+        project.enabled_modules = new_modules
         project.updated_at = now
         goal_passport = session.get(GoalPassport, project_id)
         if goal_passport is None:

@@ -171,6 +171,16 @@ export const SCREENS: ScreenMeta[] = [
     depth: "полностью",
   },
   {
+    id: "lesson-planning",
+    path: "/projects/:projectId/lesson-planning",
+    navPath: "/projects/:projectId/lesson-planning",
+    title: "Планирование занятий",
+    summary: "Календарь готовых уроков и время за открытыми уроками.",
+    group: "Занятия",
+    icon: CalendarDays,
+    depth: "полностью",
+  },
+  {
     id: "settings",
     path: "/projects/:projectId/settings",
     navPath: "/projects/:projectId/settings",

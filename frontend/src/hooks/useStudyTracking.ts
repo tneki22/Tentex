@@ -1,10 +1,12 @@
 /** Активное время учитывается в одной видимой вкладке; таймер не зависит от рендеров React. */
 import { useEffect, useRef, useState } from "react";
 import { preparation, errorText, type Interval } from "../api/preparation";
+import { lessonPlanning } from "../api/lessonPlanning";
 import {
   acknowledgeIntervals,
   bufferInterval,
   pendingIntervals,
+  type BufferedStudyInterval,
 } from "./studyTimeBuffer";
 const IDLE_MS = 5 * 60_000;
 const HEARTBEAT_MS = 30_000;
@@ -23,16 +25,17 @@ export interface StudyTrackingOptions {
   enabled?: boolean;
   studyDate?: string;
   initialSeconds?: number;
+  lesson?: boolean;
 }
 
 /** Считает активное время, сохраняя итог вопроса при переходах между разделами. */
 export function useStudyTracking(
   projectId: string,
   nodeId: string | null,
-  kind: Interval["kind"],
+  kind: Interval["kind"] | "lesson",
   options: StudyTrackingOptions = {},
 ) {
-  const { enabled = true, studyDate = "", initialSeconds = 0 } = options;
+  const { enabled = true, studyDate = "", initialSeconds = 0, lesson = false } = options;
   const [paused, setPaused] = useState(false);
   const [state, setState] = useState("Ожидание");
   const [seconds, setSeconds] = useState(0);
@@ -41,7 +44,7 @@ export function useStudyTracking(
   const seededKey = useRef("");
   useEffect(() => {
     if (!enabled || !nodeId || !studyDate) {
-      setState("Учебный день не начат");
+      setState(lesson ? "Откройте готовый урок" : "Учебный день не начат");
       return;
     }
     const saved = Number(sessionStorage.getItem(counterKey) ?? 0);
@@ -52,7 +55,7 @@ export function useStudyTracking(
     seededKey.current = counterKey;
   }, [counterKey, enabled, initialSeconds, nodeId, studyDate]);
   useEffect(() => {
-    if (!enabled || !nodeId) return;
+    if (!enabled || !nodeId || lesson) return;
     const opened = () => {
       if (!document.hidden) void preparation.opened(projectId, nodeId).catch(caught => setError(errorText(caught)));
     };
@@ -60,7 +63,7 @@ export function useStudyTracking(
     document.addEventListener("visibilitychange", opened);
     const timer = window.setInterval(opened, 60_000);
     return () => { document.removeEventListener("visibilitychange", opened); window.clearInterval(timer); };
-  }, [projectId, nodeId, enabled]);
+  }, [projectId, nodeId, enabled, lesson]);
   const answerSeconds = useRef(0);
   const answerKey = `tentex-answer-time:${projectId}:${studyDate}:${nodeId}`;
   useEffect(() => {
@@ -90,8 +93,9 @@ export function useStudyTracking(
       setError(errorText(caught));
     };
     const journalKey = `tentex-study-open:${sessionId()}:${projectId}`;
-    const makeInterval = (start: number, end: number): Interval => ({
-      id: intervalId ?? crypto.randomUUID(), session_id: sessionId(), node_id: nodeId, kind,
+    const makeInterval = (start: number, end: number): BufferedStudyInterval => ({
+      id: intervalId ?? crypto.randomUUID(), session_id: sessionId(),
+      ...(lesson ? { lesson_id: nodeId } : { node_id: nodeId, kind: kind as Interval["kind"] }),
       started_at: new Date(start).toISOString(),
       ended_at: new Date(Math.min(end, start + IDLE_MS)).toISOString(),
     });
@@ -102,9 +106,9 @@ export function useStudyTracking(
     try {
       const raw = localStorage.getItem(journalKey);
       if (raw) {
-        const recovered = JSON.parse(raw) as Interval;
+        const recovered = JSON.parse(raw) as BufferedStudyInterval;
         chain = chain.then(async () => {
-          const pending = await pendingIntervals(projectId);
+          const pending = lesson ? await pendingIntervals(projectId, true) : await pendingIntervals(projectId);
           if (!pending.some((item) => item.id === recovered.id)) await bufferInterval(projectId, recovered);
           clearJournal(recovered.id);
         });
@@ -135,17 +139,17 @@ export function useStudyTracking(
       sending = true;
       try {
         await chain;
-        const rows = await pendingIntervals(projectId);
+        const rows = lesson ? await pendingIntervals(projectId, true) : await pendingIntervals(projectId);
         for (let offset = 0; offset < rows.length; offset += 200) {
-          const result = await preparation.time(
-            projectId,
-            rows.slice(offset, offset + 200),
-          );
+          const result = lesson
+            ? await lessonPlanning.time(projectId, (rows as import("../api/lessonPlanning").LessonTimeInterval[]).slice(offset, offset + 200))
+            : await preparation.time(projectId, (rows as Interval[]).slice(offset, offset + 200));
           await acknowledgeIntervals([
             ...result.accepted_ids,
             ...(result.ignored_ids ?? []),
           ]);
         }
+        if (lesson && rows.length > 0) window.dispatchEvent(new Event("tentex-lesson-time-updated"));
         if (!stopped) setError(null);
       } catch (caught) {
         report(caught);
@@ -256,7 +260,7 @@ export function useStudyTracking(
       document.removeEventListener("visibilitychange", hide);
       window.removeEventListener("online", send);
     };
-  }, [answerKey, counterKey, projectId, nodeId, kind, enabled, paused]);
+  }, [answerKey, counterKey, projectId, nodeId, kind, enabled, paused, lesson]);
   return {
     state,
     seconds: Math.floor(seconds),
