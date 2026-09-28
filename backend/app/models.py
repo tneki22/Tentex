@@ -1978,6 +1978,9 @@ class Card(Base):
     )
     source_reference_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    generation_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
     state: Mapped[CardState] = mapped_column(
         enum_type(CardState, "card_state"), default=CardState.ACTIVE
     )
@@ -2056,6 +2059,38 @@ class Attempt(Base):
     def program_node_id(self) -> UUID | None:
         """Совместимое публичное поле экзамена берётся из общей Activity."""
         return self.activity.program_node_id
+
+    @property
+    def answer_modality(self) -> str:
+        """Отличать устную попытку в общей истории без второго вида Activity."""
+        return "oral" if (self.context_snapshot or {}).get("answer_modality") == "oral" else "text"
+
+
+class OralRecording(Base):
+    """Запись черновика или сданной устной попытки с отдельным сроком аудио."""
+
+    __tablename__ = "oral_recordings"
+    __table_args__ = (Index("ix_oral_recordings_expiry", "audio_expires_at"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
+    )
+    chat_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="CASCADE")
+    )
+    attempt_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("attempts.id", ondelete="SET NULL"),
+        unique=True, nullable=True,
+    )
+    audio_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    audio_format: Mapped[str] = mapped_column(String)
+    audio_duration_ms: Mapped[int] = mapped_column(Integer)
+    transcript: Mapped[str] = mapped_column(Text)
+    words: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    audio_expires_at: Mapped[datetime] = mapped_column(DateTime)
 
 
 class Grade(Base):

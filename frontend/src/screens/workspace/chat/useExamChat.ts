@@ -12,6 +12,7 @@ import {
   setAttemptSelfAssessment,
   streamMessage,
   submitChatAnswer,
+  submitOralDraft,
   updateChatSettings,
   type AttemptOutcome,
   type ChatCapabilities,
@@ -432,6 +433,36 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
     }
   }
 
+  async function submitOralAnswer(
+    recordingId: string, text: string, answerMode: "memory" | "supported",
+  ) {
+    if (!activeSessionId || !text.trim() || submittingAnswer) return false;
+    setSubmittingAnswer(true);
+    setFailure(null);
+    try {
+      const result = await submitOralDraft(
+        projectId, activeSessionId, recordingId, text.trim(), answerMode,
+      );
+      for (const message of result.messages) upsertMessage(message);
+      if (!result.grade) {
+        setFailure({
+          code: "oral_check_deferred",
+          detail: "Устный ответ сохранён. Проверка ИИ пока недоступна — попробуйте позже.",
+        });
+      }
+      onAttemptsChanged?.();
+      return true;
+    } catch (error) {
+      setFailure({
+        code: error instanceof ProjectApiError ? error.code ?? "unknown" : "unknown",
+        detail: error instanceof Error ? error.message : "Устный ответ не сохранён",
+      });
+      return false;
+    } finally {
+      setSubmittingAnswer(false);
+    }
+  }
+
   async function retryAttempt(attemptId: string) {
     setFailure(null);
     try {
@@ -530,6 +561,7 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
     sendMessage,
     stopMessage,
     submitAnswer,
+    submitOralAnswer,
     retryAttempt,
     assessAttempt,
     startNewChat,

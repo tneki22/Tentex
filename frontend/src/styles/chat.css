@@ -775,6 +775,10 @@
   justify-content: flex-start;
   flex-wrap: wrap;
 }
+.chat-oral-note { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-sunken); }
+.chat-oral-note p, .chat-answer-speech-metrics, .chat-answer-modality { margin: 0; color: var(--muted); }
+.chat-oral-note audio, .chat-answer-card audio { width: 100%; }
+.chat-verdict-source { display: block; margin-top: var(--space-1); color: var(--muted); }
 
 .chat-verdict-card {
   display: flex;

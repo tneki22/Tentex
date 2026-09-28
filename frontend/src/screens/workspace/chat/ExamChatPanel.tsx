@@ -9,7 +9,9 @@ import type {
   ChatOperation,
   ChatRetrievalScope,
   ChatSendOptions,
+  OralRecordingRead,
 } from "../../../api/chat";
+import { uploadOralDraft } from "../../../api/chat";
 import type { ProgramNodeRead } from "../../../api/projects";
 import { ProjectApiError } from "../../../api/projects";
 import { startExhaustiveReview } from "../../../api/retrieval";
@@ -155,8 +157,11 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
   const chat = useExamChat({ projectId, node, onAttemptsChanged, projectChat });
   const [answering, setAnswering] = useState(false);
   const [answerMode, setAnswerMode] = useState<"memory" | "supported">("memory");
+  const [responseFormat, setResponseFormat] = useState<"text" | "oral">("text");
+  const [oralDraft, setOralDraft] = useState<OralRecordingRead | null>(null);
   useEffect(() => { onAnsweringChange?.(answering); return () => onAnsweringChange?.(false); }, [answering, onAnsweringChange]);
-  useEffect(() => { setAnswering(false); setAnswerDraft(""); takeAnswerSeconds?.(); }, [node?.id]);
+  useEffect(() => { setAnswering(false); setAnswerDraft(""); setOralDraft(null); takeAnswerSeconds?.(); }, [node?.id]);
+  useEffect(() => { setOralDraft(null); }, [chat.activeSessionId]);
   const [answerDraft, setAnswerDraft] = useState("");
   const [searching, setSearching] = useState(false);
   const [toolBusy, setToolBusy] = useState(false);
@@ -331,7 +336,7 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
                   void chat.sendMessage(chat.failure?.retryText, retry);
                 }}>Искать по теме</Button>
               ) : undefined}
-              onAnswerAgain={() => { setAnswerDraft(""); setAnswering(true); }}
+              onAnswerAgain={() => { setAnswerDraft(""); setOralDraft(null); setAnswering(true); }}
               onCheckAgain={chat.retryAttempt}
               onSelfAssessment={chat.assessAttempt}
             />
@@ -404,14 +409,37 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
           {answering ? (
             <AnswerFormCard
               mode="composing"
+              projectId={projectId}
               question={topicTitle}
               ordinal={nextOrdinal(chat.messages)}
               value={answerDraft}
               answerMode={answerMode}
+              responseFormat={responseFormat}
+              onResponseFormatChange={(value) => {
+                setResponseFormat(value);
+                setAnswerDraft("");
+                setOralDraft(null);
+              }}
+              oralDraft={oralDraft}
+              onOralRecording={async (audio, durationMs) => {
+                if (!chat.activeSessionId) throw new Error("Чат ещё не готов");
+                const draft = await uploadOralDraft(
+                  projectId, chat.activeSessionId, audio, durationMs,
+                );
+                setOralDraft(draft);
+                return draft.transcript;
+              }}
               onAnswerModeChange={setAnswerMode}
               onChange={setAnswerDraft}
-              onSubmit={() => { void chat.submitAnswer(answerDraft, { answer_mode: answerMode, active_seconds: takeAnswerSeconds?.() ?? null }).then((saved) => { if (saved) setAnswering(false); }); }}
-              onCancel={() => setAnswering(false)}
+              onSubmit={() => {
+                const task = responseFormat === "oral" && oralDraft
+                  ? chat.submitOralAnswer(oralDraft.id, answerDraft, answerMode)
+                  : chat.submitAnswer(answerDraft, {
+                      answer_mode: answerMode, active_seconds: takeAnswerSeconds?.() ?? null,
+                    });
+                void task.then((saved) => { if (saved) { setAnswering(false); setOralDraft(null); } });
+              }}
+              onCancel={() => { setAnswering(false); setOralDraft(null); }}
               busy={chat.submittingAnswer}
             />
           ) : searching ? (

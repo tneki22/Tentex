@@ -55,6 +55,7 @@ function rubricPoints(value: unknown): RubricPointRead[] | null {
       quote: typeof record.quote === "string" ? record.quote : null,
       quote_start: typeof record.quote_start === "number" ? record.quote_start : null,
       quote_end: typeof record.quote_end === "number" ? record.quote_end : null,
+      source_quote: typeof record.source_quote === "string" ? record.source_quote : null,
     });
   }
   return points;

@@ -6,10 +6,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.ai.gateway import ModelGateway
 from app.cards import service
+from app.cards.generate import generate_cards
 from app.cards.schemas import (
     CardBulkWrite,
     CardCreate,
+    CardGenerateRead,
+    CardGenerateWrite,
     CardListRead,
     CardOverviewRead,
     CardRead,
@@ -75,6 +79,14 @@ def get_cards(
 def post_card(project_id: UUID, command: CardCreate, session: SessionDependency) -> CardRead:
     """Ручное создание карточки."""
     return service.create_card(session, project_id, command)
+
+
+@router.post("/cards/generate", response_model=CardGenerateRead)
+async def post_generate_cards(
+    project_id: UUID, command: CardGenerateWrite, session: SessionDependency,
+) -> CardGenerateRead:
+    """Вернуть проверенные предложения без записи карточек в Банк."""
+    return await generate_cards(session, ModelGateway(session), project_id, command)
 
 
 @router.patch("/cards/{card_id}", response_model=CardRead)

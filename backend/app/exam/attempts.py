@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.ai.gateway import ModelGateway
 from app.ai.schemas import AiUsage
 from app.ai.settings import AiGatewayError
+from app.config import settings
 from app.db import project_write_transaction
 from app.exam import chat as chat_service
 from app.exam.checking import CheckResult, RubricPoint, deterministic_check
@@ -29,12 +31,13 @@ from app.models import (
     ChatSession,
     Grade,
     GradeMethod,
+    OralRecording,
     ReferenceAnswer,
     utc_now,
 )
 from app.preparation.evidence import synchronize_review
 from app.projects.answer_lifecycle import is_reference_answer_available
-from app.projects.errors import ProjectDomainError
+from app.projects.errors import ProjectConflictError, ProjectDomainError
 
 AI_FALLBACK_CODES = {
     "ai_disabled",
@@ -76,7 +79,7 @@ class AttemptWithGrade:
 @dataclass(frozen=True)
 class AnswerResult:
     attempt: Attempt
-    grade: Grade
+    grade: Grade | None
     messages: list[ChatMessage]
 
 
@@ -240,11 +243,32 @@ async def submit_answer(
     *,
     answer_mode: str | None = None,
     active_seconds: int | None = None,
+    oral: bool = False,
+    oral_recording_id: UUID | None = None,
+    check_now: bool = True,
 ) -> AnswerResult:
     chat_id = chat.id if isinstance(chat, ChatSession) else chat
     with project_write_transaction(session, project_id):
         chat_service._require_exam_project(session, project_id)
         chat_row = chat_service._require_session(session, project_id, chat_id)
+        recording = None
+        if oral_recording_id is not None:
+            recording = session.get(OralRecording, oral_recording_id)
+            if (
+                recording is None or recording.project_id != project_id
+                or recording.chat_id != chat_id
+            ):
+                raise ProjectDomainError(
+                    "Устная запись не найдена", status=404, code="oral_recording_not_found"
+                )
+            if recording.attempt_id is not None:
+                raise ProjectConflictError(
+                    "Запись уже сдана", code="oral_recording_already_submitted"
+                )
+            if recording.audio_expires_at <= utc_now():
+                raise ProjectDomainError(
+                    "Черновик устарел", status=410, code="oral_draft_expired"
+                )
         node = chat_service._require_chat_node(session, project_id, chat_row.program_node_id)
         ctx = build_context(session, chat_row, for_judge=True)
         source_only_answer = session.get(ReferenceAnswer, (project_id, chat_row.program_node_id))
@@ -276,6 +300,8 @@ async def submit_answer(
         # проверка судит той же моделью, что была выбрана на момент сдачи,
         # даже если пользователь позже сменит override в настройках чата.
         snapshot["model_override"] = chat_row.model_override
+        if oral:
+            snapshot["answer_modality"] = "oral"
         attempt = Attempt(
             project_id=project_id,
             activity_id=activity.id,
@@ -299,13 +325,28 @@ async def submit_answer(
                 "ordinal": ordinal,
                 "submitted_at": utc_now().isoformat(),
                 "text": text,
+                "modality": "oral" if oral else "text",
+                **({
+                    "oral_recording_id": str(oral_recording_id),
+                    "speech_metrics": recording.metrics,
+                } if recording is not None else {}),
             },
             context_snapshot=snapshot,
             attempt_id=attempt.id,
         )
+        if recording is not None:
+            recording.attempt_id = attempt.id
+            recording.transcript = text
+            recording.audio_expires_at = utc_now() + timedelta(
+                days=settings.oral_audio_retention_days
+            )
+            answer_message.payload = {
+                **answer_message.payload,
+                "audio_expires_at": recording.audio_expires_at.isoformat(),
+            }
         session.refresh(attempt)
 
-    grade = await check_attempt(session, gateway, project_id, attempt.id)
+    grade = await check_attempt(session, gateway, project_id, attempt.id) if check_now else None
     with session.begin():
         verdict_message = session.scalar(
             select(ChatMessage).where(ChatMessage.grade_attempt_id == attempt.id).limit(1)
@@ -330,6 +371,10 @@ async def check_attempt(
             return existing
         snapshot = dict(attempt.context_snapshot)
         answer = attempt.text
+
+    if snapshot.get("answer_modality") == "oral":
+        judged = await judge_attempt(gateway, attempt)
+        return _save_judged_grade(session, attempt, judged)
 
     result = deterministic_check(
         answer,

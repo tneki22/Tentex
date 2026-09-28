@@ -51,7 +51,33 @@ class CardWrite(Contract):
 
 
 class CardCreate(CardWrite):
-    pass
+    generation_run_id: UUID | None = None
+    generation_candidate_index: int | None = Field(default=None, ge=0, le=5)
+
+    @model_validator(mode="after")
+    def consistent_generation(self) -> Self:
+        if (self.generation_run_id is None) != (self.generation_candidate_index is None):
+            raise ValueError("Для предложения ИИ нужны запуск и номер карточки")
+        return self
+
+
+class CardGenerateWrite(Contract):
+    program_node_id: UUID
+    mode: Literal["connections", "understanding"] = "connections"
+
+
+class GeneratedCardRead(Contract):
+    index: int
+    front: str
+    back: str
+    hint: str | None = None
+    source: CardSourceWrite
+    evidence_quote: str
+
+
+class CardGenerateRead(Contract):
+    run_id: UUID
+    candidates: list[GeneratedCardRead]
 
 
 class CardUpdate(Contract):

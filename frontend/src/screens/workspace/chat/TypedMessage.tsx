@@ -53,6 +53,7 @@ export function TypedMessage({
     return (
       <AnswerFormCard
         mode="submitted"
+        projectId={projectId}
         payload={payload.data}
         createdAt={message.created_at}
         onAnswerAgain={onAnswerAgain}

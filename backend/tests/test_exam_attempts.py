@@ -83,13 +83,18 @@ async def test_submit_answer_uses_judge_without_chat_tail_and_verifies_quotes(
                         {
                             "point": "Назначение индекса",
                             "quote": "ускоряет выборку",
+                            "source_quote": "ускоряет поиск строк",
                         }
                     ],
-                    "missed": [{"point": "Цена индекса", "quote": ""}],
+                    "missed": [{
+                        "point": "Цена индекса", "quote": "",
+                        "source_quote": "занимает место",
+                    }],
                     "wrong": [
                         {
                             "point": "Выдуманный вывод",
                             "quote": "удаляет таблицу",
+                            "source_quote": "замедляет запись",
                         }
                     ],
                     "summary": "Суть названа, ограничения упущены.",
@@ -103,7 +108,7 @@ async def test_submit_answer_uses_judge_without_chat_tail_and_verifies_quotes(
         ModelGateway(session, fake),
         project.id,
         chat,
-        "Индекс ускоряет выборку.",
+        "Индекс ускоряет выборку и удаляет таблицу.",
     )
 
     assert result.grade.method is GradeMethod.AI_JUDGE
@@ -111,7 +116,7 @@ async def test_submit_answer_uses_judge_without_chat_tail_and_verifies_quotes(
     assert result.grade.credited_points[0]["quote_start"] == 7
     assert result.grade.credited_points[0]["quote_end"] == 23
     assert result.grade.wrong_points[0]["quote"] == "удаляет таблицу"
-    assert result.grade.wrong_points[0]["quote_start"] is None
+    assert result.grade.wrong_points[0]["quote_start"] is not None
     assert [message.payload_kind.value for message in result.messages] == [
         "answer_form",
         "verdict",
@@ -130,7 +135,7 @@ async def test_submit_answer_uses_judge_without_chat_tail_and_verifies_quotes(
         ModelGateway(session, fake),
         project.id,
         chat.id,
-        "Индекс ускоряет выборку.",
+        "Индекс ускоряет выборку и удаляет таблицу.",
     )
     assert repeated.attempt.ordinal == 2
     assert repeated.grade.method is GradeMethod.AI_JUDGE

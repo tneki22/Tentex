@@ -168,6 +168,7 @@ class RubricPointRead(ApiModel):
     quote: str | None = None
     quote_start: int | None = None
     quote_end: int | None = None
+    source_quote: str | None = None
 
 
 class AttemptRead(ApiModel):
@@ -183,6 +184,20 @@ class AttemptRead(ApiModel):
     created_at: datetime
     answer_mode: Literal["memory", "supported"] | None = None
     active_seconds: int | None = None
+    answer_modality: Literal["text", "oral"] = "text"
+
+
+class OralRecordingRead(ApiModel):
+    id: UUID
+    transcript: str
+    metrics: dict[str, Any]
+    audio_available: bool
+    audio_expires_at: datetime
+
+
+class OralSubmitWrite(ApiModel):
+    text: NonBlank = Field(max_length=50_000)
+    answer_mode: Literal["memory", "supported"] | None = None
 
 
 class GradeUsageRead(ApiModel):
@@ -224,6 +239,7 @@ class AttemptSummaryRead(ApiModel):
 class AttemptDetailRead(ApiModel):
     attempt: AttemptRead
     grade: GradeRead | None
+    oral: OralRecordingRead | None = None
 
 
 class SelfAssessmentWrite(ApiModel):
@@ -233,4 +249,4 @@ class SelfAssessmentWrite(ApiModel):
 class ChatAnswerResult(ApiModel):
     messages: list[ChatMessageRead]
     attempt: AttemptRead
-    grade: GradeRead
+    grade: GradeRead | None

@@ -74,6 +74,10 @@ export interface AnswerFormPayload {
   ordinal: number;
   submitted_at: string;
   text: string;
+  modality?: "text" | "oral";
+  oral_recording_id?: string;
+  audio_expires_at?: string;
+  speech_metrics?: OralRecordingRead["metrics"];
 }
 
 export interface RubricPointRead {
@@ -81,6 +85,7 @@ export interface RubricPointRead {
   quote: string | null;
   quote_start: number | null;
   quote_end: number | null;
+  source_quote?: string | null;
 }
 
 export interface GradeUsageRead {
@@ -149,6 +154,22 @@ export interface AttemptRead {
   strictness: ExaminerStrictness;
   context_snapshot: Record<string, unknown>;
   created_at: string;
+  answer_modality?: "text" | "oral";
+}
+
+export interface OralRecordingRead {
+  id: string;
+  transcript: string;
+  metrics: {
+    duration_ms: number;
+    pace_wpm?: number;
+    time_to_first_word_ms?: number;
+    pause_count?: number;
+    pause_duration_ms?: number;
+    silence_share?: number;
+  };
+  audio_available: boolean;
+  audio_expires_at: string;
 }
 
 export interface GradeRead {
@@ -181,6 +202,7 @@ export interface AttemptSummaryRead {
 export interface AttemptDetailRead {
   attempt: AttemptRead;
   grade: GradeRead | null;
+  oral?: OralRecordingRead | null;
 }
 
 export interface ChatMessageRead {
@@ -393,7 +415,7 @@ export type ToolResultPayload =
 export interface ChatAnswerResult {
   messages: ChatMessageRead[];
   attempt: AttemptRead;
-  grade: GradeRead;
+  grade: GradeRead | null;
 }
 
 /**
@@ -515,6 +537,29 @@ export const submitChatAnswer = (
   `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/answer`,
   { method: "POST", body: JSON.stringify({ text, ...tracking }) },
 );
+
+export const uploadOralDraft = (
+  projectId: string, sessionId: string, audio: Blob, durationMs: number,
+): Promise<OralRecordingRead> => {
+  const body = new FormData();
+  body.append("file", audio, "answer.wav");
+  body.append("duration_ms", String(durationMs));
+  return request(
+    `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/oral-drafts`,
+    { method: "POST", body },
+  );
+};
+
+export const submitOralDraft = (
+  projectId: string, sessionId: string, recordingId: string,
+  text: string, answerMode: "memory" | "supported",
+): Promise<ChatAnswerResult> => request(
+  `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/oral-drafts/${encodeURIComponent(recordingId)}/submit`,
+  { method: "POST", body: JSON.stringify({ text, answer_mode: answerMode }) },
+);
+
+export const oralAudioUrl = (projectId: string, recordingId: string): string =>
+  `/api/projects/${encodeURIComponent(projectId)}/oral-recordings/${encodeURIComponent(recordingId)}/audio`;
 
 export const listAttempts = (
   projectId: string,

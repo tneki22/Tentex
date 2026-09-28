@@ -19,6 +19,7 @@ from app.ai.provider import (
     ProviderError,
     ProviderTranscription,
     ProviderUsage,
+    _timed_word,
 )
 from app.ai.schemas import AiModelSelection
 from app.ai.settings import AiGatewayError
@@ -26,6 +27,12 @@ from app.db import get_session
 from app.models import AiModelCatalogEntry, AiProviderConnection, AiRun, AiSettings, utc_now
 
 WHISPER = "openai/whisper-large-v3-turbo"
+
+
+def test_word_timestamp_parser_ignores_invalid_marks():
+    assert _timed_word({"start": 0.2, "end": 0.5, "word": "слово"}).word == "слово"
+    assert _timed_word({"start": None, "end": 0.5, "word": "слово"}) is None
+    assert _timed_word({"start": 0.5, "end": 0.2, "word": "слово"}) is None
 
 
 @pytest.fixture

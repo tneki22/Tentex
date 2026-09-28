@@ -19,6 +19,7 @@ from app.models import (
     Lesson,
     Material,
     MaterialState,
+    OralRecording,
     ParserMode,
     ProgramNode,
     Project,
@@ -634,6 +635,13 @@ def delete_project(session: Session, project_id: UUID) -> None:
                 select(ConspectImage).where(ConspectImage.project_id == project_id)
             )
         ]
+        oral_audio_paths = [
+            material_path(recording.audio_path)
+            for recording in session.scalars(
+                select(OralRecording).where(OralRecording.project_id == project_id)
+            )
+            if recording.audio_path
+        ]
         # Самоссылка дерева использует RESTRICT, поэтому одного CASCADE от
         # projects недостаточно: сначала удаляем листья, затем сам проект.
         program.delete_program_tree(session, project_id)
@@ -644,7 +652,10 @@ def delete_project(session: Session, project_id: UUID) -> None:
             session.flush()
     for path in conspect_image_paths:
         path.unlink(missing_ok=True)
+    for path in oral_audio_paths:
+        path.unlink(missing_ok=True)
     remove_storage_dir_if_empty(f"conspects/{project_id}")
+    remove_storage_dir_if_empty(f"oral/{project_id}")
 
 
 def save_workspace_state(

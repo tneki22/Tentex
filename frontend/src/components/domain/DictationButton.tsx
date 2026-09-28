@@ -5,6 +5,7 @@ import { IconButton, Tooltip } from "../ui";
 interface DictationButtonProps {
   /** Получает расшифровку; куда её вставить — решает вызывающий. */
   onText: (text: string) => void;
+  onRecording?: (audio: Blob, durationMs: number) => Promise<string>;
   disabled?: boolean;
 }
 
@@ -13,8 +14,8 @@ interface DictationButtonProps {
  * состояния стоит слева от кнопки, чтобы сама кнопка оставалась на месте рядом
  * с «Отправить» и не прыгала, пока идёт запись.
  */
-export function DictationButton({ onText, disabled = false }: DictationButtonProps) {
-  const dictation = useDictation(onText);
+export function DictationButton({ onText, onRecording, disabled = false }: DictationButtonProps) {
+  const dictation = useDictation(onText, onRecording);
   const supported = dictationSupported();
   const recording = dictation.state === "recording";
   const transcribing = dictation.state === "transcribing";

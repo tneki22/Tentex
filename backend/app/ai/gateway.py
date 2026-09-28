@@ -31,6 +31,7 @@ from app.ai.provider import (
     ProviderError,
     ProviderUsage,
     TimedSegment,
+    TimedWord,
 )
 from app.ai.schemas import (
     AiImagePart,
@@ -185,6 +186,7 @@ class AiTranscription:
     usage: AiUsage
     # Время фраз, если провайдер его отдал; иначе пусто (см. `TimedSegment`).
     segments: tuple[TimedSegment, ...] = ()
+    words: tuple[TimedWord, ...] = ()
 
 
 def _silent_wav() -> bytes:
@@ -574,6 +576,7 @@ class ModelGateway:
             actual_model_id=result.actual_model_id,
             usage=usage,
             segments=result.segments,
+            words=result.words,
         )
 
     async def _test_transcription_model(self, selection: AiModelSelection) -> AiModelTestRead:

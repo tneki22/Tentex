@@ -50,7 +50,10 @@ export function formatDuration(seconds: number): string {
  * `onText` — вставить его или отправить решает вызывающий, чтобы человек успел
  * поправить расшифровку.
  */
-export function useDictation(onText: (text: string) => void) {
+export function useDictation(
+  onText: (text: string) => void,
+  onRecording?: (audio: Blob, durationMs: number) => Promise<string>,
+) {
   const [state, setState] = useState<DictationState>("idle");
   const [seconds, setSeconds] = useState(0);
   const [error, setError] = useState("");
@@ -60,27 +63,30 @@ export function useDictation(onText: (text: string) => void) {
   // Запись, оборванная уходом со страницы, в модель не отправляется.
   const discardRef = useRef(false);
   const onTextRef = useRef(onText);
+  const onRecordingRef = useRef(onRecording);
 
   useEffect(() => {
     onTextRef.current = onText;
-  }, [onText]);
+    onRecordingRef.current = onRecording;
+  }, [onText, onRecording]);
 
   const stopTimer = useCallback(() => {
     if (timerRef.current !== null) window.clearInterval(timerRef.current);
     timerRef.current = null;
   }, []);
 
-  const send = useCallback(async (audio: Blob) => {
+  const send = useCallback(async (audio: Blob, durationMs: number) => {
     const controller = new AbortController();
     abortRef.current = controller;
     setState("transcribing");
     try {
       // Не удалось перекодировать — отправляем как записано: Groq и OpenAI webm понимают.
       const upload = await toWav(audio).catch(() => audio);
-      const result = await transcribeAudio(upload, controller.signal);
+      const text = onRecordingRef.current
+        ? await onRecordingRef.current(upload, durationMs)
+        : (await transcribeAudio(upload, controller.signal)).text;
       if (controller.signal.aborted) return;
-      const text = result.text.trim();
-      if (text) onTextRef.current(text);
+      if (text.trim()) onTextRef.current(text.trim());
       else setError("Речь не распознана. Повторите ближе к микрофону.");
     } catch (caught) {
       if (!controller.signal.aborted) setError(recognitionError(caught));
@@ -113,7 +119,10 @@ export function useDictation(onText: (text: string) => void) {
         discardRef.current = false;
         return;
       }
-      void send(new Blob(chunks, { type: recorder.mimeType || mimeType || "audio/webm" }));
+      void send(
+        new Blob(chunks, { type: recorder.mimeType || mimeType || "audio/webm" }),
+        Math.min(MAX_RECORDING_SECONDS * 1000, Date.now() - startedAt),
+      );
     };
     recorderRef.current = recorder;
     recorder.start();
