@@ -1,5 +1,6 @@
 import { useWorkspaceStudyTracking } from "../hooks/useWorkspaceStudyTracking";
-import { StudyTimer } from "./preparation/StudyTimer";
+import { useLessonStudyTracking } from "../hooks/useLessonStudyTracking";
+import { LessonStudyTimer, StudyTimer } from "./preparation/StudyTimer";
 import { StudyQueue } from "./preparation/StudyQueue";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
@@ -277,6 +278,10 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
   const [coverage, setCoverage] = useState<CoverageMapRead | null>(null);
   const [query, setQuery] = useState("");
   const [activeGroupId, setActiveGroupId] = useState(DEFAULT_LAYOUT.groups[0].id);
+  const [trackingLessons, setTrackingLessons] = useState<Record<string, string | null>>({});
+  const onTrackingLessonChange = useCallback((groupId: string, lessonId: string | null) => {
+    setTrackingLessons((current) => current[groupId] === lessonId ? current : { ...current, [groupId]: lessonId });
+  }, []);
   const [paneDetached, setPaneDetached] = useState(false);
   const paneTransitionTimer = useRef<number | null>(null);
   const [treeCollapsed, setTreeCollapsed] = useState(() => window.localStorage.getItem(`tentex:workspace-tree-collapsed:${projectId}`) === "1");
@@ -365,6 +370,23 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, preferredTopic, preferredTab, detached, detachedId]);
 
+  useEffect(() => {
+    const channel = new BroadcastChannel("tentex-project-modules");
+    const refreshModules = () => {
+      void getProject(projectId).then((next) => {
+        setDetail((current) => current ? { ...current, project: next.project } : current);
+      }).catch(() => undefined);
+    };
+    channel.onmessage = (event: MessageEvent<{ projectId?: string }>) => {
+      if (event.data?.projectId === projectId) refreshModules();
+    };
+    window.addEventListener("focus", refreshModules);
+    return () => {
+      channel.close();
+      window.removeEventListener("focus", refreshModules);
+    };
+  }, [projectId]);
+
   function updateLayout(nextOrUpdater: WorkspaceLayout | ((current: WorkspaceLayout) => WorkspaceLayout)) {
     const next = typeof nextOrUpdater === "function" ? nextOrUpdater(layoutRef.current) : nextOrUpdater;
     layoutRef.current = next;
@@ -428,6 +450,12 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
   const tracking = study.tracking;
   const selectedIndex = selected ? studyNodes.findIndex((node) => node.id === selected.id) : -1;
   const textbook = detail?.project.workspace_variant === "textbook";
+  const lessonPlanningEnabled = Boolean(textbook && detail?.project.enabled_modules.includes("lesson_planning"));
+  const trackedLessonId = !detached && focusedTab === "lesson" ? trackingLessons[activeGroupId] ?? null : null;
+  const lessonStudy = useLessonStudyTracking(
+    projectId, trackedLessonId,
+    lessonPlanningEnabled && !detached && detail?.project.status === "active",
+  );
   const lessonsEnabled = Boolean(textbook && detail?.project.enabled_modules.includes("lessons"));
   const lessonsOverview = useLessonsOverview(projectId, lessonsEnabled);
   const freeProject = detail?.project.template_key === "free";
@@ -824,7 +852,7 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
     return <div className="workspace-empty-copy"><TabIcon size={26} /><h2>{tabLabel(tab, Boolean(textbook))}</h2><p>{copy}</p></div>;
   }
 
-  function renderTabContent(tab: WorkspaceTab) {
+  function renderTabContent(tab: WorkspaceTab, groupId: string) {
     if (tab === "answer") return answerPanel();
     if (tab === "source") return sourcePanel();
     if (tab === "chat" && projectId) {
@@ -860,7 +888,7 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
       );
     }
     if (tab === "lesson" && textbook && selected) {
-      return <Suspense fallback={<LoadingState label="Открываем урок" />}><LessonTab projectId={projectId} node={selected} preferredLessonId={preferredLesson} onLessonsChanged={lessonsOverview.refresh} /></Suspense>;
+      return <Suspense fallback={<LoadingState label="Открываем урок" />}><LessonTab projectId={projectId} node={selected} preferredLessonId={preferredLesson} onLessonsChanged={lessonsOverview.refresh} trackingGroupId={groupId} onTrackingLessonChange={onTrackingLessonChange} /></Suspense>;
     }
     if (tab === "history" && textbook && selected) {
       return <Suspense fallback={<LoadingState label="Открываем историю" />}><LessonHistoryTab projectId={projectId} node={selected} /></Suspense>;
@@ -1349,6 +1377,7 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
           </div>
           <div className="workspace-question-actions">
             {!textbook && !detached && <StudyTimer study={study} />}
+            {textbook && lessonPlanningEnabled && !detached && <LessonStudyTimer study={lessonStudy} />}
             <div className="workspace-question-nav" aria-label="Переход между темами"><IconButton label="Предыдущая тема" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><ChevronLeft size={15} /></IconButton><span>{selectedIndex + 1} из {studyNodes.length}</span><IconButton label="Следующая тема" disabled={selectedIndex >= studyNodes.length - 1} onClick={() => selectRelative(1)}><ChevronRight size={15} /></IconButton></div>
             {!detached && <>
               <IconButton label="Разделить рабочую область" disabled={editorGroups.length >= 3} onClick={addPanel}><PanelsTopLeft size={15} /></IconButton>
@@ -1373,7 +1402,7 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
 <div aria-live="polite">{saveError && <p className="inline-error" role="alert">{saveError}</p>}</div></div>
         <div className="workspace-editor-grid" ref={editorGridRef} style={{ gridTemplateColumns: editorColumns }}>
           {editorGroups.map((group, index) => {
-            return <div className="workspace-editor-fragment" key={group.id}><section className={`workspace-editor-group ${activeGroupId === group.id ? "is-active" : ""}`.trim()} aria-label={`Рабочая зона ${index + 1}`} onClick={() => setActiveGroupId(group.id)}><div className="workspace-tabbar"><div className="workspace-tabs" role="tablist" aria-label={`Вкладки рабочей зоны ${index + 1}`}>{group.tabs.map((tab) => { const TabIcon = TAB_ICONS[tab]; const label = tabLabel(tab, Boolean(textbook)); return <div className={`workspace-tab ${group.active_tab === tab ? "is-active" : ""}`.trim()} key={tab}><button type="button" role="tab" aria-selected={group.active_tab === tab} onClick={() => setActiveTab(group.id, tab)}><TabIcon size={14} /><span>{label}</span></button><button type="button" className="workspace-tab-close" aria-label={`Закрыть вкладку «${label}»`} onClick={() => closeTab(group.id, tab)}><X size={13} /></button></div>; })}</div><div className="workspace-tabbar-actions">{openMenu(group.id, true)}{editorGroups.length > 1 && group.tabs.length === 0 && <IconButton label="Закрыть пустую рабочую зону" onClick={() => closePanel(group.id)}><PanelRightClose size={15} /></IconButton>}</div></div><div className="workspace-panel-content">{group.active_tab ? renderTabContent(group.active_tab) : <div className="workspace-empty-panel"><Plus size={28} /><h2>Рабочая зона пока пустая</h2><p>{textbook ? "Откройте здесь источник, конспект, историю или чат." : "Откройте здесь ответ, материал, конспект или чат."}</p><div>{openMenu(group.id)}{editorGroups.length > 1 && <Button variant="ghost" onClick={() => closePanel(group.id)}>Закрыть зону</Button>}</div></div>}</div></section>{index < editorGroups.length - 1 && <PanelResizeHandle className="workspace-panel-resize" label={`Изменить ширину рабочих зон ${index + 1} и ${index + 2}`} value={((layout.group_weights[index] ?? 1) / ((layout.group_weights[index] ?? 1) + (layout.group_weights[index + 1] ?? 1))) * 100} min={20} max={80} onDelta={(delta) => resizePanels(index, delta)} onReset={() => updateLayout((current) => ({ ...current, group_weights: current.groups.map(() => 1) }))} />}</div>;
+            return <div className="workspace-editor-fragment" key={group.id}><section className={`workspace-editor-group ${activeGroupId === group.id ? "is-active" : ""}`.trim()} aria-label={`Рабочая зона ${index + 1}`} onClick={() => setActiveGroupId(group.id)}><div className="workspace-tabbar"><div className="workspace-tabs" role="tablist" aria-label={`Вкладки рабочей зоны ${index + 1}`}>{group.tabs.map((tab) => { const TabIcon = TAB_ICONS[tab]; const label = tabLabel(tab, Boolean(textbook)); return <div className={`workspace-tab ${group.active_tab === tab ? "is-active" : ""}`.trim()} key={tab}><button type="button" role="tab" aria-selected={group.active_tab === tab} onClick={() => setActiveTab(group.id, tab)}><TabIcon size={14} /><span>{label}</span></button><button type="button" className="workspace-tab-close" aria-label={`Закрыть вкладку «${label}»`} onClick={() => closeTab(group.id, tab)}><X size={13} /></button></div>; })}</div><div className="workspace-tabbar-actions">{openMenu(group.id, true)}{editorGroups.length > 1 && group.tabs.length === 0 && <IconButton label="Закрыть пустую рабочую зону" onClick={() => closePanel(group.id)}><PanelRightClose size={15} /></IconButton>}</div></div><div className="workspace-panel-content">{group.active_tab ? renderTabContent(group.active_tab, group.id) : <div className="workspace-empty-panel"><Plus size={28} /><h2>Рабочая зона пока пустая</h2><p>{textbook ? "Откройте здесь источник, конспект, историю или чат." : "Откройте здесь ответ, материал, конспект или чат."}</p><div>{openMenu(group.id)}{editorGroups.length > 1 && <Button variant="ghost" onClick={() => closePanel(group.id)}>Закрыть зону</Button>}</div></div>}</div></section>{index < editorGroups.length - 1 && <PanelResizeHandle className="workspace-panel-resize" label={`Изменить ширину рабочих зон ${index + 1} и ${index + 2}`} value={((layout.group_weights[index] ?? 1) / ((layout.group_weights[index] ?? 1) + (layout.group_weights[index + 1] ?? 1))) * 100} min={20} max={80} onDelta={(delta) => resizePanels(index, delta)} onReset={() => updateLayout((current) => ({ ...current, group_weights: current.groups.map(() => 1) }))} />}</div>;
           })}
         </div>
         </>) : null}

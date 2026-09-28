@@ -2,7 +2,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from conftest import add_page_with_fragments, make_material
+from conftest import add_page_with_fragments, link_material, make_exam_project, make_material
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -39,7 +39,15 @@ from app.models import (
 from app.projects.errors import ProjectConflictError, ProjectDomainError
 from app.retrieval import indexing as indexing_service
 from app.retrieval import local_models
-from app.retrieval.chunking import ChunkAtom, chunk_atoms, material_chunks
+from app.retrieval.chunking import (
+    ChunkAtom,
+    Section,
+    _chunk_title,
+    _Outline,
+    chunk_atoms,
+    material_chunks,
+)
+from app.retrieval.context import ContextAssembler
 from app.retrieval.embeddings import OpenAIEmbeddingBackend, _validate_vectors
 from app.retrieval.exhaustive import start_run
 from app.retrieval.indexing import (
@@ -58,9 +66,18 @@ from app.retrieval.schemas import (
     RetrievalIndexBuildWrite,
     RetrievalIndexMaterialsWrite,
     RetrievalScope,
+    RetrievalSearchRead,
+    RetrievalSearchWrite,
+    SearchStrategy,
+)
+from app.retrieval.search import (
+    HybridRetriever,
+    ScopeFilter,
+    _lexical_candidates,
+    _lexical_coverage,
 )
 from app.retrieval.settings import read_settings
-from app.retrieval.vector import reciprocal_rank_fusion
+from app.retrieval.vector import VectorHit, reciprocal_rank_fusion
 
 
 def _profile(session: Session, *, external: bool = False) -> EmbeddingProfile:
@@ -819,7 +836,7 @@ def test_lexical_hit_opens_the_chunk_that_contains_the_found_fragment(session: S
     import asyncio
 
     from app.bindings.search import reindex_material
-    from app.retrieval.schemas import RetrievalSearchWrite, SearchStrategy
+    from app.retrieval.schemas import SearchStrategy
     from app.retrieval.search import HybridRetriever
 
     material = make_material(session, "94")
@@ -862,6 +879,42 @@ def test_lexical_hit_opens_the_chunk_that_contains_the_found_fragment(session: S
     assert [hit.locator.chunk_id for hit in result.results] == [second]
 
 
+def test_lexical_search_keeps_fts_place_when_index_has_no_fragment_links(
+    session: Session,
+) -> None:
+    """Отдельно индексируемый исходник не должен скрывать PDF-фрагменты из FTS."""
+    import asyncio
+
+    from app.bindings.search import reindex_material
+
+    material = make_material(session, "93")
+    page = add_page_with_fragments(
+        session, material, page_number=1, revision=1,
+        block_title="Раскраска графа",
+        fragments=["Минимальное число цветов называют хроматическим числом графа."],
+    )
+    reindex_material(session, material.id)
+    index = _index(session, _profile(session))
+    index.state = RetrievalIndexState.ACTIVE
+    session.add(RetrievalSettings(id=1, active_index_id=index.id))
+    session.add(RetrievalChunk(
+        index_id=index.id, material_id=material.id, revision=1,
+        block_id=page.block_id, kind=RetrievalChunkKind.TEXT, sort_order=0,
+        text="Отдельно прочитанный исходник.", token_count=4,
+        content_hash="a" * 64, fragment_ids=[],
+    ))
+    session.commit()
+
+    result = asyncio.run(HybridRetriever().search(session, RetrievalSearchWrite(
+        query="хроматическое число", strategy=SearchStrategy.LEXICAL,
+        scope=RetrievalScope.SELECTED_MATERIALS, material_ids=[material.id],
+    )))
+
+    assert len(result.results) == 1
+    assert result.results[0].locator.chunk_id == page.fragment_ids[0]
+    assert "Минимальное число цветов" in result.results[0].text
+
+
 def test_known_embedding_models_get_their_query_and_document_templates(
     session: Session,
 ) -> None:
@@ -885,3 +938,339 @@ def test_known_embedding_models_get_their_query_and_document_templates(
     assert qwen.pooling == "last_token" and qwen.query_template.startswith("Instruct: ")
     assert (manual.query_template, manual.document_template) == ("q {text}", "{text}")
 
+
+def test_search_collapses_duplicate_materials_and_keeps_chat_attribution(
+    session: Session,
+) -> None:
+    first, duplicate, other = [make_material(session, str(number)) for number in (701, 702, 703)]
+    first.display_name = "Первый"
+    duplicate.display_name = "Копия"
+    other.display_name = "Другой"
+    index = _index(session, _profile(session))
+    chunks = []
+    for order, (material, content) in enumerate(
+        [(first, "Общий текст"), (duplicate, "Общий  текст"), (other, "Другой текст")]
+    ):
+        chunk = RetrievalChunk(
+            index_id=index.id, material_id=material.id, revision=1,
+            kind=RetrievalChunkKind.TEXT, sort_order=order, text=content,
+            token_count=2, content_hash=str(order).rjust(64, "0"),
+            fragment_ids=[], locator={},
+        )
+        session.add(chunk)
+        chunks.append(chunk)
+    session.commit()
+
+    ranking = [(chunk.id, 1.0 / (rank + 1), ["semantic"]) for rank, chunk in enumerate(chunks)]
+    hits = HybridRetriever()._read_ranking(
+        session, ranking, {chunk.id: chunk for chunk in chunks}, {}, limit=2,
+    )
+    assert [hit.locator.material_id for hit in hits] == [first.id, other.id]
+    assert hits[0].also_in == ["Копия"]
+
+    assembled = ContextAssembler().assemble(
+        session,
+        RetrievalSearchRead(
+            query="общий", strategy=SearchStrategy.HYBRID, index_id=index.id,
+            degraded=False, degradation_reasons=[], results=hits,
+        ),
+        neighbor_window=0,
+    )
+    assert assembled.also_in[chunks[0].id] == ["Копия"]
+
+
+def test_chunk_title_uses_section_instead_of_generic_heading() -> None:
+    sections = [
+        Section(None, "ГЛАВА 3 Коммутация", [], True),
+        Section(None, "Коммутация пакетов", [], False),
+        Section(None, "ПРИМЕЧАНИЕ", [], False),
+    ]
+    outline = _Outline(sections)
+    assert _chunk_title([ChunkAtom("Содержание примечания", section=2)], outline)[1] == (
+        "ГЛАВА 3 Коммутация › Коммутация пакетов"
+    )
+
+
+def test_number_only_heading_joins_following_section_title() -> None:
+    sections = [
+        Section(None, "ГЛАВА 10 Алгебра", [], True),
+        Section(None, "10.1.", [], True),
+        Section(None, "Группы", [], False),
+        Section(None, "Определение", [], False),
+    ]
+    outline = _Outline(sections)
+    assert _chunk_title([ChunkAtom("Описание группы", section=2)], outline)[1] == (
+        "ГЛАВА 10 Алгебра › 10.1. Группы"
+    )
+    assert _chunk_title([ChunkAtom("Аксиомы группы", section=3)], outline)[1] == (
+        "ГЛАВА 10 Алгебра › 10.1. Группы"
+    )
+
+
+@pytest.mark.asyncio
+async def test_e5_low_evidence_returns_no_match(session: Session, monkeypatch) -> None:
+    """Слабая семантика и шумное слово не превращаются в десять ложных мест."""
+    project = make_exam_project(session)
+    material = make_material(session, "815")
+    link_material(session, project, material)
+    profile = _profile(session)
+    profile.model_id = "intfloat/multilingual-e5-base"
+    profile.query_template = "query: {text}"
+    profile.document_template = "passage: {text}"
+    index = _index(session, profile)
+    index.corpus_manifest = [
+        {"material_id": str(material.id), "revision": material.active_parse_revision}
+    ]
+    session.add(RetrievalSettings(id=1, active_index_id=index.id))
+    session.commit()
+
+    async def weak_semantic(*_args):
+        return [VectorHit(uuid4(), distance=.19)]
+
+    monkeypatch.setattr(HybridRetriever, "_semantic_ids", weak_semantic)
+    monkeypatch.setattr("app.retrieval.search._lexical_candidates", lambda *_args: [])
+    result = await HybridRetriever().search(session, RetrievalSearchWrite(
+        query="иерархия скоростей OTN", project_id=project.id,
+    ))
+    assert result.no_relevant_match
+    assert result.results == []
+    lexical = await HybridRetriever().search(session, RetrievalSearchWrite(
+        query="иерархия скоростей OTN", project_id=project.id,
+        strategy=SearchStrategy.LEXICAL,
+    ))
+    assert lexical.no_relevant_match
+
+
+def test_e5_gate_requires_the_measured_recipe(session: Session) -> None:
+    from app.retrieval.search import _is_e5_index
+
+    profile = _profile(session)
+    profile.model_id = "intfloat/multilingual-e5-base"
+    profile.query_template = "query: {text}"
+    profile.document_template = "passage: {text}"
+    index = _index(session, profile)
+
+    assert _is_e5_index(session, index)
+    profile.query_template = "{text}"
+    assert not _is_e5_index(session, index)
+
+
+def test_term_synonyms_replace_only_the_known_term() -> None:
+    from app.materials.lexicon import with_synonyms
+
+    assert with_synonyms("Как предотвратить взаимоблокировку процессов?") == (
+        "Как предотвратить тупик процессов?"
+    )
+    assert with_synonyms("Формула Байеса") == "Формула Байеса"
+
+
+def test_lexical_rescue_requires_most_query_terms() -> None:
+    from types import SimpleNamespace
+
+    partial = SimpleNamespace(text="процессы сети", block_title="Сеть")
+    relevant = SimpleNamespace(
+        text="Иерархия скоростей OTN описывает уровни передачи",
+        block_title="Сети OTN",
+    )
+    query = "иерархия скоростей OTN"
+    assert _lexical_coverage(query, [partial]) < .75
+    assert _lexical_coverage(query, [relevant]) >= .75
+    assert _lexical_coverage("коммут", [SimpleNamespace(
+        text="Коммутатор передаёт кадр", block_title="Сети",
+    )]) == 1
+
+
+def test_formula_query_expands_symbols_only_when_the_answer_signal_is_stronger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LaTeX-команды помогают формулам, но не вытесняют имена и редкие термины."""
+    from types import SimpleNamespace
+
+    formula = SimpleNamespace(
+        text=r"Из $\neg A \to B$ и $\neg A \to \neg B$ следует $A$.",
+        block_title="Приведение к абсурду",
+    )
+    weak = SimpleNamespace(text="Из A и B заключают A", block_title="")
+    named = SimpleNamespace(
+        text="Робинсон открыл правило резолюции: из G и F получают H.",
+        block_title="Резолюция",
+    )
+    symbols_only = SimpleNamespace(text=r"$G \lor F, H \lor \neg F$", block_title="")
+    query_with_answer = "Как из ¬A → B и ¬A → ¬B заключить A?"
+    query_with_name = "Какое правило вывода открыл Робинсон и что получается из G ∨ F и H ∨ ¬F?"
+
+    def candidates(_session, _ids, query, **_kwargs):
+        if "Робинсон" in query:
+            return SimpleNamespace(hits=[symbols_only if " lor " in query else named])
+        return SimpleNamespace(hits=[formula if " neg " in query else weak])
+
+    monkeypatch.setattr("app.retrieval.search.search_fragments", candidates)
+    scope = ScopeFilter([uuid4()], None, "")
+
+    assert _lexical_candidates(None, scope, query_with_answer, 10) == [formula]
+    assert _lexical_candidates(None, scope, query_with_name, 10) == [named]
+    assert _lexical_coverage(query_with_answer, [formula]) > .75
+
+
+
+def test_specific_terms_are_names_acronyms_and_words_outside_the_dictionary() -> None:
+    """Общее слово может быть синонимом учебника, имя и аббревиатура — нет."""
+    from app.materials.lexicon import specific_terms
+
+    assert specific_terms("Как работает протокол QUIC v2 согласно RFC 9369?") == [
+        "QUIC", "v2", "RFC",
+    ]
+    assert specific_terms("Что такое бутстреп и шардирование?") == ["бутстреп", "шардирование"]
+    assert specific_terms("Сформулируйте теорему Тьюринга") == ["Тьюринга"]
+    assert specific_terms("Почему привилегии процесса меняются?") == []
+    assert specific_terms("Найдите P(x) и F₁ при n = 17") == []
+    # Английское слово строчными конспект мог написать по-русски; имя — нет.
+    assert specific_terms("Что такое likelihood и self-attention?") == []
+    assert specific_terms("Как WireGuard и io_uring работают в Linux?") == [
+        "WireGuard", "io_uring", "Linux",
+    ]
+    # Части через дефис — одно имя, если каждая не короче двух знаков.
+    assert specific_terms("Как определяется равновесие в модели IS-LM?") == ["IS-LM"]
+    assert specific_terms("Чем B-tree отличается от A-B?") == []
+
+
+def _economics_material(session: Session) -> Material:
+    from app.bindings.search import reindex_material
+
+    material = make_material(session, "92")
+    add_page_with_fragments(
+        session, material, page_number=1, revision=1, block_title="Безработица",
+        fragments=["Закон Оукена связывает рост ВНП и норму безработицы.",
+                   "Тупик в распределении ресурсов предотвращают заранее."],
+    )
+    reindex_material(session, material.id)
+    session.commit()
+    return material
+
+
+def test_question_naming_an_absent_term_is_refused_with_that_term(session: Session) -> None:
+    """Любое найденное место отвечало бы на другой вопрос — выдача пуста и объяснима."""
+    import asyncio
+
+    material = _economics_material(session)
+
+    def search(query: str) -> RetrievalSearchRead:
+        return asyncio.run(HybridRetriever().search(session, RetrievalSearchWrite(
+            query=query, scope=RetrievalScope.SELECTED_MATERIALS, material_ids=[material.id],
+        )))
+
+    absent = search("Как рассчитать индекс Херфиндаля?")
+    assert absent.no_relevant_match and absent.results == []
+    assert absent.missing_terms == ["Херфиндаля"]
+    # Имя через дефис уходит в FTS строкой в кавычках: без них это ошибка синтаксиса.
+    assert search("Равновесие в модели IS-LM").missing_terms == ["IS-LM"]
+    assert search("Метод Metropolis-Hastings").missing_terms == ["Metropolis-Hastings"]
+    # Основа слова находит другую форму: «Оукена» в вопросе, «Оукена» и «Оукен» в тексте.
+    assert search("Что утверждает закон Оукена?").results
+    # Синоним из словаря терминов не считается отсутствующим словом.
+    assert not search("Как предотвратить взаимоблокировку?").missing_terms
+
+
+def test_unprocessed_material_does_not_switch_off_refusal(session: Session, monkeypatch) -> None:
+    """Файл без текста не «устарел»: он не ищется вовсе и отказ по проекту не отменяет."""
+    import asyncio
+
+    project = make_exam_project(session)
+    material = make_material(session, "816")
+    link_material(session, project, material)
+    pending = make_material(session, "817")
+    pending.display_name = "Хабр.md"
+    pending.status = MaterialState.READY_TO_PROCESS
+    pending.active_parse_revision = 0
+    link_material(session, project, pending)
+    profile = _profile(session)
+    profile.model_id = "intfloat/multilingual-e5-base"
+    profile.query_template = "query: {text}"
+    profile.document_template = "passage: {text}"
+    index = _index(session, profile)
+    index.corpus_manifest = [
+        {"material_id": str(material.id), "revision": material.active_parse_revision}
+    ]
+    session.add(RetrievalSettings(id=1, active_index_id=index.id))
+    session.commit()
+
+    async def weak_semantic(*_args):
+        return [VectorHit(uuid4(), distance=.19)]
+
+    monkeypatch.setattr(HybridRetriever, "_semantic_ids", weak_semantic)
+    monkeypatch.setattr("app.retrieval.search._lexical_candidates", lambda *_args: [])
+    result = asyncio.run(HybridRetriever().search(session, RetrievalSearchWrite(
+        query="иерархия скоростей передачи", project_id=project.id,
+    )))
+
+    assert result.no_relevant_match
+    assert result.degradation_reasons == ["Не обработаны и в поиске не участвуют: Хабр.md"]
+
+
+def test_accurate_preset_refuses_when_reranker_rejects_every_place(
+    session: Session, monkeypatch
+) -> None:
+    """Reranker читает вопрос и кусок вместе; вероятность ниже 0,5 у всех — ответа нет."""
+    import asyncio
+
+    material = _economics_material(session)
+    session.add(RetrievalSettings(id=1, preset=RetrievalPreset.ACCURATE))
+    session.commit()
+    probability = .2
+
+    async def rerank(_query, ranking, *_args, **_kwargs):
+        return [(item_id, probability, signals) for item_id, _, signals in ranking]
+
+    monkeypatch.setattr("app.retrieval.search._rerank", rerank)
+
+    def search() -> RetrievalSearchRead:
+        return asyncio.run(HybridRetriever().search(session, RetrievalSearchWrite(
+            query="норма безработицы", strategy=SearchStrategy.LEXICAL,
+            scope=RetrievalScope.SELECTED_MATERIALS, material_ids=[material.id],
+        )))
+
+    assert search().no_relevant_match
+    probability = .9
+    assert search().results
+
+
+def test_reranker_verdict_replaces_the_cosine_threshold(session: Session, monkeypatch) -> None:
+    """Прочитав места, reranker решает сам; без него действует порог cosine E5."""
+    import asyncio
+
+    material = _economics_material(session)
+    profile = _profile(session)
+    profile.model_id = "intfloat/multilingual-e5-base"
+    profile.query_template = "query: {text}"
+    profile.document_template = "passage: {text}"
+    index = _index(session, profile)
+    index.corpus_manifest = [
+        {"material_id": str(material.id), "revision": material.active_parse_revision}
+    ]
+    session.add(RetrievalSettings(
+        id=1, active_index_id=index.id, preset=RetrievalPreset.ACCURATE,
+    ))
+    session.commit()
+    available = True
+
+    async def weak_semantic(*_args):
+        return [VectorHit(uuid4(), distance=.19)]
+
+    async def rerank(_query, ranking, *_args, **_kwargs):
+        if not available:
+            raise ConnectionError("модель не установлена")
+        return [(item_id, .9, signals) for item_id, _, signals in ranking]
+
+    monkeypatch.setattr(HybridRetriever, "_semantic_ids", weak_semantic)
+    monkeypatch.setattr("app.retrieval.search._rerank", rerank)
+
+    def search() -> RetrievalSearchRead:
+        # Покрытие 2/3 ниже 0,75, cosine 0,81 ниже 0,83: без reranker — отказ.
+        return asyncio.run(HybridRetriever().search(session, RetrievalSearchWrite(
+            query="Как связаны рост ВНП и занятость?",
+            scope=RetrievalScope.SELECTED_MATERIALS, material_ids=[material.id],
+        )))
+
+    assert search().results
+    available = False
+    assert search().no_relevant_match

@@ -86,6 +86,8 @@ class ContextAssembler:
             sources.append(hit)
             seen_chunks.add(hit.locator.chunk_id)
             kept_by_text[digest] = hit
+            if hit.also_in:
+                also_in[hit.locator.chunk_id] = list(hit.also_in)
             used += size
         return AssembledContext(
             sources=sources,

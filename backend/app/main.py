@@ -18,6 +18,7 @@ from app.conspects.router import router as conspects_router
 from app.coverage.router import router as coverage_router
 from app.db import SessionLocal, upgrade_database
 from app.exam.router import router as exam_router
+from app.lesson_planning.router import router as lesson_planning_router
 from app.lessons.router import router as lessons_router
 from app.logging_config import configure_logging
 from app.materials.router import router as materials_router
@@ -168,6 +169,7 @@ def create_app() -> FastAPI:
     app.include_router(exam_router)
     app.include_router(background_router)
     app.include_router(preparation_router)
+    app.include_router(lesson_planning_router)
     app.include_router(retrieval_router)
     app.include_router(storage_router)
     app.include_router(system_router)

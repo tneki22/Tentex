@@ -15,7 +15,7 @@ import type { ModuleKey } from "../../api/projects";
 import { Tooltip } from "../ui";
 import { usePreparationInvitation } from "../../hooks/usePreparationInvitation";
 
-export type ProjectNavKey = "materials" | "program" | "answers" | "lessons" | "coverage" | "plan" | "cards" | "settings";
+export type ProjectNavKey = "materials" | "program" | "answers" | "lessons" | "coverage" | "plan" | "lesson-planning" | "cards" | "settings";
 
 interface NavEntry {
   key: ProjectNavKey;
@@ -63,6 +63,9 @@ export function ProjectNav({ projectId, active, textbook = false, modules, count
       : []),
     ...(!textbook && hasModule("plan")
       ? [{ key: "plan" as const, to: `/projects/${projectId}/plan`, icon: CalendarDays, label: "Моя подготовка" }]
+      : []),
+    ...(textbook && hasModule("lesson_planning")
+      ? [{ key: "lesson-planning" as const, to: `/projects/${projectId}/lesson-planning`, icon: CalendarDays, label: "Планирование занятий" }]
       : []),
     // Карточек в учебниковом режиме нет (решение 17.09.2026, TEXTBOOK_MODE.md §10):
     // самопроверка там — задания урока.

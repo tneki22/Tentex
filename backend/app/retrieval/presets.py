@@ -15,5 +15,8 @@ class PresetConfig:
 PRESETS = {
     RetrievalPreset.FAST: PresetConfig(30, 30, 8, 0),
     RetrievalPreset.BALANCED: PresetConfig(50, 50, 10, 0),
-    RetrievalPreset.ACCURATE: PresetConfig(80, 80, 12, 30),
+    # Qwen3 Reranker на CPU читает кусок ≈ 1,2 с: десять мест — предел ожидания.
+    # Пулы как у «Сбалансированно»: reranker переставляет ту же десятку. Пул 80+80
+    # меняет RRF и вытеснял из десятки верные места раньше, чем их прочтёт модель.
+    RetrievalPreset.ACCURATE: PresetConfig(50, 50, 12, 10),
 }

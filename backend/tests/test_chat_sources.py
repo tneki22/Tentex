@@ -28,8 +28,8 @@ from app.models import (
     Project,
 )
 from app.projects.errors import ProjectDomainError
-from app.retrieval.schemas import RetrievalScope, RetrievalSearchWrite
-from app.retrieval.search import resolve_scope
+from app.retrieval.schemas import RetrievalScope, RetrievalSearchRead, RetrievalSearchWrite
+from app.retrieval.search import HybridRetriever, resolve_scope
 
 
 def _material(
@@ -94,6 +94,22 @@ NOISE = "Нормализация отношений устраняет аном
 
 
 @pytest.mark.asyncio
+async def test_chat_names_absent_material_answer(session: Session, monkeypatch) -> None:
+    project = make_exam_project(session)
+
+    async def no_match(_retriever, _session, command):
+        return RetrievalSearchRead(
+            query=command.query, strategy=command.strategy, index_id=None,
+            degraded=False, degradation_reasons=[], results=[], no_relevant_match=True,
+        )
+
+    monkeypatch.setattr(HybridRetriever, "search", no_match)
+    found = await _find(session, project, None, "иерархия скоростей OTN")
+    assert not found.entries
+    assert any("не найдено" in note for note in found.notes)
+
+
+@pytest.mark.asyncio
 async def test_linked_topic_filters_blocks_before_the_lexical_limit(session: Session) -> None:
     """60 совпадений вне темы раньше занимали все 50 мест BM25, и тема оставалась пустой."""
     project = make_exam_project(session)
@@ -138,7 +154,9 @@ def test_whole_project_searches_without_the_hidden_topic(session: Session) -> No
 
 
 @pytest.mark.asyncio
-async def test_comparison_brings_a_second_material_and_puts_it_second(session: Session) -> None:
+async def test_comparison_does_not_treat_a_weak_word_match_as_second_source(
+    session: Session,
+) -> None:
     project = make_exam_project(session)
     _material(session, project, "Учебник", [f"{NOISE} Пример {index}." for index in range(12)])
     # Одно слово запроса в длинном тексте — BM25 ставит методичку ниже всех
@@ -154,8 +172,24 @@ async def test_comparison_brings_a_second_material_and_puts_it_second(session: S
     )
 
     assert {entry["material"] for entry in discuss.entries} == {"Учебник"}
-    assert [entry["material"] for entry in compare.entries][:2] == ["Учебник", "Методичка"]
-    assert sources.NO_SECOND_MATERIAL_NOTE not in compare.notes
+    assert {entry["material"] for entry in compare.entries} == {"Учебник"}
+    assert sources.NO_SECOND_MATERIAL_NOTE in compare.notes
+
+
+@pytest.mark.asyncio
+async def test_comparison_keeps_a_relevant_second_material(session: Session) -> None:
+    project = make_exam_project(session)
+    _material(session, project, "Учебник", [NOISE] * 12)
+    _material(session, project, "Методичка", [
+        "Нормализация устраняет аномалии обновления при проектировании схем данных."
+    ])
+
+    compare = await _find(
+        session, project, None, "нормализация аномалии обновления",
+        operation="compare_sources",
+    )
+
+    assert {entry["material"] for entry in compare.entries[:2]} == {"Учебник", "Методичка"}
 
 
 @pytest.mark.asyncio
