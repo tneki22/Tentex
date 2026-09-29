@@ -1143,6 +1143,60 @@ def test_answer_about_page_number_is_overridden_by_service():
     }
 
 
+def test_range_with_parts_is_split_across_the_blocks_of_the_range(session):
+    """Служебный хвост методички — пять блоков одним диапазоном — висел в «Ждут уточнения»."""
+    project, topic, material = setup_source(session, 0)
+    blocks = [
+        add_block(
+            session,
+            material,
+            [(f"Литература, источник {index}.1", "paragraph", None),
+             (f"Литература, источник {index}.2", "paragraph", None)],
+            sort_order=index,
+        )[0]
+        for index in range(3)
+    ]
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+    aliases = [task_input.target_aliases[str(block.id)] for block in blocks]
+    fragments = [
+        task_input.fragment_aliases[ref]
+        for target in task_input.targets
+        for ref in task_input.target_refs[target]
+    ]
+
+    def tail(parts):
+        return [{
+            "from_target": aliases[0],
+            "to_target": aliases[-1],
+            "outcome": "service",
+            "reason": "Список литературы",
+            "parts": parts,
+        }]
+
+    whole = expand_compact_response(
+        task_input,
+        tail([{"fragment": f"{fragments[0]}-{fragments[-1]}", "outcome": "service", "links": []}]),
+    )
+    assert [item["target_id"] for item in whole] == task_input.targets
+    assert not any("error" in item for item in whole)
+    publish_packet(session, token, task_input, whole)
+    rows = session.scalars(select(CoverageBlockResult).where(CoverageBlockResult.run_id == run_id))
+    assert {(row.outcome, row.reason) for row in rows} == {("service", "Список литературы")}
+
+    # Часть, чей фрагмент лежит за пределами диапазона, разложить некуда: ошибка остаётся.
+    outside = expand_compact_response(
+        task_input,
+        [{
+            "from_target": aliases[0],
+            "to_target": aliases[1],
+            "outcome": "service",
+            "parts": [{"fragment": fragments[-1], "outcome": "service", "links": []}],
+        }],
+    )
+    assert [item.get("error") for item in outside] == ["range_with_parts"] * 2
+
+
 def test_topic_alias_in_to_target_keeps_the_single_decision(session):
     """Живой прогон: alias темы в to_target уносил все восемь targets пакета."""
     project, topic, material = setup_source(session, 3)

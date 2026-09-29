@@ -192,18 +192,47 @@ def expand_compact_response(task_input, decisions: list[dict]) -> list[dict]:
             left, right = right, left
         targets = [aliases[alias] for alias in order[left : right + 1]]
         single = len(targets) == 1
+        by_target = _split_range_parts(task_input, targets, decision) if not single else {}
         for target in targets:
             # Точечное решение сильнее накрывшего его диапазона, в остальном выигрывает
             # более поздняя запись: дубль уточняет решение, а не роняет оба.
             if target in exact and not single:
                 continue
-            if not single and decision.get("parts"):
+            if by_target is None:
                 expanded[target] = {"target_id": target, "error": "range_with_parts"}
                 continue
-            expanded[target] = _expand_target(task_input, target, decision)
+            expanded[target] = _expand_target(
+                task_input, target, {**decision, **by_target.get(target, {})}
+            )
             if single:
                 exact.add(target)
     return [expanded[target] for target in task_input.targets if target in expanded]
+
+
+def _split_range_parts(task_input, targets: list[str], decision: dict) -> dict | None:
+    """Части решения на диапазон блоков раскладываются по блокам их фрагментов.
+
+    Модель присылает части и к диапазону («литература и выходные данные — service»):
+    фрагмент принадлежит ровно одному блоку пакета, поэтому каждый блок получает свои
+    части и разворачивается как одиночный. Решение без частей отдаёт блокам исход
+    диапазона как есть. `None` — часть ссылается на фрагмент вне диапазона: разложить
+    её некуда, и весь диапазон остаётся ошибкой `range_with_parts`.
+    """
+    parts = decision.get("parts")
+    if not parts:
+        return {}
+    owner = {
+        task_input.fragment_aliases[ref]: target
+        for target in targets
+        for ref in task_input.target_refs[target]
+    }
+    expanded = _expand_fragment_ranges(parts, list(owner))
+    if expanded is None:
+        return None
+    by_target: dict[str, dict] = {target: {"parts": []} for target in targets}
+    for part in expanded:
+        by_target[owner[part["fragment"]]]["parts"].append(part)
+    return by_target
 
 
 def _page_numbers_decision(task_input, target: str) -> dict:
