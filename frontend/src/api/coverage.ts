@@ -173,6 +173,67 @@ export interface CoverageBlockPage {
   distribution: Partial<Record<CoverageBucket, number>>;
 }
 
+export interface CoverageFindingPreview {
+  finding_ids: string[];
+  block_ids: string[];
+  source_block_ids: string[];
+  title: string;
+  parent_id: string | null;
+  fragments: Array<{
+    id: string; block_id: string; material_id: string; material_name: string;
+    page: number; text: string; role: "definition" | "explanation";
+  }>;
+  parent_bindings: Array<{ id: string; fragment_id: string }>;
+  remove_parent_binding_ids: string[];
+  proposal_version: string;
+  program_revision: number;
+  coverage_revision: number;
+}
+
+export interface CoverageFindingResult {
+  node_id: string;
+  action_sequence: number;
+  coverage_revision: number;
+  program_revision: number;
+  parent_block_ids: string[];
+  material_ids: string[];
+}
+
+export const getCoverageFindings = (
+  projectId: string, signal?: AbortSignal,
+): Promise<{ items: CoverageFindingPreview[] }> => request(
+  `${path(projectId)}/findings?kind=new_topic&state=proposed`, { signal },
+);
+
+export const previewCoverageFinding = (
+  projectId: string, findingIds: string[], blockIds: string[],
+): Promise<CoverageFindingPreview> => request(`${path(projectId)}/findings/preview`, {
+  method: "POST", body: JSON.stringify({ finding_ids: findingIds, block_ids: blockIds }),
+});
+
+export const applyCoverageFinding = (
+  projectId: string,
+  command: Pick<CoverageFindingPreview, "finding_ids" | "block_ids" | "proposal_version"> & {
+    title: string; parent_id: string | null; fragment_ids: string[];
+    remove_parent_binding_ids: string[]; expected_program_revision: number;
+    expected_coverage_revision: number;
+  },
+): Promise<CoverageFindingResult> => request(`${path(projectId)}/findings/apply`, {
+  method: "POST", body: JSON.stringify(command),
+});
+
+export const rejectCoverageFinding = (
+  projectId: string, preview: CoverageFindingPreview, feedback: string,
+): Promise<{ action_sequence: number; coverage_revision: number }> => request(
+  `${path(projectId)}/findings/reject`, {
+    method: "POST", body: JSON.stringify({
+      finding_ids: preview.finding_ids, block_ids: preview.block_ids,
+      expected_coverage_revision: preview.coverage_revision,
+      proposal_version: preview.proposal_version, feedback,
+    }),
+  },
+);
+
 export type CoverageView = "readable" | "gaps" | "outside_program" | "needs_action";
 
 export interface CoverageTopic {

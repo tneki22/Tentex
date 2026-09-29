@@ -287,6 +287,85 @@ class BlocksRead(StrictModel):
     distribution: dict[str, int] = Field(default_factory=dict)
 
 
+class FindingPreviewRequest(StrictModel):
+    """Группа находок либо один блок без машинного предложения."""
+
+    finding_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    block_ids: list[UUID] = Field(default_factory=list, max_length=100)
+
+
+class FindingApply(FindingPreviewRequest):
+    """Снимок предпросмотра и выбор человека проверяются внутри writer-транзакции."""
+
+    title: str = Field(min_length=1, max_length=300)
+    parent_id: UUID | None = None
+    fragment_ids: list[UUID] = Field(min_length=1, max_length=1000)
+    remove_parent_binding_ids: list[UUID] = Field(default_factory=list, max_length=1000)
+    expected_program_revision: int = Field(ge=0)
+    expected_coverage_revision: int = Field(ge=0)
+    proposal_version: str
+
+
+class FindingReject(FindingPreviewRequest):
+    """Отклонение сохраняет обратимое объяснение и отпечаток опор."""
+
+    expected_coverage_revision: int = Field(ge=0)
+    proposal_version: str
+    feedback: str = Field(default="Не нужно", max_length=1000)
+
+
+class FindingFragmentRead(StrictModel):
+    """Точный фрагмент, который человек может оставить в новой теме."""
+
+    id: UUID
+    block_id: UUID
+    material_id: UUID
+    material_name: str
+    page: int
+    text: str
+    role: Literal["definition", "explanation"]
+
+
+class FindingPreviewRead(StrictModel):
+    """Снимок выбора до платного повторного исследования."""
+
+    finding_ids: list[UUID]
+    block_ids: list[UUID]
+    source_block_ids: list[UUID]
+    title: str
+    parent_id: UUID | None
+    fragments: list[FindingFragmentRead]
+    parent_bindings: list[dict[str, UUID]]
+    remove_parent_binding_ids: list[UUID]
+    proposal_version: str
+    program_revision: int
+    coverage_revision: int
+
+
+class FindingsRead(StrictModel):
+    """Сгруппированные предложенные темы."""
+
+    items: list[FindingPreviewRead]
+
+
+class FindingApplyResult(StrictModel):
+    """Новая тема и возможная область доисследования родителя."""
+
+    node_id: UUID
+    action_sequence: int
+    coverage_revision: int
+    program_revision: int
+    parent_block_ids: list[UUID]
+    material_ids: list[UUID]
+
+
+class FindingRejectResult(StrictModel):
+    """Отклонение и общий номер для undo."""
+
+    action_sequence: int
+    coverage_revision: int
+
+
 class EvidenceRead(StrictModel):
     """Текст из оригинала и явная недоступность исторического локатора."""
 

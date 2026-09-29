@@ -284,7 +284,10 @@ export function CoverageOverviewScreen() {
         <CoverageBrowser
           projectId={projectId}
           nodes={project.program.nodes}
-          onChanged={coverage.refresh}
+          onChanged={async () => {
+            const [nextProject] = await Promise.all([getProject(projectId), coverage.refresh()]);
+            setProject(nextProject);
+          }}
         />
 
         <section className="coverage-sources" aria-labelledby="coverage-sources-title">

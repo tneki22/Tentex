@@ -109,10 +109,22 @@ interface StubState {
   decision: Record<string, unknown> | null;
   undoCalls: number;
   resolvedOutside: boolean;
+  findingApplied: boolean;
+  offerBlocks: boolean;
+  preflightPlan: Record<string, unknown> | null;
 }
 
+const findingPreview = {
+  finding_ids: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"], block_ids: [],
+  source_block_ids: [BLOCK], title: "Планировщик реального времени", parent_id: TOPIC,
+  fragments: [{ id: FRAGMENT_A, block_id: BLOCK, material_id: MATERIAL,
+    material_name: "Таненбаум.pdf", page: 80, text: "Планировщик реального времени выбирает задачи.", role: "explanation" }],
+  parent_bindings: [], remove_parent_binding_ids: [], proposal_version: "proposal-1",
+  program_revision: 7, coverage_revision: 4,
+};
+
 async function stub(page: Page): Promise<StubState> {
-  const state: StubState = { searchCalls: 0, inserted: null, decision: null, undoCalls: 0, resolvedOutside: false };
+  const state: StubState = { searchCalls: 0, inserted: null, decision: null, undoCalls: 0, resolvedOutside: false, findingApplied: false, offerBlocks: false, preflightPlan: null };
   await page.route((url) => url.pathname.startsWith("/api/"), async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -128,6 +140,28 @@ async function stub(page: Page): Promise<StubState> {
     else if (path.endsWith("/coverage/blocks") && url.searchParams.get("view") === "needs_action") json = {
       coverage_revision: 4, items: [], total: 0, next_offset: null, distribution: {},
     };
+    else if (path.endsWith("/coverage/findings")) json = { items: state.findingApplied ? [] : [findingPreview] };
+    else if (path.endsWith("/coverage/findings/preview")) json = {
+      ...findingPreview, finding_ids: [], block_ids: [BLOCK], title: "", parent_id: null,
+    };
+    else if (path.endsWith("/coverage/findings/apply")) {
+      state.findingApplied = true;
+      state.decision = JSON.parse(request.postData() ?? "{}");
+      json = { node_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", action_sequence: 16,
+        coverage_revision: 5, program_revision: 8, parent_block_ids: state.offerBlocks ? [BLOCK] : [], material_ids: [MATERIAL] };
+    }
+    else if (path.endsWith("/coverage/findings/reject")) {
+      state.findingApplied = true;
+      state.decision = JSON.parse(request.postData() ?? "{}");
+      json = { action_sequence: 17, coverage_revision: 5 };
+    }
+    else if (path.endsWith("/coverage/preflight")) {
+      state.preflightPlan = JSON.parse(request.postData() ?? "{}");
+      json = { fingerprint: "scope-1", snapshot: { sources: [], context_sources: [] },
+        blocks: 1, blocks_all: 3, blocks_needed: 1, execution_available: true,
+        execution_issue: null, model_roles: {}, limits: {}, packets_at_least: 1,
+        prompt_overhead_tokens: 0, packet_input_tokens: 1000 };
+    }
     else if (path.endsWith("/coverage/blocks")) json = {
       coverage_revision: 4,
       items: state.resolvedOutside ? [] : [{ block_id: BLOCK, material_id: MATERIAL, revision: 1, bucket: "outside_program", has_content: false, result_id: null, title: "Предметный указатель", page_from: 80, page_to: 80, material_name: "Таненбаум.pdf", reason: null }],
@@ -140,6 +174,7 @@ async function stub(page: Page): Promise<StubState> {
     } else if (path.endsWith("/actions/undo")) {
       state.undoCalls += 1;
       state.resolvedOutside = false;
+      state.findingApplied = false;
       json = { undone_action_type: "coverage_decision", program: null, draft_revision: null, latest_undoable_action: null };
     } else if (path.endsWith("/search")) {
       state.searchCalls += 1;
@@ -152,6 +187,7 @@ async function stub(page: Page): Promise<StubState> {
     } else if (path.includes(`/materials/${MATERIAL}/pages/42`)) json = materialPage(42, FRAGMENT_A, first.quote);
     else if (path.includes(`/materials/${MATERIAL}/pages/43`)) json = materialPage(43, FRAGMENT_B, second.quote);
     else if (path.endsWith("/bindings/summary") || path.endsWith("/bindings")) json = [];
+    else if (path.endsWith("/materials")) json = [{ id: MATERIAL, display_name: "Таненбаум.pdf", source_role: "main", status: "ready" }];
     else if (path.endsWith("/workspace-state")) json = { project_id: PROJECT, schema_version: 1, layout: JSON.parse(request.postData() ?? "{}").layout, updated_at: "2026-09-19T00:00:00Z" };
     else if (path.endsWith(`/projects/${PROJECT}`)) json = projectDetail;
 
@@ -159,6 +195,48 @@ async function stub(page: Page): Promise<StubState> {
   });
   return state;
 }
+
+test("находка открывает предпросмотр, создаёт тему и отменяется одним действием", async ({ page }) => {
+  const state = await stub(page);
+  await page.goto(`${BASE}/projects/${PROJECT}/coverage?view=outside`);
+  await expect(page.getByText("Предложено исследованием · 1")).toBeVisible();
+  await page.getByRole("button", { name: /Планировщик реального времени.*1 фрагм/ }).click();
+  const editor = page.locator(".coverage-finding-editor");
+  await expect(editor.getByText("Планировщик реального времени выбирает задачи.")).toBeVisible();
+  await expect(editor.getByLabel("Родительская тема")).toHaveValue(TOPIC);
+  await page.screenshot({ path: "output/coverage-finding-preview.png", fullPage: true });
+  await editor.getByRole("button", { name: "Создать тему и привязать" }).click();
+  await expect.poll(() => state.decision?.proposal_version).toBe("proposal-1");
+  await expect(page.getByText("Тема «Планировщик реального времени» создана.")).toBeVisible();
+  await page.getByRole("button", { name: "Отменить" }).click();
+  await expect.poll(() => state.undoCalls).toBe(1);
+  await expect(page.getByText("Предложено исследованием · 1")).toBeVisible();
+});
+
+test("не нужную находку можно отклонить и вернуть", async ({ page }) => {
+  const state = await stub(page);
+  await page.goto(`${BASE}/projects/${PROJECT}/coverage?view=outside`);
+  await page.getByRole("button", { name: /Планировщик реального времени.*1 фрагм/ }).click();
+  await page.locator(".coverage-finding-editor").getByRole("button", { name: "Не нужно" }).click();
+  await expect.poll(() => state.decision?.feedback).toBe("Не нужно");
+  await expect(page.getByText("Находка отклонена на этих основаниях.")).toBeVisible();
+  await page.getByRole("button", { name: "Отменить" }).click();
+  await expect.poll(() => state.undoCalls).toBe(1);
+  await expect(page.getByText("Предложено исследованием · 1")).toBeVisible();
+});
+
+test("после создания темы блоки родителя передаются в явную область доисследования", async ({ page }) => {
+  const state = await stub(page);
+  state.offerBlocks = true;
+  await page.goto(`${BASE}/projects/${PROJECT}/coverage?view=outside`);
+  await page.getByRole("button", { name: /Планировщик реального времени.*1 фрагм/ }).click();
+  await page.getByRole("button", { name: "Создать тему и привязать" }).click();
+  await page.getByRole("button", { name: "Подготовить доисследование" }).click();
+  await expect(page.getByRole("dialog").getByLabel("Только нужное · 1 блок")).toBeChecked();
+  await expect.poll(() => state.preflightPlan?.mode).toBe("incremental");
+  expect(state.preflightPlan?.block_ids).toEqual([BLOCK]);
+  await page.getByRole("dialog").getByRole("button", { name: "Отменить" }).click();
+});
 
 test("чтение сохраняет контекст, поиск остаётся ручным, кусок попадает в урок", async ({ page }) => {
   const state = await stub(page);
@@ -196,15 +274,17 @@ test("чтение сохраняет контекст, поиск остаёт�
   await expect(page.getByRole("button", { name: /Второе объяснение/ })).toHaveAttribute("aria-pressed", "true");
 });
 
-test("нераспределённый блок получает решение и undo, а И7 не притворяется готовым", async ({ page }) => {
+test("нераспределённый блок открывает создание темы и сохраняет прежние решения", async ({ page }) => {
   const state = await stub(page);
   await page.setViewportSize({ width: 1120, height: 820 });
   await page.addInitScript(() => localStorage.setItem("tentex:theme", "dark"));
   await page.goto(`${BASE}/projects/${PROJECT}/coverage?view=outside`);
 
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  const disabled = page.getByRole("button", { name: "Создать новую тему" });
-  await expect(disabled).toBeDisabled();
+  await page.getByRole("button", { name: "Создать новую тему" }).click();
+  await expect(page.getByRole("heading", { name: "Создать новую тему" })).toBeVisible();
+  await expect(page.locator(".coverage-finding-editor").getByRole("button", { name: "Создать тему и привязать" })).toBeDisabled();
+  await page.getByRole("button", { name: "Закрыть предпросмотр" }).click();
   await page.getByRole("button", { name: "Служебный блок" }).click();
   await expect.poll(() => state.decision?.action).toBe("service");
   await page.getByRole("button", { name: "Отменить" }).click();

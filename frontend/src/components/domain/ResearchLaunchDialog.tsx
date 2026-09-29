@@ -42,6 +42,14 @@ function loadDefaultResearch(projectId: string, signal: AbortSignal) {
 const DEFAULT_COST_USD = "1.00";
 const NUMBER = new Intl.NumberFormat("ru-RU");
 
+function blockCount(value: number | undefined): string {
+  if (value === undefined) return "… блоков";
+  const last = value % 10;
+  const teen = value % 100;
+  const noun = last === 1 && teen !== 11 ? "блок" : last >= 2 && last <= 4 && (teen < 12 || teen > 14) ? "блока" : "блоков";
+  return `${value} ${noun}`;
+}
+
 const ROLE_LABEL: Record<string, string> = {
   main: "основной",
   additional: "дополнительный",
@@ -226,17 +234,17 @@ export function ResearchLaunchDialog({
           <legend>Что исследовать</legend>
           <label>
             <input type="radio" name="research-mode" checked={mode === "incremental"} onChange={() => changeMode("incremental")} />
-            Только нужное · {preflight?.blocks_needed ?? "…"} блоков
+            Только нужное · {blockCount(preflight?.blocks_needed)}
           </label>
           <label>
             <input type="radio" name="research-mode" checked={mode === "initial"} disabled={forceIncremental || blockIds.length > 0} onChange={() => changeMode("initial")} />
-            Всё заново · {preflight?.blocks_all ?? "…"} блоков
+            Всё заново · {blockCount(preflight?.blocks_all)}
           </label>
           {mode === "incremental" && preflight?.blocks === 0 && <p>Нужных блоков нет. Выберите другой источник или полный повтор.</p>}
         </fieldset>
 
         <section className="research-launch-facts">
-          <div><Layers3 size={16} /><span><small>Подготовленный текст</small><b>{preflight ? `${preflight.blocks} блоков · от ${preflight.packets_at_least} вызовов` : "Проверяем…"}</b></span></div>
+          <div><Layers3 size={16} /><span><small>Подготовленный текст</small><b>{preflight ? `${blockCount(preflight.blocks)} · от ${preflight.packets_at_least} вызовов` : "Проверяем…"}</b></span></div>
           <div><RefreshCw size={16} /><span><small>Модель обзора</small><b>{model?.model_id ?? "Не настроена"}</b></span></div>
           <div><CircleDollarSign size={16} /><span><small>Модель исследования</small><b>{researchModel?.model_id ?? "Не настроена"}</b></span></div>
         </section>

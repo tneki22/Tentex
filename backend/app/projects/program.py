@@ -358,41 +358,7 @@ def create_program_node(
     session: Session, project_id: UUID, command: ProgramNodeCreate
 ) -> ProgramChangeResult:
     with project_write_transaction(session, project_id):
-        project = _require_writable_project(session, project_id)
-        nodes = _nodes(session, project_id)
-        nodes_by_id = {node.id: node for node in nodes}
-        _visible_parent(nodes_by_id, command.parent_id)
-        _validate_variant(project.workspace_variant, command.node_type, command.exam_kind)
-        node_id = uuid4()
-        parent_map = {node.id: node.parent_id for node in nodes}
-        parent_map[node_id] = command.parent_id
-        _validate_tree(parent_map)
-        passport = session.get(GoalPassport, project_id)
-        target_level = command.target_level or (
-            passport.target_outcome if passport is not None else None
-        )
-        node = ProgramNode(
-            id=node_id,
-            project_id=project_id,
-            parent_id=command.parent_id,
-            node_type=command.node_type,
-            exam_kind=command.exam_kind,
-            sort_order=0,
-            title=command.title,
-            section_purpose=command.section_purpose,
-            goal_role=command.goal_role,
-            target_level=target_level,
-            is_in_current_program=True,
-            needs_material=command.needs_material,
-            is_archived=False,
-            origin_kind=OriginKind.MANUAL,
-            basis_kind=ProgramBasisKind.CUSTOM,
-            origin_note=None,
-        )
-        nodes.append(node)
-        _place_node(nodes, node, command.parent_id, command.position)
-        session.add(node)
-        draft_revision = _begin_program_change(session, project, command.expected_program_revision)
+        project, node, draft_revision = create_node_in_transaction(session, project_id, command)
         _record_action(
             session,
             project,
@@ -401,6 +367,52 @@ def create_program_node(
             {"node_id": str(node.id)},
         )
         return _change_result(session, project, node.id, draft_revision)
+
+
+def create_node_in_transaction(
+    session: Session, project_id: UUID, command: ProgramNodeCreate
+) -> tuple[Project, ProgramNode, int | None]:
+    """Общее ядро создания узла для обычной команды и составного решения покрытия.
+
+    Вызывающий уже держит `project_write_transaction`; повторный вход в него закрывает
+    внешнюю транзакцию и разрушает атомарность составного действия.
+    """
+    project = _require_writable_project(session, project_id)
+    nodes = _nodes(session, project_id)
+    nodes_by_id = {node.id: node for node in nodes}
+    _visible_parent(nodes_by_id, command.parent_id)
+    _validate_variant(project.workspace_variant, command.node_type, command.exam_kind)
+    node_id = uuid4()
+    parent_map = {node.id: node.parent_id for node in nodes}
+    parent_map[node_id] = command.parent_id
+    _validate_tree(parent_map)
+    passport = session.get(GoalPassport, project_id)
+    target_level = command.target_level or (
+        passport.target_outcome if passport is not None else None
+    )
+    node = ProgramNode(
+        id=node_id,
+        project_id=project_id,
+        parent_id=command.parent_id,
+        node_type=command.node_type,
+        exam_kind=command.exam_kind,
+        sort_order=0,
+        title=command.title,
+        section_purpose=command.section_purpose,
+        goal_role=command.goal_role,
+        target_level=target_level,
+        is_in_current_program=True,
+        needs_material=command.needs_material,
+        is_archived=False,
+        origin_kind=OriginKind.MANUAL,
+        basis_kind=ProgramBasisKind.CUSTOM,
+        origin_note=None,
+    )
+    nodes.append(node)
+    _place_node(nodes, node, command.parent_id, command.position)
+    session.add(node)
+    draft_revision = _begin_program_change(session, project, command.expected_program_revision)
+    return project, node, draft_revision
 
 
 def update_program_node(
@@ -1019,6 +1031,11 @@ def undo_last_project_action(
             case "coverage_decision":
                 apply_coverage_undo(session, project_id, data)
                 changes_program = False
+            case "coverage_finding_apply" | "coverage_finding_reject":
+                from app.coverage.findings import undo as undo_finding
+
+                undo_finding(session, project_id, action.action_type, data)
+                changes_program = action.action_type == "coverage_finding_apply"
             case "active_exam_import" | "ai_import_repair":
                 old_ids = {UUID(item["id"]) for item in data["nodes"]}
                 for item in data["nodes"]:
