@@ -110,7 +110,7 @@ LessonBlockOperation = Literal[
     "add_note", "add_page", "add_outline", "add_fragments", "add_block", "add_link", "add_image",
     "add_region",
     "delete", "move_up", "move_down", "split", "merge",
-    "set_topic", "add_topic", "remove_topic", "set_always_pages", "set_collapsed",
+    "set_topic", "add_topic", "remove_topic", "set_always_pages", "set_collapsed", "relink",
 ]
 
 
@@ -198,6 +198,10 @@ class LessonRefRead(ApiModel):
     pages_shown: list[int]
     # У опоры пояснения модели: `[S3]` в тексте блока открывает эту ссылку.
     citation_label: str | None = None
+    # Урок пришёл файлом без своего материала: текст куска из файла уроков.
+    snapshot_md: str | None = None
+    # Тот же файл материала теперь есть в проекте — ссылку можно связать заново.
+    can_relink: bool = False
 
 
 class LessonBlockRead(ApiModel):

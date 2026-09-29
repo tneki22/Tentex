@@ -2463,6 +2463,12 @@ class LessonSourceRef(Base):
     # Метка опорной ссылки пояснения модели: `[S3]` в тексте блока открывает её.
     # Номера сквозные по уроку, поэтому одна и та же опора в разных блоках — один S-ID.
     citation_label: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Урок пришёл файлом `.tentex-lessons`, а его материала в проекте нет: кусок
+    # показывается снимком текста, а SHA-256 файла и якоря границ по тексту абзацев
+    # (`{"from": …, "to": …}`) позволяют связать ссылку заново.
+    snapshot_md: Mapped[str | None] = mapped_column(Text, nullable=True)
+    material_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    snapshot_anchors: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
 class StudyTask(Base):

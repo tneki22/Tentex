@@ -355,6 +355,22 @@ function LessonSourceView({ projectId, sourceRef: ref, mode, topicTitle, onSplit
   );
 
   if (!materialId || !ref.is_available) {
+    // Урок пришёл файлом из другой установки: учебника здесь нет, но текст куска
+    // приехал снимком — урок читается, а ссылку можно связать, когда файл появится.
+    if (ref.snapshot_md) {
+      return (
+        <section className="lesson-source is-snapshot">
+          {head}
+          <p className="lesson-source-notice is-warning">
+            <AlertTriangle size={14} aria-hidden="true" />
+            {ref.can_relink
+              ? "Показан снимок текста из файла уроков — этот учебник уже есть в проекте, кусок можно связать."
+              : "Показан снимок текста из файла уроков: этого учебника нет в проекте."}
+          </p>
+          <LessonMarkdown className="lesson-source-snapshot" text={ref.snapshot_md} />
+        </section>
+      );
+    }
     return (
       <section className="lesson-source is-unavailable">
         {head}

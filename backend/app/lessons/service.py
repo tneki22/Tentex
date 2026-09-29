@@ -398,7 +398,20 @@ def _ref_read(
         ),
         pages_shown=pages_shown,
         citation_label=ref.citation_label,
+        snapshot_md=ref.snapshot_md if material is None else None,
+        can_relink=material is None and relink_material(session, project_id, ref) is not None,
     )
+
+
+def relink_material(
+    session: Session, project_id: UUID, ref: LessonSourceRef
+) -> tuple[Material, ProjectMaterial] | None:
+    """Материал проекта с тем же SHA-256, что у снимка из файла уроков."""
+    if ref.material_id is not None or not ref.material_sha256:
+        return None
+    material = session.scalar(select(Material).where(Material.sha256 == ref.material_sha256))
+    link = session.get(ProjectMaterial, (project_id, material.id)) if material else None
+    return (material, link) if material is not None and link is not None else None
 
 
 def _ref_order(ref: LessonSourceRef) -> tuple[str, int]:

@@ -1,9 +1,11 @@
+import shutil
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
@@ -36,6 +38,8 @@ from app.lessons.ai_schemas import (
     LessonEnrichWrite,
     LessonProposalApplyWrite,
 )
+from app.lessons.export import importer as lesson_import
+from app.lessons.export import service as lesson_export
 from app.lessons.schemas import (
     LessonBlockWrite,
     LessonBulkResult,
@@ -104,6 +108,46 @@ def create_bulk_lessons(
     project_id: UUID, command: LessonBulkWrite, session: SessionDependency
 ) -> LessonBulkResult:
     return bulk.create_bulk_lessons(session, project_id, command)
+
+
+@router.post("/export")
+def export_lessons(
+    project_id: UUID, command: lesson_export.LessonExportWrite, session: SessionDependency
+) -> FileResponse:
+    """Выбранные уроки одним файлом: PDF, LaTeX, Markdown или `.tentex-lessons`."""
+    result = lesson_export.export_lessons(session, project_id, command)
+    return FileResponse(
+        result.path, filename=result.filename, media_type=result.media_type,
+        background=BackgroundTask(shutil.rmtree, result.workdir, ignore_errors=True),
+    )
+
+
+async def _package(file: UploadFile) -> lesson_import.Package:
+    raw = await file.read(lesson_import.MAX_PACKAGE_BYTES + 1)
+    await file.close()
+    return lesson_import.read_package(raw)
+
+
+@router.post("/import/preview", response_model=lesson_import.LessonImportPreviewRead)
+async def preview_lesson_import(
+    project_id: UUID, session: SessionDependency, file: Annotated[UploadFile, File()]
+) -> lesson_import.LessonImportPreviewRead:
+    """Что в файле уроков и куда он ляжет: темы проекта и найденные материалы."""
+    package = await _package(file)
+    return lesson_import.preview_package(session, project_id, package)
+
+
+@router.post("/import", response_model=lesson_import.LessonImportResult, status_code=201)
+async def import_lessons(
+    project_id: UUID,
+    session: SessionDependency,
+    file: Annotated[UploadFile, File()],
+    options: Annotated[str, Form()],
+) -> lesson_import.LessonImportResult:
+    """Уроки из файла — в выбранные темы; одна запись «Отменить» на весь импорт."""
+    package = await _package(file)
+    command = lesson_import.parse_options(options)
+    return lesson_import.import_package(session, project_id, package, command)
 
 
 @router.post("/ai/preflight", response_model=LessonAiPreflightRead)
