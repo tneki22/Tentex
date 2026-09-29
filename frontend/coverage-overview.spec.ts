@@ -259,7 +259,7 @@ test("доисследование выбирает нужные блоки и �
   await expect(dialog.getByLabel("Только нужное · 7 блоков")).toBeChecked();
   await expect(dialog.getByRole("button", { name: "Начать обзор · 7 бл." })).toBeEnabled();
   expect(plans.at(-1)?.mode).toBe("incremental");
-  await dialog.getByLabel("Всё заново · 424 блоков").check();
+  await dialog.getByLabel("Всё заново · 424 блока").check();
   await expect(dialog.getByRole("button", { name: "Начать обзор · 424 бл." })).toBeEnabled();
   expect(plans.at(-1)?.mode).toBe("initial");
   needed = 0;
