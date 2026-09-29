@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Pause, Pencil, Plus, Search, Trash2, Undo2 } from "lucide-react";
+import { Pencil, Plus, Search, Trash2, Undo2 } from "lucide-react";
 import { Link } from "react-router";
 import { bulkCards, updateCard, type CardFilters, type CardRead } from "../../api/cards";
 import { useCardBank } from "../../hooks/useCardBank";
@@ -10,7 +10,6 @@ import {
   ErrorState,
   LoadingState,
   PageHead,
-  StatusBadge,
 } from "../../components/ui";
 import { CardEditor } from "./CardEditor";
 
@@ -21,12 +20,10 @@ interface BankModeProps {
   onChanged: () => void;
 }
 
-type QuickFilter = "all" | "active" | "suspended" | "unrated" | "hard" | "recalled" | "lost" | "deleted";
+type QuickFilter = "all" | "unrated" | "hard" | "recalled" | "lost" | "deleted";
 
 const FILTERS: Array<{ value: QuickFilter; label: string }> = [
   { value: "all", label: "Все" },
-  { value: "active", label: "Активные" },
-  { value: "suspended", label: "Приостановлены" },
   { value: "unrated", label: "Без оценок" },
   { value: "hard", label: "Сложные" },
   { value: "recalled", label: "Вспомненные" },
@@ -36,11 +33,17 @@ const FILTERS: Array<{ value: QuickFilter; label: string }> = [
 
 function relativeTime(value: string | null): string {
   if (!value) return "ещё не повторялась";
-  const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
+  const utc = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? value : `${value}Z`;
+  const seconds = Math.max(0, (Date.now() - new Date(utc).getTime()) / 1000);
   if (seconds < 60) return "только что";
   if (seconds < 3600) return `${Math.floor(seconds / 60)} мин назад`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)} ч назад`;
   return `${Math.floor(seconds / 86400)} дн назад`;
+}
+
+function cardCountLabel(count: number): string {
+  const form = new Intl.PluralRules("ru").select(count);
+  return `${count} ${form === "one" ? "карточка" : form === "few" ? "карточки" : "карточек"} в выборке`;
 }
 
 function apiFilters(
@@ -52,8 +55,6 @@ function apiFilters(
   return {
     query: query || undefined,
     unitId: unitId || undefined,
-    state:
-      filter === "active" || filter === "suspended" ? filter : undefined,
     source:
       source && source !== "all"
         ? (source as CardFilters["source"])
@@ -97,7 +98,7 @@ export function BankMode({
     if (!activeId && visible[0]) setActiveId(visible[0].id);
   }, [activeId, visible]);
 
-  async function applyBulk(action: "activate" | "suspend" | "delete" | "restore", cards?: CardRead[]) {
+  async function applyBulk(action: "delete" | "restore", cards?: CardRead[]) {
     const targets = cards ?? visible.filter((card) => selected.has(card.id));
     if (!targets.length) return;
     await bulkCards(projectId, {
@@ -116,7 +117,7 @@ export function BankMode({
   return (
     <div className="bank-mode">
       <PageHead
-        eyebrow={data ? `${data.total} карточек в выборке` : "Банк проекта"}
+        eyebrow={data ? cardCountLabel(data.total) : "Банк проекта"}
         title="Банк карточек"
         actions={<Button onClick={() => onCreate(null)}><Plus size={15} /> Создать</Button>}
       />
@@ -138,7 +139,7 @@ export function BankMode({
           <option value="all">Любой источник</option>
           <option value="none">Без источника</option>
           <option value="fragment">Фрагмент</option>
-          <option value="reference">Эталонный ответ</option>
+          <option value="reference">Готовый ответ</option>
         </select>
       </section>
       <nav className="bank-filter-tabs" aria-label="Фильтры карточек">
@@ -163,12 +164,6 @@ export function BankMode({
             </Button>
           ) : (
             <>
-              <Button variant="ghost" onClick={() => void applyBulk("activate")}>
-                <Check size={14} /> Активировать
-              </Button>
-              <Button variant="ghost" onClick={() => void applyBulk("suspend")}>
-                <Pause size={14} /> Приостановить
-              </Button>
               <Button variant="ghost" className="is-destructive" onClick={() => void applyBulk("delete")}>
                 <Trash2 size={14} /> Удалить
               </Button>
@@ -197,7 +192,6 @@ export function BankMode({
                 }
                 label="Выбрать все"
               />
-              <span>Карточка</span><span>Источник</span><span>Повторение</span>
             </header>
             {visible.map((card) => (
               <article
@@ -217,15 +211,14 @@ export function BankMode({
                   label={`Выбрать: ${card.front}`}
                 />
                 <div>
-                  <small>{card.unit?.path.join(" · ") || "Без раздела"}</small>
+                  <small>{card.unit?.path.join(" · ") || (card.unit ? "Билет" : "Без вопроса")}</small>
                   <strong>{card.front}</strong>
                   <span>{card.unit?.title ?? "Без вопроса"}</span>
                 </div>
-                <span className={card.source.lost ? "is-lost" : ""}>{card.source.label}</span>
+                <span className={card.source.lost ? "is-lost" : ""}>
+                  {card.source.kind === "reference" ? "Готовый ответ" : card.source.label}
+                </span>
                 <div>
-                  <StatusBadge tone={card.state === "active" ? "success" : "neutral"}>
-                    {card.deleted_at ? "удалена" : card.state === "active" ? "активна" : "приостановлена"}
-                  </StatusBadge>
                   <small>
                     {card.last_confidence ? `Оценка ${card.last_confidence} · ` : ""}
                     {card.attempt_count} попыток · {relativeTime(card.last_reviewed_at)}
@@ -253,7 +246,7 @@ export function BankMode({
                 <>
                   <header>
                     <div>
-                      <small>{active.unit?.path.join(" · ") || "Личная карточка"}</small>
+                      <small>{active.unit?.path.join(" · ") || (active.unit ? "Билет" : "Без вопроса")}</small>
                       <h2>{active.front}</h2>
                     </div>
                     <Button variant="ghost" onClick={() => setEditing(true)}><Pencil size={15} /> Править</Button>
@@ -262,7 +255,7 @@ export function BankMode({
                   {active.hint && <p><strong>Подсказка:</strong> {active.hint}</p>}
                   <dl>
                     <div><dt>Вопрос</dt><dd>{active.unit?.title ?? "Без вопроса"}</dd></div>
-                    <div><dt>Источник</dt><dd>{active.source.label}</dd></div>
+                    <div><dt>Источник</dt><dd>{active.source.kind === "reference" ? "Готовый ответ" : active.source.label}</dd></div>
                     <div><dt>Последняя оценка</dt><dd>{active.last_confidence ?? "—"}</dd></div>
                     <div><dt>Попыток</dt><dd>{active.attempt_count}</dd></div>
                   </dl>
@@ -286,16 +279,6 @@ export function BankMode({
                   )}
                   {!active.deleted_at && (
                     <footer>
-                      <Button
-                        variant="secondary"
-                        onClick={() => void applyBulk(
-                          active.state === "active" ? "suspend" : "activate",
-                          [active],
-                        )}
-                      >
-                        {active.state === "active" ? <Pause size={14} /> : <Check size={14} />}
-                        {active.state === "active" ? "Приостановить" : "Активировать"}
-                      </Button>
                       <Button variant="ghost" className="is-destructive" onClick={() => void applyBulk("delete", [active])}>
                         <Trash2 size={14} /> Удалить
                       </Button>

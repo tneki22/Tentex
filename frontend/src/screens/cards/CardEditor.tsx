@@ -174,7 +174,7 @@ export function CardEditor({
               <option value="fragment">{source.label ?? "Фрагмент материала"}</option>
             )}
             {selectedUnit?.reference_revision && (
-              <option value="reference">Эталонный ответ</option>
+              <option value="reference">Готовый ответ</option>
             )}
           </select>
         </label>
@@ -211,7 +211,7 @@ export function CardEditor({
             <p>{back || "Здесь появится обратная сторона карточки."}</p>
           </div>
           {hint && <small>Подсказка: {hint}</small>}
-          <footer>{source.label ?? (source.kind === "reference" ? "Эталонный ответ" : "Вручную")}</footer>
+          <footer>{source.kind === "reference" ? "Готовый ответ" : source.label ?? "Вручную"}</footer>
         </article>
       </aside>
     </div>

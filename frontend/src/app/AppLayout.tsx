@@ -67,6 +67,8 @@ function backgroundJobPath(job: BackgroundJobRead): string | null {
     case "ai_lesson":
       // Раздел «Уроки» по номеру задачи сам находит тему и готовый урок.
       return job.project_id ? `/projects/${job.project_id}/lessons?job=${job.id}` : null;
+    case "ai_cards":
+      return job.project_id ? `/projects/${job.project_id}/cards?mode=creation&path=ai&job=${job.id}` : null;
     default:
       return null;
   }

@@ -52,6 +52,7 @@ REVIEW_REQUIRED_KINDS = {
     BackgroundJobKind.AI_IMPORT_REPAIR,
     BackgroundJobKind.AI_ANSWER_SECTIONS,
     BackgroundJobKind.AI_CLEANUP,
+    BackgroundJobKind.AI_CARDS,
 }
 #: У `ai_lesson` предложением заканчиваются только эти подвиды: план урока,
 #: дополнение и задания. Сборка урока создаёт черновик сама — проверять нечего.
@@ -94,6 +95,9 @@ def _needs_review(job: BackgroundJob) -> bool:
 
 def _subject(session: Session, job: BackgroundJob) -> str:
     """Над чем идёт работа — именем файла или проекта, а не идентификатором."""
+    if job.kind == BackgroundJobKind.AI_CARDS:
+        count = len((job.checkpoint.get("command") or {}).get("program_node_ids") or [])
+        return f"Карточки по вопросам · {count}"
     if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
         from app.models import EmbeddingProfile, RetrievalIndex
 
@@ -179,7 +183,10 @@ def _model_label(session: Session, job: BackgroundJob) -> str:
         return "Проверка хранилища"
     if job.kind == BackgroundJobKind.STORAGE_CLEANUP:
         return "Очистка временного"
-    if job.kind in {BackgroundJobKind.IMAGE_DESCRIPTIONS, BackgroundJobKind.AI_LESSON}:
+    if job.kind in {
+        BackgroundJobKind.IMAGE_DESCRIPTIONS, BackgroundJobKind.AI_LESSON,
+        BackgroundJobKind.AI_CARDS,
+    }:
         return str(job.checkpoint.get("model_label") or "внешняя модель")
     if job.kind in REVIEW_REQUIRED_KINDS:
         checkpoint = job.checkpoint

@@ -24,10 +24,16 @@ export interface GeneratedCard {
   hint: string | null;
   source: NonNullable<CardCreate["source"]>;
   evidence_quote: string;
+  status: "pending" | "accepted" | "rejected";
 }
-export interface CardGeneration {
+export interface CardGenerationGroup {
+  program_node_id: string;
   run_id: string;
   candidates: GeneratedCard[];
+}
+export interface CardBatchReview {
+  groups: CardGenerationGroup[];
+  errors: string[];
 }
 
 export interface CardFilters {
@@ -75,12 +81,26 @@ export const createCard = (
   });
 
 export const generateCards = (
-  projectId: string, programNodeId: string, mode: CardGenerationMode,
-): Promise<CardGeneration> =>
+  projectId: string, programNodeIds: string[], mode: CardGenerationMode,
+): Promise<{ job_id: string }> =>
   request(`${projectPath(projectId)}/cards/generate`, {
     method: "POST",
-    body: JSON.stringify({ program_node_id: programNodeId, mode }),
+    body: JSON.stringify({ program_node_ids: programNodeIds, mode }),
   });
+
+export const getCardGenerationReview = (
+  projectId: string, jobId: string,
+): Promise<CardBatchReview> =>
+  request(`${projectPath(projectId)}/cards/generation-jobs/${encodeURIComponent(jobId)}/review`);
+
+export const updateCardProposal = (
+  projectId: string, jobId: string, unitId: string, index: number,
+  command: { front: string; back: string; hint: string | null; rejected: boolean },
+): Promise<CardBatchReview> =>
+  request(
+    `${projectPath(projectId)}/cards/generation-jobs/${encodeURIComponent(jobId)}/candidates/${encodeURIComponent(unitId)}/${index}`,
+    { method: "PATCH", body: JSON.stringify(command) },
+  );
 
 export const createGeneratedCard = (
   projectId: string,

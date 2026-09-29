@@ -87,6 +87,7 @@ AI_JOB_KINDS = frozenset(
         BackgroundJobKind.RETRIEVAL_EXHAUSTIVE,
         BackgroundJobKind.IMAGE_DESCRIPTIONS,
         BackgroundJobKind.AI_LESSON,
+        BackgroundJobKind.AI_CARDS,
     }
 )
 LOCAL_JOB_KINDS = frozenset(

@@ -256,6 +256,7 @@ class BackgroundJobKind(StrEnum):
     # Модельные сценарии Уроков; подвид (`plan · build · enrich · practice`) —
     # в `checkpoint.subtype`, как у `ai_preparation`.
     AI_LESSON = "ai_lesson"
+    AI_CARDS = "ai_cards"
 
 
 class BackgroundJobState(StrEnum):

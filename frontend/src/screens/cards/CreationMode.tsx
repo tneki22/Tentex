@@ -60,7 +60,7 @@ export function CreationMode({
   return (
     <div className="creation-mode">
       <PageHead
-        title={path ? "Новая карточка" : "Создание карточек"}
+        title={path === "ai" ? "Карточки с помощью ИИ" : path ? "Новая карточка" : "Создание карточек"}
         actions={path && <Button variant="ghost" onClick={() => setPath(null)}>К способам</Button>}
       />
       {!path ? (
@@ -85,14 +85,20 @@ export function CreationMode({
               <span>Карточки по ответу и привязанным материалам с проверкой опоры.</span>
             </button>
           </div>
+          <AiCardCreator
+            projectId={projectId}
+            units={units}
+            showControls={false}
+            onChanged={onChanged}
+          />
         </>
       ) : path === "ai" ? (
         <AiCardCreator
           projectId={projectId}
           units={units}
           initialUnitId={initialUnitId}
+          showControls
           onChanged={onChanged}
-          onOpenBank={onOpenBank}
         />
       ) : path === "fragment" && !prefill ? (
         <section className="fragment-creator">

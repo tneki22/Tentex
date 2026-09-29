@@ -7,11 +7,29 @@ from conftest import make_exam_project, make_topic_node
 from sqlalchemy import select
 
 from app.ai.gateway import ModelGateway
+from app.ai.jobs import process_ai_job
 from app.ai.provider import FakeTransport, ProviderCompletion, ProviderUsage
-from app.cards.generate import generate_cards
-from app.cards.schemas import CardCreate, CardGenerateWrite
+from app.background.registry import get_job, list_jobs
+from app.cards.generate import (
+    generate_cards,
+    queue_card_generation,
+    review_card_generation,
+    update_card_proposal,
+)
+from app.cards.schemas import (
+    CardCreate,
+    CardGenerateBatchWrite,
+    CardGenerateWrite,
+    CardProposalUpdate,
+)
 from app.cards.service import create_card
-from app.models import Card, ReferenceAnswer, ReferenceAnswerMatchMethod, ReferenceAnswerOrigin
+from app.models import (
+    BackgroundJob,
+    Card,
+    ReferenceAnswer,
+    ReferenceAnswerMatchMethod,
+    ReferenceAnswerOrigin,
+)
 from app.projects.errors import ProjectDomainError
 
 
@@ -116,3 +134,65 @@ async def test_generate_without_source_never_calls_model(session, ai_config):
                              CardGenerateWrite(program_node_id=node.id))
     assert missing.value.code == "card_generation_no_source"
     assert fake.complete_calls == 0
+
+
+def test_background_generation_survives_review_and_tracks_decisions(session, ai_config):
+    del ai_config
+    project = make_exam_project(session)
+    nodes = [
+        make_topic_node(session, project, title="Причины изменений"),
+        make_topic_node(session, project, title="Следствия изменений"),
+    ]
+    for node in nodes:
+        session.add(ReferenceAnswer(
+            project_id=project.id, program_node_id=node.id,
+            text="Повышение температуры ускоряет реакцию при одинаковых условиях.",
+            origin_kind=ReferenceAnswerOrigin.MANUAL,
+            match_method=ReferenceAnswerMatchMethod.MANUAL,
+            is_confirmed=True, is_active=True, revision=1,
+        ))
+    session.commit()
+    job_id = queue_card_generation(session, project.id, CardGenerateBatchWrite(
+        program_node_ids=[node.id for node in nodes], mode="connections",
+    ))
+    assert get_job(session, job_id).state == "queued"
+    replies = [ProviderCompletion(
+        content=json.dumps({"candidates": [{
+            "front": f"Как влияет температура на реакцию в случае {index}?",
+            "back": "Ускоряет реакцию.",
+            "hint": "Подумайте о скорости.",
+            "source_kind": "reference", "fragment_id": None,
+            "evidence_quote": "Повышение температуры ускоряет реакцию",
+        }]}),
+        actual_model_id="test/structured-model", usage=ProviderUsage(),
+    ) for index in (1, 2)]
+    process_ai_job(session, session.get(BackgroundJob, job_id),
+                   ModelGateway(session, FakeTransport(completions=replies)))
+    assert get_job(session, job_id).state == "completed"
+    assert get_job(session, job_id).needs_review
+    review = review_card_generation(session, project.id, job_id)
+    assert len(review.groups) == 2
+    first = review.groups[0]
+    updated = update_card_proposal(
+        session, project.id, job_id, first.program_node_id, first.candidates[0].index,
+        CardProposalUpdate(front="Исправленный вопрос?", back="Ускоряет.", hint=None),
+    )
+    assert updated.groups[0].candidates[0].front == "Исправленный вопрос?"
+    assert review_card_generation(session, project.id, job_id).groups[0].candidates[0].hint is None
+    create_card(session, project.id, CardCreate(
+        program_node_id=first.program_node_id, front="Исправленный вопрос?",
+        back="Ускоряет.", source=first.candidates[0].source,
+        generation_run_id=first.run_id,
+        generation_candidate_index=first.candidates[0].index,
+    ))
+    refreshed = review_card_generation(session, project.id, job_id)
+    assert refreshed.groups[0].candidates[0].status == "accepted"
+    second = review.groups[1]
+    update_card_proposal(
+        session, project.id, job_id, second.program_node_id, second.candidates[0].index,
+        CardProposalUpdate(front=second.candidates[0].front,
+                           back=second.candidates[0].back, rejected=True),
+    )
+    refreshed = review_card_generation(session, project.id, job_id)
+    assert refreshed.groups[1].candidates[0].status == "rejected"
+    assert len(list_jobs(session, project_id=project.id, pending_review=True)) == 1
