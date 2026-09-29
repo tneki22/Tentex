@@ -7,8 +7,8 @@
 сессии, воспроизводятся за минуту.
 
 > **29.09.2026:** шаги 1 и 2 сделаны (ветка `codex/pass-two-passages`): 2091 карточка →
-> 146 кусков, «СКНФ и СДНФ» 53 → 4. Шаги 3 и 4 поставлены в
-> [`docs/superpowers/plans/2026-09-29-pass-two-steps-3-4.md`](../superpowers/plans/2026-09-29-pass-two-steps-3-4.md).
+> 146 кусков, «СКНФ и СДНФ» 53 → 4. Шаги 3, 4 и урезанный И7 поставлены в
+> [`docs/superpowers/plans/2026-09-29-pass-two-steps-3-4-i7.md`](../superpowers/plans/2026-09-29-pass-two-steps-3-4-i7.md).
 
 ## Коротко
 
