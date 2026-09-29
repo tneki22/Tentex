@@ -94,10 +94,7 @@ def _needs_review(job: BackgroundJob) -> bool:
 
 def _subject(session: Session, job: BackgroundJob) -> str:
     """Над чем идёт работа — именем файла или проекта, а не идентификатором."""
-    if (
-        job.kind == BackgroundJobKind.RETRIEVAL_INDEX
-        and job.checkpoint.get("mode") != "incremental"
-    ):
+    if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
         from app.models import EmbeddingProfile, RetrievalIndex
 
         profile = None

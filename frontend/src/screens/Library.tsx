@@ -1017,7 +1017,7 @@ export function Library() {
                       </StatusBadge>
                     )}
                     {material.status === "ready" && !indexedMaterialIds.has(material.id) && (
-                      <StatusBadge tone="neutral">Нет индекса</StatusBadge>
+                      <StatusBadge tone="danger">Нет индекса</StatusBadge>
                     )}
                     {material.ocr_page_count + (material.parser_mode === "fast" ? material.ocr_low_page_count : 0) > 0 && (
                       <QualityBadge quality="ocr" count={material.ocr_page_count + (material.parser_mode === "fast" ? material.ocr_low_page_count : 0)} />
