@@ -11054,6 +11054,21 @@ button.wizard-back-projects {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.workspace-section-overview.is-empty .empty-state {
+  min-width: 0;
+  align-content: center;
+  gap: var(--space-4);
+}
+
+.workspace-section-overview.is-empty .empty-state h3 {
+  font-size: var(--text-xl);
+}
+
+.workspace-section-overview.is-empty .empty-state p {
+  max-width: none;
+  font-size: var(--text-lg);
+}
+
 .workspace-outline-ranges {
   display: grid;
   gap: var(--space-1);
