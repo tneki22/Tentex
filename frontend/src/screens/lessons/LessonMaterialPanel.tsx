@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { EvidenceSummary } from "../../api/coverage";
 import { getTopicSources, type FoundPage, type LessonBlockCommand, type LessonBlockRead, type LessonSourceRangeRead } from "../../api/lessons";
 import { listMaterials, type MaterialRead } from "../../api/materials";
 import { EmptyState, ErrorState, LoadingState, SegmentedTabs, Select } from "../../components/ui";
@@ -36,6 +37,8 @@ interface LessonMaterialPanelProps {
   onAdd(command: Omit<LessonBlockCommand, "expected_revision">): Promise<boolean>;
   /** Несколько кусков подряд одной операцией экрана: каждый следующий — за предыдущим. */
   onAddMany(commands: Array<Omit<LessonBlockCommand, "expected_revision">>): Promise<boolean>;
+  /** «Собрать с ИИ» из кусков, отмеченных во вкладке «Предложено». */
+  onBuildWithAi?(items: EvidenceSummary[]): void;
   onUseFound(pages: FoundPage[]): Promise<boolean>;
   /** Вкладка при открытии: ссылка «Искать в материалах проекта» ведёт сразу в поиск. */
   initialTab?: PanelTab;
@@ -46,7 +49,7 @@ interface LessonMaterialPanelProps {
 /** Правая панель «Материал для урока»: четыре вкладки (записка §2). */
 export function LessonMaterialPanel({
   projectId, topic, busy, refreshKey, onCreateFromRange, lessonId, lessonPages,
-  blocks, insertPoint, onInsertPointChange, onAdd, onAddMany, onUseFound, initialTab = "suggested", tabRequest,
+  blocks, insertPoint, onInsertPointChange, onAdd, onAddMany, onBuildWithAi, onUseFound, initialTab = "suggested", tabRequest,
 }: LessonMaterialPanelProps) {
   const [tab, setTab] = useState<PanelTab>(initialTab);
 
@@ -125,6 +128,7 @@ export function LessonMaterialPanel({
                 busy={busy}
                 onAdd={onAdd}
                 onAddMany={onAddMany}
+                onBuildWithAi={onBuildWithAi}
               /> : <EmptyState title="Выберите тему"><p>Предложения исследования показываются для выбранной темы урока.</p></EmptyState>
             )}
           </>
