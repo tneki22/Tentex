@@ -278,13 +278,19 @@
   gap: var(--space-1);
 }
 
-/* Свёртка правой панели — не участник переноса тулбара: отдельный элемент ряда,
-   поэтому при нехватке места вниз уходят инструменты урока, а не она сама.
-   align-items: flex-start — если инструменты всё же перенеслись на вторую
-   строку, кнопка остаётся на уровне первой, а не по центру всего блока. */
+.lessons-lesson-toolbar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.lessons-lesson-toolbar > * { flex: none; }
+
+/* Свёртка панели остаётся видимой; при нехватке ширины прокручивается только
+   набор инструментов урока. */
 .lessons-lesson-toolbar-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--space-1);
 }
 
@@ -298,14 +304,12 @@
   border-top: 1px dashed var(--line);
 }
 
-/* Кнопки тулбара урока и инструментов блока компактнее общего размера — иначе
-   в один ряд без подписей инструменты не помещаются. min-width — не мельче
-   48px: без подписи остаётся только иконка, и по мелкой цели трудно попасть. */
+/* Инструменты урока и блока компактнее общего размера, чтобы ряд не переносился. */
 .lessons-lesson-toolbar :is(.primary-button, .secondary-button, .text-button),
 .lessons-block-toolbar :is(.primary-button, .secondary-button, .text-button) {
   gap: var(--space-1);
-  min-width: 48px;
-  min-height: 32px;
+  min-width: var(--space-8);
+  min-height: var(--space-8);
   padding: 0 var(--space-2);
   font-size: var(--text-xs);
 }
@@ -349,6 +353,18 @@
   }
 }
 
+.lessons-lesson-toolbar .toolbar-label-link { display: none; }
+
+@container (max-width: 820px) {
+  .lessons-lesson-toolbar .toolbar-label { display: none; }
+}
+
+@container (max-width: 600px) {
+  .lessons-lesson-toolbar .lesson-mode-tabs .segmented-tab-label-full { display: none; }
+  .lessons-lesson-toolbar .lesson-mode-tabs .segmented-tab-label-short { display: inline; }
+  .lessons-lesson-toolbar .lesson-mode-tabs button { padding: 0 var(--space-2); }
+}
+
 /* Инструменты блока с подписями занимают ~960px — больше, чем редактор получает
    даже на максимуме (820px), так что подписи здесь не показываются ни при какой
    ширине: это не «свернулось», это единственный вариант, который умещается в
@@ -375,11 +391,18 @@
   flex-direction: column;
 }
 
-.lesson-suggested { display: grid; grid-template-columns: minmax(13rem, .8fr) minmax(0, 1.2fr); gap: var(--space-3); align-items: start; }
-.lesson-suggested-list { display: grid; gap: var(--space-2); }
+.lesson-suggested { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: var(--space-3); height: 100%; min-height: 0; align-items: start; }
+.lesson-suggested-list { display: grid; align-content: start; gap: var(--space-2); min-height: 0; max-height: 100%; overflow-y: auto; padding-right: var(--space-1); }
+.lesson-suggested > .evidence-inspector { max-height: 100%; overflow-y: auto; }
 .lesson-suggested-list > p { margin: 0 0 var(--space-1); color: var(--muted); }
 .lesson-suggested-item { position: relative; }
 .lesson-suggested-item > .status-badge { position: absolute; right: var(--space-2); top: var(--space-2); }
+
+@container (max-width: 440px) {
+  .lesson-suggested { display: flex; flex-direction: column-reverse; align-items: stretch; }
+  .lesson-suggested-list { flex: 1; }
+  .lesson-suggested > .evidence-inspector { flex: none; max-height: 45%; }
+}
 
 .lessons-panel-head {
   flex: none;
@@ -432,7 +455,10 @@
   flex: 1;
   overflow-y: auto;
   padding: var(--space-3);
+  container-type: inline-size;
 }
+
+.lessons-panel-body:has(.lesson-suggested) { overflow: hidden; }
 
 .lessons-panel-hint {
   margin: 0;
@@ -1034,6 +1060,7 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
 }
 
 .lesson-tab.is-empty {
@@ -1043,16 +1070,37 @@
 .lesson-tab-head {
   flex: none;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
-.lesson-tab-title {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
+.lesson-tab-head::-webkit-scrollbar { display: none; }
+.lesson-tab-head > * { flex: none; }
+.lesson-tab-head .select-trigger { max-width: calc(var(--space-10) * 4); }
+.lesson-tab-action { white-space: nowrap; }
+.lesson-page-zoom { display: flex; align-items: center; gap: var(--space-1); }
+.lesson-page-zoom :is(.text-button, .secondary-button) { min-width: var(--space-8); min-height: var(--space-8); padding: 0 var(--space-1); }
+.lesson-page-zoom-value { min-width: var(--space-12); padding: 0; border: 0; background: transparent; color: var(--muted); font-size: var(--text-xs); cursor: pointer; }
+.segmented-tab-label-short { display: none; }
+
+@container (max-width: 1000px) {
+  .lesson-tab-head .lesson-tab-action span { display: none; }
+  .lesson-tab-head .lesson-tab-action { min-width: var(--space-8); min-height: var(--space-8); padding: 0 var(--space-2); }
+  .lesson-tab-head .lesson-duration,
+  .lesson-tab-head .status-badge { display: none; }
+  .lesson-tab-head .lesson-mode-tabs .segmented-tab-label-full { display: none; }
+  .lesson-tab-head .lesson-mode-tabs .segmented-tab-label-short { display: inline; }
+  .lesson-tab-head .lesson-mode-tabs button { padding: 0 var(--space-2); }
+}
+
+@container (max-width: 650px) {
+  .lesson-tab-head .select-trigger { max-width: calc(var(--space-10) * 3); }
+  .lesson-page-zoom-value { min-width: var(--space-10); }
 }
 
 .lesson-duration {
@@ -1063,9 +1111,12 @@
 .lesson-tab-body {
   min-height: 0;
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
   padding: var(--space-4) var(--space-5) var(--space-8);
 }
+
+.lesson-tab-body .lesson-page { justify-items: safe center; }
+.lesson-tab-body .lesson-page img { width: var(--lesson-page-width); max-width: none; }
 
 @media (max-width: 900px) {
   .lessons-center-scroll {

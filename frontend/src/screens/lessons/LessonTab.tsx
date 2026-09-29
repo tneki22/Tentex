@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link } from "react-router";
-import { CheckCircle2, GraduationCap, PencilLine, RotateCcw, Search, Sparkles, Zap } from "lucide-react";
+import { CheckCircle2, GraduationCap, Minus, PencilLine, Plus, RotateCcw, Search, Sparkles, Zap } from "lucide-react";
 import {
   createQuickLesson,
   lessonCaption,
@@ -16,6 +16,11 @@ import { useLesson, useLessonsOverview } from "../../hooks/useLessons";
 import { useLessonViewMode, type LessonViewMode } from "../../hooks/useLessonViewMode";
 
 const CHOICE_PREFIX = "tentex:lesson-choice:";
+const PAGE_ASPECT_RATIO = 0.7;
+const PAGE_HEIGHT_RESERVE = 100; // Источник, подпись страницы и поля остаются над листом.
+const MIN_PAGE_ZOOM = 0.5;
+const MAX_PAGE_ZOOM = 2;
+const PAGE_ZOOM_STEP = 0.25;
 
 function readChoice(projectId: string, nodeId: string): string | null {
   try {
@@ -33,9 +38,9 @@ function saveChoice(projectId: string, nodeId: string, lessonId: string) {
   }
 }
 
-export const VIEW_MODE_TABS: Array<{ value: LessonViewMode; label: string }> = [
-  { value: "pages", label: "Страницы" },
-  { value: "text", label: "Текст" },
+export const VIEW_MODE_TABS: Array<{ value: LessonViewMode; label: string; shortLabel: string }> = [
+  { value: "pages", label: "Страницы", shortLabel: "С" },
+  { value: "text", label: "Текст", shortLabel: "Т" },
 ];
 
 /** Уроки темы, которые можно читать сейчас: готовые первыми, архивные — нет. */
@@ -63,6 +68,25 @@ export function LessonTab({ projectId, node, preferredLessonId, onLessonsChanged
   const [choice, setChoice] = useState<string | null>(() => preferredLessonId ?? readChoice(projectId, node.id));
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [bodyElement, setBodyElement] = useState<HTMLDivElement | null>(null);
+  const [fitPageWidth, setFitPageWidth] = useState(640);
+  const [pageZoom, setPageZoom] = useState(1);
+
+  useEffect(() => {
+    if (!bodyElement) return;
+    const measure = () => {
+      const style = window.getComputedStyle(bodyElement);
+      const availableWidth = bodyElement.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      setFitPageWidth(Math.max(200, Math.floor(Math.min(
+        availableWidth,
+        (bodyElement.clientHeight - PAGE_HEIGHT_RESERVE) * PAGE_ASPECT_RATIO,
+      ))));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(bodyElement);
+    return () => observer.disconnect();
+  }, [bodyElement]);
 
   useEffect(() => {
     setChoice(preferredLessonId ?? readChoice(projectId, node.id));
@@ -145,27 +169,32 @@ export function LessonTab({ projectId, node, preferredLessonId, onLessonsChanged
               setChoice(value);
             }}
           />
-        ) : <strong className="lesson-tab-title">{current.title}</strong>}
+        ) : null}
         {current.status === "draft" && <StatusBadge tone="warning">Черновик</StatusBadge>}
         {current.duration_minutes && <span className="lesson-duration">≈ {current.duration_minutes} мин</span>}
-        <SegmentedTabs label="Способ показа урока" value={mode} tabs={VIEW_MODE_TABS} onChange={setMode} />
-        <Link className="secondary-button" to={`${sectionLink}&lesson=${current.id}`}>
-          <PencilLine size={14} />{current.status === "draft" ? "Продолжить редактирование" : "Редактировать"}
+        <SegmentedTabs label="Способ показа урока" value={mode} tabs={VIEW_MODE_TABS} onChange={setMode} className="lesson-mode-tabs" />
+        {mode === "pages" && <div className="lesson-page-zoom" role="group" aria-label="Масштаб страниц">
+          <Button variant="ghost" aria-label="Уменьшить масштаб" disabled={pageZoom <= MIN_PAGE_ZOOM} onClick={() => setPageZoom((value) => Math.max(MIN_PAGE_ZOOM, value - PAGE_ZOOM_STEP))}><Minus size={15} /></Button>
+          <button type="button" className="lesson-page-zoom-value" title="Подогнать страницу" onClick={() => setPageZoom(1)}>{Math.round(pageZoom * 100)}%</button>
+          <Button variant="ghost" aria-label="Увеличить масштаб" disabled={pageZoom >= MAX_PAGE_ZOOM} onClick={() => setPageZoom((value) => Math.min(MAX_PAGE_ZOOM, value + PAGE_ZOOM_STEP))}><Plus size={15} /></Button>
+        </div>}
+        <Link className="secondary-button lesson-tab-action" aria-label={current.status === "draft" ? "Продолжить редактирование" : "Редактировать"} title={current.status === "draft" ? "Продолжить редактирование" : "Редактировать"} to={`${sectionLink}&lesson=${current.id}`}>
+          <PencilLine size={14} /><span>{current.status === "draft" ? "Продолжить редактирование" : "Редактировать"}</span>
         </Link>
         {progress.completed
           ? (
-            <Button variant="ghost" onClick={() => void progress.setCompleted(false)} disabled={progress.busy}>
-              <RotateCcw size={15} />Пройден · снять отметку
+            <Button variant="ghost" className="lesson-tab-action" aria-label="Снять отметку о прохождении" title="Снять отметку о прохождении" onClick={() => void progress.setCompleted(false)} disabled={progress.busy}>
+              <RotateCcw size={15} /><span>Пройден · снять отметку</span>
             </Button>
           )
           : (
-            <Button variant="secondary" onClick={() => void progress.setCompleted(true)} disabled={progress.busy || !lesson.data}>
-              <CheckCircle2 size={15} />{progress.busy ? "Отмечаем…" : "Урок пройден"}
+            <Button variant="secondary" className="lesson-tab-action" aria-label="Урок пройден" title="Урок пройден" onClick={() => void progress.setCompleted(true)} disabled={progress.busy || !lesson.data}>
+              <CheckCircle2 size={15} /><span>{progress.busy ? "Отмечаем…" : "Урок пройден"}</span>
             </Button>
           )}
       </header>
       {progress.error && <p className="inline-error" role="alert">{progress.error}</p>}
-      <div className="lesson-tab-body">
+      <div ref={setBodyElement} className="lesson-tab-body" style={{ "--lesson-page-width": `${Math.round(fitPageWidth * pageZoom)}px` } as CSSProperties}>
         {lesson.error
           ? <ErrorState message={lesson.error instanceof Error ? lesson.error.message : "Урок не загрузился"} />
           : lesson.data && lesson.data.id === current.id

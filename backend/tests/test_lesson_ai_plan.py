@@ -108,12 +108,15 @@ def test_plan_is_a_proposal_waiting_for_review(session, project):
 
     assert job.state == BackgroundJobState.COMPLETED, job.error
     result = job.checkpoint["result"]
+    assert result["program_node_id"] == str(node.id)
     assert [step["sources"] for step in result["steps"]] == [["C1"], ["C2"]]
     assert result["dropped"] == ["Шаг 1: опоры C9 не было в карте"]
     assert [item["label"] for item in result["candidates"]] == ["C1", "C2"]
     # Неизменная часть «Обычного» — вызов заданий урока.
     assert Decimal(result["step_cost_usd"]) > 0 and result["fixed_calls"] == 1
-    assert registry.get_job(session, job.id).needs_review
+    listed = registry.get_job(session, job.id)
+    assert listed.needs_review
+    assert listed.program_node_id == node.id
     run = session.scalars(select(AiRun).where(AiRun.job_id == job.id)).one()
     assert run.context_manifest[0] == {"kind": "stage", "stage": "plan"}
 

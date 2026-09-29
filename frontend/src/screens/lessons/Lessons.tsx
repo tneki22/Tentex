@@ -1,7 +1,8 @@
 import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { ArrowLeft, FileDown, FileUp, FolderInput, GraduationCap, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
-import { createLessonFromSearch, createManualLesson, createQuickLesson, editLessonBlocks, getLesson, type FoundPage, type LessonBlockCommand } from "../../api/lessons";
+import { createLessonFromSearch, createManualLesson, createQuickLesson, editLessonBlocks, getLesson, type FoundPage, type LessonAiPlanRead, type LessonBlockCommand, type LessonProposalRead } from "../../api/lessons";
+import { getBackgroundJobResult, listBackgroundJobs } from "../../api/backgroundJobs";
 import { getProject, ProjectApiError, type ProjectDetail } from "../../api/projects";
 import { ProjectNav } from "../../components/domain/ProjectNav";
 import { Button, EmptyState, ErrorState, IconButton, LoadingState, Menu, PanelResizeHandle } from "../../components/ui";
@@ -20,6 +21,16 @@ import { LessonTopicPane } from "./LessonTopicPane";
 import { errorText, isVisible, STUDY_TYPES } from "./lessonTree";
 
 const LAYOUT_KEY = "tentex:lessons-layout";
+const LAST_LESSON_KEY = (projectId: string) => `tentex:lessons-last:${projectId}`;
+
+function readLastLesson(projectId: string): { topicId: string; lessonId: string | null } | null {
+  try {
+    const value = window.localStorage.getItem(LAST_LESSON_KEY(projectId));
+    return value ? JSON.parse(value) as { topicId: string; lessonId: string | null } : null;
+  } catch {
+    return null;
+  }
+}
 const LessonMaterialPanel = lazy(() =>
   import("./LessonMaterialPanel").then((module) => ({ default: module.LessonMaterialPanel })),
 );
@@ -63,6 +74,8 @@ export function Lessons() {
   const [proposalJobId, setProposalJobId] = useState<string | null>(null);
   /** Экспорт и импорт уроков — диалоги из меню в шапке раздела. */
   const [transfer, setTransfer] = useState<"export" | "import" | null>(null);
+  const [pendingPlans, setPendingPlans] = useState<Array<{ jobId: string; topicId: string; plan: LessonAiPlanRead }>>([]);
+  const lastLesson = useMemo(() => readLastLesson(projectId), [projectId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -76,6 +89,32 @@ export function Lessons() {
   const available = Boolean(detail && detail.project.workspace_variant === "textbook" && detail.project.enabled_modules.includes("lessons"));
   const overview = useLessonsOverview(projectId, available);
   const lessons = useMemo(() => overview.data?.lessons ?? [], [overview.data]);
+
+  useEffect(() => {
+    if (!available) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const jobs = await listBackgroundJobs({ projectId, kind: "ai_lesson", pendingReview: true });
+        const results = await Promise.allSettled(jobs.map(async (job) => ({
+          jobId: job.id,
+          topicId: job.program_node_id,
+          result: await getBackgroundJobResult<LessonAiPlanRead | LessonProposalRead>(job.id),
+        })));
+        if (!cancelled) setPendingPlans(results.flatMap((entry) =>
+          entry.status === "fulfilled" && "steps" in entry.value.result
+            && (entry.value.topicId || entry.value.result.program_node_id)
+            ? [{ jobId: entry.value.jobId, topicId: entry.value.topicId ?? entry.value.result.program_node_id, plan: entry.value.result as LessonAiPlanRead }]
+            : [],
+        ));
+      } catch {
+        // Панель «Фон» сохраняет доступ к задачам, если список временно не загрузился.
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 15000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [available, projectId, rangesKey]);
 
   // Дерево программы (сотни узлов у крупного учебника) рендерится в дереве
   // синхронно и надолго блокирует коммит — эффект загрузки обзора уроков
@@ -94,8 +133,15 @@ export function Lessons() {
   const buildParam = searchParams.get("build") === "1";
   const jobParam = searchParams.get("job");
   const [panelTabRequest, setPanelTabRequest] = useState<{ tab: PanelTab; nonce: number } | null>(null);
-  const active = flat.find((node) => node.id === topicParam) ?? flat.find((node) => STUDY_TYPES.has(node.node_type)) ?? flat[0] ?? null;
-  const activeLessonId = lessonParam ?? lessons.find((item) => item.program_node_ids.includes(active?.id ?? "") && item.status !== "archived")?.id ?? null;
+  const active = flat.find((node) => node.id === (topicParam ?? lastLesson?.topicId)) ?? flat.find((node) => STUDY_TYPES.has(node.node_type)) ?? flat[0] ?? null;
+  const requestedLessonId = lessonParam ?? (!topicParam && active?.id === lastLesson?.topicId ? lastLesson?.lessonId : null);
+  const activeLessonId = lessons.find((item) => item.id === requestedLessonId && item.program_node_ids.includes(active?.id ?? ""))?.id
+    ?? lessons.find((item) => item.program_node_ids.includes(active?.id ?? "") && item.status !== "archived")?.id ?? null;
+  useEffect(() => {
+    if (!active || !overview.data) return;
+    try { window.localStorage.setItem(LAST_LESSON_KEY(projectId), JSON.stringify({ topicId: active.id, lessonId: activeLessonId })); }
+    catch { /* выбор остаётся в текущем URL */ }
+  }, [projectId, active?.id, activeLessonId, overview.data]);
   const panelLesson = useLesson(projectId, activeLessonId);
   // Страницы открытого урока — для пометки «в уроке» в поиске и на страницах панели.
   const lessonPages = useMemo(() => {
@@ -316,7 +362,9 @@ export function Lessons() {
         topic={active}
         studyNodes={studyNodes}
         lessons={lessons}
-        lessonId={lessonParam}
+        lessonId={activeLessonId}
+        pendingPlans={pendingPlans.filter((item) => item.topicId === active.id)}
+        onOpenPlan={(jobId) => setBuild({ open: true, jobId })}
         busy={busy}
         onSelectLesson={(id) => navigateTo(active.id, id)}
         onQuickLesson={() => void createLesson()}

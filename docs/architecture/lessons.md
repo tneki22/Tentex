@@ -232,6 +232,13 @@
   не показывается — это удобство, а не правка.
 - `useLessonViewMode` — режим показа в `localStorage` по проекту; ширины колонок раздела и
   выбор урока темы во вкладке — тоже `localStorage`, только настройки показа.
+- Раздел «Уроки» помнит последние открытые тему и урок в `localStorage` по проекту;
+  явные `?topic=&lesson=` имеют приоритет. Во вкладке Рабочей области страницы
+  по умолчанию подгоняются под высоту панели, масштаб меняется от 50 до 200%.
+  Шапки чтения и редактора остаются в один ряд: в узком месте подписи действий
+  скрываются, а переключатель показывает «С» и «Т».
+- Во вкладке «Предложено» список слева прокручивается внутри панели независимо
+  от инспектора выбранного предложения справа.
 
 ## Модельные сценарии (28.09.2026)
 
@@ -255,7 +262,7 @@ model_id · cost_usd · concepts · job_id · ai_run_ids · dropped`); `lesson_b
 | Метод | Путь | Что |
 | --- | --- | --- |
 | POST | `/ai/preflight` `{program_node_id, template, level, basis, material_ids?, minutes?, wishes, use_conspect?, model?}` | Без модели: материалы проекта с выбором по умолчанию (с диапазоном темы, иначе все не справочные), число и токены кусков, состояние материала и причины деградации поиска, оценка трёх уровней, модель роли, `brief_text` — паспорт урока, который уйдёт в промпт. Модели выключены — `models_available = false` с причиной, остальное считается |
-| POST | `/ai/plan` — заказ плюс `max_cost_usd?`, `confirm_unknown_price` | 202 `{job_id}` задачи `plan` («Обычный» и «Подробный»; у `draft` — 422 `lesson_ai_plan_level`). Итог — `LessonAiPlanRead`: название, цель, понятия, шаги `{kind, title, intent, sources: [C4…], collapsed, introduces}`, карта кусков для замены опор, `step_cost_usd`, `fixed_cost_usd`, `fixed_calls`, что сервер убрал. Задача ждёт проверки в «Фоне» |
+| POST | `/ai/plan` — заказ плюс `max_cost_usd?`, `confirm_unknown_price` | 202 `{job_id}` задачи `plan` («Обычный» и «Подробный»; у `draft` — 422 `lesson_ai_plan_level`). Итог — `LessonAiPlanRead`: `program_node_id`, название, цель, понятия, шаги `{kind, title, intent, sources: [C4…], collapsed, introduces}`, карта кусков для замены опор, `step_cost_usd`, `fixed_cost_usd`, `fixed_calls`, что сервер убрал. Задача ждёт проверки в «Фоне» и показывается в списке своей темы в разделе «Уроки», откуда открывается тот же редактор плана |
 | POST | `/ai/build` — тот же заказ, `plan?` (`{job_id, title, goal, concepts, steps}`) | 202 `{job_id}` задачи `build`. С `plan` — паспорт и куски берутся из задачи плана (409 `lesson_ai_plan_missing`), план снимается с проверки; без `plan` у «Обычного»/«Подробного» план составляется внутри задачи и не показывается. 409 `lesson_ai_no_material`, 409 `ai_price_unknown`, ошибки шлюза. Итог — `{lesson_id, dropped, cost_usd}`; `lesson_id = null`, если сборку отменили |
 | POST | `/ai/bulk/preflight` `{program_node_ids ≤ 50, template, basis, model?}` | Без модели: темы в порядке программы с числом кусков, число вызовов (тема без материала при основе «только материалы» вызова не получает), общая оценка «Черновиков» |
 | POST | `/ai/bulk` — тот же заказ, `max_cost_usd?`, `confirm_unknown_price` | 202 `{job_id}` задачи `bulk`. Итог — `LessonAiBulkResult`: по теме `lesson_id` или `skipped` с причиной, `dropped`, общая цена. 409 `lesson_ai_no_material`, `ai_price_unknown`, `ai_disabled` |

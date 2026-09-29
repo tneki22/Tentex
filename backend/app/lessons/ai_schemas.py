@@ -146,6 +146,7 @@ class LessonAiCandidateRead(ApiModel):
 class LessonAiPlanRead(ApiModel):
     """Итог задачи `ai_lesson/plan`: план для редактора и цена сборки по нему."""
 
+    program_node_id: UUID
     title: str
     goal: str
     concepts: list[str]

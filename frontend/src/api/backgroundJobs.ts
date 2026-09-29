@@ -46,6 +46,8 @@ export interface BackgroundJobRead {
   subject: string;
   /** Чем читается материал: локальный движок или внешняя модель. У ролей ИИ пусто. */
   model_label: string;
+  /** Тема ожидающего плана урока, если задача создавалась для одной темы. */
+  program_node_id: string | null;
   page_number: number | null;
   source_revision: number | null;
   deadline_seconds: number | null;

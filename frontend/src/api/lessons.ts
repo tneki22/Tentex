@@ -482,6 +482,7 @@ export interface LessonAiCandidateRead {
 
 /** Итог задачи плана: сам план, карта кусков для замены опор и цена сборки по нему. */
 export interface LessonAiPlanRead {
+  program_node_id: string;
   title: string;
   goal: string;
   concepts: string[];

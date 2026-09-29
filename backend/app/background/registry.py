@@ -209,6 +209,11 @@ def _read(session: Session, job: BackgroundJob) -> BackgroundJobRead:
         update={
             "subject": _subject(session, job),
             "model_label": _model_label(session, job),
+            "program_node_id": (
+                UUID(str(job.checkpoint["program_node_id"]))
+                if job.kind == BackgroundJobKind.AI_LESSON
+                and job.checkpoint.get("program_node_id") else None
+            ),
             "page_number": _positive_int(job.checkpoint.get("page_number")),
             "source_revision": _positive_int(
                 (job.checkpoint.get("command") or {}).get("expected_revision")

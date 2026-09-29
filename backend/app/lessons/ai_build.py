@@ -669,6 +669,7 @@ def _plan_read(job: BackgroundJob, plan: LessonPlan, dropped: list[str]) -> Less
     items = [Candidate.from_json(item) for item in job.checkpoint["candidates"]]
     costs = job.checkpoint.get("costs") or {}
     return LessonAiPlanRead(
+        program_node_id=order.program_node_id,
         title=plan.title,
         goal=plan.goal,
         concepts=plan.concepts,

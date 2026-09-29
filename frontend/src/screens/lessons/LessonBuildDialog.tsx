@@ -140,7 +140,7 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
 
   // Оценка без модели при каждом выборе; ввод пожеланий не дёргает сервер на каждую букву.
   useEffect(() => {
-    if (!open || jobId) return;
+    if (!open || jobId || plan) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       previewLessonAi(projectId, order, controller.signal)
@@ -154,7 +154,7 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
         });
     }, 300);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [open, jobId, projectId, order]);
+  }, [open, jobId, plan, projectId, order]);
 
   const chosenLevel = preview?.levels.find((item) => item.level === level) ?? null;
   useEffect(() => {
@@ -192,6 +192,10 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
           setPlan({ jobId, read: result });
           setPlanSteps(result.steps);
           setPlanLimit(null);
+          setTemplate(result.template);
+          setLevel(result.level);
+          setBasis(result.basis);
+          setMinutes(result.minutes === null ? "" : String(result.minutes));
           setJobId(null);
           return;
         }

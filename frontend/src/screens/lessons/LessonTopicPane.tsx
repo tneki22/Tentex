@@ -8,6 +8,7 @@ import {
   applyLessonProposal, confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, LESSON_TEMPLATE_LABELS, unbindLessonBindings,
   updateLesson, updateLessonNote, uploadLessonImage, type LessonBlockCommand, type LessonBlockRead,
   type LessonChangeResult, type LessonProposalRead, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
+  type LessonAiPlanRead,
 } from "../../api/lessons";
 import { getBackgroundJobResult, resolveBackgroundJob } from "../../api/backgroundJobs";
 import { undoProjectAction } from "../../api/projects";
@@ -38,6 +39,8 @@ interface LessonTopicPaneProps {
   studyNodes: ProgramTreeNode[];
   lessons: LessonSummaryRead[];
   lessonId: string | null;
+  pendingPlans: Array<{ jobId: string; plan: LessonAiPlanRead }>;
+  onOpenPlan(jobId: string): void;
   busy: boolean;
   onSelectLesson(lessonId: string | null): void;
   onQuickLesson(): void;
@@ -95,7 +98,7 @@ function ToolButton({ icon, label, hint, variant = "ghost", disabled, destructiv
 }
 
 /** Центр для одной темы: формулировка, уроки темы и открытый урок (записка §2, бриф §12). */
-export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonId, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onBuildWithAi, onChanged, refreshKey, selectedBlockId, onSelectBlock, panelToggle, actionError, onFindInMaterials, proposalJobId = null }: LessonTopicPaneProps) {
+export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonId, pendingPlans, onOpenPlan, busy, onSelectLesson, onQuickLesson, onFromSources, onManual, onBuildWithAi, onChanged, refreshKey, selectedBlockId, onSelectBlock, panelToggle, actionError, onFindInMaterials, proposalJobId = null }: LessonTopicPaneProps) {
   const topicLessons = lessons.filter((lesson) => lesson.program_node_ids.includes(topic.id));
   const defaultLesson = topicLessons.find((lesson) => lesson.status !== "archived") ?? topicLessons[0];
   const openId = topicLessons.some((lesson) => lesson.id === lessonId) ? lessonId : defaultLesson?.id ?? null;
@@ -397,8 +400,17 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
         {actionError && <p className="inline-error" role="alert">{actionError}</p>}
       </header>
 
-      {topicLessons.length > 1 && (
+      {(topicLessons.length > 1 || pendingPlans.length > 0) && (
         <ul className="lessons-lesson-list" aria-label="Уроки темы">
+          {pendingPlans.map(({ jobId, plan }) => (
+            <li key={jobId}>
+              <button type="button" onClick={() => onOpenPlan(jobId)}>
+                <strong>{plan.title}</strong>
+                <StatusBadge tone="info">План ИИ · подтвердить</StatusBadge>
+                <span>Шагов: {plan.steps.length}</span>
+              </button>
+            </li>
+          ))}
           {topicLessons.map((item) => (
             <li key={item.id}>
               <button type="button" className={item.id === openId ? "is-active" : ""} onClick={() => onSelectLesson(item.id)}>
@@ -416,7 +428,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
         </ul>
       )}
 
-      {topicLessons.length === 0 && (hasRange ? (
+      {topicLessons.length === 0 && pendingPlans.length === 0 && (hasRange ? (
         <EmptyState title="У темы ещё нет урока">
           <p>Быстрый урок соберёт страницы темы из оглавления без модели. С ИИ — объяснение по этим страницам: модель выберет куски и напишет пояснения между ними.</p>
           <div className="lessons-topic-actions">
@@ -453,7 +465,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
               <header className="lessons-lesson-head">
                 <div className="lessons-lesson-toolbar-row">
                   <div className="lessons-lesson-toolbar">
-                    <SegmentedTabs label="Способ показа урока" value={mode} tabs={VIEW_MODE_TABS} onChange={setMode} />
+                    <SegmentedTabs label="Способ показа урока" value={mode} tabs={VIEW_MODE_TABS} onChange={setMode} className="lesson-mode-tabs" />
                     {data.status === "draft"
                       ? <ToolButton variant="secondary" icon={<CheckCircle2 size={14} />} label="Готов" hint="Урок готов — снять пометку черновика" disabled={saving} onClick={() => void change({ status: "ready" })} />
                       : <ToolButton variant="secondary" icon={<RotateCcw size={14} />} label="Вернуть в черновики" disabled={saving} onClick={() => void change({ status: "draft" })} />}

@@ -29,6 +29,8 @@ class BackgroundJobRead(ApiModel):
     # подставляет их отдельным шагом (`registry._read`).
     subject: str = ""
     model_label: str = ""
+    # Тема плана урока: раздел «Уроки» показывает ожидающий план рядом с уроками.
+    program_node_id: UUID | None = None
     # Детали ИИ-задачи хранятся в checkpoint: не раздуваем общую таблицу
     # полями, которые нужны только нескольким ролям.
     page_number: int | None = None

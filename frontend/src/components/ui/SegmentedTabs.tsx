@@ -5,6 +5,7 @@ import { Tooltip } from "./Tooltip";
 interface SegmentedTab<T extends string> {
   value: T;
   label: string;
+  shortLabel?: string;
   disabled?: boolean;
   tooltip?: string;
 }
@@ -91,6 +92,7 @@ export function SegmentedTabs<T extends string>({
               else buttonRefs.current.delete(tab.value);
             }}
             role="tab"
+            aria-label={tab.label}
             type="button"
             aria-selected={tab.value === value}
             aria-controls={`${tabId}-tabpanel`}
@@ -115,7 +117,8 @@ export function SegmentedTabs<T extends string>({
               }
             }}
           >
-            {tab.label}
+            <span className="segmented-tab-label-full">{tab.label}</span>
+            {tab.shortLabel && <span className="segmented-tab-label-short" aria-hidden="true">{tab.shortLabel}</span>}
           </button>
         );
         return tab.tooltip ? (
