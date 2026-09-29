@@ -10,6 +10,7 @@ from app.ai.schemas import AiMessage, AiModelSelection
 from app.coverage.budget import ResearchBudget
 from app.coverage.packets import estimate_tokens
 from app.coverage.schemas import OverviewPacketResponse
+from app.coverage.validation import normalize_title
 
 # Модель пишет диапазон любым тире: дефисом, en dash или em dash.
 DASH_SPLIT = re.compile(r"\s*[-\u2010-\u2015]\s*")
@@ -30,6 +31,11 @@ content — раскрытие темы с ролью definition/explanation/exa
 Список факторов, признаков, видов или условий раскрывает тему: это content.
 mention/context несут только роль reference.
 Ошибка, лимит и нехватка контекста дают unresolved с причиной, не service и не outside_program.
+Блок со своим заголовком и своим предметом, которому подходит только широкая родительская
+тема, в неё не входит: верни outside_program, в reason назови предлагаемую тему и добавь в
+findings находку new_topic — title (название новой темы), parent (T-alias широкой темы),
+explanation (почему это отдельная тема), evidence (F-alias заголовка блока).
+Если в списке есть тема точнее, блок — content по ней и находки нет.
 Текст цитат не возвращай: сервер возьмёт опубликованную опору из снимка.
 section_descriptions описывают содержание раздела своими словами, без подгонки под программу."""
 
@@ -204,6 +210,9 @@ def expand_compact_response(task_input, decisions: list[dict]) -> list[dict]:
             expanded[target] = _expand_target(
                 task_input, target, {**decision, **by_target.get(target, {})}
             )
+            if "error" not in expanded[target]:
+                found = _expand_findings(task_input, target, decision, single)
+                expanded[target]["findings"] = found
             if single:
                 exact.add(target)
     return [expanded[target] for target in task_input.targets if target in expanded]
@@ -233,6 +242,39 @@ def _split_range_parts(task_input, targets: list[str], decision: dict) -> dict |
     for part in expanded:
         by_target[owner[part["fragment"]]]["parts"].append(part)
     return by_target
+
+
+def _expand_findings(task_input, target: str, decision: dict, single: bool) -> list[dict]:
+    """Находки `new_topic` блока в форме `Finding`: alias родителя и опор переведены в id.
+
+    Находка не должна ронять блок, поэтому негодная просто отбрасывается: с неизвестным
+    родителем, с названием, которое в программе уже есть, или с опорой вне блока. Без
+    опоры находка одиночного блока опирается на его первый показанный фрагмент; у
+    диапазона блоков опору выбрать не из чего.
+    """
+    by_alias = {
+        task_input.fragment_aliases[ref]: ref for ref in task_input.target_refs[target]
+    }
+    known = {normalize_title(title) for _, title in task_input.topic_aliases.values()}
+    result = []
+    for index, finding in enumerate(decision.get("findings") or []):
+        title = " ".join(str(finding.get("title", "")).split())
+        parent = finding.get("parent")
+        parent_id = _resolve_topic(task_input, parent) if parent else None
+        refs = [by_alias[alias] for alias in finding.get("evidence") or [] if alias in by_alias]
+        if not refs and single:
+            refs = list(by_alias.values())[:1]
+        if not title or normalize_title(title) in known or not refs or (parent and not parent_id):
+            continue
+        result.append(
+            {
+                "kind": "new_topic",
+                "explanation": finding["explanation"],
+                "evidence": [{"key": f"n{index}_{i}", "ref": ref} for i, ref in enumerate(refs)],
+                "operations": [{"op": "create", "title": title, "parent": parent_id}],
+            }
+        )
+    return result
 
 
 def _page_numbers_decision(task_input, target: str) -> dict:

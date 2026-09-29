@@ -164,6 +164,20 @@ class CompactPart(StrictModel):
     links: list[CompactLink] = Field(default_factory=list, max_length=16)
 
 
+class CompactFinding(StrictModel):
+    """Блок — отдельная тема, которой нет в программе: сервер переведёт её в `Finding`.
+
+    Адреса — те же alias, что и в остальном протоколе: `parent` — T-alias широкой темы,
+    в которую блок попал бы молча, `evidence` — F-alias опор (заголовок блока).
+    """
+
+    kind: Literal["new_topic"]
+    title: str = Field(min_length=1, max_length=200)
+    parent: str | None = None
+    explanation: str = Field(min_length=1, max_length=1000)
+    evidence: list[str] = Field(default_factory=list, max_length=8)
+
+
 class CompactDecision(StrictModel):
     """Диапазон определяется порядком targets только в текущем пакете."""
 
@@ -172,6 +186,7 @@ class CompactDecision(StrictModel):
     outcome: Outcome
     reason: str = ""
     parts: list[CompactPart] = Field(default_factory=list, max_length=4096)
+    findings: list[CompactFinding] = Field(default_factory=list, max_length=8)
 
 
 class SectionDescription(StrictModel):

@@ -46,6 +46,7 @@ from app.models import (
     BlockClass,
     CoverageBlockResult,
     CoverageDecision,
+    CoverageFinding,
     CoverageRun,
     CoverageTask,
     MaterialBlock,
@@ -1195,6 +1196,71 @@ def test_range_with_parts_is_split_across_the_blocks_of_the_range(session):
         }],
     )
     assert [item.get("error") for item in outside] == ["range_with_parts"] * 2
+
+
+def test_new_topic_finding_is_translated_and_a_bad_one_never_drops_the_block(session):
+    """«Деревья и структуры данных» брали ≈70% чужого: стек, дек, хеширование (шаг 3.5)."""
+    project, _, material = setup_source(session, 0)
+    parent = make_topic_node(session, project, title="Деревья и структуры данных")
+    hashing, _ = add_block(
+        session, material, [("Хеширование", "heading", None), ("Хеш-функция.", "paragraph", None)],
+        sort_order=0,
+    )
+    stack, _ = add_block(session, material, [("Стек", "heading", None)], sort_order=1)
+    queue, _ = add_block(session, material, [("Очередь", "heading", None)], sort_order=2)
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+    parent_alias = task_input.topic_aliases[str(parent.id)][0]
+
+    def outside(block, title, parent_value):
+        alias = task_input.target_aliases[str(block.id)]
+        first = task_input.fragment_aliases[task_input.target_refs[str(block.id)][0]]
+        return {
+            "from_target": alias,
+            "to_target": alias,
+            "outcome": "outside_program",
+            "reason": f"{title} — своя тема",
+            "parts": [],
+            "findings": [{
+                "kind": "new_topic",
+                "title": title,
+                "parent": parent_value,
+                "explanation": "Блок посвящён отдельному предмету.",
+                "evidence": [first],
+            }],
+        }
+
+    raw = expand_compact_response(task_input, [
+        outside(hashing, "Хеширование", parent_alias),
+        # Неизвестный родитель и название, которое в программе уже есть, — не находки.
+        outside(stack, "Стек", "T404"),
+        outside(queue, " деревья  и структуры ДАННЫХ ", parent_alias),
+    ])
+    assert [item["outcome"] for item in raw] == ["outside_program"] * 3
+    heading = task_input.target_refs[str(hashing.id)][0]
+    assert raw[0]["findings"] == [{
+        "kind": "new_topic",
+        "explanation": "Блок посвящён отдельному предмету.",
+        "evidence": [{"key": "n0_0", "ref": heading}],
+        "operations": [{"op": "create", "title": "Хеширование", "parent": str(parent.id)}],
+    }]
+    assert raw[1]["findings"] == [] and raw[2]["findings"] == []
+
+    publish_packet(session, token, task_input, raw)
+    rows = session.scalars(select(CoverageBlockResult).where(CoverageBlockResult.run_id == run_id))
+    assert {row.outcome for row in rows} == {"outside_program"}
+    found = list(session.scalars(select(CoverageFinding)))
+    assert [(item.kind, item.state) for item in found] == [("new_topic", "proposed")]
+    assert found[0].payload["operations"][0]["title"] == "Хеширование"
+    assert found[0].evidence_refs[0]["target_id"] == str(hashing.id)
+
+
+def test_rules_ask_for_a_new_topic_instead_of_swallowing_by_a_broad_parent():
+    """Правило про широкую родительскую тему: без него находок на «Мат логике» было 0."""
+    assert "new_topic" in SYSTEM_RULES and "findings" in SYSTEM_RULES
+    assert "только широкая родительская" in SYSTEM_RULES
+    # Узкая тема из списка сильнее: находка не превращает любой блок в «своя тема».
+    assert "Если в списке есть тема точнее" in SYSTEM_RULES
 
 
 def test_topic_alias_in_to_target_keeps_the_single_decision(session):

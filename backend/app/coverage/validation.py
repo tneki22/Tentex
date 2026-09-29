@@ -56,6 +56,11 @@ def normalize(text: str) -> str:
     return " ".join(value.translate(HOMOGLYPHS).casefold().split())
 
 
+def normalize_title(text: str) -> str:
+    """Название темы для сравнения: регистр, лишние пробелы и «ё» тем не различают."""
+    return " ".join(text.replace("ё", "е").replace("Ё", "Е").casefold().split())
+
+
 @dataclass(frozen=True)
 class Unit:
     """Прочитанный текст снимка с адресом и качеством."""
