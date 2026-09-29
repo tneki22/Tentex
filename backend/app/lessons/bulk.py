@@ -51,6 +51,7 @@ def create_bulk_lessons(
         for item in command.items:
             node = _require_study_node(session, project_id, item.program_node_id)
             lesson = new_lesson(session, project_id, node, now)
+            lesson.build_meta = {"creation_type": item.action}
             lesson_ids.append(lesson.id)
             if item.action == "quick":
                 sources = quick_sources(session, program, node, None)

@@ -47,6 +47,7 @@ class LessonSummaryRead(ApiModel):
     completed_at: datetime | None
     updated_at: datetime
     build: LessonBuildRead | None = None
+    creation_type: Literal["quick", "manual", "ai"]
 
 
 class LessonsOverviewRead(ApiModel):

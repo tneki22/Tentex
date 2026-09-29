@@ -30,6 +30,7 @@ export interface LessonSummaryRead {
   completed_at: string | null;
   updated_at: string;
   build: LessonBuildRead | null;
+  creation_type: "quick" | "manual" | "ai";
 }
 
 export interface LessonsOverviewRead {
@@ -334,10 +335,15 @@ export const LESSON_TEMPLATE_LABELS: Record<LessonTemplate, string> = {
   cheatsheet: "Шпаргалка",
 };
 
-/** Подпись урока в списках: «Объяснение с нуля · ≈25 мин · Черновик». */
-export function lessonCaption(lesson: Pick<LessonSummaryRead, "build" | "duration_minutes" | "status">): string {
+/** Способ создания урока для выбора и экспорта. */
+export function lessonTypeLabel(lesson: Pick<LessonSummaryRead, "build" | "creation_type">): string {
+  if (lesson.build) return LESSON_TEMPLATE_LABELS[lesson.build.template];
+  return lesson.creation_type === "quick" ? "Быстрый урок" : "Вручную";
+}
+
+/** Длительность и состояние урока после подписи типа. */
+export function lessonCaption(lesson: Pick<LessonSummaryRead, "duration_minutes" | "status">): string {
   return [
-    lesson.build ? LESSON_TEMPLATE_LABELS[lesson.build.template] : null,
     lesson.duration_minutes ? `≈${lesson.duration_minutes} мин` : null,
     LESSON_STATUS_LABELS[lesson.status],
   ].filter(Boolean).join(" · ");

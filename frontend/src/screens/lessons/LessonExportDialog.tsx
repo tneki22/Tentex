@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Search, X } from "lucide-react";
-import { LESSON_STATUS_LABELS, type LessonSummaryRead } from "../../api/lessons";
+import { LESSON_STATUS_LABELS, lessonTypeLabel, type LessonSummaryRead } from "../../api/lessons";
 import {
   exportLessons,
   saveFile,
@@ -180,7 +180,7 @@ export function LessonExportDialog({ projectId, open, onOpenChange, lessons, top
                   {group.lessons.map((lesson) => (
                     <div className="lesson-export-row" key={lesson.id}>
                       <Checkbox
-                        label={lesson.title}
+                        label={`${lesson.title} · ${lessonTypeLabel(lesson)}`}
                         checked={selected.has(lesson.id)}
                         onCheckedChange={(value) => toggle([lesson.id], value)}
                       />

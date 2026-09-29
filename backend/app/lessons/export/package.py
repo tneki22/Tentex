@@ -45,7 +45,7 @@ FORMAT_VERSION = 1
 SUFFIX = ".tentex-lessons"
 # Что из `build_meta` переживает перенос: понятия нужны «уже известно» следующих
 # уроков, подпись сборки — метке урока. Задача и прогоны остаются в старой установке.
-BUILD_KEYS = ("template", "level", "basis", "model_id", "cost_usd", "concepts")
+BUILD_KEYS = ("template", "level", "basis", "model_id", "cost_usd", "concepts", "creation_type")
 ANCHOR_TEXT = 160
 
 
@@ -223,4 +223,3 @@ class PackageWriter:
             for name, path in self.media.items():
                 archive.write(path, name)
         return target
-

@@ -396,7 +396,8 @@
 .lesson-suggested > .evidence-inspector { max-height: 100%; overflow-y: auto; }
 .lesson-suggested-list > p { margin: 0 0 var(--space-1); color: var(--muted); }
 .lesson-suggested-item { position: relative; }
-.lesson-suggested-item > .status-badge { position: absolute; right: var(--space-2); top: var(--space-2); }
+.lesson-suggested-item:has(.lesson-suggested-state) .evidence-card { padding-bottom: var(--space-12); }
+.lesson-suggested-state { position: absolute; left: var(--space-3); bottom: var(--space-3); pointer-events: none; }
 
 @container (max-width: 440px) {
   .lesson-suggested { display: flex; flex-direction: column-reverse; align-items: stretch; }
@@ -723,6 +724,9 @@
   font-weight: var(--weight-medium);
 }
 
+.lessons-bulk-action-head { display: flex; align-items: center; gap: var(--space-2); }
+.lessons-bulk-action-head .select-trigger { min-width: 8rem; }
+
 .lessons-bulk-footer {
   max-width: 980px;
   display: flex;
@@ -735,7 +739,7 @@
 
 .lesson-document {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-2);
 }
 
 .lesson-document-empty {
@@ -744,7 +748,7 @@
 }
 
 .lesson-note-heading {
-  margin: var(--space-4) 0 0;
+  margin: 0;
   color: var(--ink);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
@@ -1697,7 +1701,7 @@
 
 /* Откуда пояснение модели: по материалам или из её знаний (FR-L5). */
 .lesson-note-origin {
-  margin: var(--space-1) 0 var(--space-3);
+  margin: var(--space-1) 0 0;
   font-size: var(--text-xs);
 }
 
@@ -2002,7 +2006,7 @@
 .lesson-task {
   display: grid;
   gap: var(--space-3);
-  margin: var(--space-3) 0 var(--space-4);
+  margin: 0;
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
@@ -2059,6 +2063,13 @@
 .lesson-task-option.is-wrong { border-color: var(--tone-danger); background: color-mix(in srgb, var(--tone-danger) 8%, transparent); }
 .lesson-task-option.is-key { border-style: dashed; border-color: var(--tone-success); }
 .lesson-task-option .checkbox-row { width: 100%; }
+.lesson-task-option-text { min-width: 0; }
+.lesson-task-option-text > :first-child,
+.lesson-task-option-text > :last-child,
+.lesson-task-order-text > :first-child,
+.lesson-task-order-text > :last-child,
+.lesson-task-match-left > :first-child,
+.lesson-task-match-left > :last-child { margin: 0; }
 
 .lesson-task-radio {
   display: grid;
@@ -2330,15 +2341,16 @@
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
   gap: var(--space-5);
-  align-items: start;
+  align-items: stretch;
 }
 
-.lesson-export-pick,
 .lesson-export-options {
   display: grid;
   gap: var(--space-3);
   min-width: 0;
 }
+
+.lesson-export-pick { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; min-height: 0; }
 
 .lesson-export-tools {
   display: flex;
@@ -2349,7 +2361,9 @@
 .lesson-export-tools .workspace-tree-search { flex: 1; }
 
 .lesson-export-list {
-  max-height: 24rem;
+  height: 0;
+  flex: 1;
+  min-height: 16rem;
   overflow-y: auto;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--line);

@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, Check } from "lucide-react";
 import { RadioGroup } from "radix-ui";
 import type { StudyTaskAnswer, StudyTaskAttemptRead, StudyTaskForm, StudyTaskKey, StudyTaskPayload } from "../../../../api/lessons";
 import { Checkbox, Select } from "../../../ui";
+import { MarkdownInline } from "../../markdown/MarkdownView";
 import { LessonMarkdown } from "../LessonMarkdown";
 
 /** Ответ в работе: поля формы и текст открытого ответа. */
@@ -92,7 +93,7 @@ function SingleChoice({ payload, answerKey, answer, onChange, result, showKey, d
             <RadioGroup.Item className="lesson-task-radio" value={String(index)}>
               <RadioGroup.Indicator className="lesson-task-radio-dot" />
             </RadioGroup.Item>
-            <span>{option}</span>
+            <LessonMarkdown className="lesson-task-option-text" text={option} />
           </label>
         );
       })}
@@ -111,17 +112,14 @@ function MultipleChoice({ payload, answerKey, answer, onChange, result, showKey,
         const missed = showKey && !isChosen && correct.has(index) ? " is-key" : "";
         return (
           <div key={index} className={`lesson-task-option${isChosen ? " is-chosen" : ""}${state}${missed}`}>
-            <Checkbox
-              checked={isChosen}
-              disabled={Boolean(result) || disabled}
-              label={option}
+            <Checkbox checked={isChosen} disabled={Boolean(result) || disabled}
+              label={<LessonMarkdown className="lesson-task-option-text" text={option} />}
               onCheckedChange={(checked) => {
                 const next = new Set(chosen);
                 if (checked) next.add(index);
                 else next.delete(index);
                 onChange({ choices: [...next].sort((left, right) => left - right) });
-              }}
-            />
+              }} />
           </div>
         );
       })}
@@ -208,7 +206,7 @@ function OrderingInput({ payload, answerKey, answer, onChange, result, showKey, 
         {order.map((itemIndex, position) => (
           <li key={itemIndex} className={`lesson-task-order-item${result ? mark(result.items[position]) : ""}`}>
             <span className="lesson-task-order-number">{position + 1}</span>
-            <span className="lesson-task-order-text">{items[itemIndex]}</span>
+            <LessonMarkdown className="lesson-task-order-text" text={items[itemIndex]} />
             {!locked && (
               <span className="lesson-task-order-tools">
                 <button type="button" aria-label={`Поднять шаг «${items[itemIndex]}»`} disabled={position === 0} onClick={() => move(position, -1)}><ArrowUp size={14} /></button>
@@ -220,7 +218,7 @@ function OrderingInput({ payload, answerKey, answer, onChange, result, showKey, 
       </ol>
       {showKey && (
         <ol className="lesson-task-key-list" aria-label="Верный порядок">
-          {(answerKey.order ?? []).map((itemIndex) => <li key={itemIndex}>{items[itemIndex]}</li>)}
+          {(answerKey.order ?? []).map((itemIndex) => <li key={itemIndex}><LessonMarkdown text={items[itemIndex]} /></li>)}
         </ol>
       )}
     </>
@@ -231,12 +229,12 @@ function MatchingInput({ payload, answerKey, answer, onChange, result, showKey, 
   const left = payload.left ?? [];
   const right = payload.right ?? [];
   const pairs = answer.pairs ?? left.map(() => null);
-  const options = right.map((item, index) => ({ value: String(index), label: item }));
+  const options = right.map((item, index) => ({ value: String(index), label: item, renderLabel: <MarkdownInline text={item} /> }));
   return (
     <div className="lesson-task-matching">
       {left.map((item, index) => (
         <div key={index} className={`lesson-task-match${result ? mark(result.items[index]) : ""}`}>
-          <span className="lesson-task-match-left">{item}</span>
+          <LessonMarkdown className="lesson-task-match-left" text={item} />
           <Select
             ariaLabel={`Пара для «${item}»`}
             value={pairs[index] === null || pairs[index] === undefined ? null : String(pairs[index])}
@@ -246,7 +244,7 @@ function MatchingInput({ payload, answerKey, answer, onChange, result, showKey, 
             onValueChange={(value) => onChange({ pairs: pairs.map((current, position) => position === index ? (value === null ? null : Number(value)) : current) })}
           />
           {showKey && answerKey.match && (
-            <small className="lesson-task-accepted"><Check size={12} aria-hidden="true" /> {right[answerKey.match[index]]}</small>
+            <small className="lesson-task-accepted"><Check size={12} aria-hidden="true" /> <LessonMarkdown text={right[answerKey.match[index]]} /></small>
           )}
         </div>
       ))}

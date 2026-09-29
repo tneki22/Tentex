@@ -85,7 +85,7 @@ export function LessonSuggestedTab({
         const state = inclusion(item, blocks);
         return <div className="lesson-suggested-item" key={item.id}>
           <EvidenceCard evidence={item} selected={evidence.selectedId === item.id} onSelect={() => evidence.select(item.id)} />
-          {state && <StatusBadge tone={state === "exact" ? "success" : "warning"}>{state === "exact" ? "уже в уроке" : "пересекается"}</StatusBadge>}
+          {state && <span className="lesson-suggested-state"><StatusBadge tone={state === "exact" ? "success" : "warning"}>{state === "exact" ? "уже в уроке" : "пересекается"}</StatusBadge></span>}
         </div>;
       })}
     </div>

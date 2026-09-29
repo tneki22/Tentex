@@ -427,6 +427,10 @@ def test_update_lesson_checks_revision(session, project):
     book.page(10, "h:Ethernet", "p:первый")
     topic = add_node(session, project, "Ethernet", 0, ranges=[(book, 10, 10)])
     lesson = quick(session, project, topic).lesson
+    assert service.lessons_overview(session, project.id).lessons[0].creation_type == "quick"
+    session.get(Lesson, lesson.id).build_meta = None
+    session.flush()
+    assert service.lessons_overview(session, project.id).lessons[0].creation_type == "quick"
 
     updated = service.update_lesson(
         session,
@@ -459,6 +463,7 @@ def test_manual_lesson_page_binding_and_undo(session, project):
         session, project.id, LessonManualWrite(program_node_id=topic.id)
     ).lesson
     assert lesson.blocks == []
+    assert service.lessons_overview(session, project.id).lessons[0].creation_type == "manual"
     added = editing.edit_lesson_blocks(session, project.id, lesson.id, LessonBlockWrite(
         expected_revision=1, operation="add_page", material_id=book.material.id, page_from=4,
     )).lesson

@@ -1,10 +1,10 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import { Check } from "lucide-react";
 
 interface CheckboxProps {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
-  label: string;
+  label: ReactNode;
   disabled?: boolean;
 }
 
@@ -44,7 +44,7 @@ export function Checkbox({ checked, onCheckedChange, label, disabled }: Checkbox
           </span>
         )}
       </button>
-      <label htmlFor={id} title={label}>{label}</label>
+      <label htmlFor={id} title={typeof label === "string" ? label : undefined}>{label}</label>
     </div>
   );
 }

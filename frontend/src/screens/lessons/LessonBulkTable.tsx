@@ -80,6 +80,7 @@ function usd(value: string | null): string {
 export function LessonBulkTable({ projectId, topics, lessons, onClear, onChanged, onOpenLesson }: LessonBulkTableProps) {
   const counts = useMemo(() => countsByNode(lessons), [lessons]);
   const [overrides, setOverrides] = useState<Record<string, BulkAction>>({});
+  const [allAction, setAllAction] = useState<BulkAction | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // Одна транзакция — одна отмена, и она остаётся рядом с действием (записка §4.5).
@@ -100,6 +101,15 @@ export function LessonBulkTable({ projectId, topics, lessons, onClear, onChanged
     return topic.source_page_ranges.length > 0 ? "quick" : "manual";
   };
   const actionOf = (topic: ProgramTreeNode) => overrides[topic.id] ?? defaultAction(topic);
+  function chooseAll(action: BulkAction) {
+    setCreated(null);
+    setAllAction(action);
+    setOverrides(Object.fromEntries(topics.map((topic) => [
+      topic.id,
+      defaultAction(topic) === "skip" ? "skip"
+        : action === "quick" && topic.source_page_ranges.length === 0 ? "manual" : action,
+    ])));
+  }
   const planned = topics
     .map((topic) => ({ topic, action: actionOf(topic) }))
     .filter((row): row is { topic: ProgramTreeNode; action: LessonBulkAction } =>
@@ -199,7 +209,7 @@ export function LessonBulkTable({ projectId, topics, lessons, onClear, onChanged
       </header>
       <div className="lessons-bulk-scroll">
         <table className="lessons-bulk-table">
-          <thead><tr><th>#</th><th>Тема</th><th>Материал</th><th>Уроки</th><th>Действие</th></tr></thead>
+          <thead><tr><th>#</th><th>Тема</th><th>Материал</th><th>Уроки</th><th><span className="lessons-bulk-action-head">Действие<Select ariaLabel="Действие для всех тем" value={allAction} emptyOption="Для всех…" options={ACTION_OPTIONS} onValueChange={(value) => { if (value) chooseAll(value as BulkAction); }} /></span></th></tr></thead>
           <tbody>
             {topics.map((topic, index) => {
               const item = counts.get(topic.id);
@@ -225,6 +235,7 @@ export function LessonBulkTable({ projectId, topics, lessons, onClear, onChanged
                       onValueChange={(value) => {
                         if (!value) return;
                         setCreated(null);
+                        setAllAction(null);
                         setOverrides((current) => ({ ...current, [topic.id]: value as BulkAction }));
                       }}
                     />
@@ -287,7 +298,7 @@ export function LessonBulkTable({ projectId, topics, lessons, onClear, onChanged
               {built[0]?.lesson_id && (
                 <Button variant="ghost" onClick={() => onOpenLesson(built[0].program_node_id, built[0].lesson_id!)}>Открыть первый</Button>
               )}
-              <Button variant="ghost" onClick={() => { setAiJobId(null); setAiResult(null); setOverrides({}); }}>Готово</Button>
+              <Button variant="ghost" onClick={() => { setAiJobId(null); setAiResult(null); setOverrides({}); setAllAction(null); }}>Готово</Button>
             </div>
           )}
           {skipped.length > 0 && (
@@ -312,7 +323,7 @@ export function LessonBulkTable({ projectId, topics, lessons, onClear, onChanged
         {error && <p className="inline-error" role="alert">{error}</p>}
         <Button variant="ghost" onClick={onClear} disabled={busy}>Очистить выбор</Button>
         <Tooltip label="Вернуть каждой теме действие по умолчанию: готовый урок — пропустить, диапазон есть — быстрый урок" side="top">
-          <Button variant="secondary" onClick={() => { setCreated(null); setOverrides({}); }} disabled={busy}>
+          <Button variant="secondary" onClick={() => { setCreated(null); setOverrides({}); setAllAction(null); }} disabled={busy}>
             <ListOrdered size={15} />Создать по порядку
           </Button>
         </Tooltip>

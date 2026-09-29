@@ -31,6 +31,7 @@ export interface StudyTaskView {
 
 interface TaskCardProps {
   task: StudyTaskView;
+  showOrigin?: boolean;
   /** Подпись над заданием: «Задание», «Задание 2 из 5». */
   label?: string;
   /** Отправить ответ; без неё карточка — предпросмотр с открытым ключом. */
@@ -93,7 +94,7 @@ function JudgePoints({ attempt }: { attempt: StudyTaskAttemptRead }) {
  * сохраняется и проверяется позже. После проверки видно, что верно по пунктам,
  * почему ответ такой и на какую страницу учебника он опирается.
  */
-export function TaskCard({ task, label = "Задание", onSubmit, onCheckPending, onResult }: TaskCardProps) {
+export function TaskCard({ task, label = "Задание", onSubmit, onCheckPending, onResult, showOrigin = true }: TaskCardProps) {
   const preview = !onSubmit;
   const [answer, setAnswer] = useState<TaskDraftAnswer>(() => initialAnswer(task.form, task.payload));
   const [result, setResult] = useState<StudyTaskAttemptRead | null>(null);
@@ -137,7 +138,7 @@ export function TaskCard({ task, label = "Задание", onSubmit, onCheckPend
             {last.outcome === "passed" ? "решено" : "была ошибка"} · попыток {attempts}
           </span>
         )}
-        {modelOnly && <MachineMark origin="ИИ · знания модели — не подтверждено материалами" />}
+        {modelOnly && showOrigin && <MachineMark origin="ИИ · знания модели — не подтверждено материалами" />}
       </header>
 
       <TaskInputs

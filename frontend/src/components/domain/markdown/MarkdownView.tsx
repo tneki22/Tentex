@@ -97,6 +97,11 @@ function inline(text: string, key: string, options: MarkdownOptions): ReactNode[
   return inlineNodes(parseInline(text), key, options);
 }
 
+/** Короткая разметка внутри пункта выбора, где блочный Markdown недопустим. */
+export function MarkdownInline({ text }: { text: string }) {
+  return <>{inline(text, "inline", EMPTY_OPTIONS)}</>;
+}
+
 /**
  * Заголовок `#`…`######` внутри сообщения — на два уровня ниже страницы:
  * у экрана свои h1–h2, а размер задаёт класс `md-h{n}`, не тег.

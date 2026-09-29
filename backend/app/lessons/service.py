@@ -429,6 +429,16 @@ def build_read(lesson: Lesson) -> LessonBuildRead | None:
     return LessonBuildRead.model_validate({key: meta.get(key) for key in fields if key in meta})
 
 
+def creation_type(lesson: Lesson, legacy_quick_ids: set[UUID]) -> str:
+    """Способ создания; у старых быстрых уроков он следует из блока оглавления."""
+    if build_read(lesson):
+        return "ai"
+    saved = (lesson.build_meta or {}).get("creation_type")
+    if saved in ("quick", "manual"):
+        return saved
+    return "quick" if lesson.id in legacy_quick_ids else "manual"
+
+
 def _lesson_read(session: Session, lesson: Lesson) -> LessonRead:
     blocks = list(
         session.scalars(
@@ -532,6 +542,11 @@ def lessons_overview(session: Session, project_id: UUID) -> LessonsOverviewRead:
         node.id: node
         for node in session.scalars(select(ProgramNode).where(ProgramNode.project_id == project_id))
     }
+    legacy_quick_ids = set(session.scalars(
+        select(LessonBlock.lesson_id)
+        .where(LessonBlock.lesson_id.in_([lesson.id for lesson in lessons]))
+        .where(LessonBlock.origin == LessonBlockOrigin.OUTLINE)
+    )) if lessons else set()
 
     def needs_review(topic: LessonTopic) -> bool:
         node = nodes.get(topic.program_node_id)
@@ -554,6 +569,7 @@ def lessons_overview(session: Session, project_id: UUID) -> LessonsOverviewRead:
                 completed_at=lesson.completed_at,
                 updated_at=lesson.updated_at,
                 build=build_read(lesson),
+                creation_type=creation_type(lesson, legacy_quick_ids),
             )
             for lesson in lessons
         ]
@@ -794,6 +810,7 @@ def create_quick_lesson(
         sources = quick_sources(session, program, node, command.material_ids)
         now = utc_now()
         lesson = new_lesson(session, project_id, node, now)
+        lesson.build_meta = {"creation_type": "quick"}
         created_bindings = fill_quick_lesson(session, program, node, sources, lesson, now)
         session.add(
             ProjectActionLog(
@@ -843,6 +860,7 @@ def create_manual_lesson(
         lesson = Lesson(
             id=uuid4(), project_id=project.id, title=node.title,
             status=LessonStatus.DRAFT, revision=1, created_at=now, updated_at=now,
+            build_meta={"creation_type": "manual"},
         )
         session.add(lesson)
         session.add(LessonTopic(

@@ -44,6 +44,8 @@ interface LessonDocumentProps {
   onReadBlock?: (blockId: string) => void;
   /** Предложение модели: его изменения стоят на своих местах среди блоков. */
   proposal?: LessonProposalView | null;
+  /** В Рабочей области служебное происхождение пояснений скрыто. */
+  showOrigin?: boolean;
 }
 
 function pageRange(ref: LessonRefRead): number[] {
@@ -58,7 +60,7 @@ function pageRange(ref: LessonRefRead): number[] {
  * фрагменты активной ревизии с отсечением по граничным фрагментам; служебные
  * блоки скрыты.
  */
-export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selectedBlockId, onSelectBlock, blockMenuItems, tailMenuItems, renderNoteEditor, splitBlockId, onSplit, startBlockId, onReadBlock, proposal }: LessonDocumentProps) {
+export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selectedBlockId, onSelectBlock, blockMenuItems, tailMenuItems, renderNoteEditor, splitBlockId, onSplit, startBlockId, onReadBlock, proposal, showOrigin = true }: LessonDocumentProps) {
   const topicTitles = useMemo(
     () => new Map(lesson.topics.map((topic) => [topic.program_node_id, topic.current_title ?? topic.title_snapshot])),
     [lesson.topics],
@@ -112,6 +114,7 @@ export function LessonDocument({ projectId, lesson, mode, hiddenHeading, selecte
                   mode={mode}
                   hiddenHeading={hiddenHeading}
                   topicTitle={multiTopic && block.bound_program_node_id ? topicTitles.get(block.bound_program_node_id) : undefined}
+                  showOrigin={showOrigin}
                   onSplit={splitBlockId === block.id && onSplit ? (point) => onSplit(block.id, point) : undefined}
                 />}
             {block.kind === "media" && selectedBlockId === block.id && renderNoteEditor?.(block)}
@@ -191,6 +194,7 @@ interface LessonBlockViewProps {
   hiddenHeading?: string;
   topicTitle?: string;
   onSplit?: (point: LessonSplitPoint) => void;
+  showOrigin: boolean;
 }
 
 /** Пустой абзац Crepe пишет как `<br />`: без этого пустой блок считался заполненным. */
@@ -215,7 +219,7 @@ function headingOf(body: string): { text: string; level: 2 | 3 | 4; rest: string
   return { text: lines[first].trim(), level: 3, rest };
 }
 
-function LessonBlockView({ projectId, lessonId, block, mode, hiddenHeading, topicTitle, onSplit }: LessonBlockViewProps) {
+function LessonBlockView({ projectId, lessonId, block, mode, hiddenHeading, topicTitle, onSplit, showOrigin }: LessonBlockViewProps) {
   if (block.kind === "note") {
     const body = noteBody(block.body_md);
     const heading = block.variant === "heading" ? headingOf(body) : null;
@@ -234,7 +238,7 @@ function LessonBlockView({ projectId, lessonId, block, mode, hiddenHeading, topi
     return (
       <>
         <LessonMarkdown className={`lesson-note is-${block.variant ?? "text"}`} text={body} citations={supports} projectId={projectId} />
-        <NoteOrigin block={block} supports={supports} />
+        {showOrigin && <NoteOrigin block={block} supports={supports} />}
       </>
     );
   }
@@ -245,6 +249,7 @@ function LessonBlockView({ projectId, lessonId, block, mode, hiddenHeading, topi
     return (
       <TaskCard
         task={task}
+        showOrigin={showOrigin}
         onSubmit={(answer) => submitStudyTaskAttempt(projectId, lessonId, task.activity_id,
           task.form === "open_answer" ? { text: answer.text } : { answer })}
         onCheckPending={(attemptId) => checkStudyTaskAttempt(projectId, lessonId, task.activity_id, attemptId)}

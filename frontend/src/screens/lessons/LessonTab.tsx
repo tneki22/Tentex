@@ -4,6 +4,7 @@ import { CheckCircle2, GraduationCap, Minus, PencilLine, Plus, RotateCcw, Search
 import {
   createQuickLesson,
   lessonCaption,
+  lessonTypeLabel,
   saveLessonPosition,
   setLessonCompleted,
   type LessonRead,
@@ -162,7 +163,7 @@ export function LessonTab({ projectId, node, preferredLessonId, onLessonsChanged
           <Select
             ariaLabel="Урок темы"
             value={current.id}
-            options={lessons.map((item) => ({ value: item.id, label: `${item.title} · ${lessonCaption(item)}` }))}
+            options={lessons.map((item) => ({ value: item.id, label: `${lessonTypeLabel(item)} · ${lessonCaption(item)}` }))}
             onValueChange={(value) => {
               if (!value) return;
               saveChoice(projectId, node.id, value);
@@ -203,6 +204,7 @@ export function LessonTab({ projectId, node, preferredLessonId, onLessonsChanged
                 projectId={projectId}
                 lesson={lesson.data}
                 mode={mode}
+                showOrigin={false}
                 hiddenHeading={node.title}
                 startBlockId={progress.startBlockId}
                 onReadBlock={progress.onReadBlock}

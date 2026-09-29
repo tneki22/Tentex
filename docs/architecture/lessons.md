@@ -32,7 +32,7 @@
 
 | Метод | Путь | Ответ и ошибки |
 | --- | --- | --- |
-| GET | `/overview` | `lessons[]`: id, название, статус, длительность, `program_node_ids`, `needs_review`. Суммы по дереву считает клиент |
+| GET | `/overview` | `lessons[]`: id, название, статус, длительность, `program_node_ids`, `needs_review`, `build`, `creation_type` (`quick` / `manual` / `ai`). Для старых уроков без сохранённого типа быстрый выводится по блокам из оглавления. Суммы по дереву считает клиент |
 | GET | `/sources?program_node_id=` | Диапазоны темы по источникам проекта: роль, приоритет, `outline_page_from/to`, уточнённые `page_from/to`, `starts_at_heading`, `ends_mid_page`, `is_parsed`, `default_selected` (справочный — `false`) |
 | POST | `/quick` `{program_node_id, material_ids?}` | 201. Без `material_ids` — первый источник по роли и приоритету; со списком — «Из источников». 409 `lesson_no_ranges`, 422 `lesson_source_without_range`, 422 `lesson_requires_study_node` |
 | POST | `/manual` `{program_node_id}` | 201: пустой черновик по теме, включая тему без оглавления; одна запись `lesson_create` |
