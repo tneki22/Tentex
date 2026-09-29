@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpenText, Compass, Dumbbell, ListChecks, Sparkles } from "lucide-react";
+import { BookOpenText, Compass, Dumbbell, ListChecks, Sparkles, X } from "lucide-react";
 import type { AiModelSelection } from "../../api/ai";
 import { getBackgroundJobResult } from "../../api/backgroundJobs";
+import type { EvidenceSummary } from "../../api/coverage";
 import {
   LESSON_BASIS_LABELS,
   previewLessonAi,
@@ -20,20 +21,32 @@ import {
   type LessonTemplate,
 } from "../../api/lessons";
 import { OfflineNotice } from "../../components/domain";
+import { pagesLabel } from "../../components/domain/EvidenceCard";
 import {
-  Button, Checkbox, Dialog, Disclosure, ErrorState, Field, LoadingState, Progress, RadioCards,
-  SegmentedTabs, type RadioCardOption,
+  Button, Checkbox, Dialog, Disclosure, ErrorState, Field, IconButton, LoadingState, Progress,
+  RadioCards, SegmentedTabs, type RadioCardOption,
 } from "../../components/ui";
 import { useBackgroundJob } from "../../hooks/useBackgroundJob";
 import { ChatModelControl } from "../workspace/chat/ChatModelControl";
 import { LessonStoryboard, storyboardCost } from "./LessonStoryboard";
 import { errorText } from "./lessonTree";
 
+/** Кусок из «Источника» или «Предложено», закреплённый за уроком: название и место для списка. */
+export type PinnedPassage = Pick<
+  EvidenceSummary,
+  "id" | "material_id" | "material_name" | "title" | "page_from" | "page_to"
+  | "from_fragment_id" | "to_fragment_id"
+>;
+
 interface LessonBuildDialogProps {
   open: boolean;
   onOpenChange(open: boolean): void;
   projectId: string;
   topic: { id: string; title: string };
+  /** Выбранные человеком куски в порядке книги: урок строится из них, любой можно снять. */
+  pinned?: PinnedPassage[];
+  /** Задача поставлена: родитель, которому диалог не место, уводит человека к ней. */
+  onStarted?(jobId: string): void;
   /** Уже идущая сборка — диалог открывается сразу на её прогрессе. */
   jobId?: string | null;
   /** Черновик готов: родитель перечитывает уроки и открывает новый. */
@@ -89,7 +102,7 @@ function calls(count: number): string {
  * изменении выбора; тот же паспорт показан в «Что увидит модель». Верх оценки
  * становится пределом расхода, и его можно поменять.
  */
-export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId: initialJobId = null, onBuilt, onProposal }: LessonBuildDialogProps) {
+export function LessonBuildDialog({ open, onOpenChange, projectId, topic, pinned, onStarted, jobId: initialJobId = null, onBuilt, onProposal }: LessonBuildDialogProps) {
   const [template, setTemplate] = useState<LessonTemplate>("explain");
   const [basis, setBasis] = useState<LessonBasis>("sources_and_model");
   const [level, setLevel] = useState<LessonLevel>("draft");
@@ -112,9 +125,12 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
   const [plan, setPlan] = useState<{ jobId: string; read: LessonAiPlanRead } | null>(null);
   const [planSteps, setPlanSteps] = useState<LessonAiPlanStep[]>([]);
   const [planLimit, setPlanLimit] = useState<string | null>(null);
+  // Снятые в диалоге куски не возвращаются, пока его не откроют заново.
+  const [chosen, setChosen] = useState<PinnedPassage[]>(pinned ?? []);
 
   useEffect(() => {
     if (!open) return;
+    setChosen(pinned ?? []);
     setJobId(initialJobId);
     setStartError("");
     setPlan(null);
@@ -136,7 +152,10 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
     wishes: wishes.trim(),
     use_conspect: useConspect,
     model,
-  }), [topic.id, template, level, basis, materialIds, minutes, wishes, useConspect, model]);
+    pinned: chosen.map(({ material_id, from_fragment_id, to_fragment_id }) => (
+      { material_id, from_fragment_id, to_fragment_id }
+    )),
+  }), [topic.id, template, level, basis, materialIds, minutes, wishes, useConspect, model, chosen]);
 
   // Оценка без модели при каждом выборе; ввод пожеланий не дёргает сервер на каждую букву.
   useEffect(() => {
@@ -228,6 +247,7 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
     try {
       const result = await action();
       setJobId(result.job_id);
+      onStarted?.(result.job_id);
       return true;
     } catch (caught) {
       setStartError(errorText(caught, fallback));
@@ -338,6 +358,19 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
           {offline && <OfflineNotice reason="disabled" alternative={`${preview.models_unavailable_reason ?? ""} Быстрый урок и ручная сборка работают без модели.`} />}
           {previewError && <p className="inline-error" role="alert">{previewError}</p>}
 
+          {chosen.length > 0 && (
+            <Field label={`Выбранные куски · ${chosen.length}`} hint="Урок строится только из них, в порядке книги; любой можно снять">
+              <ul className="lesson-build-pinned">
+                {chosen.map((item) => (
+                  <li key={item.id}>
+                    <span><strong>{item.title || "Без названия"}</strong><small>{item.material_name} · {pagesLabel(item.page_from, item.page_to)}</small></span>
+                    <IconButton label={`Снять кусок «${item.title || item.material_name}»`} onClick={() => setChosen((current) => current.filter((entry) => entry.id !== item.id))}><X size={14} aria-hidden="true" /></IconButton>
+                  </li>
+                ))}
+              </ul>
+            </Field>
+          )}
+
           <Field label="Как строить урок">
             <RadioCards label="Шаблон урока" value={template} options={TEMPLATE_OPTIONS} onChange={setTemplate} className="lesson-build-templates" />
           </Field>
@@ -359,13 +392,14 @@ export function LessonBuildDialog({ open, onOpenChange, projectId, topic, jobId:
           </Field>
 
           {basis !== "model_only" && (
-            <Field label="Материалы" hint={preview ? `Найдено ${preview.candidates} кусков · ≈${preview.candidate_tokens.toLocaleString("ru-RU")} токенов · ${preview.material_state}` : "Считаем куски материала…"}>
+            <Field label="Материалы" hint={chosen.length > 0 ? "Куски берутся из своих материалов; остальные в этой сборке не участвуют" : preview ? `Найдено ${preview.candidates} кусков · ≈${preview.candidate_tokens.toLocaleString("ru-RU")} токенов · ${preview.material_state}` : "Считаем куски материала…"}>
               <div className="lesson-build-materials">
                 {!preview && <LoadingState label="Ищем материал темы" />}
                 {preview?.materials.map((item) => (
                   <Checkbox
                     key={item.material_id}
                     checked={materialIds ? materialIds.includes(item.material_id) : item.selected}
+                    disabled={chosen.length > 0}
                     onCheckedChange={(checked) => toggleMaterial(item.material_id, checked)}
                     label={`${item.name} · ${SOURCE_ROLE_LABELS[item.role]}${item.page_from ? ` · стр. ${item.page_from}–${item.page_to}` : ""}${item.is_parsed ? "" : " · текст не распознан"}`}
                   />

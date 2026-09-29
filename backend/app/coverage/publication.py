@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 
 from app.coverage.decisions import link_rejected
+from app.coverage.findings import was_rejected
 from app.coverage.lifecycle import fenced, stop_core
 from app.coverage.snapshots import decisions_fingerprint, snapshot_current
 from app.coverage.validation import derive_outcome
@@ -102,6 +103,8 @@ def _apply_result(session, run, task, row, checked, receipt):
         if checked.outcome != "unresolved":
             _retire_owned_links(session, run, row, retained)
         for finding in checked.findings:
+            if finding["kind"] == "new_topic" and was_rejected(session, run.project_id, finding):
+                continue
             session.add(
                 CoverageFinding(
                     project_id=run.project_id,
@@ -133,6 +136,8 @@ def _apply_interval_result(session, run, task, row, checked, receipt, interval):
         if binding:
             retained.add(binding.id)
     for finding in checked.findings:
+        if finding["kind"] == "new_topic" and was_rejected(session, run.project_id, finding):
+            continue
         session.add(
             CoverageFinding(
                 project_id=run.project_id,

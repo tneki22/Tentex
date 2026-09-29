@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { BookPlus } from "lucide-react";
+import { BookPlus, Sparkles } from "lucide-react";
 import { decideCoverage, type CoverageDecisionAction, type EvidenceSummary } from "../../api/coverage";
 import type { LessonBlockCommand, LessonBlockRead } from "../../api/lessons";
 import { EvidenceInspector } from "../../components/domain/EvidenceInspector";
 import { EvidencePassageList, inReadingOrder, primaryPassages } from "../../components/domain/EvidencePassageList";
 import { placedInLesson } from "../../components/domain/LessonEvidenceDialog";
 import { Button, EmptyState, StatusBadge } from "../../components/ui";
+import { unavailableReason, useAiRoleAvailability } from "../../hooks/useAiRoleAvailability";
 import { useTopicEvidence } from "../../hooks/useTopicEvidence";
 import type { ProgramTreeNode } from "../programTree";
 
@@ -20,6 +21,8 @@ interface LessonSuggestedTabProps {
   onAdd(command: AddCommand): Promise<boolean>;
   /** Несколько кусков подряд: следующий встаёт за предыдущим. */
   onAddMany(commands: AddCommand[]): Promise<boolean>;
+  /** «Собрать с ИИ» из отмеченных кусков в порядке книги. */
+  onBuildWithAi?(items: EvidenceSummary[]): void;
 }
 
 function addCommand(item: EvidenceSummary, topicId: string): AddCommand {
@@ -44,10 +47,12 @@ export function LessonSuggestedTab({
   busy,
   onAdd,
   onAddMany,
+  onBuildWithAi,
 }: LessonSuggestedTabProps) {
   const evidence = useTopicEvidence(projectId, topic.id);
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  const availability = useAiRoleAvailability("lesson_builder");
   const items = primaryPassages(evidence.groups);
   const refs = blocks.flatMap((block) => block.refs);
   const placed = (item: EvidenceSummary) => placedInLesson(item, refs);
@@ -99,6 +104,7 @@ export function LessonSuggestedTab({
             <span>Выбрано: {checked.size}</span>
             <Button variant="ghost" onClick={() => setChecked(new Set())}>Снять</Button>
             <Button disabled={!lessonId || busy} onClick={() => void addChecked()}><BookPlus size={14} />В урок</Button>
+            {onBuildWithAi && <Button variant="secondary" disabled={busy || availability.state !== "ready"} title={unavailableReason(availability)} onClick={() => onBuildWithAi(inReadingOrder(items.filter((item) => checked.has(item.id)), items))}><Sparkles size={14} />Собрать с ИИ</Button>}
           </>
           : <>
             <span>{lessonId ? <>Тема: <strong>{topic.title}</strong></> : "Вставить можно после создания урока."}</span>

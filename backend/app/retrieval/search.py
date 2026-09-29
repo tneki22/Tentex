@@ -10,6 +10,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, defer
 
 from app.bindings.search import SearchHit, mentions_term, search_fragments
+from app.bindings.service import topic_support
 from app.config import settings as app_settings
 from app.materials.image_meta import DESCRIBABLE_PROCESSING
 from app.materials.lexicon import (
@@ -23,8 +24,6 @@ from app.materials.lexicon import (
 )
 from app.materials.naming import material_display_name
 from app.models import (
-    Binding,
-    BindingStatus,
     EmbeddingProfile,
     Material,
     MaterialFragment,
@@ -620,17 +619,14 @@ def resolve_scope(session: Session, command: RetrievalSearchWrite) -> ScopeFilte
         if command.scope in {RetrievalScope.LINKED_TOPIC, RetrievalScope.TOPIC_PROJECT}:
             semantic_query = f"Тема: {node.title}\nЗапрос: {command.query}"
         if command.scope == RetrievalScope.LINKED_TOPIC:
-            block_ids = list(
-                session.scalars(
-                    select(Binding.block_id)
-                    .where(
-                        Binding.project_id == command.project_id,
-                        Binding.program_node_id == command.node_id,
-                        Binding.status != BindingStatus.REMOVED,
-                        Binding.block_id.is_not(None),
-                    )
-                    .distinct()
-                )
+            # Только опоры темы: упоминание тянуло в контекст весь блок оглавления.
+            block_ids = sorted(
+                {
+                    binding.block_id
+                    for binding in topic_support(session, command.project_id, command.node_id)
+                    if binding.block_id is not None
+                },
+                key=str,
             )
     return ScopeFilter(material_ids, block_ids, semantic_query)
 

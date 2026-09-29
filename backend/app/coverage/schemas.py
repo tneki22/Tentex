@@ -3,7 +3,7 @@
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models import BackgroundJobState
 
@@ -95,14 +95,29 @@ class RoleSelection(StrictModel):
 
 
 class RunPlan(StrictModel):
-    """Область запуска и явно выбранные модели ролей прохода 2."""
+    """Область запуска и явно выбранные модели ролей прохода 2.
+
+    `initial` читает все блоки выбранных источников. `incremental` («Только нужное») —
+    блоки со статусом `pending`, `stale`, `unresolved`, `error` плюс явный `block_ids`
+    (например, блоки родителя после создания новой темы); остальные результаты
+    остаются как были.
+    """
 
     material_ids: list[UUID] = Field(min_length=1, max_length=100)
     context_material_ids: list[UUID] = Field(default_factory=list, max_length=100)
     mode: Literal["initial", "incremental", "deep_program"] = "initial"
+    # Явные блоки добавляются к нужным; сервер проверяет, что они из выбранных источников.
+    block_ids: list[UUID] = Field(default_factory=list, max_length=5000)
     expected_program_revision: int = Field(ge=0)
     limits: Limits = Field(default_factory=Limits)
     roles: dict[Literal["overview", "research"], RoleSelection] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def block_ids_belong_to_incremental_run(self):
+        """Полный запуск и так читает всё: явный список у него — ошибка запроса."""
+        if self.block_ids and self.mode != "incremental":
+            raise ValueError("Явный список блоков задаётся только для доисследования")
+        return self
 
 
 class RunStart(RunPlan):
@@ -136,7 +151,11 @@ class PreflightRead(StrictModel):
 
     fingerprint: str
     snapshot: dict[str, Any]
+    # Блоков в области запроса; `blocks_all` и `blocks_needed` — оба числа выбора
+    # «Всё заново · N» и «Только нужное · M», независимо от выбранного режима.
     blocks: int
+    blocks_all: int = 0
+    blocks_needed: int = 0
     execution_available: bool
     execution_issue: str | None = None
     model_roles: dict[str, ModelRoleRead] = Field(default_factory=dict)
@@ -164,6 +183,20 @@ class CompactPart(StrictModel):
     links: list[CompactLink] = Field(default_factory=list, max_length=16)
 
 
+class CompactFinding(StrictModel):
+    """Блок — отдельная тема, которой нет в программе: сервер переведёт её в `Finding`.
+
+    Адреса — те же alias, что и в остальном протоколе: `parent` — T-alias широкой темы,
+    в которую блок попал бы молча, `evidence` — F-alias опор (заголовок блока).
+    """
+
+    kind: Literal["new_topic"]
+    title: str = Field(min_length=1, max_length=200)
+    parent: str | None = None
+    explanation: str = Field(min_length=1, max_length=1000)
+    evidence: list[str] = Field(default_factory=list, max_length=8)
+
+
 class CompactDecision(StrictModel):
     """Диапазон определяется порядком targets только в текущем пакете."""
 
@@ -172,6 +205,7 @@ class CompactDecision(StrictModel):
     outcome: Outcome
     reason: str = ""
     parts: list[CompactPart] = Field(default_factory=list, max_length=4096)
+    findings: list[CompactFinding] = Field(default_factory=list, max_length=8)
 
 
 class SectionDescription(StrictModel):
@@ -251,6 +285,85 @@ class BlocksRead(StrictModel):
     total: int
     next_offset: int | None
     distribution: dict[str, int] = Field(default_factory=dict)
+
+
+class FindingPreviewRequest(StrictModel):
+    """Группа находок либо один блок без машинного предложения."""
+
+    finding_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    block_ids: list[UUID] = Field(default_factory=list, max_length=100)
+
+
+class FindingApply(FindingPreviewRequest):
+    """Снимок предпросмотра и выбор человека проверяются внутри writer-транзакции."""
+
+    title: str = Field(min_length=1, max_length=300)
+    parent_id: UUID | None = None
+    fragment_ids: list[UUID] = Field(min_length=1, max_length=1000)
+    remove_parent_binding_ids: list[UUID] = Field(default_factory=list, max_length=1000)
+    expected_program_revision: int = Field(ge=0)
+    expected_coverage_revision: int = Field(ge=0)
+    proposal_version: str
+
+
+class FindingReject(FindingPreviewRequest):
+    """Отклонение сохраняет обратимое объяснение и отпечаток опор."""
+
+    expected_coverage_revision: int = Field(ge=0)
+    proposal_version: str
+    feedback: str = Field(default="Не нужно", max_length=1000)
+
+
+class FindingFragmentRead(StrictModel):
+    """Точный фрагмент, который человек может оставить в новой теме."""
+
+    id: UUID
+    block_id: UUID
+    material_id: UUID
+    material_name: str
+    page: int
+    text: str
+    role: Literal["definition", "explanation"]
+
+
+class FindingPreviewRead(StrictModel):
+    """Снимок выбора до платного повторного исследования."""
+
+    finding_ids: list[UUID]
+    block_ids: list[UUID]
+    source_block_ids: list[UUID]
+    title: str
+    parent_id: UUID | None
+    fragments: list[FindingFragmentRead]
+    parent_bindings: list[dict[str, UUID]]
+    remove_parent_binding_ids: list[UUID]
+    proposal_version: str
+    program_revision: int
+    coverage_revision: int
+
+
+class FindingsRead(StrictModel):
+    """Сгруппированные предложенные темы."""
+
+    items: list[FindingPreviewRead]
+
+
+class FindingApplyResult(StrictModel):
+    """Новая тема и возможная область доисследования родителя."""
+
+    node_id: UUID
+    action_sequence: int
+    coverage_revision: int
+    program_revision: int
+    parent_block_ids: list[UUID]
+    material_ids: list[UUID]
+
+
+class FindingRejectResult(StrictModel):
+    """Отклонение и общий номер для undo."""
+
+    action_sequence: int
+    coverage_revision: int
 
 
 class EvidenceRead(StrictModel):

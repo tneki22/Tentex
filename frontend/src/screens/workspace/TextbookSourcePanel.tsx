@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router";
-import { BookPlus, RotateCcw, Search } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router";
+import { BookPlus, RotateCcw, Search, Sparkles } from "lucide-react";
 import { createBindings } from "../../api/bindings";
 import { decideCoverage, type CoverageDecisionAction, type EvidenceSummary } from "../../api/coverage";
 import { undoProjectAction } from "../../api/projects";
@@ -18,7 +18,9 @@ import {
   SegmentedTabs,
   StatusBadge,
 } from "../../components/ui";
+import { unavailableReason, useAiRoleAvailability } from "../../hooks/useAiRoleAvailability";
 import { evidenceItems, useTopicEvidence } from "../../hooks/useTopicEvidence";
+import { LessonBuildDialog } from "../lessons/LessonBuildDialog";
 import { toSourcePlaces, type SourcePlace } from "./sourcePlaces";
 
 type SourceMode = "together" | "research" | "search";
@@ -60,6 +62,10 @@ export function TextbookSourcePanel({
   const [notice, setNotice] = useState("");
   const [undoSequence, setUndoSequence] = useState<number | null>(null);
   const [lessonItems, setLessonItems] = useState<EvidenceSummary[] | null>(null);
+  /** Куски, из которых «Собрать с ИИ» строит урок; `null` — диалог закрыт. */
+  const [buildItems, setBuildItems] = useState<EvidenceSummary[] | null>(null);
+  const availability = useAiRoleAvailability("lesson_builder");
+  const navigate = useNavigate();
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const evidence = useTopicEvidence(projectId, topicId, initialEvidenceId);
@@ -189,6 +195,7 @@ export function TextbookSourcePanel({
               <span>Выбрано: {checked.size}</span>
               <Button variant="ghost" onClick={() => setChecked(new Set())}>Снять</Button>
               <Button onClick={() => setLessonItems(chosen)}><BookPlus size={14} />В урок</Button>
+              <Button variant="secondary" disabled={availability.state !== "ready"} title={unavailableReason(availability)} onClick={() => setBuildItems(chosen)}><Sparkles size={14} />Собрать с ИИ</Button>
             </>
             : <>
               <span>Кусков: {primary.length}</span>
@@ -223,6 +230,17 @@ export function TextbookSourcePanel({
       {searched && !searching && places.length === 0 && <EmptyState title="Совпадений нет" />}
       {places.length > 0 && <ul>{places.map((place) => <li key={place.key}><span><strong>{place.materialName} · стр. {place.pageNumber}</strong><small>{place.signals.length > 1 ? "по словам и смыслу" : place.signals[0] === "semantic" ? "по смыслу" : "по словам"}</small><p>{place.text}</p>{place.warning && <em>{place.warning}</em>}</span><Button variant="secondary" disabled={busy} onClick={() => void bind(place)}>Привязать</Button></li>)}</ul>}
     </section>}
+
+    {/* Сборка идёт фоном, а её ход и итог показывает раздел «Уроки»: onStarted открывает ту же задачу. */}
+    <LessonBuildDialog
+      open={buildItems !== null}
+      onOpenChange={(open) => { if (!open) setBuildItems(null); }}
+      projectId={projectId}
+      topic={{ id: topicId, title: topicTitle }}
+      pinned={buildItems ?? []}
+      onStarted={(jobId) => { setBuildItems(null); navigate(`/projects/${projectId}/lessons?topic=${topicId}&job=${jobId}`); }}
+      onBuilt={(lessonId) => navigate(`/projects/${projectId}/lessons?topic=${topicId}&lesson=${lessonId}`)}
+    />
 
     <LessonEvidenceDialog
       open={lessonItems !== null}

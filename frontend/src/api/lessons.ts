@@ -361,6 +361,13 @@ export const LESSON_BASIS_LABELS: Record<LessonBasis, string> = {
   model_only: "Только знания модели",
 };
 
+/** Кусок, выбранный человеком: диапазон фрагментов одного материала (`EvidenceSummary`). */
+export interface LessonPinnedRange {
+  material_id: string;
+  from_fragment_id: string;
+  to_fragment_id: string;
+}
+
 /** Что пользователь выбрал в диалоге «Собрать урок с ИИ». */
 export interface LessonAiOrder {
   program_node_id: string;
@@ -374,6 +381,10 @@ export interface LessonAiOrder {
   /** `null` — конспект учитывается, если он не пуст. */
   use_conspect: boolean | null;
   model: { provider_id: string; model_id: string } | null;
+  /** Выбранные куски в порядке книги; они обязательны и идут первыми. */
+  pinned?: LessonPinnedRange[];
+  /** По умолчанию `true`: при `pinned` урок строится из них одних. */
+  pinned_only?: boolean;
 }
 
 export interface LessonAiMaterialRead {

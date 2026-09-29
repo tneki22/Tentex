@@ -8,7 +8,7 @@ import { ProjectNav } from "../../components/domain/ProjectNav";
 import { Button, EmptyState, ErrorState, IconButton, LoadingState, Menu, PanelResizeHandle } from "../../components/ui";
 import { useLesson, useLessonsOverview } from "../../hooks/useLessons";
 import { buildProgramTree, flattenProgramTree } from "../programTree";
-import { LessonBuildDialog } from "./LessonBuildDialog";
+import { LessonBuildDialog, type PinnedPassage } from "./LessonBuildDialog";
 import { LessonBulkTable } from "./LessonBulkTable";
 import { LessonExportDialog } from "./LessonExportDialog";
 import { LessonImportDialog } from "./LessonImportDialog";
@@ -69,7 +69,7 @@ export function Lessons() {
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [insertPoint, setInsertPoint] = useState<LessonInsertPoint>(INSERT_AT_END);
   /** «Собрать урок с ИИ»: открытый диалог и, если сборка уже идёт, её задача. */
-  const [build, setBuild] = useState<{ open: boolean; jobId: string | null }>({ open: false, jobId: null });
+  const [build, setBuild] = useState<{ open: boolean; jobId: string | null; pinned?: PinnedPassage[] }>({ open: false, jobId: null });
   /** Готовое предложение «Дополнить урок», открытое из «Фона». */
   const [proposalJobId, setProposalJobId] = useState<string | null>(null);
   /** Экспорт и импорт уроков — диалоги из меню в шапке раздела. */
@@ -497,6 +497,7 @@ export function Lessons() {
                 onInsertPointChange={chooseInsertPoint}
                 onAdd={addFromPanel}
                 onAddMany={addManyFromPanel}
+                onBuildWithAi={(items) => setBuild({ open: true, jobId: null, pinned: items })}
                 onUseFound={addFound}
                 initialTab={panelParam}
                 tabRequest={panelTabRequest}
@@ -524,10 +525,11 @@ export function Lessons() {
       {active && (build.jobId || active.node_type !== "section") && (
         <LessonBuildDialog
           open={build.open}
-          onOpenChange={(open) => setBuild((current) => ({ open, jobId: open ? current.jobId : null }))}
+          onOpenChange={(open) => setBuild((current) => ({ open, jobId: open ? current.jobId : null, pinned: open ? current.pinned : undefined }))}
           projectId={projectId}
           topic={active}
           jobId={build.jobId}
+          pinned={build.pinned}
           onBuilt={(lessonId) => void openBuilt(lessonId)}
           onProposal={(jobId, lessonId) => { setProposalJobId(jobId); void openBuilt(lessonId); }}
         />

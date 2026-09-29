@@ -243,7 +243,7 @@ export function CoverageOverviewScreen() {
             <span className={active ? "is-active" : stoppedWithProblem ? "is-danger" : run?.state === "paused" ? "is-warning" : ""}>
               {active ? <CircleDashed size={19} /> : stoppedWithProblem ? <AlertTriangle size={19} /> : run?.state === "paused" ? <Pause size={19} /> : <CheckCircle2 size={19} />}
             </span>
-            <div><small>{active ? "Сейчас происходит" : run ? "Последний запуск" : "Исследование не запускалось"}</small><strong>{runTitle}</strong>{run?.stop_reason && run.stop_reason !== "work_exhausted" && <small>{STOP_REASON[run.stop_reason] ?? `Причина: ${run.stop_reason}`}{budgetStop && run ? `: ${NUMBER.format(run.costs.tokens)} из ${NUMBER.format(run.limits.max_total_tokens)} токенов, ${run.costs.calls} из ${run.limits.max_calls} вызовов, $${run.costs.cost_usd.toFixed(2)}${run.limits.max_cost_usd === null ? "" : ` из $${run.limits.max_cost_usd.toFixed(2)}`}.` : "."} Сохранённые решения доступны.</small>}{run?.stale && <small>Источник изменился после запуска: продолжить прежний обзор нельзя — отмените его и запустите заново.</small>}</div>
+            <div><small>{active ? "Сейчас происходит" : run ? "Последний запуск" : "Исследование не запускалось"}</small><strong>{runTitle}</strong>{run?.stop_reason && run.stop_reason !== "work_exhausted" && <small>{STOP_REASON[run.stop_reason] ?? `Причина: ${run.stop_reason}`}{budgetStop && run ? `: ${NUMBER.format(run.costs.tokens)} из ${NUMBER.format(run.limits.max_total_tokens)} токенов, ${run.costs.calls} из ${run.limits.max_calls} вызовов, $${run.costs.cost_usd.toFixed(2)}${run.limits.max_cost_usd === null ? "" : ` из $${run.limits.max_cost_usd.toFixed(2)}`}.` : "."} Сохранённые решения доступны.</small>}{run?.stale && run.state === "paused" && <small>Цель, программа или источник изменились после запуска: продолжить прежний обзор нельзя — отмените его и запустите заново.</small>}</div>
           </div>
           <div className="coverage-progress-copy"><strong>{runTotal > 0 ? `${inspected} из ${runTotal}` : "—"}</strong><span>блоков выбранной области рассмотрено</span></div>
           {runTotal > 0 && <Progress value={inspected} max={runTotal} label={`Рассмотрено ${inspected} из ${runTotal} блоков выбранной области`} />}
@@ -284,7 +284,10 @@ export function CoverageOverviewScreen() {
         <CoverageBrowser
           projectId={projectId}
           nodes={project.program.nodes}
-          onChanged={coverage.refresh}
+          onChanged={async () => {
+            const [nextProject] = await Promise.all([getProject(projectId), coverage.refresh()]);
+            setProject(nextProject);
+          }}
         />
 
         <section className="coverage-sources" aria-labelledby="coverage-sources-title">

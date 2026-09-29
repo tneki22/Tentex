@@ -148,7 +148,8 @@ def plan_request(
         role=ROLE,
         messages=[
             AiMessage(role="system", content=plan_instructions(
-                order["template"], order["level"], order["basis"])),
+                order["template"], order["level"], order["basis"],
+                pinned=any(item.pinned for item in items))),
             AiMessage(role="user", content=user),
         ],
         response_model=LessonPlan,

@@ -45,6 +45,10 @@ MAX_LABEL_CHARS = 400
 # Что считается «ещё нет проверяемого текста изображения»: такие кандидаты
 # входят в число N у кнопки «Описать изображения».
 DESCRIBABLE_PROCESSING = frozenset({"unprocessed", "legacy", "text_only", "skipped", "error"})
+# Состояния, при которых текст фрагмента-изображения можно прочесть и процитировать:
+# описание модели или надпись, прочитанная в самом рисунке. Ручная правка (`review`)
+# читаема при любом состоянии.
+READABLE_PROCESSING = frozenset({"described", "text_only"})
 
 
 def crop_hash(data: bytes) -> str:
@@ -118,6 +122,26 @@ def element_meta(element: ParsedElement) -> ImageMeta | None:
     return element.image or legacy_meta(
         element.text, element.recognition_source, element.asset_path
     )
+
+
+def fragment_meta(
+    visual: dict[str, Any] | None, text: str, recognition_source: str, asset_path: str | None
+) -> ImageMeta:
+    """Состояние изображения-фрагмента; у старых страниц без поля оно выводится из текста."""
+    if visual:
+        return meta_from_json(visual)
+    return legacy_meta(text, recognition_source, asset_path)
+
+
+def has_readable_text(meta: ImageMeta, text: str) -> bool:
+    """У изображения есть проверяемый текст: его можно прочесть, процитировать и связать.
+
+    Заглушка «[Изображение]» и пустой текст текстом не считаются, даже если состояние
+    говорит «описано»: так выглядят служебные и декоративные рисунки после описания.
+    """
+    if not text.strip() or is_placeholder(text):
+        return False
+    return meta.processing in READABLE_PROCESSING or meta.review == "manual"
 
 
 def needs_description(meta: ImageMeta) -> bool:

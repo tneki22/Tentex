@@ -1,5 +1,6 @@
 """И2: инварианты публикации и restart без реального провайдера."""
 
+import json
 from datetime import timedelta
 from uuid import UUID, uuid4
 
@@ -15,7 +16,12 @@ from app.coverage.packets import (
     build_packet_specs,
     output_reserve_tokens,
 )
-from app.coverage.protocol import SYSTEM_RULES, expand_compact_response
+from app.coverage.protocol import (
+    SYSTEM_RULES,
+    CoverageOverviewExecutor,
+    build_prompt,
+    expand_compact_response,
+)
 from app.coverage.queries import evidence_read, overview, run_read
 from app.coverage.research import prepare_task, process_coverage_job, publish_packet
 from app.coverage.schemas import Evidence, RunControl, RunPlan, RunStart
@@ -28,6 +34,8 @@ from app.coverage.validation import (
     validate_target,
 )
 from app.db import job_write_transaction
+from app.materials.image_meta import described_text, meta_to_json
+from app.materials.parsers.base import IMAGE_PLACEHOLDER, ImageDescription, ImageMeta
 from app.materials.worker import claim_job
 from app.models import (
     BackgroundJob,
@@ -38,6 +46,7 @@ from app.models import (
     BlockClass,
     CoverageBlockResult,
     CoverageDecision,
+    CoverageFinding,
     CoverageRun,
     CoverageTask,
     MaterialBlock,
@@ -94,6 +103,41 @@ def setup_source(session, count=3):
         )
     session.commit()
     return project, topic, material
+
+
+def add_block(session, material, fragments, *, sort_order):
+    """Блок на единственной странице `setup_source`: `(текст, вид, visual)` на фрагмент."""
+    page = session.scalar(select(MaterialPage).where(MaterialPage.material_id == material.id))
+    block = MaterialBlock(
+        id=uuid4(),
+        material_id=material.id,
+        revision=1,
+        sort_order=sort_order,
+        block_class=BlockClass.CONTENT,
+        page_from=1,
+        page_to=1,
+    )
+    session.add(block)
+    session.flush()
+    refs = []
+    for order, (text, kind, visual) in enumerate(fragments):
+        fragment = MaterialFragment(
+            id=uuid4(),
+            material_id=material.id,
+            page_id=page.id,
+            block_id=block.id,
+            # Порядок чтения сквозной по странице: блоки идут друг за другом.
+            sort_order=sort_order * 100 + order,
+            text=text,
+            bbox=[0, 0, 1, 1],
+            element_kind=kind,
+            quality=PageQuality.NATIVE,
+            visual=visual,
+        )
+        session.add(fragment)
+        refs.append(fragment.id)
+    session.commit()
+    return block, refs
 
 
 def launch(session, project, material, **kwargs):
@@ -904,6 +948,319 @@ def test_unseen_image_drops_its_fragment_not_the_whole_block():
     # Просмотренная страница ничего не снимает.
     seen = validate_target(block, raw, units, units, {"page:1"}, {topic})
     assert seen.outcome == "linked" and len(seen.links) == 2
+
+
+def test_described_image_is_text_but_placeholder_stays_unavailable(session):
+    """Живой прогон «Мат логики»: 34 из 53 «Ждут уточнения» — описанные картинки.
+
+    Описание модели — такой же проверяемый текст, как абзац: связь его фрагмента
+    публикуется. Заглушка без описания по-прежнему снимает только свой фрагмент.
+    """
+    project, topic, material = setup_source(session, 0)
+    described = ImageDescription(
+        kind="diagram", title="Таблица истинности", summary="Значения импликации по строкам."
+    )
+    described_visual = meta_to_json(
+        ImageMeta(role="content", processing="described", description=described)
+    )
+    plain = ImageMeta()
+    block_a, (para_a, image_a) = add_block(
+        session,
+        material,
+        [
+            ("Импликация ложна, лишь если посылка истинна, а следствие ложно.", "paragraph", None),
+            (described_text(described), "image", described_visual),
+        ],
+        sort_order=0,
+    )
+    block_b, (para_b, placeholder_b) = add_block(
+        session,
+        material,
+        [
+            ("Эквиваленция истинна, когда значения совпадают.", "paragraph", None),
+            (IMAGE_PLACEHOLDER, "image", meta_to_json(plain)),
+        ],
+        sort_order=1,
+    )
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+    # Для прохода описанный рисунок — абзац, а заглушка остаётся рисунком.
+    assert task_input.seen[str(image_a)].kind == "paragraph"
+    assert task_input.seen[str(placeholder_b)].kind == "image"
+    publish_packet(session, token, task_input, answer(task_input, topic.id))
+
+    results = {
+        row.block_id: row
+        for row in session.scalars(
+            select(CoverageBlockResult).where(CoverageBlockResult.run_id == run_id)
+        )
+    }
+    described_block = results[block_a.id]
+    assert described_block.outcome == "linked" and described_block.reason is None
+    assert not any(
+        item.get("reason") == "visual_unavailable" for item in described_block.result["diagnostics"]
+    )
+    bound = set(
+        session.scalars(select(Binding.fragment_id).where(Binding.status == BindingStatus.MACHINE))
+    )
+    assert {para_a, image_a} <= bound
+
+    bare_block = results[block_b.id]
+    assert bare_block.outcome == "unresolved" and bare_block.reason == "visual_unavailable"
+    assert {"reason": "visual_unavailable", "ref": str(placeholder_b)} in bare_block.result[
+        "diagnostics"
+    ]
+    # Текст рядом с заглушкой разобран и публикуется, сама заглушка связи не получает.
+    assert para_b in bound and placeholder_b not in bound
+
+
+def compact_answer(task_input, topic_id):
+    """Ответ модели в alias-протоколе: каждый показанный фрагмент — content по теме."""
+    topic_alias = task_input.topic_aliases[str(topic_id)][0]
+    decisions = []
+    for target in task_input.visible_targets:
+        alias = task_input.target_aliases[target]
+        parts = []
+        for ref in task_input.target_refs[target]:
+            fragment = task_input.fragment_aliases[ref]
+            link = {
+                "topic": topic_alias,
+                "semantic_kind": "content",
+                "roles": ["explanation"],
+                "evidence": [fragment],
+            }
+            parts.append({"fragment": fragment, "outcome": "content", "links": [link]})
+        decisions.append(
+            {"from_target": alias, "to_target": alias, "outcome": "linked", "parts": parts}
+        )
+    return decisions
+
+
+def test_page_numbers_are_not_sent_to_the_model_and_are_service(session):
+    """«27» отдельным фрагментом модель размечала как содержание: 29 связей на «Мат логике»."""
+    project, topic, material = setup_source(session, 0)
+    universal = "Квантор всеобщности читается «для любого»."
+    mixed, (number, text) = add_block(
+        session,
+        material,
+        [("27", "paragraph", None), (universal, "paragraph", None)],
+        sort_order=0,
+    )
+    alone, (lone_number,) = add_block(session, material, [("28", "paragraph", None)], sort_order=1)
+    plain, (plain_text,) = add_block(
+        session, material, [("Квантор существования читается «найдётся».", "paragraph", None)],
+        sort_order=2,
+    )
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+
+    # Модель видит два блока по одному фрагменту; блок из одного «28» ей не показан.
+    assert task_input.visible_targets == [str(mixed.id), str(plain.id)]
+    assert task_input.target_refs[str(mixed.id)] == [str(text)]
+    assert task_input.target_refs[str(alone.id)] == []
+    payload = json.loads(build_prompt(task_input).partition("ВХОД:")[2])
+    shown = [item["text"] for target in payload["targets"] for item in target["fragments"]]
+    assert len(shown) == 2 and not {"27", "28"} & set(shown)
+
+    raw = expand_compact_response(task_input, compact_answer(task_input, topic.id))
+    assert [item["target_id"] for item in raw] == task_input.targets
+    publish_packet(session, token, task_input, raw)
+
+    results = {
+        row.block_id: row
+        for row in session.scalars(
+            select(CoverageBlockResult).where(CoverageBlockResult.run_id == run_id)
+        )
+    }
+    parts = {
+        item["fragment_id"]: item["outcome"] for item in results[mixed.id].result["dispositions"]
+    }
+    assert parts == {str(number): "service", str(text): "content"}
+    assert results[mixed.id].outcome == "mixed_resolved"
+    assert results[alone.id].outcome == "service" and results[alone.id].reason == "Номер страницы"
+    assert results[plain.id].outcome == "linked"
+    bound = set(
+        session.scalars(select(Binding.fragment_id).where(Binding.status == BindingStatus.MACHINE))
+    )
+    assert bound == {text, plain_text}
+    assert number not in bound and lone_number not in bound
+
+
+def test_packet_of_page_numbers_costs_no_model_call(session):
+    """Пакет из одних номеров страниц закрывает сервер: шлюз не вызывается."""
+    project, _, material = setup_source(session, 0)
+    block, _ = add_block(session, material, [("28", "paragraph", None)], sort_order=0)
+    run_id, job, token, _ = launch(session, project, material)
+
+    class NoCalls:
+        async def complete(self, request):
+            raise AssertionError("платный вызов ради номера страницы")
+
+    executor = CoverageOverviewExecutor(session, job.id, token, gateway=NoCalls())
+    try:
+        process_coverage_job(session, job, executor)
+    finally:
+        executor.close()
+
+    assert run_read(session, project.id, run_id)["state"] == "completed"
+    row = session.scalar(select(CoverageBlockResult).where(CoverageBlockResult.run_id == run_id))
+    assert row.block_id == block.id and row.outcome == "service"
+
+
+def test_answer_about_page_number_is_overridden_by_service():
+    """Сохранённый ответ старой версии мог назвать номер страницы содержанием."""
+    topic, block = str(uuid4()), str(uuid4())
+    body_ref, number_ref = str(uuid4()), str(uuid4())
+    units = {
+        body_ref: Unit(body_ref, "Кванторы связывают переменные.", block, "page:1"),
+        number_ref: Unit(number_ref, "27", block, "page:1"),
+    }
+    raw = [
+        {
+            "target_id": block,
+            "outcome": "linked",
+            "dispositions": [
+                {"fragment_id": ref, "start": 0, "end": len(unit.text), "outcome": "content"}
+                for ref, unit in units.items()
+            ],
+            "links": [
+                {
+                    "topic_id": topic,
+                    "fragment_id": ref,
+                    "semantic_kind": "content",
+                    "roles": ["explanation"],
+                    "evidence": [{"key": f"e{index}", "ref": ref}],
+                }
+                for index, ref in enumerate(units)
+            ],
+        }
+    ]
+    checked = validate_target(block, raw, units, units, set(), {topic})
+    assert checked.valid and checked.outcome == "mixed_resolved"
+    assert [link["fragment_id"] for link in checked.links] == [body_ref]
+    assert {part["fragment_id"]: part["outcome"] for part in checked.dispositions} == {
+        body_ref: "content",
+        number_ref: "service",
+    }
+
+
+def test_range_with_parts_is_split_across_the_blocks_of_the_range(session):
+    """Служебный хвост методички — пять блоков одним диапазоном — висел в «Ждут уточнения»."""
+    project, topic, material = setup_source(session, 0)
+    blocks = [
+        add_block(
+            session,
+            material,
+            [(f"Литература, источник {index}.1", "paragraph", None),
+             (f"Литература, источник {index}.2", "paragraph", None)],
+            sort_order=index,
+        )[0]
+        for index in range(3)
+    ]
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+    aliases = [task_input.target_aliases[str(block.id)] for block in blocks]
+    fragments = [
+        task_input.fragment_aliases[ref]
+        for target in task_input.targets
+        for ref in task_input.target_refs[target]
+    ]
+
+    def tail(parts):
+        return [{
+            "from_target": aliases[0],
+            "to_target": aliases[-1],
+            "outcome": "service",
+            "reason": "Список литературы",
+            "parts": parts,
+        }]
+
+    whole = expand_compact_response(
+        task_input,
+        tail([{"fragment": f"{fragments[0]}-{fragments[-1]}", "outcome": "service", "links": []}]),
+    )
+    assert [item["target_id"] for item in whole] == task_input.targets
+    assert not any("error" in item for item in whole)
+    publish_packet(session, token, task_input, whole)
+    rows = session.scalars(select(CoverageBlockResult).where(CoverageBlockResult.run_id == run_id))
+    assert {(row.outcome, row.reason) for row in rows} == {("service", "Список литературы")}
+
+    # Часть, чей фрагмент лежит за пределами диапазона, разложить некуда: ошибка остаётся.
+    outside = expand_compact_response(
+        task_input,
+        [{
+            "from_target": aliases[0],
+            "to_target": aliases[1],
+            "outcome": "service",
+            "parts": [{"fragment": fragments[-1], "outcome": "service", "links": []}],
+        }],
+    )
+    assert [item.get("error") for item in outside] == ["range_with_parts"] * 2
+
+
+def test_new_topic_finding_is_translated_and_a_bad_one_never_drops_the_block(session):
+    """«Деревья и структуры данных» брали ≈70% чужого: стек, дек, хеширование (шаг 3.5)."""
+    project, _, material = setup_source(session, 0)
+    parent = make_topic_node(session, project, title="Деревья и структуры данных")
+    hashing, _ = add_block(
+        session, material, [("Хеширование", "heading", None), ("Хеш-функция.", "paragraph", None)],
+        sort_order=0,
+    )
+    stack, _ = add_block(session, material, [("Стек", "heading", None)], sort_order=1)
+    queue, _ = add_block(session, material, [("Очередь", "heading", None)], sort_order=2)
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+    parent_alias = task_input.topic_aliases[str(parent.id)][0]
+
+    def outside(block, title, parent_value):
+        alias = task_input.target_aliases[str(block.id)]
+        first = task_input.fragment_aliases[task_input.target_refs[str(block.id)][0]]
+        return {
+            "from_target": alias,
+            "to_target": alias,
+            "outcome": "outside_program",
+            "reason": f"{title} — своя тема",
+            "parts": [],
+            "findings": [{
+                "kind": "new_topic",
+                "title": title,
+                "parent": parent_value,
+                "explanation": "Блок посвящён отдельному предмету.",
+                "evidence": [first],
+            }],
+        }
+
+    raw = expand_compact_response(task_input, [
+        outside(hashing, "Хеширование", parent_alias),
+        # Неизвестный родитель и название, которое в программе уже есть, — не находки.
+        outside(stack, "Стек", "T404"),
+        outside(queue, " деревья  и структуры ДАННЫХ ", parent_alias),
+    ])
+    assert [item["outcome"] for item in raw] == ["outside_program"] * 3
+    heading = task_input.target_refs[str(hashing.id)][0]
+    assert raw[0]["findings"] == [{
+        "kind": "new_topic",
+        "explanation": "Блок посвящён отдельному предмету.",
+        "evidence": [{"key": "n0_0", "ref": heading}],
+        "operations": [{"op": "create", "title": "Хеширование", "parent": str(parent.id)}],
+    }]
+    assert raw[1]["findings"] == [] and raw[2]["findings"] == []
+
+    publish_packet(session, token, task_input, raw)
+    rows = session.scalars(select(CoverageBlockResult).where(CoverageBlockResult.run_id == run_id))
+    assert {row.outcome for row in rows} == {"outside_program"}
+    found = list(session.scalars(select(CoverageFinding)))
+    assert [(item.kind, item.state) for item in found] == [("new_topic", "proposed")]
+    assert found[0].payload["operations"][0]["title"] == "Хеширование"
+    assert found[0].evidence_refs[0]["target_id"] == str(hashing.id)
+
+
+def test_rules_ask_for_a_new_topic_instead_of_swallowing_by_a_broad_parent():
+    """Правило про широкую родительскую тему: без него находок на «Мат логике» было 0."""
+    assert "new_topic" in SYSTEM_RULES and "findings" in SYSTEM_RULES
+    assert "только широкая родительская" in SYSTEM_RULES
+    # Узкая тема из списка сильнее: находка не превращает любой блок в «своя тема».
+    assert "Если в списке есть тема точнее" in SYSTEM_RULES
 
 
 def test_topic_alias_in_to_target_keeps_the_single_decision(session):

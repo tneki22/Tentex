@@ -2,11 +2,14 @@
 
 import hashlib
 import json
+from collections import defaultdict
+from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.coverage.validation import Unit
+from app.materials.image_meta import fragment_meta, has_readable_text
 from app.materials.naming import project_material_display_name
 from app.models import (
     Binding,
@@ -19,6 +22,7 @@ from app.models import (
     MaterialPage,
     MaterialRevision,
     MaterialState,
+    NodeType,
     ProgramNode,
     Project,
     ProjectMaterial,
@@ -90,6 +94,20 @@ def semantic_snapshot(session, project_id) -> dict:
             for n in nodes
         ],
     }
+
+
+def topic_nodes(program: list[dict]) -> list[dict]:
+    """Темы программы в снимке — то, что видит модель: в программе, не в архиве, не раздел.
+
+    Один порядок для prompt, оценки, aliases и проверки актуальности запуска.
+    """
+    return [
+        node
+        for node in program
+        if node["is_in_current_program"]
+        and not node["is_archived"]
+        and node["node_type"] != "section"
+    ]
 
 
 def decisions_fingerprint(session, project_id) -> str:
@@ -201,86 +219,96 @@ def snapshot_current(session, run) -> bool:
     return fingerprint(sources + context) == run.fingerprints["sources"]
 
 
-def snapshots_current(session, runs) -> dict[UUID, bool]:
-    """Проверить историю проекта пачкой, не перечитывая программу и источники для run."""
+@dataclass(frozen=True, slots=True)
+class RunCurrency:
+    """Что в снимке запуска ещё верно для чтения (правило актуальности, шаг 7.1).
+
+    Правка программы не обесценивает исследование целиком: модель видела только список
+    тем `{alias, title}`, поэтому связь к теме X из запуска актуальна, пока X в программе
+    с тем же названием, сколько бы тем ни добавили рядом. Цели в запросе нет, и её смена
+    ничего не устаревает. Источник актуален, пока не сменилась его активная ревизия.
+    """
+
+    active: bool
+    stale_sources: frozenset[str]
+    stale_topics: frozenset[str]
+
+    def alive(self, material_id) -> bool:
+        """Разбор источника не устарел: проект активен и ревизия та же."""
+        return self.active and str(material_id) not in self.stale_sources
+
+    def fresh(self, material_id, topic_id) -> bool:
+        """Связь к теме актуальна: живой источник и тема на месте под прежним названием."""
+        return self.alive(material_id) and str(topic_id) not in self.stale_topics
+
+
+def runs_currency(session, runs) -> dict[UUID, RunCurrency]:
+    """Актуальность истории проекта пачкой, по снимку каждого запуска.
+
+    Программа, проекты и источники читаются по одному запросу на всю историю: на
+    «Экономике» с десятью запусками и тремя тысячами связей поштучная проверка стоила
+    минуту. Миграции не нужны — всё берётся из `CoverageRun.snapshot`.
+    """
     if not runs:
         return {}
     project_ids = {run.project_id for run in runs}
-    projects = {
-        project.id: project
-        for project in session.scalars(select(Project).where(Project.id.in_(project_ids)))
-    }
-    semantic_fingerprints = {
-        project_id: fingerprint(semantic_snapshot(session, project_id))
-        for project_id, project in projects.items()
-        if project.status == ProjectStatus.ACTIVE
-    }
-    source_ids = {
-        UUID(source["id"])
-        for run in runs
-        for source in run.snapshot["sources"] + run.snapshot["context_sources"]
-    }
-    materials = {
-        material.id: material
-        for material in session.scalars(select(Material).where(Material.id.in_(source_ids)))
-    }
-    links = {
-        (link.project_id, link.material_id): link
-        for link in session.scalars(
-            select(ProjectMaterial).where(
+    active = set(
+        session.scalars(
+            select(Project.id).where(
+                Project.id.in_(project_ids), Project.status == ProjectStatus.ACTIVE
+            )
+        )
+    )
+    titles: dict[UUID, dict[str, str]] = defaultdict(dict)
+    for project_id, node_id, title in session.execute(
+        select(ProgramNode.project_id, ProgramNode.id, ProgramNode.title).where(
+            ProgramNode.project_id.in_(project_ids),
+            ProgramNode.is_in_current_program.is_(True),
+            ProgramNode.is_archived.is_(False),
+            ProgramNode.node_type != NodeType.SECTION,
+        )
+    ):
+        titles[project_id][str(node_id)] = title
+    source_ids = {UUID(source["id"]) for run in runs for source in run.snapshot["sources"]}
+    revisions = dict(
+        session.execute(
+            select(Material.id, Material.active_parse_revision).where(Material.id.in_(source_ids))
+        ).tuples().all()
+    )
+    linked = set(
+        session.execute(
+            select(ProjectMaterial.project_id, ProjectMaterial.material_id).where(
                 ProjectMaterial.project_id.in_(project_ids),
                 ProjectMaterial.material_id.in_(source_ids),
             )
-        )
-    }
-    revisions = {
-        (revision.material_id, revision.revision): revision
-        for revision in session.scalars(
-            select(MaterialRevision).where(MaterialRevision.material_id.in_(source_ids))
-        )
-    }
-
-    def current_sources(project_id: UUID, rows: list[dict]) -> list[dict] | None:
-        """Воспроизвести форму `source_snapshot` из уже загруженных строк."""
-        result = []
-        for material_id in sorted({UUID(row["id"]) for row in rows}, key=str):
-            material = materials.get(material_id)
-            link = links.get((project_id, material_id))
-            if material is None or link is None:
-                return None
-            revision = revisions.get((material_id, material.active_parse_revision))
-            diagnostics = (revision.summary if revision else {}) or {}
-            result.append(
-                {
-                    "id": str(material_id),
-                    "name": project_material_display_name(material, link),
-                    "source_role": link.source_role,
-                    "purposes": link.purposes,
-                    "revision": material.active_parse_revision,
-                    "diagnostics": diagnostics,
-                    "diagnostics_fingerprint": fingerprint(diagnostics),
-                }
-            )
-        return result
-
+        ).tuples()
+    )
     result = {}
     for run in runs:
-        semantic = semantic_fingerprints.get(run.project_id)
-        if semantic is None or semantic != run.fingerprints["semantic"]:
-            result[run.id] = False
-            continue
-        sources = current_sources(run.project_id, run.snapshot["sources"])
-        context = current_sources(run.project_id, run.snapshot["context_sources"])
-        result[run.id] = bool(
-            sources is not None
-            and context is not None
-            and fingerprint(sources + context) == run.fingerprints["sources"]
+        current = titles[run.project_id]
+        result[run.id] = RunCurrency(
+            active=run.project_id in active,
+            stale_sources=frozenset(
+                source["id"]
+                for source in run.snapshot["sources"]
+                if (run.project_id, UUID(source["id"])) not in linked
+                or revisions.get(UUID(source["id"])) != source["revision"]
+            ),
+            stale_topics=frozenset(
+                node["id"]
+                for node in topic_nodes(run.snapshot["program"])
+                if current.get(node["id"]) != node["title"]
+            ),
         )
     return result
 
 
-def manifest_rows(session, snapshot):
-    """Фиксирует состав, хеши и locators, не копируя весь текст книги."""
+def manifest_rows(session, snapshot, only=None):
+    """Фиксирует состав, хеши и locators, не копируя весь текст книги.
+
+    `only` — область доисследования: остальные блоки не получают строки в запуске,
+    и их прежний результат остаётся в силе.
+    """
     for source in snapshot["sources"]:
         blocks = session.scalars(
             select(MaterialBlock)
@@ -292,6 +320,8 @@ def manifest_rows(session, snapshot):
         )
         by_block = material_units(session, UUID(source["id"]), source["revision"])
         for block in blocks:
+            if only is not None and block.id not in only:
+                continue
             units = by_block.get(str(block.id), {})
             yield (
                 block,
@@ -319,6 +349,22 @@ def manifest_rows(session, snapshot):
             )
 
 
+def _kind(fragment) -> str:
+    """Вид фрагмента для прохода 2: изображение с проверяемым текстом — обычный абзац.
+
+    Проход не смотрит картинок, поэтому любой `image` считался непросмотренным и снимал
+    связь своего фрагмента (`visual_unavailable`). Описание модели, надпись в рисунке или
+    ручная правка — такой же текст, как и остальной: его читают и цитируют. Рисунок без
+    описания и заглушка остаются `image`.
+    """
+    if fragment.element_kind != "image":
+        return fragment.element_kind
+    meta = fragment_meta(
+        fragment.visual, fragment.text, fragment.recognition_source, fragment.asset_path
+    )
+    return "paragraph" if has_readable_text(meta, fragment.text) else "image"
+
+
 def _unit(fragment, page, material) -> Unit:
     """Адрес страницы содержит material ID: page:1 двух книг не совпадает."""
     return Unit(
@@ -326,7 +372,7 @@ def _unit(fragment, page, material) -> Unit:
         fragment.text,
         str(fragment.block_id),
         f"page:{fragment.material_id}:{page.page_number}",
-        fragment.element_kind,
+        _kind(fragment),
         fragment.quality,
         _locator(fragment, page, material),
     )
@@ -363,21 +409,6 @@ def material_units(session, material_id, revision) -> dict[str, dict[str, Unit]]
             fragment, page, material
         )
     return result
-
-
-def count_manifest_blocks(session, snapshot) -> int:
-    """Preflight нужно только число: полный manifest ради счётчика стоит десятки секунд."""
-    return sum(
-        session.scalar(
-            select(func.count())
-            .select_from(MaterialBlock)
-            .where(
-                MaterialBlock.material_id == UUID(source["id"]),
-                MaterialBlock.revision == source["revision"],
-            )
-        )
-        for source in snapshot["sources"]
-    )
 
 
 def _locator(fragment, page, material):

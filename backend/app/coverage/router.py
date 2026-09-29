@@ -6,12 +6,19 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.coverage import interaction, lifecycle, queries, service
+from app.coverage import findings, interaction, lifecycle, queries, service
 from app.coverage.schemas import (
     BlocksRead,
     DecisionReceipt,
     DecisionWrite,
     EvidenceRead,
+    FindingApply,
+    FindingApplyResult,
+    FindingPreviewRead,
+    FindingPreviewRequest,
+    FindingReject,
+    FindingRejectResult,
+    FindingsRead,
     OverviewRead,
     PreflightRead,
     RunControl,
@@ -122,3 +129,31 @@ def evidence(project_id: UUID, evidence_id: str, session: DB):
 def decide(project_id: UUID, command: DecisionWrite, session: DB):
     """Одна команда, одна транзакция, один общий undo."""
     return interaction.apply_decision(session, project_id, command)
+
+
+@router.get("/findings", response_model=FindingsRead)
+def proposed_findings(
+    project_id: UUID, session: DB, kind: str = "new_topic", state: str = "proposed"
+):
+    """Группы действующих предложений о новых темах."""
+    if kind != "new_topic" or state != "proposed":
+        return {"items": []}
+    return findings.list_proposed(session, project_id)
+
+
+@router.post("/findings/preview", response_model=FindingPreviewRead)
+def preview_finding(project_id: UUID, command: FindingPreviewRequest, session: DB):
+    """Проверяемый снимок фрагментов и связей родителя."""
+    return findings.preview(session, project_id, command)
+
+
+@router.post("/findings/apply", response_model=FindingApplyResult)
+def apply_finding(project_id: UUID, command: FindingApply, session: DB):
+    """Создать тему и подтвердить выбранные опоры одним действием."""
+    return findings.apply(session, project_id, command)
+
+
+@router.post("/findings/reject", response_model=FindingRejectResult)
+def reject_finding(project_id: UUID, command: FindingReject, session: DB):
+    """Отклонить предложение на нынешних основаниях."""
+    return findings.reject(session, project_id, command)

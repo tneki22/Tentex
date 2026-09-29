@@ -3,11 +3,17 @@ import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { AlertTriangle, BookOpen, Link2, RotateCcw } from "lucide-react";
 import {
   decideCoverage,
+  applyCoverageFinding,
   getCoverageBlocks,
+  getCoverageFindings,
   getCoverageTopics,
+  previewCoverageFinding,
+  rejectCoverageFinding,
   type CoverageBlock,
   type CoverageBlockPage,
   type CoverageDecisionAction,
+  type CoverageFindingPreview,
+  type CoverageFindingResult,
   type CoverageTopicPage,
 } from "../../api/coverage";
 import { undoProjectAction, type ProgramNodeRead } from "../../api/projects";
@@ -15,6 +21,7 @@ import {
   EvidenceInspector,
   EvidencePassageList,
   LessonEvidenceDialog,
+  ResearchLaunchDialog,
 } from "../../components/domain";
 import {
   Button,
@@ -24,7 +31,6 @@ import {
   LoadingState,
   SegmentedTabs,
   StatusBadge,
-  Tooltip,
 } from "../../components/ui";
 import { useTopicEvidence } from "../../hooks/useTopicEvidence";
 
@@ -69,6 +75,14 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
   });
   const [lessonOpen, setLessonOpen] = useState(false);
   const [targetTopics, setTargetTopics] = useState<string[]>([]);
+  const [findings, setFindings] = useState<CoverageFindingPreview[]>([]);
+  const [finding, setFinding] = useState<CoverageFindingPreview | null>(null);
+  const [findingTitle, setFindingTitle] = useState("");
+  const [findingParent, setFindingParent] = useState<string | null>(null);
+  const [findingFragments, setFindingFragments] = useState<string[]>([]);
+  const [removeParent, setRemoveParent] = useState<string[]>([]);
+  const [researchOffer, setResearchOffer] = useState<CoverageFindingResult | null>(null);
+  const [researchOpen, setResearchOpen] = useState(false);
   const evidence = useTopicEvidence(projectId, selectedTopic, selectedEvidence);
 
   const setQuery = (values: Record<string, string | null>) => {
@@ -100,15 +114,16 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
           setQuery({ topic: null, evidence: null, source: null });
         }
       } else {
-        const page = await getCoverageBlocks(
-          projectId,
-          view === "outside" ? "outside_program" : "needs_action",
-          offset,
-          PAGE_SIZE,
-          signal,
-        );
+        const [page, proposed] = await Promise.all([
+          getCoverageBlocks(
+            projectId, view === "outside" ? "outside_program" : "needs_action",
+            offset, PAGE_SIZE, signal,
+          ),
+          view === "outside" ? getCoverageFindings(projectId, signal) : Promise.resolve({ items: [] }),
+        ]);
         if (signal?.aborted) return;
         setBlocks(page);
+        setFindings(proposed.items);
         setTopics(null);
         if (page.items[0] && (resetSelection || !selectedBlock)) {
           setQuery({ block: page.items[0].block_id });
@@ -140,6 +155,56 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
   const studyNodes = nodes.filter((node) => node.node_type !== "section"
     && node.is_in_current_program && !node.is_archived);
   const returnTo = `${location.pathname}${location.search}`;
+
+  function showFinding(value: CoverageFindingPreview) {
+    setFinding(value);
+    setFindingTitle(value.title);
+    setFindingParent(value.parent_id);
+    setFindingFragments(value.fragments.map((item) => item.id));
+    setRemoveParent(value.remove_parent_binding_ids);
+    setFeedback({ notice: "", undoSequence: null });
+  }
+
+  async function previewBlock(blockId: string) {
+    setBusy(true);
+    try {
+      showFinding(await previewCoverageFinding(projectId, [], [blockId]));
+    } catch (caught) {
+      setFeedback({ notice: caught instanceof Error ? caught.message : "Предпросмотр не загрузился", undoSequence: null });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resolveFinding(action: "apply" | "reject") {
+    if (!finding) return;
+    setBusy(true);
+    try {
+      if (action === "apply") {
+        const result = await applyCoverageFinding(projectId, {
+          finding_ids: finding.finding_ids, block_ids: finding.block_ids,
+          title: findingTitle, parent_id: findingParent,
+          fragment_ids: findingFragments,
+          remove_parent_binding_ids: removeParent,
+          expected_program_revision: finding.program_revision,
+          expected_coverage_revision: finding.coverage_revision,
+          proposal_version: finding.proposal_version,
+        });
+        setResearchOffer(result.parent_block_ids.length ? result : null);
+        setFeedback({ notice: `Тема «${findingTitle.trim()}» создана.`, undoSequence: result.action_sequence });
+      } else {
+        const result = await rejectCoverageFinding(projectId, finding, "Не нужно");
+        setResearchOffer(null);
+        setFeedback({ notice: "Находка отклонена на этих основаниях.", undoSequence: result.action_sequence });
+      }
+      setFinding(null);
+      await Promise.all([load(undefined, true), evidence.refresh(), onChanged()]);
+    } catch (caught) {
+      setFeedback({ notice: caught instanceof Error ? caught.message : "Решение не сохранено", undoSequence: null });
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function decide(
     action: CoverageDecisionAction,
@@ -177,6 +242,7 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
     try {
       await undoProjectAction(projectId, feedback.undoSequence);
       setFeedback({ notice: "Последнее решение отменено.", undoSequence: null });
+      setResearchOffer(null);
       await Promise.all([
         load(undefined, view === "outside" || view === "action"),
         evidence.refresh(),
@@ -199,10 +265,17 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
         <SegmentedTabs label="Вид покрытия" value={view} tabs={TABS} onChange={(next) => setQuery({ view: next, topic: null, evidence: null, source: null, block: null, offset: null })} />
       </header>
       {feedback.notice && <div className="coverage-browser-notice" role="status"><span>{feedback.notice}</span>{feedback.undoSequence !== null && <Button variant="ghost" disabled={busy} onClick={() => void undo()}><RotateCcw size={14} />Отменить</Button>}</div>}
+      {researchOffer && <div className="coverage-browser-notice" role="status"><span>Проверить блоки родителя для новой темы?</span><Button variant="secondary" onClick={() => setResearchOpen(true)}>Подготовить доисследование</Button></div>}
       {error && <ErrorState message={error}><Button onClick={() => void load()}>Повторить</Button></ErrorState>}
       {loading && !topics && !blocks && <LoadingState label="Загружаем результат" />}
       {!error && <div className="coverage-browser-grid">
         <div className="coverage-browser-list">
+          {view === "outside" && findings.length > 0 && <div className="coverage-finding-groups">
+            <strong>Предложено исследованием · {findings.length}</strong>
+            {findings.map((item) => <button type="button" key={item.proposal_version} className={finding?.proposal_version === item.proposal_version ? "is-selected" : ""} onClick={() => showFinding(item)}>
+              <span><strong>{item.title}</strong><small>{item.fragments.length} фрагм. · {item.fragments[0]?.material_name}</small></span>
+            </button>)}
+          </div>}
           {topics?.items.map((topic) => (
             <button
               type="button"
@@ -261,7 +334,16 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
             <Link className="coverage-read-in-workspace" to={`/projects/${projectId}?topic=${selectedTopic}&tab=source&evidence=${encodeURIComponent(evidence.selectedId ?? "")}&returnTo=${encodeURIComponent(returnTo)}`}><BookOpen size={14} />Читать в Рабочей области</Link>
           </>}
           {view === "gaps" && selectedTopic && <EmptyState title="Для темы нет актуального содержания" icon={<BookOpen size={23} />}><p>Упоминания и прежние связи не считаются материалом для чтения. Подключите источник или дождитесь следующего исследования.</p></EmptyState>}
-          {view === "outside" && activeBlock && <BlockDecision
+          {view === "outside" && finding && <FindingEditor
+            finding={finding} title={findingTitle} parentId={findingParent}
+            selected={findingFragments} removeParent={removeParent} nodes={nodes} busy={busy}
+            onTitle={setFindingTitle} onParent={setFindingParent}
+            onSelected={setFindingFragments} onRemoveParent={setRemoveParent}
+            onApply={() => void resolveFinding("apply")}
+            onReject={() => void resolveFinding("reject")}
+            onClose={() => setFinding(null)}
+          />}
+          {view === "outside" && !finding && activeBlock && <BlockDecision
             block={activeBlock}
             topics={studyNodes}
             selected={targetTopics}
@@ -270,6 +352,7 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
             onReassign={() => void decide("reassign", { blockId: activeBlock.block_id, topicIds: targetTopics })}
             onService={() => void decide("service", { blockId: activeBlock.block_id })}
             onOutside={() => void decide("outside_goal", { blockId: activeBlock.block_id })}
+            onCreate={() => void previewBlock(activeBlock.block_id)}
             projectId={projectId}
           />}
           {view === "action" && activeBlock && <ActionBlock block={activeBlock} projectId={projectId} />}
@@ -282,6 +365,13 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
         topicTitle={evidence.evidence?.topic_title ?? ""}
         onOpenChange={setLessonOpen}
         onAdded={(lesson) => setFeedback({ notice: `Кусок добавлен в урок «${lesson.title}».`, undoSequence: null })}
+      />
+      <ResearchLaunchDialog
+        open={researchOpen} projectId={projectId}
+        initialMaterialIds={researchOffer?.material_ids}
+        blockIds={researchOffer?.parent_block_ids} forceIncremental
+        onOpenChange={setResearchOpen}
+        onStarted={() => { setResearchOffer(null); void onChanged(); }}
       />
     </section>
   );
@@ -297,15 +387,70 @@ interface BlockDecisionProps {
   onReassign(): void;
   onService(): void;
   onOutside(): void;
+  onCreate(): void;
 }
 
-function BlockDecision({ block, topics, selected, busy, projectId, onToggle, onReassign, onService, onOutside }: BlockDecisionProps) {
+function BlockDecision({ block, topics, selected, busy, projectId, onToggle, onReassign, onService, onOutside, onCreate }: BlockDecisionProps) {
   return <article className="coverage-block-decision">
     <header><small>{block.material_name} · стр. {block.page_from}{block.page_to !== block.page_from ? `–${block.page_to}` : ""}</small><h3>{block.title || "Блок вне программы"}</h3></header>
     <p>Это результат разбора, а не ошибка. Выберите существующие темы либо явно оставьте блок вне учебной цели.</p>
     <fieldset><legend>Привязать к темам</legend>{topics.map((topic) => <Checkbox key={topic.id} checked={selected.includes(topic.id)} onCheckedChange={() => onToggle(topic.id)} label={topic.title} />)}</fieldset>
-    <div className="coverage-block-actions"><Button disabled={busy || selected.length === 0} onClick={onReassign}><Link2 size={14} />Привязать выбранное</Button><Button variant="secondary" disabled={busy} onClick={onService}>Служебный блок</Button><Button variant="secondary" disabled={busy} onClick={onOutside}>Вне моей цели</Button><Tooltip label="Создание тем появится в И7"><span><Button variant="ghost" disabled>Создать новую тему</Button></span></Tooltip></div>
+    <div className="coverage-block-actions"><Button disabled={busy || selected.length === 0} onClick={onReassign}><Link2 size={14} />Привязать выбранное</Button><Button variant="secondary" disabled={busy} onClick={onService}>Служебный блок</Button><Button variant="secondary" disabled={busy} onClick={onOutside}>Вне моей цели</Button><Button variant="ghost" disabled={busy} onClick={onCreate}>Создать новую тему</Button></div>
     <Link to={`/projects/${projectId}/materials/${block.material_id}?page=${block.page_from}`}>Открыть первичный текст</Link>
+  </article>;
+}
+
+interface FindingEditorProps {
+  finding: CoverageFindingPreview;
+  title: string;
+  parentId: string | null;
+  selected: string[];
+  removeParent: string[];
+  nodes: ProgramNodeRead[];
+  busy: boolean;
+  onTitle(value: string): void;
+  onParent(value: string | null): void;
+  onSelected(value: string[]): void;
+  onRemoveParent(value: string[]): void;
+  onApply(): void;
+  onReject(): void;
+  onClose(): void;
+}
+
+/** Проверяемый выбор человека перед составным изменением программы и покрытия. */
+function FindingEditor({
+  finding, title, parentId, selected, removeParent, nodes, busy,
+  onTitle, onParent, onSelected, onRemoveParent, onApply, onReject, onClose,
+}: FindingEditorProps) {
+  const parents = nodes.filter((node) => node.node_type !== "section"
+    && node.is_in_current_program && !node.is_archived);
+  const parentBindings = new Map(finding.parent_bindings.map((item) => [item.fragment_id, item.id]));
+  return <article className="coverage-finding-editor">
+    <header><small>{finding.finding_ids.length ? "Предложено исследованием" : "Из неразобранного блока"}</small><h3>Создать новую тему</h3></header>
+    <label>Название темы<input className="input" value={title} maxLength={300} onChange={(event) => onTitle(event.target.value)} /></label>
+    <label>Родительская тема
+      <select className="input" value={parentId ?? ""} onChange={(event) => { onParent(event.target.value || null); onRemoveParent([]); }}>
+        <option value="">Без родителя</option>
+        {parents.map((node) => <option key={node.id} value={node.id}>{node.title}</option>)}
+      </select>
+    </label>
+    <fieldset><legend>Привязать как содержание</legend>
+      {finding.fragments.map((item) => {
+        const oldId = parentId === finding.parent_id ? parentBindings.get(item.id) : undefined;
+        return <div className="coverage-finding-fragment" key={item.id}>
+          <Checkbox checked={selected.includes(item.id)} onCheckedChange={(checked) => {
+            onSelected(checked ? [...selected, item.id] : selected.filter((id) => id !== item.id));
+            if (!checked && oldId) onRemoveParent(removeParent.filter((id) => id !== oldId));
+          }} label={`${item.material_name} · стр. ${item.page} · ${item.text.slice(0, 180)}`} />
+          {oldId && selected.includes(item.id) && <Checkbox checked={removeParent.includes(oldId)} onCheckedChange={(checked) => onRemoveParent(checked ? [...removeParent, oldId] : removeParent.filter((id) => id !== oldId))} label="Снять прежнюю связь родителя" />}
+        </div>;
+      })}
+    </fieldset>
+    <div className="coverage-block-actions">
+      <Button disabled={busy || !title.trim() || selected.length === 0} onClick={onApply}>Создать тему и привязать</Button>
+      {finding.finding_ids.length > 0 && <Button variant="secondary" disabled={busy} onClick={onReject}>Не нужно</Button>}
+      <Button variant="ghost" disabled={busy} onClick={onClose}>Закрыть предпросмотр</Button>
+    </div>
   </article>;
 }
 

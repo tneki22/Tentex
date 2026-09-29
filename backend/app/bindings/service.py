@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.bindings import search as search_module
@@ -29,6 +29,7 @@ from app.models import (
     Binding,
     BindingMechanism,
     BindingStatus,
+    CoverageDecision,
     Material,
     MaterialBlock,
     MaterialFragment,
@@ -48,6 +49,42 @@ from app.projects.schemas import LatestUndoableAction
 STUDY_NODE_TYPES = {NodeType.TOPIC, NodeType.SUBPOINT}
 ACTIVE_STATUSES = {BindingStatus.MANUAL, BindingStatus.CONFIRMED, BindingStatus.MACHINE}
 QUALITY_RANK = {PageQuality.NATIVE: 0, PageQuality.OCR: 1, PageQuality.OCR_LOW: 2}
+# Привязка служит опорой темы, если текст раскрывает её (`content`) либо человек сам
+# привязал его не через урок. Упоминание называет тему, привязка урока повторяет то, что
+# в урок уже положили: и то и другое нельзя выдавать урокам и чату за материал темы.
+SUPPORT_CLAUSE = or_(
+    Binding.semantic_kind == "content",
+    and_(Binding.status == BindingStatus.MANUAL, Binding.mechanism != BindingMechanism.LESSON),
+)
+
+
+def topic_support(session: Session, project_id: UUID, node_id: UUID) -> list[Binding]:
+    """Активные привязки, на которые тема опирается как на свой материал.
+
+    Общая для ИИ-урока (`lessons.candidates`) и области «Связано с темой» в чате: раньше
+    оба брали любую не снятую привязку, и упоминание в оглавлении втягивало в урок весь
+    блок «Содержание», а урок кормил сам себя своими же привязками. Опора, скрытая
+    человеком («не показывать»), исключается так же, как в «Источнике».
+    """
+    hidden = {
+        row.target_key
+        for row in session.scalars(
+            select(CoverageDecision).where(
+                CoverageDecision.project_id == project_id,
+                CoverageDecision.kind == "hide_evidence",
+            )
+        )
+        if row.payload.get("hidden")
+    }
+    rows = session.scalars(
+        select(Binding).where(
+            Binding.project_id == project_id,
+            Binding.program_node_id == node_id,
+            Binding.status.in_(ACTIVE_STATUSES),
+            SUPPORT_CLAUSE,
+        )
+    )
+    return [binding for binding in rows if str(binding.id) not in hidden]
 
 
 def _require_project(session: Session, project_id: UUID, *, writable: bool) -> Project:

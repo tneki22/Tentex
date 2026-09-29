@@ -7,6 +7,14 @@ export type AiRoleAvailability =
   | { state: "disabled" }
   | { state: "unavailable"; reason: string };
 
+/** Подсказка недоступной кнопки; `undefined`, когда роль готова или ещё неизвестно. */
+export function unavailableReason(availability: AiRoleAvailability): string | undefined {
+  if (availability.state === "disabled") {
+    return "Внешние модели выключены — включаются в Параметрах ИИ.";
+  }
+  return availability.state === "unavailable" ? availability.reason : undefined;
+}
+
 /**
  * Можно ли прямо сейчас вызвать роль ИИ — до первого запроса, а не по ошибке
  * после него. Проверяет то же, что шлюз: общий тумблер, тумблер роли, выбранную

@@ -19,6 +19,9 @@ interface ResearchLaunchDialogProps {
   open: boolean;
   projectId: string;
   initialMaterialIds?: string[];
+  /** Блоки для повторной проверки после создания темы; запуск остаётся решением человека. */
+  blockIds?: string[];
+  forceIncremental?: boolean;
   onOpenChange: (open: boolean) => void;
   onStarted?: (run: CoverageRun) => void;
   loadContext?: (
@@ -39,6 +42,14 @@ function loadDefaultResearch(projectId: string, signal: AbortSignal) {
 const DEFAULT_COST_USD = "1.00";
 const NUMBER = new Intl.NumberFormat("ru-RU");
 
+function blockCount(value: number | undefined): string {
+  if (value === undefined) return "… блоков";
+  const last = value % 10;
+  const teen = value % 100;
+  const noun = last === 1 && teen !== 11 ? "блок" : last >= 2 && last <= 4 && (teen < 12 || teen > 14) ? "блока" : "блоков";
+  return `${value} ${noun}`;
+}
+
 const ROLE_LABEL: Record<string, string> = {
   main: "основной",
   additional: "дополнительный",
@@ -58,6 +69,8 @@ export function ResearchLaunchDialog({
   open,
   projectId,
   initialMaterialIds,
+  blockIds = [],
+  forceIncremental = false,
   onOpenChange,
   onStarted,
   loadContext = loadDefaultContext,
@@ -68,6 +81,7 @@ export function ResearchLaunchDialog({
   const [materials, setMaterials] = useState<MaterialRead[]>([]);
   const [programRevision, setProgramRevision] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
+  const [mode, setMode] = useState<CoveragePlan["mode"]>("initial");
   const [preflight, setPreflight] = useState<CoveragePreflight | null>(null);
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -94,10 +108,10 @@ export function ResearchLaunchDialog({
         setMaterials(sourceRows);
         setProgramRevision(revision);
         const requested = initialMaterialIds?.filter((id) => ready.some((item) => item.id === id));
-        // Повторный обзор читает все блоки заново, поэтому по умолчанию выбрано то,
-        // что ещё не исследовано; если исследовано всё — всё.
         const unexplored = ready.filter((item) => known.get(item.id)?.needed ?? true);
-        setSelected(requested?.length ? requested : (unexplored.length ? unexplored : ready).map((item) => item.id));
+        const chosen = requested?.length ? requested : (unexplored.length ? unexplored : ready).map((item) => item.id);
+        setSelected(chosen);
+        setMode(forceIncremental || chosen.some((id) => known.get(id)?.researched) ? "incremental" : "initial");
         setRequestKey(crypto.randomUUID());
       })
       .catch((caught) => {
@@ -109,7 +123,7 @@ export function ResearchLaunchDialog({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [open, projectId, initialMaterialIds?.join(","), loadContext, loadResearch]);
+  }, [open, projectId, initialMaterialIds?.join(","), forceIncremental, loadContext, loadResearch]);
 
   const cost = Number(costLimit.replace(",", "."));
   const costValid = costLimit.trim() === "" || (Number.isFinite(cost) && cost > 0);
@@ -121,10 +135,11 @@ export function ResearchLaunchDialog({
   const scope = useMemo<CoveragePlan>(() => ({
     material_ids: selected,
     context_material_ids: [],
-    mode: "initial",
+    mode,
+    ...(mode === "incremental" && blockIds.length ? { block_ids: blockIds } : {}),
     expected_program_revision: programRevision,
     limits: {},
-  }), [programRevision, selected]);
+  }), [programRevision, selected, mode, blockIds.join(",")]);
 
   const plan: CoveragePlan = costValid && costLimit.trim() !== ""
     ? { ...scope, limits: { max_cost_usd: cost } }
@@ -155,6 +170,12 @@ export function ResearchLaunchDialog({
     setError("");
   }
 
+  function changeMode(next: CoveragePlan["mode"]) {
+    setMode(next);
+    setRequestKey(crypto.randomUUID());
+    setError("");
+  }
+
   async function start() {
     if (!preflight) return;
     setStarting(true);
@@ -164,7 +185,7 @@ export function ResearchLaunchDialog({
       onStarted?.(run);
       onOpenChange(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Не удалось запустить первичный обзор");
+      setError(caught instanceof Error ? caught.message : "Не удалось запустить исследование");
     } finally {
       setStarting(false);
     }
@@ -180,11 +201,11 @@ export function ResearchLaunchDialog({
       open={open}
       onOpenChange={onOpenChange}
       title="Исследовать материалы"
-      description="Первичный обзор распределит каждый блок подготовленного текста. Углубление и синтез коллекции появятся следующим этапом."
+      description="Обзор распределит выбранные блоки подготовленного текста. Углубление и синтез коллекции появятся следующим этапом."
       className="research-launch-dialog"
       footer={<>
         <Button variant="ghost" disabled={starting} onClick={() => onOpenChange(false)}>Отменить</Button>
-        <Button disabled={!preflight?.execution_available || selected.length === 0 || starting || !costValid} onClick={() => void start()}>
+        <Button disabled={!preflight?.execution_available || !preflight.blocks || selected.length === 0 || starting || !costValid} onClick={() => void start()}>
           {starting ? "Запускаем…" : `Начать обзор${preflight ? ` · ${preflight.blocks} бл.` : ""}`}
         </Button>
       </>}
@@ -206,11 +227,24 @@ export function ResearchLaunchDialog({
             ))}
           </div>
           {unavailable.length > 0 && <p className="research-launch-note">Не готовы и не войдут автоматически: {unavailable.map((item) => item.display_name).join(", ")}.</p>}
-          {repeated.length > 0 && <p className="research-launch-note is-warning">Уже исследованное будет прочитано заново целиком: {materials.filter((item) => repeated.includes(item.id)).map((item) => item.display_name).join(", ")}. Повторный обзор не пропускает готовые блоки и снова тратит вызовы модели.</p>}
+          {repeated.length > 0 && mode === "initial" && <p className="research-launch-note is-warning">Уже исследованное будет прочитано заново целиком: {materials.filter((item) => repeated.includes(item.id)).map((item) => item.display_name).join(", ")}. Повторный обзор снова тратит вызовы модели.</p>}
         </section>
 
+        <fieldset className="research-launch-mode">
+          <legend>Что исследовать</legend>
+          <label>
+            <input type="radio" name="research-mode" checked={mode === "incremental"} onChange={() => changeMode("incremental")} />
+            Только нужное · {blockCount(preflight?.blocks_needed)}
+          </label>
+          <label>
+            <input type="radio" name="research-mode" checked={mode === "initial"} disabled={forceIncremental || blockIds.length > 0} onChange={() => changeMode("initial")} />
+            Всё заново · {blockCount(preflight?.blocks_all)}
+          </label>
+          {mode === "incremental" && preflight?.blocks === 0 && <p>Нужных блоков нет. Выберите другой источник или полный повтор.</p>}
+        </fieldset>
+
         <section className="research-launch-facts">
-          <div><Layers3 size={16} /><span><small>Подготовленный текст</small><b>{preflight ? `${preflight.blocks} блоков · от ${preflight.packets_at_least} вызовов` : "Проверяем…"}</b></span></div>
+          <div><Layers3 size={16} /><span><small>Подготовленный текст</small><b>{preflight ? `${blockCount(preflight.blocks)} · от ${preflight.packets_at_least} вызовов` : "Проверяем…"}</b></span></div>
           <div><RefreshCw size={16} /><span><small>Модель обзора</small><b>{model?.model_id ?? "Не настроена"}</b></span></div>
           <div><CircleDollarSign size={16} /><span><small>Модель исследования</small><b>{researchModel?.model_id ?? "Не настроена"}</b></span></div>
         </section>

@@ -1,7 +1,8 @@
 """Кандидаты материала для модельного урока — этап B, без вызова модели.
 
-Три источника в порядке доверия: диапазон темы по оглавлению (уточнённый
-`boundaries`), привязки темы (ручные, подтверждённые, машинные — в том числе
+Куски, выбранные человеком, идут первыми, и тогда урок строится из них одних; иначе
+три источника в порядке доверия: диапазон темы по оглавлению (уточнённый
+`boundaries`), опоры темы (ручные и содержательные привязки, в том числе
 прохода 2) и общий поиск `HybridRetriever` по выбранным материалам. Фрагмент
 принадлежит первому кандидату, который его взял: дубли не повторяются, а
 сигналы копятся. Большой блок режется на части по фрагментам, чтобы кусок
@@ -16,14 +17,15 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.bindings.service import ACTIVE_STATUSES
+from app.bindings.service import topic_support
 from app.lessons import boundaries
+from app.lessons import refs as refs_module
 from app.lessons.service import (
     ROLE_ORDER,
     _load_program,
@@ -33,7 +35,6 @@ from app.lessons.service import (
 )
 from app.materials.image_meta import DESCRIBABLE_PROCESSING
 from app.models import (
-    Binding,
     BindingMechanism,
     BindingStatus,
     BlockClass,
@@ -46,11 +47,22 @@ from app.models import (
     ProjectMaterial,
     SourceRole,
 )
+from app.projects.errors import ProjectDomainError
 from app.retrieval.chunking import count_tokens
 from app.retrieval.schemas import RetrievalScope, RetrievalSearchWrite, SearchStrategy
 from app.retrieval.search import HybridRetriever
 from app.retrieval.vector import fuse_rankings
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from app.lessons.ai_schemas import LessonPinnedRange
+
+#: Сигнал куска, который человек выбрал сам: он обязателен для урока, не вытесняется
+#: лимитом и поиском и не теряется как дубль другого материала.
+PINNED_SIGNAL = "выбрано человеком"
+#: Вес выбранного куска выше любого автоматического сигнала (оглавление — 1,0).
+PINNED_SCORE = 1.1
 #: Столько кусков модель ещё сопоставляет между собой; больше — шум.
 MAX_CANDIDATES = 30
 #: Кусок крупнее режется по фрагментам: его должно быть можно прочитать целиком.
@@ -114,6 +126,11 @@ class Candidate:
     time_to: float | None = None
     in_outline: bool = False
 
+    @property
+    def pinned(self) -> bool:
+        """Кусок выбран человеком: урок обязан его содержать."""
+        return PINNED_SIGNAL in self.signals
+
     def to_json(self) -> dict[str, Any]:
         data = asdict(self)
         data["material_id"] = str(self.material_id)
@@ -155,6 +172,8 @@ class CandidateSet:
     has_outline: bool
     searched: bool
     search_notes: list[str]
+    #: Сколько кусков выбрал человек (заказ `pinned`); их кандидаты идут первыми.
+    pinned: int = 0
 
 
 @dataclass
@@ -297,6 +316,31 @@ class _Pool:
                 self.owner[fragment_id] = candidate
 
 
+def _pin(session: Session, pool: _Pool, sources: dict[UUID, _Source],
+         pinned: Sequence[LessonPinnedRange]) -> None:
+    """Куски человека — первыми: неверный диапазон отклоняется до любых запросов к модели.
+
+    Фрагменты берутся от начала до конца диапазона в порядке чтения; `outline=True`
+    защищает кусок от вытеснения поиском и лимитом `MAX_CANDIDATES`.
+    """
+    for pin in pinned:
+        source = sources.get(pin.material_id)
+        if source is None:
+            raise ProjectDomainError(
+                "Материал выбранного куска не входит в проект",
+                status=422, code="lesson_source_unavailable",
+            )
+        ids = refs_module.ids_between(
+            session, source.material, pin.from_fragment_id, pin.to_fragment_id
+        )
+        rows = _rows(session, source.material, set(ids))
+        if not rows:
+            raise ProjectDomainError(
+                "В выбранном куске нет текста", status=422, code="lesson_pinned_empty",
+            )
+        pool.add(source, rows, PINNED_SCORE, PINNED_SIGNAL, outline=True)
+
+
 def _outline(session: Session, pool: _Pool, program: _Program, node: ProgramNode,
              sources: dict[UUID, _Source]) -> bool:
     has_outline = False
@@ -323,18 +367,11 @@ def _outline(session: Session, pool: _Pool, program: _Program, node: ProgramNode
 def _bindings(session: Session, pool: _Pool, node: ProgramNode,
               sources: dict[UUID, _Source]) -> None:
     by_signal: dict[tuple[UUID, BindingStatus, BindingMechanism], set[UUID]] = defaultdict(set)
-    for binding in session.scalars(
-        select(Binding).where(
-            Binding.project_id == node.project_id,
-            Binding.program_node_id == node.id,
-            Binding.status.in_(ACTIVE_STATUSES),
-            Binding.material_id.in_(list(sources)),
-            Binding.fragment_id.is_not(None),
-        )
-    ):
-        by_signal[(binding.material_id, binding.status, binding.mechanism)].add(
-            binding.fragment_id
-        )
+    for binding in topic_support(session, node.project_id, node.id):
+        if binding.material_id in sources and binding.fragment_id is not None:
+            by_signal[(binding.material_id, binding.status, binding.mechanism)].add(
+                binding.fragment_id
+            )
     # Ручные раньше машинных: сильный сигнал забирает фрагмент первым.
     for (material_id, status, mechanism), ids in sorted(
         by_signal.items(), key=lambda item: -SIGNAL_WEIGHT[item[0][1]]
@@ -392,10 +429,15 @@ def _mark_duplicates(candidates: list[Candidate]) -> list[Candidate]:
     """Тот же текст в другом материале — `also_in` у лучшего, а не второй кусок."""
     kept: dict[str, Candidate] = {}
     result: list[Candidate] = []
-    for candidate in sorted(candidates, key=lambda item: -item.score):
+    # Выбранные человеком идут первыми и дублем не считаются: выбор нельзя «съесть».
+    for candidate in sorted(candidates, key=lambda item: (not item.pinned, -item.score)):
         key = " ".join(candidate.text.split()).lower()
         twin = kept.get(key)
-        if twin is not None and twin.material_id != candidate.material_id:
+        if (
+            twin is not None
+            and twin.material_id != candidate.material_id
+            and not candidate.pinned
+        ):
             if candidate.material_name not in twin.also_in:
                 twin.also_in.append(candidate.material_name)
             continue
@@ -424,23 +466,34 @@ def _load_sources(session: Session, project_id: UUID, material_ids: list[UUID]
 
 
 async def collect(
-    session: Session, node: ProgramNode, material_ids: list[UUID]
+    session: Session, node: ProgramNode, material_ids: list[UUID],
+    pinned: Sequence[LessonPinnedRange] = (), pinned_only: bool = True,
 ) -> CandidateSet:
-    """Кандидаты темы по выбранным материалам, лучшие не больше `MAX_CANDIDATES`."""
-    sources = _load_sources(session, node.project_id, material_ids)
+    """Кандидаты темы по выбранным материалам, лучшие не больше `MAX_CANDIDATES`.
+
+    `pinned` — куски, выбранные человеком: их материал участвует, даже если его не
+    отметили. С `pinned_only` (по умолчанию) урок строится из выбранного одного — ни
+    оглавление, ни привязки, ни поиск не зовутся; без него они добавляют своё.
+    """
+    wanted = list(dict.fromkeys([*material_ids, *(pin.material_id for pin in pinned)]))
+    sources = _load_sources(session, node.project_id, wanted)
+    pool = _Pool()
+    _pin(session, pool, sources, pinned)
     if not sources:
         return CandidateSet([], has_outline=False, searched=False, search_notes=[])
-    program = _load_program(session, node.project_id)
-    pool = _Pool()
-    has_outline = _outline(session, pool, program, node, sources)
-    _bindings(session, pool, node, sources)
-    notes = await _search(session, pool, program, node, sources)
+    only = bool(pinned) and pinned_only
+    has_outline, notes = False, []
+    if not only:
+        program = _load_program(session, node.project_id)
+        has_outline = _outline(session, pool, program, node, sources)
+        _bindings(session, pool, node, sources)
+        notes = await _search(session, pool, program, node, sources)
     candidates = _mark_duplicates(pool.items)
-    # Весь диапазон оглавления — сама тема: он не вытесняется находками поиска.
+    # Выбранное и весь диапазон оглавления — сама тема: поиск их не вытесняет.
     outline = [item for item in candidates if item.in_outline]
     rest = sorted((item for item in candidates if not item.in_outline), key=lambda i: -i.score)
     chosen = (outline + rest)[:MAX_CANDIDATES]
-    return CandidateSet(reading_order(chosen), has_outline, True, notes)
+    return CandidateSet(reading_order(chosen), has_outline, not only, notes, len(pinned))
 
 
 # --- текст для модели ------------------------------------------------------------------
