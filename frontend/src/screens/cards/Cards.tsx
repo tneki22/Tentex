@@ -23,7 +23,8 @@ const GRADE_LABELS = ["Не вспомнил", "Частично", "Вспомн
 
 function relativeTime(value: string | null): string {
   if (!value) return "без оценки";
-  const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
+  const utc = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? value : `${value}Z`;
+  const seconds = Math.max(0, (Date.now() - new Date(utc).getTime()) / 1000);
   if (seconds < 60) return "только что";
   if (seconds < 3600) return `${Math.floor(seconds / 60)} мин назад`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)} ч назад`;
@@ -120,11 +121,11 @@ export function Cards() {
                   <StatusBadge tone={card.last_confidence && card.last_confidence <= 2 ? "warning" : "success"}>
                     {card.last_confidence ? GRADE_LABELS[card.last_confidence - 1] : "Без оценки"}
                   </StatusBadge>
-                  <small>{relativeTime(card.last_reviewed_at)}</small>
+                  <small>{card.last_reviewed_at ? "Повторена" : "Создана"} {relativeTime(card.last_reviewed_at ?? card.created_at)}</small>
                 </span>
                 <span className="cards-recent-question">{card.unit?.title ?? "Без вопроса"}</span>
               </button>
-            )) : <p className="cards-recent-empty">После первого ответа здесь появятся последние карточки.</p>}
+            )) : <p className="cards-recent-empty">Здесь появятся созданные карточки.</p>}
           </div>
         </section>
 

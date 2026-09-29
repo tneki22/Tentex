@@ -67,6 +67,7 @@ const KIND_LABEL: Record<TaskKind, string> = {
   storage_cleanup: "Очистка временного",
   image_descriptions: "Описание изображений",
   ai_lesson: "Сборка урока",
+  ai_cards: "Предложения карточек",
 };
 
 interface TaskRowProps {

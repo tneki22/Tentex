@@ -611,8 +611,8 @@ def overview(session: Session, project_id: UUID, period: int) -> CardOverviewRea
     plan_exists, today = _today_units(session, project_id, unit_rows)
     count_by_unit = Counter(card.program_node_id for card in active)
     recent = sorted(
-        (card for card in cards if card.last_reviewed_at),
-        key=lambda card: card.last_reviewed_at or datetime.min,
+        active,
+        key=lambda card: card.last_reviewed_at or card.created_at,
         reverse=True,
     )[:5]
     hard = sorted(

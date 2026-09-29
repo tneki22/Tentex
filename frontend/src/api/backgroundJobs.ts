@@ -23,7 +23,8 @@ export type BackgroundJobKind =
   | "storage_verify"
   | "storage_cleanup"
   | "image_descriptions"
-  | "ai_lesson";
+  | "ai_lesson"
+  | "ai_cards";
 
 export type BackgroundJobState =
   | "queued"

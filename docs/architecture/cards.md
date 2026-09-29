@@ -35,7 +35,8 @@
 
 - `GET /api/projects/{projectId}/cards/overview?period=7|30` — состояние Программы и Плана, сегодняшние повторения и покрытие, единицы, недавние/сложные карточки, аналитика и активный сеанс.
 - `GET|POST /api/projects/{projectId}/cards` — поиск/фильтры и создание.
-- `POST /api/projects/{projectId}/cards/generate` — предложения по `program_node_id` и режиму `connections / understanding`. Возвращает `run_id` и до шести кандидатов без сохранения в Банк; без готового ответа или привязанных Фрагментов отвечает `card_generation_no_source`.
+- `POST /api/projects/{projectId}/cards/generate` — ставит в фон выбранные `program_node_ids` и режим `connections / understanding`, отвечает `202 {job_id}`. Каждый вопрос даёт до шести кандидатов; отсутствие опоры у всех выбранных вопросов отвечает `card_generation_no_source`.
+- `GET /api/projects/{projectId}/cards/generation-jobs/{jobId}/review` — предложения, правки и решения по ним из результата фоновой задачи. `PATCH .../candidates/{unitId}/{index}` сохраняет исправление или отклонение; принятые определяются по карточкам Банка. Когда все предложения обработаны, клиент снимает задачу из корзины проверки.
 - `PATCH|DELETE /api/projects/{projectId}/cards/{cardId}` — редактирование и мягкое удаление; `POST .../restore` — восстановление.
 - `POST /api/projects/{projectId}/cards/bulk` — активация, приостановка, удаление или восстановление списка с ожидаемыми ревизиями.
 - `GET /api/projects/{projectId}/cards/fragments/{fragmentId}/prefill` — доступный проекту Фрагмент, снимок источника и предложенная единица по активной Привязке.

@@ -48,7 +48,13 @@ DEADLINE_SECONDS: dict[BackgroundJobKind, int] = {
     # повтор, если ответ не прошёл схему.
     # Сборка урока «Подробный» — до 16 вызовов подряд, каждый с повтором схемы.
     BackgroundJobKind.AI_LESSON: 1800,
+    # До шести карточек на вопрос; пакет идёт последовательно и может быть длинным.
+    BackgroundJobKind.AI_CARDS: 1800,
 }
+
+# Один вопрос делает один вызов модели; общий срок пакета растёт вместе с числом
+# вопросов, иначе «Выбрать все» падало бы по фиксированному пределу задачи.
+CARD_BATCH_SECONDS_PER_UNIT = 180
 
 
 async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway) -> BaseModel:
@@ -118,6 +124,10 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
 
         # Команда, паспорт урока и кандидаты заморожены в checkpoint при постановке.
         return await ai_jobs.run(session, gateway, job.id)
+    elif job.kind == BackgroundJobKind.AI_CARDS:
+        from app.cards.generate import run_card_generation
+
+        return await run_card_generation(session, gateway, job.id)
     elif job.kind == BackgroundJobKind.AI_CLEANUP:
         assert job.material_id is not None
         page_number = int(job.checkpoint["page_number"])
@@ -214,6 +224,8 @@ def process_ai_job(
     """
     job_id = job.id
     deadline = DEADLINE_SECONDS.get(job.kind, 600)
+    if job.kind == BackgroundJobKind.AI_CARDS:
+        deadline = max(deadline, job.total * CARD_BATCH_SECONDS_PER_UNIT)
     gateway = gateway or ModelGateway(session)
     try:
         result = asyncio.run(_run_with_deadline(session, job, gateway, deadline))
