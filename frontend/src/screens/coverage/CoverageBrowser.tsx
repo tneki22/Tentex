@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { AlertTriangle, BookOpen, Link2, RotateCcw } from "lucide-react";
 import {
@@ -12,8 +12,8 @@ import {
 } from "../../api/coverage";
 import { undoProjectAction, type ProgramNodeRead } from "../../api/projects";
 import {
-  EvidenceCard,
   EvidenceInspector,
+  EvidencePassageList,
   LessonEvidenceDialog,
 } from "../../components/domain";
 import {
@@ -143,7 +143,7 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
 
   async function decide(
     action: CoverageDecisionAction,
-    values: { bindingId?: string; blockId?: string; topicIds?: string[]; role?: "definition" | "explanation" | "example" } = {},
+    values: { bindingIds?: string[]; blockId?: string; topicIds?: string[]; role?: "definition" | "explanation" | "example" } = {},
   ) {
     if (revision === undefined) return;
     setBusy(true);
@@ -153,7 +153,7 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
         request_key: crypto.randomUUID(),
         expected_coverage_revision: revision,
         action,
-        binding_id: values.bindingId,
+        binding_ids: values.bindingIds,
         block_id: values.blockId,
         topic_ids: values.topicIds,
         role: values.role,
@@ -192,16 +192,6 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
     }
   }
 
-  const groups = useMemo(() => evidence.groups ? [
-    ["Для начала", evidence.groups.starter],
-    ["Другие объяснения", evidence.groups.explanations],
-    ["Примеры и практика", evidence.groups.practice],
-    ["Углубление и связи", evidence.groups.depth],
-    ["Упоминания", evidence.groups.mentions],
-    ["Скрытые", evidence.groups.hidden],
-    ["Прежние связи", evidence.groups.legacy],
-  ] as const : [], [evidence.groups]);
-
   return (
     <section className="coverage-browser" aria-labelledby="coverage-browser-title">
       <header className="coverage-browser-head">
@@ -222,7 +212,7 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
             >
               <span><strong>{topic.title}</strong>{topic.parent_title && <small>{topic.parent_title}</small>}</span>
               <StatusBadge tone={view === "gaps" ? "warning" : "info"}>
-                {view === "gaps" ? "нет содержания" : `Опор: ${topic.evidence_count}`}
+                {view === "gaps" ? "нет содержания" : `Фрагментов: ${topic.evidence_count}`}
               </StatusBadge>
             </button>
           ))}
@@ -250,14 +240,20 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
             {evidence.updateAvailable && <div className="coverage-refresh-offer"><span>Покрытие обновилось. Открытый текст оставлен на месте.</span><Button variant="secondary" onClick={() => void evidence.refresh()}>Показать обновление</Button></div>}
             <div className="coverage-evidence-layout">
               <div className="coverage-evidence-groups">
-                {groups.map(([label, items]) => items.length > 0 && <section key={label}><h3>{label}</h3>{items.map((item) => <EvidenceCard key={item.id} evidence={item} selected={evidence.selectedId === item.id} onSelect={() => { evidence.select(item.id); setQuery({ evidence: item.id, source: item.material_id }); }} />)}</section>)}
+                {evidence.groups && <EvidencePassageList
+                  groups={evidence.groups}
+                  selectedId={evidence.selectedId}
+                  secondary
+                  onSelect={(item) => { evidence.select(item.id); setQuery({ evidence: item.id, source: item.material_id }); }}
+                />}
               </div>
               <EvidenceInspector
                 evidence={evidence.evidence}
+                projectId={projectId}
                 loading={evidence.loading}
                 error={evidence.error}
                 busy={busy}
-                onDecision={(action, role) => evidence.evidence && void decide(action, { bindingId: evidence.evidence.binding_id, role })}
+                onDecision={(action, role) => evidence.evidence && void decide(action, { bindingIds: evidence.evidence.binding_ids, role })}
                 onAddToLesson={() => setLessonOpen(true)}
                 onOpenSource={() => evidence.evidence && navigate(`/projects/${projectId}/materials/${evidence.evidence.material_id}?page=${evidence.evidence.page_from}`)}
               />
@@ -282,9 +278,10 @@ export function CoverageBrowser({ projectId, nodes, onChanged }: CoverageBrowser
       <LessonEvidenceDialog
         open={lessonOpen}
         projectId={projectId}
-        evidence={evidence.evidence}
+        items={evidence.evidence ? [evidence.evidence] : []}
+        topicTitle={evidence.evidence?.topic_title ?? ""}
         onOpenChange={setLessonOpen}
-        onAdded={(lesson) => setFeedback({ notice: `Материал добавлен в урок «${lesson.title}».`, undoSequence: null })}
+        onAdded={(lesson) => setFeedback({ notice: `Кусок добавлен в урок «${lesson.title}».`, undoSequence: null })}
       />
     </section>
   );

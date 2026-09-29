@@ -24,8 +24,6 @@
 .coverage-browser-detail { min-width: 0; padding: var(--space-3); overflow: auto; }
 .coverage-evidence-layout { display: grid; grid-template-columns: minmax(13rem, 18rem) minmax(0, 1fr); gap: var(--space-3); }
 .coverage-evidence-groups { display: grid; align-content: start; gap: var(--space-4); }
-.coverage-evidence-groups section { display: grid; gap: var(--space-2); }
-.coverage-evidence-groups h3 { margin: 0; color: var(--muted); font-size: var(--text-xs); text-transform: uppercase; }
 .coverage-read-in-workspace { display: inline-flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); }
 .coverage-browser-pagination { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2); color: var(--muted); font-size: var(--text-xs); }
 .coverage-block-decision { display: grid; gap: var(--space-4); max-width: 48rem; margin: 0 auto; }
@@ -42,7 +40,6 @@
   .coverage-browser-head { align-items: stretch; flex-direction: column; }
   .coverage-browser-grid { grid-template-columns: minmax(13rem, 17rem) minmax(0, 1fr); }
   .coverage-evidence-layout { grid-template-columns: 1fr; }
-  .coverage-evidence-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 .coverage-main {
@@ -289,6 +286,9 @@
 .research-launch-source { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--surface-sunken); }
 .research-launch-source .checkbox-row { min-width: 0; }
 .research-launch-source .checkbox-row label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.research-launch-source > .status-badge { margin-left: auto; }
+.research-launch-source > .materials-research-state { flex: none; max-width: 11rem; padding-left: 0; }
+.research-launch-note.is-warning { padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: color-mix(in oklab, var(--tone-warning) 10%, transparent); color: var(--ink-soft); }
 .research-launch-note,
 .research-launch-boundary { margin: 0; color: var(--muted); font-size: var(--text-xs); line-height: var(--leading-relaxed); }
 .research-launch-boundary { padding: var(--space-3); border-radius: var(--radius-md); background: var(--accent-wash); color: var(--ink-soft); }

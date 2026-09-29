@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { BookPlus, RotateCcw, Search } from "lucide-react";
 import { createBindings } from "../../api/bindings";
-import { decideCoverage, type CoverageDecisionAction } from "../../api/coverage";
+import { decideCoverage, type CoverageDecisionAction, type EvidenceSummary } from "../../api/coverage";
 import { undoProjectAction } from "../../api/projects";
 import { searchProjectMaterials } from "../../api/search";
-import { EvidenceCard } from "../../components/domain/EvidenceCard";
 import { EvidenceDecisionMenu } from "../../components/domain/EvidenceDecisionMenu";
+import { EvidencePassageList, inReadingOrder, primaryPassages } from "../../components/domain/EvidencePassageList";
 import { EvidenceStructuredReader } from "../../components/domain/EvidenceStructuredReader";
+import { pagesLabel } from "../../components/domain/EvidenceCard";
 import { LessonEvidenceDialog } from "../../components/domain/LessonEvidenceDialog";
 import {
   Button,
@@ -17,7 +18,7 @@ import {
   SegmentedTabs,
   StatusBadge,
 } from "../../components/ui";
-import { useTopicEvidence } from "../../hooks/useTopicEvidence";
+import { evidenceItems, useTopicEvidence } from "../../hooks/useTopicEvidence";
 import { toSourcePlaces, type SourcePlace } from "./sourcePlaces";
 
 type SourceMode = "together" | "research" | "search";
@@ -36,7 +37,11 @@ interface TextbookSourcePanelProps {
   onBindingsChanged(): void;
 }
 
-/** Учебниковый Источник: исследованные опоры сначала, BM25 только по явной кнопке. */
+/**
+ * Учебниковый Источник: куски исследованного текста темы, а не отдельные строки.
+ * Кусок читается целиком справа и вставляется в урок одним блоком; несколько
+ * отмеченных кусков встают подряд в порядке чтения. BM25 — только по «Найти ещё».
+ */
 export function TextbookSourcePanel({
   projectId,
   topicId,
@@ -54,7 +59,8 @@ export function TextbookSourcePanel({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [undoSequence, setUndoSequence] = useState<number | null>(null);
-  const [lessonOpen, setLessonOpen] = useState(false);
+  const [lessonItems, setLessonItems] = useState<EvidenceSummary[] | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const evidence = useTopicEvidence(projectId, topicId, initialEvidenceId);
 
@@ -63,6 +69,7 @@ export function TextbookSourcePanel({
     setPlaces([]);
     setSearched(false);
     setNotice("");
+    setChecked(new Set());
   }, [topicId, topicTitle]);
 
   useEffect(() => {
@@ -115,7 +122,7 @@ export function TextbookSourcePanel({
         request_key: crypto.randomUUID(),
         expected_coverage_revision: evidence.groups.coverage_revision,
         action,
-        binding_id: evidence.evidence.binding_id,
+        binding_ids: evidence.evidence.binding_ids,
         role,
       });
       setNotice(result.message);
@@ -145,15 +152,21 @@ export function TextbookSourcePanel({
     }
   }
 
-  const researched = evidence.groups ? [
-    ...evidence.groups.starter,
-    ...evidence.groups.explanations,
-    ...evidence.groups.practice,
-    ...evidence.groups.depth,
-  ] : [];
-  const displayed = mode === "research" || !evidence.groups
-    ? researched
-    : [...researched, ...evidence.groups.mentions, ...evidence.groups.legacy];
+  function toggle(item: EvidenceSummary, value: boolean) {
+    setChecked((current) => {
+      const next = new Set(current);
+      if (value) next.add(item.id);
+      else next.delete(item.id);
+      return next;
+    });
+  }
+
+  const primary = primaryPassages(evidence.groups);
+  const all = evidenceItems(evidence.groups);
+  // Отмеченное встаёт в урок в порядке книги, а не в порядке кликов.
+  const chosen = inReadingOrder(all.filter((item) => checked.has(item.id)), all);
+  const selected = evidence.evidence;
+  const hasAny = mode === "research" ? primary.length > 0 : all.length > 0;
 
   return <div className="textbook-source-panel">
     <header className="textbook-source-head">
@@ -164,21 +177,40 @@ export function TextbookSourcePanel({
       </div>
     </header>
     {notice && <div className="workspace-source-tab-notice" role="status"><span>{notice}</span>{undoSequence !== null && <Button variant="ghost" disabled={busy} onClick={() => void undo()}><RotateCcw size={14} />Отменить</Button>}</div>}
-    {evidence.updateAvailable && <div className="coverage-refresh-offer"><span>Исследование обновилось; открытая опора оставлена на месте.</span><Button variant="secondary" onClick={() => void evidence.refresh()}>Обновить список</Button></div>}
+    {evidence.updateAvailable && <div className="coverage-refresh-offer"><span>Исследование обновилось; открытый кусок оставлен на месте.</span><Button variant="secondary" onClick={() => void evidence.refresh()}>Обновить список</Button></div>}
 
     {mode !== "search" && <div className="textbook-source-reading">
       <aside className="textbook-source-evidence-list">
-        {evidence.loading && !evidence.groups && <LoadingState label="Загружаем исследованные опоры" />}
+        {evidence.loading && !evidence.groups && <LoadingState label="Загружаем исследованный текст" />}
         {evidence.error && <ErrorState message={evidence.error} />}
-        {displayed.map((item) => <EvidenceCard key={item.id} evidence={item} selected={item.id === evidence.selectedId} onSelect={() => evidence.select(item.id)} />)}
-        {displayed.length === 0 && !evidence.loading && <EmptyState title="Исследованных объяснений пока нет"><p>Поиск остаётся доступен вручную; он не запускается при открытии темы.</p></EmptyState>}
+        {primary.length > 0 && <div className="evidence-selection-bar">
+          {checked.size > 0
+            ? <>
+              <span>Выбрано: {checked.size}</span>
+              <Button variant="ghost" onClick={() => setChecked(new Set())}>Снять</Button>
+              <Button onClick={() => setLessonItems(chosen)}><BookPlus size={14} />В урок</Button>
+            </>
+            : <>
+              <span>Кусков: {primary.length}</span>
+              <Button variant="ghost" onClick={() => setChecked(new Set(primary.map((item) => item.id)))}>Выбрать все</Button>
+            </>}
+        </div>}
+        {evidence.groups && <EvidencePassageList
+          groups={evidence.groups}
+          selectedId={evidence.selectedId}
+          onSelect={(item) => evidence.select(item.id)}
+          secondary={mode === "together"}
+          checkedIds={checked}
+          onCheckedChange={toggle}
+        />}
+        {!hasAny && !evidence.loading && <EmptyState title="Исследованного текста пока нет"><p>Поиск остаётся доступен вручную; он не запускается при открытии темы.</p></EmptyState>}
       </aside>
       <section className="textbook-source-reader">
-        {evidence.evidence ? <>
-          <header><div><small>{evidence.evidence.material_name} · стр. {evidence.evidence.page_from}{evidence.evidence.page_to !== evidence.evidence.page_from ? `–${evidence.evidence.page_to}` : ""}</small><h2>{evidence.evidence.topic_title}</h2></div><div>{evidence.evidence.preferred && <StatusBadge tone="info">читать первой</StatusBadge>}<EvidenceDecisionMenu evidence={evidence.evidence} busy={busy} onAction={(action, role) => void decide(action, role)} /></div></header>
-          <EvidenceStructuredReader projectId={projectId} evidence={evidence.evidence} />
-          <footer><Button onClick={() => setLessonOpen(true)} disabled={busy || evidence.evidence.stale}><BookPlus size={14} />Добавить в урок</Button></footer>
-        </> : !evidence.loading && <EmptyState title="Выберите опору" />}
+        {selected ? <>
+          <header><div><small>{selected.material_name} · {pagesLabel(selected.page_from, selected.page_to)}</small><h2>{selected.title || selected.topic_title}</h2></div><div>{selected.preferred && <StatusBadge tone="info">открывается первым</StatusBadge>}{selected.legacy && <StatusBadge tone="neutral">из урока или оглавления</StatusBadge>}<EvidenceDecisionMenu evidence={selected} busy={busy} onAction={(action, role) => void decide(action, role)} /></div></header>
+          <EvidenceStructuredReader projectId={projectId} evidence={selected} />
+          <footer><Button onClick={() => setLessonItems([selected])} disabled={busy || selected.stale}><BookPlus size={14} />Добавить в урок</Button></footer>
+        </> : !evidence.loading && <EmptyState title="Выберите кусок" />}
       </section>
     </div>}
 
@@ -193,13 +225,15 @@ export function TextbookSourcePanel({
     </section>}
 
     <LessonEvidenceDialog
-      open={lessonOpen}
+      open={lessonItems !== null}
       projectId={projectId}
-      evidence={evidence.evidence}
-      onOpenChange={setLessonOpen}
-      onAdded={(lesson) => {
+      items={lessonItems ?? []}
+      topicTitle={topicTitle}
+      onOpenChange={(open) => { if (!open) setLessonItems(null); }}
+      onAdded={(lesson, added) => {
         setUndoSequence(null);
-        setNotice(`Материал добавлен в урок «${lesson.title}».`);
+        setChecked(new Set());
+        setNotice(added > 1 ? `Кусков добавлено в урок «${lesson.title}»: ${added}.` : `Кусок добавлен в урок «${lesson.title}».`);
       }}
     />
   </div>;

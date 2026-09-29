@@ -1,8 +1,9 @@
-import { BookOpenText, Pin } from "lucide-react";
+import type { ReactNode } from "react";
+import { Pin } from "lucide-react";
 import type { EvidenceSummary } from "../../api/coverage";
 import { QualityBadge } from "./QualityBadge";
 
-const ROLE_LABELS: Record<string, string> = {
+export const ROLE_LABELS: Record<string, string> = {
   definition: "определение",
   explanation: "объяснение",
   example: "пример",
@@ -14,28 +15,61 @@ interface EvidenceCardProps {
   evidence: EvidenceSummary;
   selected?: boolean;
   onSelect(): void;
+  /** Флажок множественного выбора; без обработчика карточка его не рисует. */
+  checked?: boolean;
+  onCheckedChange?(checked: boolean): void;
+  /** Метка поверх подписи: «уже в уроке», «пересекается». */
+  badge?: ReactNode;
 }
 
-/** Компактная опора: источник и роль видны до открытия полного текста. */
-export function EvidenceCard({ evidence, selected = false, onSelect }: EvidenceCardProps) {
+export function pagesLabel(from: number, to: number): string {
+  return from === to ? `стр. ${from}` : `стр. ${from}–${to}`;
+}
+
+function fragmentsLabel(count: number): string {
+  const tail = count % 100;
+  const last = count % 10;
+  const word = tail >= 11 && tail <= 14 ? "фрагментов"
+    : last === 1 ? "фрагмент"
+      : last >= 2 && last <= 4 ? "фрагмента"
+        : "фрагментов";
+  return `${count} ${word}`;
+}
+
+/**
+ * Кусок чтения: название раздела, начало текста, место и роль. Выбор флажком не
+ * открывает кусок, клик по карточке не меняет выбор — это два разных действия.
+ */
+export function EvidenceCard({ evidence, selected = false, onSelect, checked, onCheckedChange, badge }: EvidenceCardProps) {
+  const roles = evidence.roles.map((role) => ROLE_LABELS[role] ?? role).join(", ");
   return (
-    <button
-      type="button"
-      className={`evidence-card ${selected ? "is-selected" : ""}`.trim()}
-      onClick={onSelect}
-      aria-pressed={selected}
-    >
-      <span className="evidence-card-head">
-        <BookOpenText size={15} />
-        <strong>{evidence.material_name}</strong>
-        {evidence.preferred && <Pin size={13} aria-label="Открывается первой" />}
-      </span>
-      <span className="evidence-card-quote">{evidence.quote}</span>
-      <span className="evidence-card-meta">
-        стр. {evidence.page_from}{evidence.page_to !== evidence.page_from ? `–${evidence.page_to}` : ""}
-        {evidence.roles.length > 0 && ` · ${evidence.roles.map((role) => ROLE_LABELS[role] ?? role).join(", ")}`}
-      </span>
-      <QualityBadge quality={evidence.quality} />
-    </button>
+    <div className={`evidence-card ${selected ? "is-selected" : ""} ${checked ? "is-checked" : ""}`.trim()}>
+      {onCheckedChange && (
+        <input
+          type="checkbox"
+          className="evidence-card-check"
+          checked={Boolean(checked)}
+          aria-label={`Выбрать «${evidence.title || evidence.quote.slice(0, 40)}»`}
+          onChange={(event) => onCheckedChange(event.target.checked)}
+        />
+      )}
+      <button type="button" className="evidence-card-body" onClick={onSelect} aria-pressed={selected}>
+        <span className="evidence-card-head">
+          <strong>{evidence.title || evidence.material_name}</strong>
+          {evidence.preferred && <Pin size={13} aria-label="Открывается первым" />}
+        </span>
+        <span className="evidence-card-quote">{evidence.quote}</span>
+        <span className="evidence-card-meta">
+          {evidence.title && <span className="evidence-card-source">{evidence.material_name}</span>}
+          <span>{pagesLabel(evidence.page_from, evidence.page_to)} · {fragmentsLabel(evidence.fragment_count)}{roles && ` · ${roles}`}</span>
+        </span>
+      </button>
+      {(badge || evidence.quality !== "native") && (
+        <span className="evidence-card-foot">
+          {badge}
+          <QualityBadge quality={evidence.quality} />
+        </span>
+      )}
+    </div>
   );
 }

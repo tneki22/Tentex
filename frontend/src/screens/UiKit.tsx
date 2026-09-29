@@ -29,8 +29,8 @@ import {
 import {
   AnswerMatchStatus,
   CostEstimate,
-  EvidenceCard,
   EvidenceInspector,
+  EvidencePassageList,
   GOAL_LEVELS,
   GoalLevelPicker,
   LibraryMaterialPickerDialog,
@@ -56,7 +56,7 @@ import {
 import type { GoalLevelValue, ProjectColor } from "../components/domain";
 import type { AiModelRead, AiModelSelection, AiProviderRead } from "../api/ai";
 import type { AnswersLinkRead } from "../api/bindings";
-import type { CoveragePreflight, CoverageRun, EvidenceDetail } from "../api/coverage";
+import type { CoveragePreflight, CoverageRun, EvidenceDetail, TopicEvidence } from "../api/coverage";
 import type { LibraryMaterialDetailRead, LibraryMaterialRead, MaterialRead } from "../api/materials";
 
 const DEMO_LIBRARY_MATERIAL: LibraryMaterialRead = {
@@ -265,15 +265,21 @@ const DEMO_EVIDENCE: EvidenceDetail = {
   key: "e1",
   ref: "demo-fragment",
   binding_id: "demo-binding",
+  binding_ids: ["demo-binding", "demo-binding-2", "demo-binding-3"],
+  member_ids: ["demo-task:demo-block:e1", "demo-task:demo-block:e2", "demo-task:demo-block:e3"],
   topic_id: "demo-topic",
   topic_title: "Взаимная блокировка",
   material_id: "demo-material",
   material_name: "Операционные системы.pdf",
+  title: "6.2. Условия возникновения тупика",
   page_from: 84,
   page_to: 85,
-  fragment_ids: ["demo-fragment"],
-  quote: "Взаимная блокировка возникает, когда процессы циклически ждут ресурсы друг друга.",
-  text: "Взаимная блокировка возникает, когда процессы циклически ждут ресурсы друг друга.",
+  from_fragment_id: "demo-heading",
+  to_fragment_id: "demo-fragment-3",
+  fragment_ids: ["demo-fragment", "demo-fragment-2", "demo-fragment-3"],
+  fragment_count: 3,
+  quote: "Взаимная блокировка возникает, когда процессы циклически ждут ресурсы друг друга. Для неё нужны четыре условия: взаимное исключение, удержание и ожидание…",
+  text: "Взаимная блокировка возникает, когда процессы циклически ждут ресурсы друг друга. Для неё нужны четыре условия: взаимное исключение, удержание и ожидание, отсутствие вытеснения и циклическое ожидание.",
   description: "Связное объяснение условия циклического ожидания.",
   roles: ["definition", "explanation"],
   semantic_kind: "content",
@@ -292,7 +298,41 @@ const DEMO_EVIDENCE: EvidenceDetail = {
   origin: "overview",
   applied: true,
   locator: {},
-  linked_topics: [{ topic_id: "demo-topic", title: "Взаимная блокировка" }],
+  linked_topics: [{ topic_id: "demo-other", title: "Предотвращение тупиков" }],
+};
+
+const DEMO_PASSAGES: TopicEvidence = {
+  coverage_revision: 1,
+  topic_id: "demo-topic",
+  topic_title: "Взаимная блокировка",
+  best_evidence_id: DEMO_EVIDENCE.id,
+  starter: [DEMO_EVIDENCE],
+  explanations: [{
+    ...DEMO_EVIDENCE,
+    id: "demo-task:demo-block:e7",
+    title: "Граф распределения ресурсов",
+    quote: "Цикл в графе распределения ресурсов с единичными экземплярами означает тупик.",
+    page_from: 86,
+    page_to: 86,
+    fragment_count: 5,
+    preferred: false,
+  }],
+  practice: [{
+    ...DEMO_EVIDENCE,
+    id: "demo-task:demo-block:e9",
+    title: "Пример: обедающие философы",
+    quote: "Пять философов берут сначала левую вилку — каждый ждёт правую.",
+    roles: ["example", "explanation"],
+    page_from: 88,
+    page_to: 89,
+    fragment_count: 8,
+    quality: "ocr",
+    preferred: false,
+  }],
+  depth: [],
+  mentions: [{ ...DEMO_EVIDENCE, id: "demo-mention", title: "Оглавление", quote: "6.2. Взаимоблокировки … 84", roles: ["reference"], fragment_count: 1, preferred: false }],
+  hidden: [],
+  legacy: [],
 };
 
 type DemoTab = "gaps" | "unsorted";
@@ -791,13 +831,21 @@ export function UiKit() {
       </section>
 
       <section className="kit-section">
-        <h2>Опоры прохода 2</h2>
+        <h2>Куски исследованного текста</h2>
         <p className="kit-hint">
-          Карточка остаётся короткой, а постоянный инспектор показывает точный текст,
-          происхождение и решения. Вставка в Урок открывает отдельный диалог с явным местом.
+          Исследование привязывает к теме отдельные фрагменты, а читаются и вставляются
+          в урок куски — подряд идущий текст одного материала от заголовка раздела.
+          Упоминания свёрнуты отдельно; флажки отмечают куски для вставки пачкой.
         </p>
         <div className="kit-grid-two">
-          <EvidenceCard evidence={DEMO_EVIDENCE} selected onSelect={() => undefined} />
+          <EvidencePassageList
+            groups={DEMO_PASSAGES}
+            selectedId={DEMO_EVIDENCE.id}
+            secondary
+            onSelect={() => undefined}
+            checkedIds={new Set([DEMO_EVIDENCE.id])}
+            onCheckedChange={() => undefined}
+          />
           <EvidenceInspector
             evidence={DEMO_EVIDENCE}
             onDecision={() => undefined}
@@ -807,7 +855,8 @@ export function UiKit() {
         <LessonEvidenceDialog
           open={lessonEvidenceDialog}
           projectId="demo-project"
-          evidence={DEMO_EVIDENCE}
+          items={[DEMO_EVIDENCE]}
+          topicTitle={DEMO_EVIDENCE.topic_title}
           preview
           onOpenChange={setLessonEvidenceDialog}
         />

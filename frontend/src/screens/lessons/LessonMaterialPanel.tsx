@@ -34,6 +34,8 @@ interface LessonMaterialPanelProps {
   insertPoint: LessonInsertPoint;
   onInsertPointChange(point: LessonInsertPoint): void;
   onAdd(command: Omit<LessonBlockCommand, "expected_revision">): Promise<boolean>;
+  /** Несколько кусков подряд одной операцией экрана: каждый следующий — за предыдущим. */
+  onAddMany(commands: Array<Omit<LessonBlockCommand, "expected_revision">>): Promise<boolean>;
   onUseFound(pages: FoundPage[]): Promise<boolean>;
   /** Вкладка при открытии: ссылка «Искать в материалах проекта» ведёт сразу в поиск. */
   initialTab?: PanelTab;
@@ -44,7 +46,7 @@ interface LessonMaterialPanelProps {
 /** Правая панель «Материал для урока»: четыре вкладки (записка §2). */
 export function LessonMaterialPanel({
   projectId, topic, busy, refreshKey, onCreateFromRange, lessonId, lessonPages,
-  blocks, insertPoint, onInsertPointChange, onAdd, onUseFound, initialTab = "suggested", tabRequest,
+  blocks, insertPoint, onInsertPointChange, onAdd, onAddMany, onUseFound, initialTab = "suggested", tabRequest,
 }: LessonMaterialPanelProps) {
   const [tab, setTab] = useState<PanelTab>(initialTab);
 
@@ -122,7 +124,8 @@ export function LessonMaterialPanel({
                 blocks={blocks}
                 busy={busy}
                 onAdd={onAdd}
-              /> : <EmptyState title="Выберите тему"><p>Предложения прохода 2 показываются для выбранной темы урока.</p></EmptyState>
+                onAddMany={onAddMany}
+              /> : <EmptyState title="Выберите тему"><p>Предложения исследования показываются для выбранной темы урока.</p></EmptyState>
             )}
           </>
         )}

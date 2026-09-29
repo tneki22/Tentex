@@ -65,6 +65,8 @@ const filledOverview = {
     diagnostics: {},
     known_limits: ["docx_tables_not_enumerated", "bbox_reliability_not_preserved"],
     in_latest_run: true,
+    researched_at: null,
+    run_state: "running",
   }],
 };
 

@@ -81,6 +81,10 @@ export interface CoverageSourceOverview {
   diagnostics: Record<string, unknown>;
   known_limits: string[];
   in_latest_run: boolean;
+  /** Когда закончился последний запуск, в область которого входил источник. */
+  researched_at: string | null;
+  /** Состояние последнего запуска, если источник в его области. */
+  run_state: CoverageRun["state"] | null;
 }
 
 export interface CoverageOverview {
@@ -186,15 +190,26 @@ export interface CoverageTopicPage {
   next_offset: number | null;
 }
 
+/**
+ * Кусок чтения: подряд идущие опоры темы одного материала. `id` — адрес первой опоры,
+ * `member_ids` — всех; `from_fragment_id…to_fragment_id` включают заголовок, номера
+ * страниц и рисунки между опорами и целиком вставляются в урок.
+ */
 export interface EvidenceSummary {
   id: string;
   binding_id: string;
+  binding_ids: string[];
+  member_ids: string[];
   topic_id: string;
   material_id: string;
   material_name: string;
+  title: string;
   page_from: number;
   page_to: number;
+  from_fragment_id: string;
+  to_fragment_id: string;
   fragment_ids: string[];
+  fragment_count: number;
   quote: string;
   description: string;
   roles: string[];
@@ -247,6 +262,8 @@ export interface CoverageDecisionCommand {
   expected_coverage_revision: number;
   action: CoverageDecisionAction;
   binding_id?: string;
+  /** Все привязки куска: одна команда и одна отмена. */
+  binding_ids?: string[];
   evidence_id?: string;
   block_id?: string;
   topic_ids?: string[];

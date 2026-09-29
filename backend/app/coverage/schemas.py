@@ -271,13 +271,19 @@ class EvidenceRead(StrictModel):
     applied: bool
     locator: dict[str, Any] = Field(default_factory=dict)
     binding_id: UUID | None = None
+    binding_ids: list[UUID] = Field(default_factory=list)
+    member_ids: list[str] = Field(default_factory=list)
     topic_id: UUID | None = None
     topic_title: str | None = None
     material_id: UUID | None = None
     material_name: str | None = None
+    title: str = ""
     page_from: int | None = None
     page_to: int | None = None
+    from_fragment_id: UUID | None = None
+    to_fragment_id: UUID | None = None
     fragment_ids: list[UUID] = Field(default_factory=list)
+    fragment_count: int = 0
     text: str = ""
     roles: list[str] = Field(default_factory=list)
     semantic_kind: str | None = None
@@ -313,16 +319,28 @@ class TopicsRead(StrictModel):
 
 
 class EvidenceSummary(StrictModel):
-    """Компактная карточка точной опоры без числовой уверенности."""
+    """Кусок чтения: подряд идущие опоры темы одного материала без числовой уверенности.
+
+    `id` — адрес первой опоры куска, `member_ids` — всех: старый адрес опоры из ссылки
+    находит свой кусок. `fragment_ids` — привязанные фрагменты, а границы
+    `from_fragment_id…to_fragment_id` включают заголовок, номера страниц и рисунки между
+    ними — ровно этот диапазон вставляется в урок.
+    """
 
     id: str
     binding_id: UUID
+    binding_ids: list[UUID] = Field(default_factory=list)
+    member_ids: list[str] = Field(default_factory=list)
     topic_id: UUID
     material_id: UUID
     material_name: str
+    title: str = ""
     page_from: int
     page_to: int
+    from_fragment_id: UUID
+    to_fragment_id: UUID
     fragment_ids: list[UUID]
+    fragment_count: int = 1
     quote: str
     description: str = ""
     roles: list[str] = Field(default_factory=list)
@@ -375,6 +393,8 @@ class DecisionWrite(StrictModel):
     expected_coverage_revision: int = Field(ge=0)
     action: DecisionAction
     binding_id: UUID | None = None
+    # Кусок чтения — все его привязки одной командой и одним undo.
+    binding_ids: list[UUID] = Field(default_factory=list, max_length=2000)
     evidence_id: str | None = None
     block_id: UUID | None = None
     topic_ids: list[UUID] = Field(default_factory=list, max_length=100)
