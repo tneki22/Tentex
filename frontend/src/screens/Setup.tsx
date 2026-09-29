@@ -45,7 +45,6 @@ const SEARCH_SUBSECTIONS = [
   { id: "overview", label: "Обзор" },
   { id: "models", label: "Модели" },
   { id: "index", label: "Индекс" },
-  { id: "quality", label: "Качество" },
   { id: "advanced", label: "Дополнительно" },
 ] as const;
 

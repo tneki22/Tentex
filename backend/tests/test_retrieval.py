@@ -68,6 +68,7 @@ from app.retrieval.schemas import (
     RetrievalScope,
     RetrievalSearchRead,
     RetrievalSearchWrite,
+    RetrievalSettingsWrite,
     SearchStrategy,
 )
 from app.retrieval.search import (
@@ -76,7 +77,7 @@ from app.retrieval.search import (
     _lexical_candidates,
     _lexical_coverage,
 )
-from app.retrieval.settings import read_settings
+from app.retrieval.settings import read_settings, update_settings
 from app.retrieval.vector import VectorHit, reciprocal_rank_fusion
 
 
@@ -537,6 +538,20 @@ def test_model_install_survives_another_writer_during_download(
     assert job.done == job.total
     assert local_models.model_path("tentex-test/embeddings").is_dir()
     assert not local_models._partial_path("tentex-test/embeddings").exists()
+
+
+def test_accurate_preset_requires_installed_reranker(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    accurate = RetrievalSettingsWrite(preset=RetrievalPreset.ACCURATE)
+
+    with pytest.raises(ProjectConflictError) as raised:
+        update_settings(session, accurate)
+    assert raised.value.code == "retrieval_reranker_missing"
+
+    local_models.model_path("Qwen/Qwen3-Reranker-0.6B").mkdir(parents=True)
+    assert update_settings(session, accurate).preset == RetrievalPreset.ACCURATE
 
 
 def test_exhaustive_run_requires_confirmation_with_corpus_snapshot(session: Session) -> None:

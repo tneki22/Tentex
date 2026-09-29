@@ -7,6 +7,7 @@ import {
   type ProjectChatSessionDetail,
   type ProjectChatSessionSummary,
 } from "../api/projectChat";
+import { activeTurn, trackTurn } from "./inflightChatTurns";
 
 const DRAFT_DEBOUNCE_MS = 800;
 
@@ -39,7 +40,6 @@ export function useProjectChat({ projectId, channel, streaming = false }: UsePro
   const [pending, setPending] = useState<PendingSend | null>(null);
   const [sendError, setSendError] = useState("");
   const [progress, setProgress] = useState<ProjectChatProgress | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
   const [sessionsReloadKey, setSessionsReloadKey] = useState(0);
   const [detailReloadKey, setDetailReloadKey] = useState(0);
 
@@ -47,6 +47,9 @@ export function useProjectChat({ projectId, channel, streaming = false }: UsePro
   // пользователь мог открыть другой чат.
   const activeSessionRef = useRef<string | null>(null);
   activeSessionRef.current = activeSessionId;
+  const pendingRef = useRef<PendingSend | null>(null);
+  pendingRef.current = pending;
+  const turnKey = (sessionId: string) => `project-chat:${projectId}:${channel}:${sessionId}`;
 
   const loadToken = useRef(0);
   useEffect(() => {
@@ -128,6 +131,29 @@ export function useProjectChat({ projectId, channel, streaming = false }: UsePro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft, activeSessionId]);
 
+  // Пользователь мог уйти с экрана, пока модель отвечала, и вернуться: ход тогда идёт
+  // на сервере, а свежий экземпляр хука о нём не знает. Показываем ожидание и
+  // перечитываем переписку, когда ход закончится.
+  useEffect(() => {
+    if (!activeSessionId || pendingRef.current?.sessionId === activeSessionId) return;
+    const turn = activeTurn(turnKey(activeSessionId));
+    if (!turn) return;
+    const sessionId = activeSessionId;
+    setPending({ sessionId, message: null });
+    void turn.done.then(async (failure) => {
+      const fresh = await fetchDetail(sessionId);
+      if (activeSessionRef.current === sessionId) {
+        if (fresh) setSession(fresh);
+        if (failure) {
+          setSendError(failure);
+          setDraft((current) => current || turn.text);
+        }
+      }
+      setPending((current) => (current?.sessionId === sessionId ? null : current));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, activeSessionId]);
+
   /** Полная перезагрузка с индикатором — для кнопки «Повторить» после ошибки открытия. */
   function retryDetail() {
     setDetailReloadKey((key) => key + 1);
@@ -170,19 +196,20 @@ export function useProjectChat({ projectId, channel, streaming = false }: UsePro
 
     setProgress(null);
 
-    let failure = "";
     const controller = new AbortController();
-    abortRef.current = controller;
-    try {
-      if (streaming) failure = await streamTurn(sessionId, clean, controller.signal);
-      else await api.send(sessionId, clean);
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        failure = error instanceof Error ? error.message : "Сообщение не отправилось";
+    const done = (async () => {
+      try {
+        if (streaming) return await streamTurn(sessionId, clean, controller.signal);
+        await api.send(sessionId, clean);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          return error instanceof Error ? error.message : "Сообщение не отправилось";
+        }
       }
-    } finally {
-      abortRef.current = null;
-    }
+      return "";
+    })();
+    trackTurn(turnKey(sessionId), { text: clean, done, abort: () => controller.abort() });
+    const failure = await done;
     const stopped = controller.signal.aborted;
 
     // Пользовательская реплика на сервере сохраняется до вызова модели, поэтому
@@ -207,7 +234,7 @@ export function useProjectChat({ projectId, channel, streaming = false }: UsePro
         setDraft((current) => current || clean);
       }
     }
-    setPending((current) => (current?.message.id === message.id ? null : current));
+    setPending((current) => (current?.message?.id === message.id ? null : current));
     setProgress(null);
   }
 
@@ -229,7 +256,8 @@ export function useProjectChat({ projectId, channel, streaming = false }: UsePro
 
   /** Остановить ход: обрыв соединения отменяет его на сервере, в том числе вызов модели. */
   function stopMessage() {
-    abortRef.current?.abort();
+    const sessionId = activeSessionRef.current;
+    if (sessionId) activeTurn(turnKey(sessionId))?.abort();
   }
 
   function updateContextFlag(key: string, value: boolean) {
@@ -257,7 +285,7 @@ export function useProjectChat({ projectId, channel, streaming = false }: UsePro
   const sending = pending !== null && pending.sessionId === activeSessionId;
   const messages = useMemo(() => {
     const saved = session?.messages ?? [];
-    return sending && pending ? [...saved, pending.message] : saved;
+    return sending && pending?.message ? [...saved, pending.message] : saved;
   }, [session?.messages, sending, pending]);
 
   return {
@@ -275,7 +303,8 @@ export function useProjectChat({ projectId, channel, streaming = false }: UsePro
 
 interface PendingSend {
   sessionId: string;
-  message: ChatMessageRead;
+  /** Пусто, когда ход идёт с прошлого показа экрана: реплика уже пришла с сервера. */
+  message: ChatMessageRead | null;
 }
 
 /** Сообщение, которого на сервере ещё нет: своя реплика до ответа или отметка об остановке. */

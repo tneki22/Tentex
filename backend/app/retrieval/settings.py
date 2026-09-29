@@ -17,6 +17,7 @@ from app.models import (
 )
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.retrieval.embeddings import backend_for_profile
+from app.retrieval.local_models import model_path
 from app.retrieval.recipes import DEFAULT_TEMPLATE, model_recipe
 from app.retrieval.schemas import (
     EmbeddingProfileRead,
@@ -24,6 +25,8 @@ from app.retrieval.schemas import (
     RetrievalSettingsRead,
     RetrievalSettingsWrite,
 )
+
+DEFAULT_RERANKER_MODEL_ID = "Qwen/Qwen3-Reranker-0.6B"
 
 
 def create_profile(session: Session, command: EmbeddingProfileWrite) -> EmbeddingProfileRead:
@@ -140,6 +143,17 @@ def update_settings(session: Session, command: RetrievalSettingsWrite) -> Retrie
             and session.get(EmbeddingProfile, command.default_profile_id) is None
         ):
             raise ProjectNotFoundError("Embedding-профиль не найден")
+        if command.preset == "accurate":
+            # Пресет «Точно» переставляет места reranker'ом: без установленной модели он
+            # молча превратился бы в «Сбалансированно», а в настройках остался бы «Точно».
+            reranker_id = str(
+                command.expert_parameters.get("reranker_model_id", DEFAULT_RERANKER_MODEL_ID)
+            )
+            if not model_path(reranker_id).is_dir():
+                raise ProjectConflictError(
+                    "Профиль «Точно» требует установленную модель reranker",
+                    code="retrieval_reranker_missing",
+                )
         row.default_profile_id = command.default_profile_id
         row.preset = command.preset
         row.expert_parameters = command.expert_parameters

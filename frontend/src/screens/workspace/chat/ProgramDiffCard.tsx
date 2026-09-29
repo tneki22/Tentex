@@ -3,6 +3,7 @@ import { Ban, Check, ThumbsDown, ThumbsUp } from "lucide-react";
 import type { ProgramChatDiffPayload, ProgramChatOperationView } from "../../../api/chat";
 import { MaterialHint, SourceChip } from "../../../components/domain";
 import { Button, Checkbox } from "../../../components/ui";
+import { plural } from "../../preparation/model";
 
 const NODE_TYPE_LABELS: Record<string, string> = {
   section: "раздел", topic: "тема", subpoint: "подпункт",
@@ -30,6 +31,11 @@ interface ProgramDiffCardProps {
   /** id узла → формулировка — красит node_id из операций в читаемый текст. */
   nodeTitles?: Record<string, string>;
   headingRef?: (node: HTMLHeadingElement | null) => void;
+}
+
+/** Каждый новый пункт — своё изменение: раздел с тремя темами внутри — это 4 изменения, а не 1. */
+function countChanges(op: ProgramChatOperationView): number {
+  return 1 + (op.children ?? []).reduce((sum, child) => sum + countChanges(child), 0);
 }
 
 function nodeLabel(id: string | null | undefined, titles: Record<string, string>): string {
@@ -162,12 +168,15 @@ export function ProgramDiffCard({
     });
   }
 
-  const selectedCount = [...selected].filter((index) => diff.operation_states[index] === "pending").length;
+  const selectedCount = [...selected]
+    .filter((index) => diff.operation_states[index] === "pending")
+    .reduce((sum, index) => sum + countChanges(diff.operations[index]), 0);
+  const changeCount = diff.operations.reduce((sum, op) => sum + countChanges(op), 0);
   const hasPending = pendingIndices.length > 0;
 
   return (
     <article className="chat-bubble is-assistant program-diff-card">
-      <h3 ref={headingRef} tabIndex={-1} className="program-diff-title">Предложение · {diff.operations.length} изменени{diff.operations.length === 1 ? "е" : "й"}</h3>
+      <h3 ref={headingRef} tabIndex={-1} className="program-diff-title">Предложение · {changeCount} {plural(changeCount, "изменение", "изменения", "изменений")}</h3>
       {summary && <p className="program-diff-summary">{summary}</p>}
       {(diff.pros.length > 0 || diff.cons.length > 0) && (
         <div className="program-diff-pros-cons">

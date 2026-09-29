@@ -31,6 +31,7 @@ from app.models import (
 )
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.storage import archive, maintenance
+from app.storage.host_paths import host_path
 from app.storage.schemas import (
     BackupArchiveRead,
     BackupCreateRead,
@@ -151,8 +152,8 @@ def storage_snapshot(session: Session) -> StorageSnapshot:
         )
     )
     return StorageSnapshot(
-        data_directory=str(settings.data_dir.resolve()),
-        backup_directory=str(backups),
+        data_directory=host_path(settings.data_dir),
+        backup_directory=host_path(backups),
         # `Path.drive` в контейнере пуст у обоих путей и ничего не говорит о
         # физическом диске. Достоверно известно одно: лежат ли копии внутри
         # папки рабочих данных — тогда поломка диска унесёт и их.

@@ -374,6 +374,8 @@ export function Library() {
     [retrievalSettings?.active_index?.corpus_manifest],
   );
   const subjects = useMemo(() => [...new Set(materials.flatMap((material) => material.subject ? [material.subject] : []))].sort((a, b) => a.localeCompare(b, "ru")), [materials]);
+  // Пока настройки не загрузились, «индекса нет» не утверждаем.
+  const contentIndexMissing = retrievalSettings !== null && retrievalSettings.active_index === null;
   const readyContentMaterials = useMemo(
     () => materials.filter((material) => material.status === "ready"),
     [materials],
@@ -575,6 +577,9 @@ export function Library() {
       );
       setContentHits(response.results);
       setContentReasons([
+        ...(contentIndexMissing
+          ? ["Индекс поиска не собран, поэтому искали только по словам. Чтобы искать по смыслу, соберите индекс в параметрах поиска."]
+          : []),
         ...response.degradation_reasons,
         ...(response.no_relevant_match
           ? [response.missing_terms.length
@@ -944,9 +949,20 @@ export function Library() {
         </EmptyState>
       ) : searchSurface === "content" ? (
         contentHits.length === 0 && !contentSearching ? (
-          <EmptyState title="Поиск по содержимому">
-            <p>Спросите своими словами или найдите точный термин во всех готовых материалах.</p>
-          </EmptyState>
+          contentIndexMissing ? (
+            <EmptyState title="Индекс поиска не собран">
+              <p>
+                Пока индекса нет, работает только поиск по словам, а поиск по смыслу недоступен.
+                Скачайте embedding-модель и соберите индекс в параметрах поиска — или соберите его
+                сразу по выбранным материалам кнопкой выше.
+              </p>
+              <Link className="secondary-button" to="/setup?section=search&subsection=models">Настроить поиск</Link>
+            </EmptyState>
+          ) : (
+            <EmptyState title="Поиск по содержимому">
+              <p>Спросите своими словами или найдите точный термин во всех готовых материалах.</p>
+            </EmptyState>
+          )
         ) : null
       ) : visible.length === 0 ? (
         <EmptyState title="Под фильтры ничего не подошло">

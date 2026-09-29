@@ -25,6 +25,7 @@ import {
   type ChatSettingsPatch,
 } from "../../../api/chat";
 import { ProjectApiError, type ProgramNodeRead } from "../../../api/projects";
+import { activeTurn, trackTurn } from "../../../hooks/inflightChatTurns";
 
 const DRAFT_DEBOUNCE_MS = 800;
 
@@ -82,6 +83,8 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
   const [detailReloadKey, setDetailReloadKey] = useState(0);
 
   const abortRef = useRef<AbortController | null>(null);
+  const activeSessionRef = useRef<string | null>(null);
+  activeSessionRef.current = activeSessionId;
   const loadToken = useRef(0);
   const deltaBuffer = useRef("");
   const flushScheduled = useRef(false);
@@ -188,6 +191,23 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft, activeSessionId]);
 
+  // Ответ строится на сервере, даже если пользователь ушёл с экрана. Вернувшись, он
+  // должен видеть, что модель отвечает, и получить ответ без перезагрузки страницы.
+  useEffect(() => {
+    if (!activeSessionId || abortRef.current) return;
+    const turn = activeTurn(`exam-chat:${projectId}:${activeSessionId}`);
+    if (!turn) return;
+    const sessionId = activeSessionId;
+    setPreparing(true);
+    void turn.done.then(async () => {
+      const fresh = await getChatSession(projectId, sessionId).catch(() => null);
+      if (activeSessionRef.current !== sessionId) return;
+      if (fresh) applySessionDetail(fresh);
+      setPreparing(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, activeSessionId]);
+
   async function refreshDetail(): Promise<ChatSessionDetail | null> {
     if (!activeSessionId) return null;
     try {
@@ -287,6 +307,12 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
     };
     const controller = new AbortController();
     abortRef.current = controller;
+    let finishTurn: (failure: string) => void = () => undefined;
+    trackTurn(`exam-chat:${projectId}:${activeSessionId}`, {
+      text,
+      done: new Promise<string>((resolve) => { finishTurn = resolve; }),
+      abort: () => controller.abort(),
+    });
     setFailure(null);
     setPreparing(true);
     const userId = `pending-user-${Date.now()}`;
@@ -380,6 +406,7 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
       setPreparing(false);
       setStreamingMessageId(null);
       abortRef.current = null;
+      finishTurn("");
     }
   }
 
@@ -401,7 +428,8 @@ export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = 
   }
 
   function stopMessage() {
-    abortRef.current?.abort();
+    if (abortRef.current) abortRef.current.abort();
+    else if (activeSessionId) activeTurn(`exam-chat:${projectId}:${activeSessionId}`)?.abort();
   }
 
   async function submitAnswer(text: string, tracking?: Parameters<typeof submitChatAnswer>[3]) {

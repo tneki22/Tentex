@@ -208,7 +208,4 @@ def test_exam_material_uses_expected_count_to_ignore_title_and_trailing_reset(
 
     assert preview.counts["questions"] == 3
     assert [node.title for node in preview.nodes] == ["Первый", "Второй", "Третий"]
-    assert preview.warnings == [
-        "Перед списком пропущено строк: 1",
-        "После списка пропущено строк: 1",
-    ]
+    assert preview.warnings == []

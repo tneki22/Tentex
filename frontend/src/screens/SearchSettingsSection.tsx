@@ -13,12 +13,9 @@ import {
   resumeRetrievalIndexBuild,
   installLocalEmbeddingModel,
   listLocalEmbeddingModels,
-  listRetrievalBenchmarks,
   listRetrievalIndexes,
-  runRetrievalBenchmark,
   testEmbeddingProfile,
   updateRetrievalSettings,
-  type BenchmarkRunRead,
   type LocalModelRead,
   type ModelSupport,
   type RetrievalIndexRead,
@@ -93,7 +90,6 @@ export function SearchSettingsSection({
   const [settings, setSettings] = useState<RetrievalSettingsRead | null>(null);
   const [indexes, setIndexes] = useState<RetrievalIndexRead[]>([]);
   const [models, setModels] = useState<LocalModelRead[]>([]);
-  const [benchmarks, setBenchmarks] = useState<BenchmarkRunRead[]>([]);
   const [aiSettings, setAiSettings] = useState<AiSettingsRead | null>(null);
   const [externalProvider, setExternalProvider] = useState<string | null>(null);
   const [externalModel, setExternalModel] = useState<string | null>(null);
@@ -110,17 +106,15 @@ export function SearchSettingsSection({
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [nextSettings, nextIndexes, nextModels, nextBenchmarks, nextAiSettings] = await Promise.all([
+      const [nextSettings, nextIndexes, nextModels, nextAiSettings] = await Promise.all([
         getRetrievalSettings(signal),
         listRetrievalIndexes(),
         listLocalEmbeddingModels(),
-        listRetrievalBenchmarks(),
         getAiSettings(signal).catch(() => null),
       ]);
       setSettings(nextSettings);
       setIndexes(nextIndexes);
       setModels(nextModels);
-      setBenchmarks(nextBenchmarks);
       setAiSettings(nextAiSettings);
       setExternalProvider((current) => current ?? nextAiSettings?.providers[0]?.id ?? null);
       setError("");
@@ -160,7 +154,7 @@ export function SearchSettingsSection({
 
   useEffect(() => {
     if (!settings) return;
-    const sections = ["overview", "models", "index", "quality", "advanced"]
+    const sections = ["overview", "models", "index", "advanced"]
       .map((id) => document.getElementById(`search-${id}`))
       .filter((section): section is HTMLElement => section !== null);
     const observer = new IntersectionObserver((entries) => {
@@ -259,7 +253,7 @@ export function SearchSettingsSection({
   const activeProfile = settings.profiles.find(
     (profile) => profile.id === settings.active_index?.profile_id,
   );
-  const candidate = indexes.find((index) => index.state === "ready");
+  const rerankerInstalled = models.some((model) => model.role === "reranker" && model.installed);
   const externalModels = aiSettings?.models.filter(
     (model) => model.provider_id === externalProvider && model.is_available,
   ) ?? [];
@@ -598,36 +592,6 @@ export function SearchSettingsSection({
         </section>
       </div>
 
-      <div id="search-quality" className="ai-anchor-section">
-        <section className="ai-settings-group is-first">
-          <header className="ai-group-head">
-            <div><h2>Качество</h2><p>Контрольные запросы сравнивают релевантность, задержку и zero-hit на одном корпусе.</p></div>
-            <Button
-              variant="secondary"
-              disabled={!candidate || busy !== ""}
-              onClick={() => candidate && void action(`benchmark:${candidate.id}`, () => runRetrievalBenchmark(candidate.id))}
-            >Запустить на кандидате</Button>
-          </header>
-          <div className="retrieval-quality-guide" aria-label="Метрики качества">
-            <article><strong>Recall@10</strong><p>Доля известных релевантных мест, которые попали в первые десять результатов.</p></article>
-            <article><strong>NDCG@10</strong><p>Учитывает порядок: полезные результаты выше дают большую оценку.</p></article>
-            <article><strong>Ложные находки</strong><p>Сколько запросов без ответа всё же получили результаты.</p></article>
-            <article><strong>p95</strong><p>Время ответа для 95% запросов. Показывает задержку в тяжёлом сценарии.</p></article>
-          </div>
-          <div className="retrieval-benchmark-list">
-            {benchmarks.map((run) => <article key={run.id}>
-              <strong>NDCG@10 {((run.metrics.ndcg_at_10 ?? 0) * 100).toFixed(1)}%</strong>
-              <span>Recall@10 {((run.metrics.recall_at_10 ?? 0) * 100).toFixed(1)}%</span>
-              <span>MRR@10 {((run.metrics.mrr_at_10 ?? 0) * 100).toFixed(1)}%</span>
-              <span>Ложные находки {run.metrics.negative_false_positive ?? 0} / {run.metrics.negative_cases ?? 0}</span>
-              <span>p95 {Math.round(run.metrics.p95_ms ?? 0)} мс</span>
-              <small>{run.metrics.positive_cases ?? 0} с ответом · {run.metrics.negative_cases ?? 0} без ответа</small>
-            </article>)}
-            {benchmarks.length === 0 && <p className="ai-muted">Добавьте контрольные запросы через API — здесь появятся сравнимые запуски.</p>}
-          </div>
-        </section>
-      </div>
-
       <div id="search-advanced" className="ai-anchor-section">
         <section className="ai-settings-group is-first">
           <header className="ai-group-head"><div><h2>Дополнительно</h2><p>Пресет применяется сразу. Модель и размеры кусков меняются только через новый индекс.</p></div></header>
@@ -639,7 +603,12 @@ export function SearchSettingsSection({
               tabs={[
                 { value: "fast", label: "Быстро" },
                 { value: "balanced", label: "Сбалансированно" },
-                { value: "accurate", label: "Точно" },
+                {
+                  value: "accurate",
+                  label: "Точно",
+                  disabled: !rerankerInstalled && settings.preset !== "accurate",
+                  tooltip: !rerankerInstalled ? "Нужна установленная модель reranker: скачайте её на вкладке «Модели»" : undefined,
+                },
               ]}
               onChange={(value) => void action("preset", async () => setSettings(await updateRetrievalSettings({
                 default_profile_id: settings.default_profile_id,
@@ -651,7 +620,7 @@ export function SearchSettingsSection({
           <p className="retrieval-neutral-note">{({
             fast: "Быстро: минимум кандидатов и без reranker — подходит для коротких запросов и слабого компьютера.",
             balanced: "Сбалансированно: равный вклад поиска по словам и смыслу, обычно лучший повседневный режим.",
-            accurate: "Точно: локальный Qwen3 Reranker перечитывает 10 лучших мест вместе с вопросом, ставит выше отвечающие и отказывает, если ответа нет ни в одном. Нужна установленная модель; на процессоре это ≈ 15–20 с на запрос.",
+            accurate: "Точно: локальный Qwen3 Reranker перечитывает 10 лучших мест вместе с вопросом, ставит выше отвечающие и отказывает, если ответа нет ни в одном. Нужна установленная модель reranker (вкладка «Модели»); на процессоре это ≈ 15–20 с на запрос.",
           } as Record<RetrievalPreset, string>)[settings.preset]}</p>
           {settings.active_index && (
             <p className="retrieval-neutral-note">Нарезка активного индекса: цель {settings.active_index.chunk_target_tokens}, максимум {settings.active_index.chunk_max_tokens}, перекрытие {settings.active_index.chunk_overlap_tokens} токенов. Для изменения нужна пересборка.</p>

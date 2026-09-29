@@ -5956,7 +5956,6 @@ button.wizard-back-projects {
 
 .wizard-review-list,
 .wizard-review-list ol { margin: 0; padding: 0; list-style: none; }
-.wizard-review-list { max-height: 32rem; overflow-y: auto; }
 .wizard-review-list ol {
   margin-left: var(--space-5);
   border-left: 1px solid var(--line);

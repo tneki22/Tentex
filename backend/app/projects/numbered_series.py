@@ -79,10 +79,8 @@ def _build_selection(
     ignored_before = tuple(line.strip() for line in lines[:start] if line.strip())
     ignored_after = tuple(line.strip() for line in lines[end:] if line.strip())
     warnings: list[str] = []
-    if ignored_before:
-        warnings.append(f"Перед списком пропущено строк: {len(ignored_before)}")
-    if ignored_after:
-        warnings.append(f"После списка пропущено строк: {len(ignored_after)}")
+    # Заголовок до списка и приложение после него — обычное дело для файла с вопросами:
+    # предупреждать о них нечем, пользователь не может ничего исправить.
     if len(chain) > 1:
         gap_lines = 0
         for index in range(len(chain) - 1):

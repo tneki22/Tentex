@@ -1430,8 +1430,13 @@ function MaterialSurface() {
     documentObserver.current.observe(node);
   }, []);
 
+  // Сбрасываем оверлей только при переходе из широкого режима в узкий: любое
+  // колебание ширины (например, полоса прокрутки на другой странице) не должно его закрывать.
+  const wasWideOutline = useRef(false);
   useEffect(() => {
-    if (documentWidth < INLINE_OUTLINE_MIN_WIDTH) setOverlayOutlineOpen(false);
+    const wide = documentWidth >= INLINE_OUTLINE_MIN_WIDTH;
+    if (!wide && wasWideOutline.current) setOverlayOutlineOpen(false);
+    wasWideOutline.current = wide;
   }, [documentWidth]);
 
   useEffect(() => {
@@ -2219,10 +2224,9 @@ function MaterialSurface() {
                   pageStates={viewerDetail.page_states}
                   showOcrReview={viewerDetail.parser_mode !== "fast"}
                   storageKey={material.id}
-                  onPageChange={(next) => {
-                    goToPage(next);
-                    setOverlayOutlineOpen(false);
-                  }}
+                  // Оглавление остаётся открытым и поверх документа: страницы листают подряд,
+                  // закрывать панель после каждого перехода значило бы открывать её заново.
+                  onPageChange={goToPage}
                 />
               )}
               <DocumentStage
