@@ -281,8 +281,9 @@ model_id · cost_usd · concepts · job_id · ai_run_ids · dropped`); `lesson_b
 | POST | `/{lesson_id}/proposals/{job_id}/apply` `{op_ids, expected_revision}` | Применяет выбранные операции одним действием журнала `lesson_blocks`; итог — `LessonChangeResult` и `conflicts` (операции, которые больше не ложатся на урок). 409 `lesson_proposal_missing`, `lesson_proposal_resolved`, `stale_lesson_revision` |
 
 **Этапы.** `lessons/candidates.py` без модели собирает куски в порядке доверия: диапазон
-темы по оглавлению (уточнённый `boundaries`), активные привязки темы, общий
-`HybridRetriever` по выбранным материалам (запросы — «раздел › тема», подпункты, «Где
+темы по оглавлению (уточнённый `boundaries`), опоры темы (`bindings.service.topic_support`:
+содержание `content` или ручная привязка не из урока, без скрытых человеком; упоминания и
+привязки самого урока не в счёт), общий `HybridRetriever` по выбранным материалам (запросы — «раздел › тема», подпункты, «Где
 искать»; выдачи сливает `retrieval/vector.fuse_rankings`). Фрагмент принадлежит первому
 куску, который его взял; блок крупнее 1200 токенов режется по фрагментам; тот же текст в
 другом материале становится `also_in`. Вес — роль материала × сигнал, `ocr_low` × 0,85; до 30
