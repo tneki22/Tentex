@@ -193,6 +193,23 @@ class LessonWriter:
         self.used_sources.add(label)
         self.characters += len(item.text)
 
+    def add_missing_pinned(self) -> None:
+        """Выбранный человеком кусок, которого нет в уроке, встаёт в конец.
+
+        Модель может пропустить кусок, хотя правило требует его поставить; терять выбор
+        человека молча нельзя, поэтому сервер добавляет его сам и называет это.
+        """
+        for label, item in self.items.items():
+            if not item.pinned or label in self.used_sources:
+                continue
+            self.add_source(label, None)
+            if label in self.used_sources:
+                place = f"стр. {item.page_from}–{item.page_to}"
+                self.dropped.append(
+                    f"Выбранный кусок ({item.material_name}, {place}) модель не поставила "
+                    "в урок — он добавлен в конец"
+                )
+
     def _supports(self, body: str) -> tuple[str, list[str]]:
         """Ссылки пояснения: известные метки получают номер урока, прочие исчезают."""
         cited = cited_ids(body)
@@ -308,6 +325,7 @@ def save_lesson(
                 writer.add_source(item.label, item.collapsed)
             else:
                 writer.add_note(item.variant, item.body, item.run_id)
+        writer.add_missing_pinned()
         writer.finish()
         lesson.duration_minutes = command.minutes or boundaries.estimate_minutes(
             writer.characters

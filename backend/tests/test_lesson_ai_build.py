@@ -13,7 +13,13 @@ from app.ai.gateway import ModelGateway
 from app.ai.jobs import process_ai_job
 from app.ai.provider import FakeTransport, ProviderCompletion, ProviderUsage
 from app.lessons import ai_build, ai_context, editing
-from app.lessons.ai_schemas import LessonAiBuildWrite, LessonAiOrder, LessonAiRunWrite
+from app.lessons.ai_prompts import PINNED_RULE
+from app.lessons.ai_schemas import (
+    LessonAiBuildWrite,
+    LessonAiOrder,
+    LessonAiRunWrite,
+    LessonPinnedRange,
+)
 from app.lessons.schemas import LessonBlockWrite, LessonNoteWrite
 from app.models import (
     AiRun,
@@ -34,6 +40,7 @@ from app.models import (
     ProgramNode,
     ProjectActionLog,
     ProjectMaterial,
+    SourceRole,
     StartingLevel,
     StudyFormat,
     TargetOutcome,
@@ -381,3 +388,74 @@ def test_edited_model_note_becomes_mixed(session, project):
     ))
 
     assert result.lesson.blocks[0].origin == LessonBlockOrigin.MIXED
+
+
+def test_pinned_pieces_are_the_only_sources_and_none_is_lost(session, project):
+    """«Собрать с ИИ» из выбранных кусков: модель пропустила второй — сервер добавил (4.1)."""
+    _, node = _ethernet(session, project)
+    second = Book(session, project, "Игошин", role=SourceRole.ADDITIONAL)
+    second.page(45, "h:3.2 Нормальные формы", "p:КНФ — конъюнкция дизъюнкций.")
+    second.page(46, "h:Пример", "p:Построим КНФ для импликации.")
+    pins = [
+        LessonPinnedRange(material_id=second.material.id, from_fragment_id=second.ids[first],
+                          to_fragment_id=second.ids[last])
+        for first, last in (("3.2 Нормальные формы", "КНФ — конъюнкция дизъюнкций."),
+                            ("Пример", "Построим КНФ для импликации."))
+    ]
+
+    preview = asyncio.run(ai_build.preflight(
+        session, project.id, LessonAiOrder(program_node_id=node.id, pinned=pins)
+    ))
+    assert preview.candidates == 2
+    assert preview.material_state == "куски выбраны человеком: 2"
+    assert [(item.name, item.selected) for item in preview.materials] == [
+        ("Олифер", False), ("Игошин", True),
+    ]
+
+    started = asyncio.run(ai_build.start(
+        session, project.id, LessonAiBuildWrite(program_node_id=node.id, pinned=pins)
+    ))
+    job = session.get(BackgroundJob, started.job_id)
+    transport = FakeTransport(completions=[_completion(_draft(
+        _note("КНФ — конъюнкция дизъюнкций [S1]."), _source("S1"),
+    ))])
+    process_ai_job(session, job, ModelGateway(session, transport))
+    session.expire_all()
+    job = session.get(BackgroundJob, started.job_id)
+
+    assert job.state == BackgroundJobState.COMPLETED, job.error
+    system, user = (message["content"] for message in transport.complete_requests[0]["messages"])
+    assert PINNED_RULE in system
+    assert "сигналы: выбрано человеком" in user and "Станции делят общую среду" not in user
+    result = job.checkpoint["result"]
+    _, blocks = _blocks(session, UUID(result["lesson_id"]))
+    pieces = [block for block in blocks if block.kind == LessonBlockKind.SOURCE]
+    assert [block.refs[0].page_from for block in pieces] == [45, 46]
+    assert any("модель не поставила в урок" in reason for reason in result["dropped"])
+
+
+def test_bad_pinned_range_is_a_422_with_a_code(session, project):
+    from fastapi.testclient import TestClient
+
+    from app.db import get_session
+    from app.main import create_app
+
+    _, node = _ethernet(session, project)
+    second = Book(session, project, "Игошин", role=SourceRole.ADDITIONAL)
+    second.page(45, "h:3.2 Нормальные формы", "p:КНФ — конъюнкция дизъюнкций.")
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: session
+    body = {
+        "program_node_id": str(node.id),
+        # Конец куска стоит раньше его начала.
+        "pinned": [{
+            "material_id": str(second.material.id),
+            "from_fragment_id": str(second.ids["КНФ — конъюнкция дизъюнкций."]),
+            "to_fragment_id": str(second.ids["3.2 Нормальные формы"]),
+        }],
+    }
+
+    response = TestClient(app).post(f"/api/projects/{project.id}/lessons/ai/preflight", json=body)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "lesson_pinned_range"

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.bindings import search as search_module
 from app.lessons import candidates
+from app.lessons.ai_schemas import LessonPinnedRange
 from app.models import (
     Binding,
     BindingMechanism,
@@ -19,6 +20,7 @@ from app.models import (
     SourceRole,
     utc_now,
 )
+from app.projects.errors import ProjectDomainError
 from app.retrieval.schemas import RetrievalScope, RetrievalSearchWrite
 from app.retrieval.search import resolve_scope
 from tests.test_lessons import Book, add_node, make_lessons_project
@@ -180,3 +182,80 @@ def test_only_content_and_human_bindings_are_topic_support(session, project):
         project_id=project.id, node_id=node.id,
     ))
     assert scope.block_ids == sorted((made[title].block_id for title in kept), key=str)
+
+
+def pin(book, first, last):
+    """Кусок, выбранный человеком: от одного фрагмента книги до другого."""
+    return LessonPinnedRange(
+        material_id=book.material.id, from_fragment_id=book.ids[first],
+        to_fragment_id=book.ids[last],
+    )
+
+
+def two_books(session, project):
+    main = Book(session, project, "Афанасьев")
+    main.page(26, "h:1.13. Совершенные формы", "p:СДНФ строится по таблице истинности.")
+    second = Book(session, project, "Игошин", role=SourceRole.ADDITIONAL)
+    second.page(45, "h:3.2 Нормальные формы", "p:КНФ — конъюнкция дизъюнкций.")
+    second.page(46, "h:Пример", "p:Построим КНФ для импликации.")
+    node = add_node(session, project, "СКНФ и СДНФ", 0, ranges=[(main, 26, 26)])
+    pins = [
+        pin(second, "3.2 Нормальные формы", "КНФ — конъюнкция дизъюнкций."),
+        pin(second, "Пример", "Построим КНФ для импликации."),
+    ]
+    return main, second, node, pins
+
+
+def test_pinned_pieces_are_first_protected_and_in_book_order(session, project):
+    """Выбор человека не вытесняется оглавлением и поиском (шаг 4.1)."""
+    main, second, node, pins = two_books(session, project)
+
+    found = asyncio.run(candidates.collect(
+        session, node, [main.material.id], pins, pinned_only=False,
+    ))
+
+    assert found.pinned == 2 and found.searched and found.has_outline
+    titles = [(item.material_name, item.title) for item in found.candidates]
+    # Порядок книги: основной материал, затем выбранные куски второго по страницам.
+    assert titles == [
+        ("Афанасьев", "1.13. Совершенные формы"),
+        ("Игошин", "3.2 Нормальные формы"),
+        ("Игошин", "Пример"),
+    ]
+    chosen = found.candidates[1:]
+    assert all(item.pinned and item.in_outline for item in chosen)
+    assert all(item.signals[0] == candidates.PINNED_SIGNAL for item in chosen)
+    assert not found.candidates[0].pinned
+
+
+def test_pinned_only_builds_from_the_choice_and_skips_outline_and_search(session, project):
+    main, second, node, pins = two_books(session, project)
+
+    found = asyncio.run(candidates.collect(session, node, [main.material.id], pins))
+
+    assert not found.has_outline and not found.searched and found.search_notes == []
+    assert [item.title for item in found.candidates] == ["3.2 Нормальные формы", "Пример"]
+    # Материал выбранных кусков участвует, даже если его не отметили в диалоге.
+    assert {item.material_name for item in found.candidates} == {"Игошин"}
+
+
+def test_pinned_range_must_be_ordered_inside_a_project_material(session, project):
+    main, second, node, pins = two_books(session, project)
+    outsider = Book(session, make_lessons_project(session), "Чужая")
+    outsider.page(1, "h:Чужой раздел", "p:Чужой абзац.")
+
+    def refused(pinned):
+        with pytest.raises(ProjectDomainError) as error:
+            asyncio.run(candidates.collect(session, node, [main.material.id], pinned))
+        assert error.value.status == 422
+        return error.value.code
+
+    backwards = pin(second, "Построим КНФ для импликации.", "3.2 Нормальные формы")
+    assert refused([backwards]) == "lesson_pinned_range"
+    # Начало из одного материала, а материал указан другой: фрагмента там нет.
+    mixed = LessonPinnedRange(
+        material_id=main.material.id, from_fragment_id=second.ids["Пример"],
+        to_fragment_id=second.ids["Построим КНФ для импликации."],
+    )
+    assert refused([mixed]) == "lesson_pinned_range"
+    assert refused([pin(outsider, "Чужой раздел", "Чужой абзац.")]) == "lesson_source_unavailable"

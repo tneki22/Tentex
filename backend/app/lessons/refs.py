@@ -141,6 +141,37 @@ def bounds_of(ref: LessonSourceRef) -> Bounds:
     return Bounds(ref.page_from, ref.page_to, ref.from_fragment_id, ref.to_fragment_id)
 
 
+def ids_between(session: Session, material: Material, first_id: UUID, last_id: UUID
+                ) -> list[UUID]:
+    """Все фрагменты от `first_id` до `last_id` включительно в порядке чтения ревизии.
+
+    В отличие от `fragment_range` порядок аргументов важен: кусок, выбранный человеком,
+    задан парой «начало, конец», и конец перед началом — ошибка данных, а не «выделили
+    снизу вверх».
+    """
+    pages = dict(session.execute(
+        select(MaterialFragment.id, MaterialPage.page_number)
+        .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+        .where(
+            MaterialFragment.id.in_([first_id, last_id]),
+            MaterialPage.material_id == material.id,
+            MaterialPage.revision == material.active_parse_revision,
+        )
+    ).tuples().all())
+    if len(pages) != len({first_id, last_id}):
+        raise ProjectDomainError(
+            "Фрагмент куска не найден в текущей ревизии материала",
+            status=422, code="lesson_pinned_range",
+        )
+    order = load_order(session, material, min(pages.values()), max(pages.values()))
+    start, end = order.index[first_id], order.index[last_id]
+    if start > end:
+        raise ProjectDomainError(
+            "Начало куска стоит после его конца", status=422, code="lesson_pinned_range",
+        )
+    return [item.id for item in order.fragments[start : end + 1]]
+
+
 def fragment_range(order: MaterialOrder, first_id: UUID, last_id: UUID) -> Bounds:
     """Выделенные фрагменты → границы куска; порядок выбора не важен."""
     if first_id not in order.index or last_id not in order.index:

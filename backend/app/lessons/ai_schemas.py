@@ -16,6 +16,17 @@ from app.lessons.task_schemas import StudyTaskDraftRead
 from app.models import LessonBasis, SourceRole
 
 
+class LessonPinnedRange(ApiModel):
+    """Кусок, выбранный человеком: непрерывный диапазон фрагментов одного материала.
+
+    Ровно то, что несёт кусок чтения (`EvidenceSummary.from_fragment_id…to_fragment_id`).
+    """
+
+    material_id: UUID
+    from_fragment_id: UUID
+    to_fragment_id: UUID
+
+
 class LessonAiOrder(ApiModel):
     """Что пользователь выбрал в диалоге «Собрать урок с ИИ»."""
 
@@ -30,6 +41,12 @@ class LessonAiOrder(ApiModel):
     # Без значения — конспект учитывается, если он не пуст.
     use_conspect: bool | None = None
     model: AiModelSelection | None = None
+    # Куски, выбранные человеком в «Источнике» или «Предложено»: они обязательны и идут
+    # первыми. Материал куска участвует, даже если его не отметили в диалоге.
+    pinned: list[LessonPinnedRange] = Field(default_factory=list, max_length=20)
+    # Есть закреплённые куски — урок строится из них одних; False добавляет к ним
+    # оглавление, привязки и поиск по теме.
+    pinned_only: bool = True
 
 
 class LessonAiPlanStep(ApiModel):

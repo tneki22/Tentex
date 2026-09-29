@@ -132,15 +132,19 @@ def _materials(
     ]
     links.sort(key=lambda pair: (ROLE_ORDER[pair[1].source_role], pair[1].priority))
     known = {material.id for material, _ in links}
-    if order.material_ids is not None:
-        unknown = set(order.material_ids) - known
-        if unknown:
-            raise ProjectDomainError(
-                "Материал не входит в проект", status=422, code="lesson_source_unavailable"
-            )
-        selected = set(order.material_ids)
+    pinned = {pin.material_id for pin in order.pinned}
+    unknown = (set(order.material_ids or []) | pinned) - known
+    if unknown:
+        raise ProjectDomainError(
+            "Материал не входит в проект", status=422, code="lesson_source_unavailable"
+        )
+    if pinned and order.pinned_only:
+        # Урок строится из выбранных кусков: остальные материалы модель не увидит.
+        selected = pinned
+    elif order.material_ids is not None:
+        selected = set(order.material_ids) | pinned
     else:
-        selected = _default_selection(links, set(ranges))
+        selected = _default_selection(links, set(ranges)) | pinned
     result: list[LessonAiMaterialRead] = []
     for material, link in links:
         page_range = ranges.get(material.id)
@@ -165,6 +169,11 @@ def _material_state(order: LessonAiOrder, selected: int, found: CandidateSet
         return ai_context.MaterialState("материалы не используются: основа — знания модели")
     if not selected:
         return ai_context.MaterialState("материалы не выбраны")
+    if found.pinned:
+        extra = "" if not found.searched else "; к ним добавлено найденное по теме"
+        return ai_context.MaterialState(
+            f"куски выбраны человеком: {found.pinned}{extra}", notes
+        )
     if not found.candidates:
         return ai_context.MaterialState("поиск не нашёл материала по теме", notes)
     if found.has_outline:
@@ -190,7 +199,9 @@ async def _prepare(
     if order.basis == LessonBasis.MODEL_ONLY or not selected:
         found = CandidateSet([], has_outline=False, searched=False, search_notes=[])
     else:
-        found = await candidates_module.collect(session, node, selected)
+        found = await candidates_module.collect(
+            session, node, selected, order.pinned, order.pinned_only
+        )
     passport = session.get(GoalPassport, project.id)
     default_minutes = passport.session_minutes if passport else None
     words = ai_context.conspect_words(session, project.id, node.id)
@@ -240,7 +251,10 @@ def _sources_text(items: list[Candidate]) -> str:
 
 def draft_messages(brief: dict[str, Any], items: list[Candidate]) -> list[AiMessage]:
     order = brief["order"]
-    system = draft_instructions(order["template"], order["level"], order["basis"])
+    system = draft_instructions(
+        order["template"], order["level"], order["basis"],
+        pinned=any(item.pinned for item in items),
+    )
     user = (
         f"<brief>\n{ai_context.render_brief(brief)}\n</brief>\n\n"
         f"<sources>\n{_sources_text(items)}\n</sources>\n\n"
