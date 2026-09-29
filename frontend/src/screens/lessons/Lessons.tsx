@@ -251,6 +251,39 @@ export function Lessons() {
     } finally { setBusy(false); }
   }
 
+  /**
+   * Несколько кусков из «Предложено» подряд. Место вставки держится локально: состояние
+   * экрана между вызовами не успевает обновиться, и куски встали бы в обратном порядке.
+   */
+  async function addManyFromPanel(
+    commands: Array<Omit<LessonBlockCommand, "expected_revision">>,
+  ): Promise<boolean> {
+    if (!activeLessonId || commands.length === 0) return false;
+    setBusy(true);
+    setActionError("");
+    try {
+      let current = await getLesson(projectId, activeLessonId);
+      let point = insertPoint;
+      for (const command of commands) {
+        const known = new Set(current.blocks.map((block) => block.id));
+        const result = await editLessonBlocks(projectId, activeLessonId, {
+          ...command, ...insertPlacement(point, current.blocks),
+          expected_revision: current.revision,
+        });
+        current = result.lesson;
+        const added = current.blocks.find((block) => !known.has(block.id));
+        if (added) point = { kind: "after", blockId: added.id };
+      }
+      chooseInsertPoint(point);
+      overview.refresh();
+      setRangesKey((value) => value + 1);
+      return true;
+    } catch (caught) {
+      setActionError(errorText(caught, "Не удалось добавить куски"));
+      return false;
+    } finally { setBusy(false); }
+  }
+
   /** «Урок из найденного»: отмеченные в поиске страницы — новым черновиком или в конец урока. */
   async function addFound(pages: FoundPage[]): Promise<boolean> {
     if (!active || pages.length === 0) return false;
@@ -463,6 +496,7 @@ export function Lessons() {
                 insertPoint={insertPoint}
                 onInsertPointChange={chooseInsertPoint}
                 onAdd={addFromPanel}
+                onAddMany={addManyFromPanel}
                 onUseFound={addFound}
                 initialTab={panelParam}
                 tabRequest={panelTabRequest}

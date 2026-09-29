@@ -10493,7 +10493,7 @@ button.wizard-back-projects {
    своя ширина «auto»-колонок и значения съезжают относительно шапки. */
 .materials-overview-table {
   display: grid;
-  grid-template-columns: minmax(200px, 2fr) minmax(110px, 1fr) minmax(64px, auto) minmax(120px, 1.2fr) minmax(88px, auto) minmax(110px, auto) minmax(96px, auto);
+  grid-template-columns: minmax(200px, 2fr) minmax(110px, 1fr) minmax(64px, auto) minmax(120px, 1.2fr) minmax(88px, auto) minmax(110px, auto) minmax(150px, auto);
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
@@ -10524,6 +10524,14 @@ button.wizard-back-projects {
 .materials-overview-link strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .materials-overview-link:hover { color: var(--accent); }
 .materials-overview-row > .status-badge { justify-self: start; font-variant-numeric: tabular-nums; }
+/* Под «Исследовать» — исследован ли файл: «Файл разобран» ещё не значит «содержание прочитано». */
+.materials-research-cell { display: grid; justify-items: start; gap: 2px; min-width: 0; }
+.materials-research-state { --research-dot: var(--faint); display: block; max-width: 15rem; padding-left: var(--space-3); color: var(--muted); font-size: var(--text-xs); line-height: 1.35; }
+.materials-research-state::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: var(--space-1); border-radius: 50%; background: var(--research-dot); vertical-align: 1px; }
+.materials-research-state.is-success { --research-dot: var(--tone-success); color: var(--ink-soft); }
+.materials-research-state.is-warning { --research-dot: var(--tone-warning); color: var(--ink-soft); }
+.materials-research-state.is-info { --research-dot: var(--tone-info); color: var(--ink-soft); }
+.materials-research-state span { color: var(--muted); }
 .materials-overview-name { display: flex; align-items: center; gap: var(--space-1); min-width: 0; margin-left: calc(-1 * var(--space-3)); }
 .materials-drag-handle { display: grid; flex: none; place-items: center; width: 20px; height: 28px; border-radius: var(--radius-sm); color: var(--faint); cursor: grab; opacity: 0; transition: opacity var(--ease-fast), color var(--ease-fast); }
 .materials-drag-handle:hover { color: var(--ink-soft); }

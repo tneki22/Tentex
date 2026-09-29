@@ -11,7 +11,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, load_only
 
-from app.coverage import queries
+from app.coverage import passages, queries
 from app.coverage.schemas import DecisionWrite
 from app.coverage.snapshots import fingerprint, require_project
 from app.db import project_write_transaction
@@ -21,8 +21,6 @@ from app.models import (
     BindingMechanism,
     BindingStatus,
     CoverageDecision,
-    CoverageRun,
-    CoverageTask,
     Material,
     MaterialBlock,
     MaterialFragment,
@@ -41,12 +39,6 @@ from app.projects.errors import (
 
 ACTIVE_STATUSES = {BindingStatus.MANUAL, BindingStatus.CONFIRMED, BindingStatus.MACHINE}
 STUDY_NODE_TYPES = {NodeType.TOPIC, NodeType.SUBPOINT}
-ROLE_GROUP = {
-    "example": "practice",
-    "exercise": "practice",
-    "reference": "depth",
-}
-QUALITY_RANK = {"native": 0, "ocr": 1, "ocr_low": 2}
 SOURCE_ROLE_RANK = {"main": 0, "additional": 1, "reference": 2}
 
 
@@ -90,6 +82,13 @@ def _binding_rows(
         )
         .outerjoin(MaterialBlock, MaterialBlock.id == Binding.block_id)
         .where(Binding.project_id == project_id, Binding.status.in_(ACTIVE_STATUSES))
+        # Страница несёт весь свой текст, разметку и элементы, а материал — оглавление:
+        # на теме в 455 опор полные строки стоили 2,3 с из 3.
+        .options(
+            load_only(MaterialPage.id, MaterialPage.page_number, MaterialPage.revision),
+            load_only(Material.id, Material.display_name, Material.active_parse_revision),
+            load_only(MaterialBlock.id, MaterialBlock.page_from, MaterialBlock.page_to),
+        )
     )
     if node_id is not None:
         statement = statement.where(Binding.program_node_id == node_id)
@@ -285,60 +284,15 @@ def blocks_page(
     }
 
 
-def _evidence_tasks(session: Session, project_id: UUID, rows) -> dict[UUID, CoverageTask]:
-    """Загрузить JSON каждой задачи темы один раз, даже если из неё опубликованы сотни связей."""
-    task_ids = set()
-    for binding, *_ in rows:
-        ref = binding.evidence_ref or {}
-        try:
-            task_ids.add(UUID(ref["task_id"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-    if not task_ids:
-        return {}
-    return {
-        task.id: task
-        for task in session.scalars(
-            select(CoverageTask)
-            .join(CoverageRun, CoverageRun.id == CoverageTask.run_id)
-            .where(
-                CoverageTask.id.in_(task_ids),
-                CoverageRun.project_id == project_id,
-            )
-        )
-    }
-
-
-def _evidence_meta(
-    binding: Binding,
-    fragment: MaterialFragment,
-    tasks: dict[UUID, CoverageTask],
-) -> tuple[str, str]:
-    evidence_id = _evidence_id(binding)
-    if evidence_id.startswith("binding:"):
-        return fragment.text, ""
-    ref = binding.evidence_ref or {}
-    try:
-        task = tasks[UUID(ref["task_id"])]
-        evidence = queries.task_evidence(task, ref["target_id"], ref["key"])
-    except (KeyError, TypeError, ValueError):
-        evidence = None
-    if evidence is None:
-        return "", ""
-    return evidence["quote"], evidence["description"]
-
-
 def _evidence_summary(
     row,
     *,
     fresh_ids: set[UUID],
     hidden: dict[str, CoverageDecision],
     preferred_binding_id: str | None,
-    tasks: dict[UUID, CoverageTask],
 ) -> dict:
     """Собрать одну карточку без протекания служебного ранга в API."""
     binding, fragment, page, material, project_material, block = row
-    quote, description = _evidence_meta(binding, fragment, tasks)
     hidden_row = hidden.get(str(binding.id))
     stale = binding.id not in fresh_ids or page.revision != material.active_parse_revision
     return {
@@ -350,8 +304,8 @@ def _evidence_summary(
         "page_from": block.page_from if block else page.page_number,
         "page_to": block.page_to if block else page.page_number,
         "fragment_ids": [str(fragment.id)],
-        "quote": quote or fragment.text,
-        "description": description,
+        "quote": fragment.text,
+        "description": "",
         "roles": binding.roles or [],
         "semantic_kind": binding.semantic_kind,
         "status": binding.status.value,
@@ -364,72 +318,101 @@ def _evidence_summary(
         "legacy": binding.semantic_kind in {None, "unknown"},
         "_priority": project_material.priority,
         "_source_role": project_material.source_role.value,
+        "_material": binding.material_id,
+        "_revision": page.revision,
+        "_page": page.page_number,
     }
 
 
-def _evidence_rank(item: dict) -> tuple:
-    roles = set(item["roles"])
+def _passage_rank(item: dict) -> tuple:
+    """Порядок чтения: основной источник, приоритет, затем место в материале.
+
+    Прежний ранг ставил текстовый слой выше OCR и сравнивал строковые ID опор, и
+    пример СДНФ читался «II. Аналитический способ…» раньше «Решение.».
+    """
     return (
-        not item["preferred"],
-        item["stale"] or not item["available"],
-        QUALITY_RANK.get(item["quality"], 9),
-        not bool(roles & {"definition", "explanation"}),
-        item["semantic_kind"] != "content",
         SOURCE_ROLE_RANK.get(item["_source_role"], 9),
         item["_priority"],
         item["material_name"].casefold(),
-        item["page_from"],
-        item["id"],
+        item["_position"],
     )
 
 
-def topic_evidence(session: Session, project_id: UUID, node_id: UUID) -> dict:
-    """Сгруппировать опоры темы с единым стабильным рангом."""
-    project = require_project(session, project_id)
-    node = session.get(ProgramNode, node_id)
-    if node is None or node.project_id != project_id or node.node_type not in STUDY_NODE_TYPES:
-        raise ProjectNotFoundError("Тема программы не найдена")
+def _starter(content: list[dict]) -> dict | None:
+    """С чего начать: личный выбор, иначе первое определение, иначе первое объяснение."""
+    readable = [item for item in content if not item["stale"] and item["available"]]
+    return next(
+        (item for item in readable if item["preferred"]),
+        next(
+            (item for item in readable if "definition" in item["roles"]),
+            next(
+                (item for item in readable if item["group"] == "explanations"),
+                readable[0] if readable else None,
+            ),
+        ),
+    )
+
+
+def _public(item: dict, *, detail: bool = False) -> dict:
+    """Служебный ранг и полный текст не протекают в список."""
+    hidden_keys = {"category", "group"} | (set() if detail else {"text"})
+    return {
+        key: value
+        for key, value in item.items()
+        if not key.startswith("_") and key not in hidden_keys
+    }
+
+
+def _topic_passages(session: Session, project_id: UUID, node_id: UUID) -> list[dict]:
+    """Все опоры темы, свёрнутые в куски чтения, в порядке чтения."""
     rows = _binding_rows(session, project_id, node_id)
     fresh_ids = _fresh_binding_ids(session, project_id, [row[0] for row in rows])
     hidden = _decision_map(session, project_id, "hide_evidence")
     preferred = _decision_map(session, project_id, "prefer_reading").get(str(node_id))
     preferred_id = (preferred.payload or {}).get("binding_id") if preferred else None
-    tasks = _evidence_tasks(session, project_id, rows)
+    # Цитата куска берётся из текста фрагментов, поэтому тяжёлый JSON задач модели
+    # (десятки килобайт на пакет) списку не нужен: он один давал секунды на тему.
     items = [
         _evidence_summary(
             row,
             fresh_ids=fresh_ids,
             hidden=hidden,
             preferred_binding_id=preferred_id,
-            tasks=tasks,
         )
         for row in rows
     ]
-    items.sort(key=_evidence_rank)
-    best = next(
-        (
-            item
-            for item in items
-            if not item["hidden"]
-            and not item["legacy"]
-            and not item["stale"]
-            and item["semantic_kind"] == "content"
-        ),
-        None,
-    )
+    result = passages.build(session, project_id, node_id, items)
+    result.sort(key=_passage_rank)
+    return result
+
+
+def _require_study_node(session: Session, project_id: UUID, node_id: UUID) -> ProgramNode:
+    node = session.get(ProgramNode, node_id)
+    if node is None or node.project_id != project_id or node.node_type not in STUDY_NODE_TYPES:
+        raise ProjectNotFoundError("Тема программы не найдена")
+    return node
+
+
+def topic_evidence(session: Session, project_id: UUID, node_id: UUID) -> dict:
+    """Опоры темы кусками чтения, сгруппированные по назначению.
+
+    Единица выдачи — кусок (`passages.py`), а не фрагмент: одна карточка раньше
+    была одной строкой, и урок приходилось собирать из десятков вставок.
+    """
+    project = require_project(session, project_id)
+    node = _require_study_node(session, project_id, node_id)
+    found = _topic_passages(session, project_id, node_id)
+    content = [item for item in found if item["category"] == "content"]
+    best = _starter(content)
     groups: dict[str, list[dict]] = defaultdict(list)
-    for item in items:
-        if item["hidden"]:
-            group = "hidden"
-        elif item["legacy"] or item["stale"]:
-            group = "legacy"
-        elif item["semantic_kind"] == "mention":
-            group = "mentions"
+    for item in found:
+        if item["category"] != "content":
+            group = item["category"]
+        elif item is best:
+            group = "starter"
         else:
-            group = next((ROLE_GROUP[role] for role in item["roles"] if role in ROLE_GROUP), None)
-            if group is None:
-                group = "starter" if not groups["starter"] else "explanations"
-        groups[group].append({key: value for key, value in item.items() if not key.startswith("_")})
+            group = item["group"]
+        groups[group].append(_public(item))
     return {
         "coverage_revision": project.coverage_revision,
         "topic_id": str(node.id),
@@ -501,29 +484,22 @@ def evidence_detail(session: Session, project_id: UUID, evidence_id: str) -> dic
         base = queries.evidence_read(session, project_id, evidence_id)
     hidden = _decision_map(session, project_id, "hide_evidence").get(str(binding.id))
     preferred = _decision_map(session, project_id, "prefer_reading").get(str(node.id))
-    block = session.get(MaterialBlock, binding.block_id) if binding.block_id else None
-    linked = [
-        {"topic_id": str(other_id), "title": other_title}
-        for other_id, other_title in session.execute(
-            select(ProgramNode.id, ProgramNode.title)
-            .join(Binding, Binding.program_node_id == ProgramNode.id)
-            .where(
-                Binding.project_id == project_id,
-                Binding.fragment_id == binding.fragment_id,
-                Binding.status.in_(ACTIVE_STATUSES),
-            )
-        )
-    ]
-    return {
+    single = {
         **base,
         "binding_id": str(binding.id),
+        "binding_ids": [str(binding.id)],
+        "member_ids": [evidence_id],
         "topic_id": str(node.id),
         "topic_title": node.title,
         "material_id": str(material.id),
         "material_name": project_material_display_name(material, project_material),
-        "page_from": block.page_from if block else page.page_number,
-        "page_to": block.page_to if block else page.page_number,
+        "title": "",
+        "page_from": page.page_number,
+        "page_to": page.page_number,
+        "from_fragment_id": str(fragment.id),
+        "to_fragment_id": str(fragment.id),
         "fragment_ids": [str(fragment.id)],
+        "fragment_count": 1,
         "text": base["quote"] or fragment.text,
         "roles": binding.roles or [],
         "semantic_kind": binding.semantic_kind,
@@ -533,8 +509,47 @@ def evidence_detail(session: Session, project_id: UUID, evidence_id: str) -> dic
         "hidden": bool(hidden and hidden.payload.get("hidden")),
         "preferred": bool(preferred and preferred.payload.get("binding_id") == str(binding.id)),
         "legacy": binding.semantic_kind in {None, "unknown"},
-        "linked_topics": linked,
     }
+    # Снятая связь и тема-раздел кусков не образуют: инспектор показывает её одну.
+    passage = None
+    if binding.status in ACTIVE_STATUSES and node.node_type in STUDY_NODE_TYPES:
+        passage = next(
+            (
+                item
+                for item in _topic_passages(session, project_id, node.id)
+                if str(binding.id) in item["binding_ids"]
+            ),
+            None,
+        )
+    detail = {**single, **_public(passage, detail=True)} if passage else single
+    if passage:
+        # Модельные поля опоры относятся к её первому фрагменту, а не ко всему куску.
+        detail.update({key: base[key] for key in ("key", "ref", "repair", "start", "end")})
+        detail["id"] = passage["id"]
+    detail["linked_topics"] = _linked_topics(session, project_id, node.id, detail["fragment_ids"])
+    return detail
+
+
+def _linked_topics(
+    session: Session, project_id: UUID, node_id: UUID, fragment_ids: list[str]
+) -> list[dict]:
+    """Другие темы, которые раскрывает тот же текст: кусок бывает общим для двух тем."""
+    return [
+        {"topic_id": str(other_id), "title": other_title}
+        for other_id, other_title, _ in session.execute(
+            select(ProgramNode.id, ProgramNode.title, ProgramNode.sort_order)
+            .join(Binding, Binding.program_node_id == ProgramNode.id)
+            .where(
+                Binding.project_id == project_id,
+                Binding.fragment_id.in_([UUID(item) for item in fragment_ids]),
+                Binding.program_node_id != node_id,
+                Binding.status.in_(ACTIVE_STATUSES),
+                Binding.semantic_kind == "content",
+            )
+            .distinct()
+            .order_by(ProgramNode.sort_order)
+        )
+    ]
 
 
 def _request_hash(command: DecisionWrite) -> str:
@@ -664,6 +679,26 @@ def _require_binding(session: Session, project_id: UUID, command: DecisionWrite)
     if binding is None or binding.project_id != project_id:
         raise ProjectNotFoundError("Связь не найдена")
     return binding
+
+
+def _require_bindings(session: Session, project_id: UUID, command: DecisionWrite) -> list[Binding]:
+    """Все привязки команды: кусок чтения передаёт их списком, одиночная — одну."""
+    if not command.binding_ids:
+        return [_require_binding(session, project_id, command)]
+    ids = list(dict.fromkeys(command.binding_ids))
+    found = {
+        row.id: row
+        for row in session.scalars(
+            select(Binding).where(Binding.project_id == project_id, Binding.id.in_(ids))
+        )
+    }
+    if len(found) != len(ids):
+        raise ProjectNotFoundError("Связь не найдена")
+    return [found[binding_id] for binding_id in ids]
+
+
+def _has_link_target(command: DecisionWrite) -> bool:
+    return bool(command.binding_ids or command.binding_id or command.evidence_id)
 
 
 def _require_topics(session: Session, project_id: UUID, topic_ids: list[UUID]) -> list[ProgramNode]:
@@ -809,14 +844,10 @@ def _apply_reassign(
 ) -> tuple[list[Binding], list[tuple[str, str]], str]:
     """Переназначить точные фрагменты всем выбранным темам без частичного результата."""
     topics = _require_topics(session, project_id, command.topic_ids)
-    old = (
-        _require_binding(session, project_id, command)
-        if command.binding_id or command.evidence_id
-        else None
-    )
+    olds = _require_bindings(session, project_id, command) if _has_link_target(command) else []
     fragments = (
-        [session.get(MaterialFragment, old.fragment_id)]
-        if old is not None
+        [session.get(MaterialFragment, old.fragment_id) for old in olds]
+        if olds
         else _block_fragments(session, project_id, command.block_id)
         if command.block_id
         else []
@@ -825,7 +856,7 @@ def _apply_reassign(
         raise ProjectNotFoundError("Точный фрагмент для переназначения не найден")
     touched: list[Binding] = []
     keys: list[tuple[str, str]] = []
-    if old is not None:
+    for old in olds:
         old.status = BindingStatus.REMOVED
         old.updated_at = utc_now()
         touched.append(old)
@@ -870,10 +901,13 @@ def _prepare_reassign(
     session: Session, project_id: UUID, command: DecisionWrite
 ) -> tuple[dict[str, dict | None], dict[str, dict | None]]:
     """Зафиксировать все существующие связи диапазона до атомарного переназначения."""
-    if command.binding_id or command.evidence_id:
-        source = _require_binding(session, project_id, command)
-        fragment_ids = [source.fragment_id]
-        decision_keys = [("reject_link", f"{source.program_node_id}:{source.fragment_id}")]
+    if _has_link_target(command):
+        sources = _require_bindings(session, project_id, command)
+        fragment_ids = [source.fragment_id for source in sources]
+        decision_keys = [
+            ("reject_link", f"{source.program_node_id}:{source.fragment_id}")
+            for source in sources
+        ]
     elif command.block_id:
         fragment_ids = [
             item.id for item in _block_fragments(session, project_id, command.block_id)
@@ -929,8 +963,36 @@ def _apply_command(
         )
         return {}, before_decisions, touched, decision_keys, message
 
-    binding = _require_binding(session, project_id, command)
-    key_by_action = {
+    bindings = _require_bindings(session, project_id, command)
+    if command.action in {"prefer", "clear_prefer"}:
+        # «Читать первой» — одна опора темы; кусок узнаётся по своей первой связи.
+        bindings = bindings[:1]
+    decision_keys = list(dict.fromkeys(_link_key(command.action, row) for row in bindings))
+    before_bindings = {str(row.id): _binding_snapshot(row) for row in bindings}
+    before_decisions = _snapshots_for_keys(session, project_id, decision_keys)
+    touched: list[Binding] = []
+    message = ""
+    for row in bindings:
+        changed, _, message = _apply_link_action(session, project_id, command, row)
+        touched += changed
+    if len(bindings) > 1:
+        message = PASSAGE_MESSAGES.get(command.action, message)
+    return before_bindings, before_decisions, touched, decision_keys, message
+
+
+PASSAGE_MESSAGES = {
+    "confirm": "Кусок подтверждён.",
+    "remove": "Кусок снят с темы.",
+    "restore": "Кусок снова привязан к теме.",
+    "change_role": "Роль куска изменена.",
+    "hide": "Кусок скрыт из рекомендаций.",
+    "show": "Кусок снова виден.",
+}
+
+
+def _link_key(action: str, binding: Binding) -> tuple[str, str]:
+    """Ключ долговечного решения, которое пишет действие над одной связью."""
+    return {
         "confirm": ("confirm_link", str(binding.id)),
         "remove": ("reject_link", f"{binding.program_node_id}:{binding.fragment_id}"),
         "restore": ("reject_link", f"{binding.program_node_id}:{binding.fragment_id}"),
@@ -939,20 +1001,7 @@ def _apply_command(
         "show": ("hide_evidence", str(binding.id)),
         "prefer": ("prefer_reading", str(binding.program_node_id)),
         "clear_prefer": ("prefer_reading", str(binding.program_node_id)),
-    }
-    decision_keys = [key_by_action[command.action]]
-    before_binding = _binding_snapshot(binding)
-    before_decisions = _snapshots_for_keys(session, project_id, decision_keys)
-    touched, decision_keys, message = _apply_link_action(
-        session, project_id, command, binding
-    )
-    return (
-        {str(binding.id): before_binding},
-        before_decisions,
-        touched,
-        decision_keys,
-        message,
-    )
+    }[action]
 
 
 def apply_decision(session: Session, project_id: UUID, command: DecisionWrite) -> dict:

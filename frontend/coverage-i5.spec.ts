@@ -52,14 +52,16 @@ const overview = {
   sources: [{
     id: MATERIAL, name: "Таненбаум.pdf", revision: 1, total: 3, distribution,
     diagnostics: {}, known_limits: [], in_latest_run: true,
+    researched_at: "2026-09-19T00:00:00Z", run_state: null,
   }],
 };
 
 function summary(id: string, binding: string, fragment: string, quote: string, page: number) {
   return {
-    id, binding_id: binding, topic_id: TOPIC, material_id: MATERIAL,
-    material_name: "Таненбаум.pdf", page_from: page, page_to: page,
-    fragment_ids: [fragment], quote, description: "Связное объяснение из основного источника.",
+    id, binding_id: binding, binding_ids: [binding], member_ids: [id], topic_id: TOPIC,
+    material_id: MATERIAL, material_name: "Таненбаум.pdf", title: null, page_from: page, page_to: page,
+    from_fragment_id: fragment, to_fragment_id: fragment, fragment_ids: [fragment], fragment_count: 1,
+    quote, description: "",
     roles: ["explanation"], semantic_kind: "content", status: "machine",
     mechanism: "coverage", quality: "native", available: true, stale: false,
     hidden: false, preferred: id === EVIDENCE_A, legacy: false,
@@ -158,7 +160,7 @@ async function stub(page: Page): Promise<StubState> {
   return state;
 }
 
-test("чтение сохраняет контекст, поиск остаётся ручным, точный диапазон попадает в урок", async ({ page }) => {
+test("чтение сохраняет контекст, поиск остаётся ручным, кусок попадает в урок", async ({ page }) => {
   const state = await stub(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${BASE}/projects/${PROJECT}/coverage?view=reading`);
@@ -177,7 +179,7 @@ test("чтение сохраняет контекст, поиск остаёт�
   await page.getByRole("tab", { name: "Вместе" }).click();
   await page.getByRole("button", { name: "Добавить в урок" }).click();
 
-  const dialog = page.getByRole("dialog", { name: "Добавить точный диапазон в урок" });
+  const dialog = page.getByRole("dialog", { name: "Добавить кусок в урок" });
   await expect(dialog).toContainText("Новый ручной черновик");
   await dialog.getByRole("button", { name: "Добавить в урок" }).click();
   await expect.poll(() => state.inserted).not.toBeNull();
@@ -185,7 +187,7 @@ test("чтение сохраняет контекст, поиск остаёт�
     operation: "add_fragments", from_fragment_id: FRAGMENT_B,
     to_fragment_id: FRAGMENT_B, program_node_id: TOPIC,
   });
-  await expect(page.getByRole("status")).toContainText("Материал добавлен в урок");
+  await expect(page.getByRole("status")).toContainText("Кусок добавлен в урок");
 
   await page.screenshot({ path: "output/coverage-i5-workspace-light-1440.png", fullPage: true });
 

@@ -3,10 +3,27 @@ import {
   getEvidence,
   getTopicEvidence,
   type EvidenceDetail,
+  type EvidenceSummary,
   type TopicEvidence,
 } from "../api/coverage";
 
-/** Опоры темы и постоянный выбор: обновление данных не вырывает открытый текст. */
+const GROUP_KEYS = ["starter", "explanations", "practice", "depth", "mentions", "hidden", "legacy"] as const;
+
+/** Все куски темы в порядке групп: основные, затем упоминания, скрытые и прежние. */
+export function evidenceItems(groups: TopicEvidence | null): EvidenceSummary[] {
+  return groups ? GROUP_KEYS.flatMap((key) => groups[key]) : [];
+}
+
+/**
+ * Адрес куска по адресу любой его опоры. Ссылка из Обзора, URL и `best_evidence_id`
+ * списка тем несут адрес отдельной опоры, а список отдаёт куски.
+ */
+function passageId(groups: TopicEvidence, id: string | null): string | null {
+  if (!id) return null;
+  return evidenceItems(groups).find((item) => item.id === id || item.member_ids.includes(id))?.id ?? null;
+}
+
+/** Куски темы и постоянный выбор: обновление данных не вырывает открытый текст. */
 export function useTopicEvidence(
   projectId: string,
   topicId: string | null,
@@ -35,12 +52,7 @@ export function useTopicEvidence(
     }
     setGroups(next);
     setUpdateAvailable(false);
-    const current = selectedRef.current;
-    const allIds = Object.values(next)
-      .filter(Array.isArray)
-      .flatMap((value) => value as Array<{ id: string }>)
-      .map((item) => item.id);
-    setSelectedId(current && allIds.includes(current) ? current : next.best_evidence_id);
+    setSelectedId(passageId(next, selectedRef.current) ?? next.best_evidence_id);
   }, [groups, projectId, topicId]);
 
   useEffect(() => {

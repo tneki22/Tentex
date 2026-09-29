@@ -462,6 +462,14 @@ def overview(session, project_id):
                 "known_limits": _known_extraction_limits(material),
                 # Источник проекта и область последнего запуска — разные вещи.
                 "in_latest_run": str(material.id) in latest_scope,
+                # «Материалы» показывают, исследован ли файл: без даты и состояния
+                # запуска Игошин на «Мат логике» выглядел исследованным, не будучи им.
+                "researched_at": _researched_at(runs, str(material.id)),
+                "run_state": (
+                    latest_job.state.value
+                    if latest_job and str(material.id) in latest_scope
+                    else None
+                ),
             }
         )
     return {
@@ -508,6 +516,19 @@ def overview(session, project_id):
         "latest_run_state": latest_job.state if latest_job else None,
         "sources": source_rows,
     }
+
+
+def _researched_at(runs, material_id: str):
+    """Когда закончился последний запуск, в область которого входил источник."""
+    return next(
+        (
+            run.finished_at
+            for run in runs
+            if run.finished_at
+            and any(source["id"] == material_id for source in run.snapshot["sources"])
+        ),
+        None,
+    )
 
 
 # Сколько названий тем экран показывает под числом, не превращаясь в список программы.

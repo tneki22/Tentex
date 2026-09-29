@@ -1,15 +1,21 @@
 import { useEffect, useState } from "react";
-import type { EvidenceDetail } from "../../api/coverage";
+import type { EvidenceSummary } from "../../api/coverage";
 import { getMaterialPage, materialFragmentAssetUrl, type MaterialPageRead } from "../../api/materials";
 import { ErrorState, LoadingState } from "../ui";
 import { StructuredPage } from "./material-viewer";
 
 interface EvidenceStructuredReaderProps {
   projectId: string;
-  evidence: EvidenceDetail;
+  evidence: Pick<EvidenceSummary, "id" | "material_id" | "page_from" | "page_to" | "from_fragment_id" | "to_fragment_id">;
 }
 
-/** Связный диапазон опоры тем же рендерером, что и просмотрщик материала. */
+const PAGE_NUMBER = /^\s*\d{1,4}\s*$/;
+
+/**
+ * Кусок целиком тем же рендерером, что и просмотрщик материала: от заголовка до
+ * последней опоры, с рисунками и несвязанными строками между опорами. Раньше здесь
+ * оставался один выбранный фрагмент, и читатель видел одну строку без контекста.
+ */
 export function EvidenceStructuredReader({ projectId, evidence }: EvidenceStructuredReaderProps) {
   const [pages, setPages] = useState<MaterialPageRead[] | null>(null);
   const [error, setError] = useState("");
@@ -36,15 +42,20 @@ export function EvidenceStructuredReader({ projectId, evidence }: EvidenceStruct
   }, [projectId, evidence.id, evidence.material_id, evidence.page_from, evidence.page_to]);
 
   if (error) return <ErrorState message={error} />;
-  if (!pages) return <LoadingState label="Загружаем страницы опоры" />;
-  const selected = new Set(evidence.fragment_ids);
-  return <div className="evidence-structured-reader">{pages.map((page) => (
-    <StructuredPage
-      key={page.id}
-      page={{ ...page, fragments: page.fragments.filter((fragment) => selected.has(fragment.id)) }}
-      focusedFragmentId={evidence.fragment_ids[0]}
-      showOcrReview={false}
-      assetUrl={(fragmentId) => materialFragmentAssetUrl(projectId, evidence.material_id, fragmentId)}
-    />
-  ))}</div>;
+  if (!pages) return <LoadingState label="Загружаем текст куска" />;
+  const ordered = pages.flatMap((page) => page.fragments.map((fragment) => fragment.id));
+  const start = Math.max(0, ordered.indexOf(evidence.from_fragment_id));
+  const endIndex = ordered.indexOf(evidence.to_fragment_id);
+  const inside = new Set(ordered.slice(start, endIndex < 0 ? undefined : endIndex + 1));
+  return <div className="evidence-structured-reader">{pages.map((page) => {
+    const fragments = page.fragments.filter((fragment) => inside.has(fragment.id) && !PAGE_NUMBER.test(fragment.text));
+    return fragments.length > 0 && (
+      <StructuredPage
+        key={page.id}
+        page={{ ...page, fragments }}
+        showOcrReview={false}
+        assetUrl={(fragmentId) => materialFragmentAssetUrl(projectId, evidence.material_id, fragmentId)}
+      />
+    );
+  })}</div>;
 }

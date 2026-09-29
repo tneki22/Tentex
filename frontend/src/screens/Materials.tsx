@@ -63,6 +63,8 @@ import {
   ResearchLaunchDialog,
 } from "../components/domain";
 import { usePendingReviewJob } from "../hooks/usePendingReviewJob";
+import { useResearchStatus } from "../hooks/useResearchStatus";
+import { RESEARCH_ACTION_LABEL, type ResearchState } from "../components/domain/researchStatus";
 import { AnswersAiPlanDialog } from "./answers/AnswersAiPlanDialog";
 import {
   Button,
@@ -273,12 +275,18 @@ function MaterialOverview({
   onChooseLibrary,
   onFindOnline,
   onResearch,
+  onResearchProgress,
+  research,
   webSearch,
   menu,
   onReorder,
 }: {
   materials: MaterialRead[];
   textbook: boolean;
+  /** Исследован ли материал: строка под кнопкой «Исследовать». */
+  research: Map<string, ResearchState>;
+  /** Идущее исследование смотрят в Покрытии: второй запуск туда не нужен. */
+  onResearchProgress: () => void;
   menu: MaterialMenuActions;
   /** Новый порядок строк сверху вниз — он и есть приоритет источников. */
   onReorder: (materialIds: string[]) => void;
@@ -389,7 +397,13 @@ function MaterialOverview({
                       </span>
                       <span>{topicsLabel(material.used_by_topics)}</span>
                       <StatusBadge tone={STATUS[material.status].tone}>{STATUS[material.status].label}{progressSuffix(material)}</StatusBadge>
-                      <span>{textbook && material.status === "ready" ? <Button variant="ghost" onClick={() => onResearch(material.id)}><ScanSearch size={14} />Исследовать</Button> : "—"}</span>
+                      {textbook && material.status === "ready"
+                        ? <ResearchCell
+                          state={research.get(material.id)}
+                          onResearch={() => onResearch(material.id)}
+                          onProgress={onResearchProgress}
+                        />
+                        : <span>—</span>}
                     </div>}
                   />
                 );
@@ -400,6 +414,31 @@ function MaterialOverview({
         </div>
       </div>
     </div>
+  );
+}
+
+/** Кнопка исследования и под ней — исследован ли файл и нужно ли повторить. */
+function ResearchCell({
+  state,
+  onResearch,
+  onProgress,
+}: {
+  state: ResearchState | undefined;
+  onResearch: () => void;
+  onProgress: () => void;
+}) {
+  const action = state?.action ?? "research";
+  return (
+    <span className="materials-research-cell">
+      <Button variant="ghost" onClick={action === "progress" ? onProgress : onResearch}>
+        <ScanSearch size={14} />{RESEARCH_ACTION_LABEL[action]}
+      </Button>
+      {state && (
+        <small className={`materials-research-state is-${state.tone}`}>
+          {state.label}{state.detail && <span> · {state.detail}</span>}
+        </small>
+      )}
+    </span>
   );
 }
 
@@ -1380,6 +1419,12 @@ function MaterialSurface() {
   const overlayOutline = outlineAvailable && documentWidth < INLINE_OUTLINE_MIN_WIDTH && overlayOutlineOpen;
   const showOutline = inlineOutline || overlayOutline;
   const textbook = project?.project.workspace_variant === "textbook";
+  // Новая версия текста делает прежнее исследование устаревшим: состояние перечитывается.
+  const research = useResearchStatus(
+    projectId,
+    Boolean(textbook) && !material,
+    store.materials.map((item) => `${item.id}:${item.status}`).join(","),
+  );
   // Вопросы и ответы бывают только в учебниковом шаблоне; экзамен и свободное
   // изучение держат одни учебные источники (решение 27.09.2026 в SCREENS.md).
   const allowExamPurposes = project?.project.template_key === "textbook";
@@ -2119,6 +2164,8 @@ function MaterialSurface() {
             onChooseLibrary={() => setLibraryOpen(true)}
             onFindOnline={() => webSearch.current?.reveal()}
             onResearch={(id) => { setResearchMaterialIds([id]); setResearchOpen(true); }}
+            onResearchProgress={() => navigate(`/projects/${projectId}/coverage`)}
+            research={research}
             menu={menuActions}
             onReorder={(ids) => void store.reorder(ids)}
             webSearch={project ? (

@@ -1,11 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { BookPlus } from "lucide-react";
 import { decideCoverage, type CoverageDecisionAction, type EvidenceSummary } from "../../api/coverage";
 import type { LessonBlockCommand, LessonBlockRead } from "../../api/lessons";
-import { EvidenceCard } from "../../components/domain/EvidenceCard";
 import { EvidenceInspector } from "../../components/domain/EvidenceInspector";
-import { EmptyState, StatusBadge } from "../../components/ui";
+import { EvidencePassageList, inReadingOrder, primaryPassages } from "../../components/domain/EvidencePassageList";
+import { placedInLesson } from "../../components/domain/LessonEvidenceDialog";
+import { Button, EmptyState, StatusBadge } from "../../components/ui";
 import { useTopicEvidence } from "../../hooks/useTopicEvidence";
 import type { ProgramTreeNode } from "../programTree";
+
+type AddCommand = Omit<LessonBlockCommand, "expected_revision">;
 
 interface LessonSuggestedTabProps {
   projectId: string;
@@ -13,21 +17,25 @@ interface LessonSuggestedTabProps {
   lessonId: string | null;
   blocks: LessonBlockRead[];
   busy: boolean;
-  onAdd(command: Omit<LessonBlockCommand, "expected_revision">): Promise<boolean>;
+  onAdd(command: AddCommand): Promise<boolean>;
+  /** Несколько кусков подряд: следующий встаёт за предыдущим. */
+  onAddMany(commands: AddCommand[]): Promise<boolean>;
 }
 
-function inclusion(evidence: EvidenceSummary, blocks: LessonBlockRead[]): "exact" | "overlap" | null {
-  const refs = blocks.flatMap((block) => block.refs)
-    .filter((ref) => ref.material_id === evidence.material_id);
-  if (refs.some((ref) => ref.from_fragment_id === evidence.fragment_ids[0]
-    && ref.to_fragment_id === evidence.fragment_ids.at(-1))) return "exact";
-  if (refs.some((ref) => ref.page_from <= evidence.page_to && ref.page_to >= evidence.page_from)) {
-    return "overlap";
-  }
-  return null;
+function addCommand(item: EvidenceSummary, topicId: string): AddCommand {
+  return {
+    operation: "add_fragments",
+    material_id: item.material_id,
+    from_fragment_id: item.from_fragment_id,
+    to_fragment_id: item.to_fragment_id,
+    program_node_id: topicId,
+  };
 }
 
-/** Предложенное проходом 2 остаётся ручным выбором с точным местом вставки панели. */
+/**
+ * Предложенное исследованием — куски темы, которые вставляются целиком в выбранное
+ * место урока; отмеченные встают подряд в порядке книги.
+ */
 export function LessonSuggestedTab({
   projectId,
   topic,
@@ -35,15 +43,16 @@ export function LessonSuggestedTab({
   blocks,
   busy,
   onAdd,
+  onAddMany,
 }: LessonSuggestedTabProps) {
   const evidence = useTopicEvidence(projectId, topic.id);
   const [decisionBusy, setDecisionBusy] = useState(false);
-  const items = evidence.groups ? [
-    ...evidence.groups.starter,
-    ...evidence.groups.explanations,
-    ...evidence.groups.practice,
-    ...evidence.groups.depth,
-  ] : [];
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const items = primaryPassages(evidence.groups);
+  const refs = blocks.flatMap((block) => block.refs);
+  const placed = (item: EvidenceSummary) => placedInLesson(item, refs);
+
+  useEffect(() => setChecked(new Set()), [topic.id]);
 
   async function decide(action: CoverageDecisionAction, role?: "definition" | "explanation" | "example") {
     if (!evidence.evidence || !evidence.groups) return;
@@ -53,7 +62,7 @@ export function LessonSuggestedTab({
         request_key: crypto.randomUUID(),
         expected_coverage_revision: evidence.groups.coverage_revision,
         action,
-        binding_id: evidence.evidence.binding_id,
+        binding_ids: evidence.evidence.binding_ids,
         role,
       });
       await evidence.refresh();
@@ -62,41 +71,61 @@ export function LessonSuggestedTab({
     }
   }
 
-  function addSelected() {
-    const selected = evidence.evidence;
-    if (!selected) return;
-    void onAdd({
-      operation: "add_fragments",
-      material_id: selected.material_id,
-      from_fragment_id: selected.fragment_ids[0],
-      to_fragment_id: selected.fragment_ids.at(-1),
-      program_node_id: topic.id,
+  async function addChecked() {
+    const chosen = inReadingOrder(items.filter((item) => checked.has(item.id) && placed(item) !== "exact"), items);
+    if (chosen.length === 0) return;
+    if (await onAddMany(chosen.map((item) => addCommand(item, topic.id)))) setChecked(new Set());
+  }
+
+  function toggle(item: EvidenceSummary, value: boolean) {
+    setChecked((current) => {
+      const next = new Set(current);
+      if (value) next.add(item.id);
+      else next.delete(item.id);
+      return next;
     });
   }
 
-  if (!evidence.loading && items.length === 0) return <EmptyState title="Для темы нет предложений"><p>Проход 2 ещё не нашёл актуального содержания для этой темы.</p></EmptyState>;
+  if (!evidence.loading && evidence.groups && items.length === 0) {
+    return <EmptyState title="Для темы нет предложений"><p>Исследование материалов ещё не нашло текста по этой теме.</p></EmptyState>;
+  }
 
+  const selected = evidence.evidence;
   return <div className="lesson-suggested">
     <div className="lesson-suggested-list">
-      {lessonId
-        ? <p>Тема куска: <strong>{topic.title}</strong></p>
-        : <p>Предложения можно просмотреть сейчас, а вставить — после создания урока.</p>}
-      {items.map((item) => {
-        const state = inclusion(item, blocks);
-        return <div className="lesson-suggested-item" key={item.id}>
-          <EvidenceCard evidence={item} selected={evidence.selectedId === item.id} onSelect={() => evidence.select(item.id)} />
-          {state && <span className="lesson-suggested-state"><StatusBadge tone={state === "exact" ? "success" : "warning"}>{state === "exact" ? "уже в уроке" : "пересекается"}</StatusBadge></span>}
-        </div>;
-      })}
+      <div className="evidence-selection-bar">
+        {checked.size > 0
+          ? <>
+            <span>Выбрано: {checked.size}</span>
+            <Button variant="ghost" onClick={() => setChecked(new Set())}>Снять</Button>
+            <Button disabled={!lessonId || busy} onClick={() => void addChecked()}><BookPlus size={14} />В урок</Button>
+          </>
+          : <>
+            <span>{lessonId ? <>Тема: <strong>{topic.title}</strong></> : "Вставить можно после создания урока."}</span>
+            {items.length > 1 && <Button variant="ghost" onClick={() => setChecked(new Set(items.filter((item) => placed(item) !== "exact").map((item) => item.id)))}>Выбрать все</Button>}
+          </>}
+      </div>
+      {evidence.groups && <EvidencePassageList
+        groups={evidence.groups}
+        selectedId={evidence.selectedId}
+        onSelect={(item) => evidence.select(item.id)}
+        checkedIds={checked}
+        onCheckedChange={lessonId ? toggle : undefined}
+        badge={(item) => {
+          const state = placed(item);
+          return state && <StatusBadge tone={state === "exact" ? "success" : "warning"}>{state === "exact" ? "уже в уроке" : "те же страницы"}</StatusBadge>;
+        }}
+      />}
     </div>
     <EvidenceInspector
-      evidence={evidence.evidence}
+      evidence={selected}
+      projectId={projectId}
       loading={evidence.loading}
       error={evidence.error}
       busy={busy || decisionBusy}
       onDecision={(action, role) => void decide(action, role)}
-      onAddToLesson={lessonId && evidence.evidence && inclusion(evidence.evidence, blocks) !== "exact"
-        ? addSelected
+      onAddToLesson={lessonId && selected && placed(selected) !== "exact"
+        ? () => void onAdd(addCommand(selected, topic.id))
         : undefined}
     />
   </div>;

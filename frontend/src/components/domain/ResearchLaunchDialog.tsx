@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { BookOpen, CircleDollarSign, Layers3, RefreshCw } from "lucide-react";
 import {
+  getCoverageOverview,
   preflightCoverage,
   startCoverage,
+  type CoverageOverview,
   type CoveragePlan,
   type CoveragePreflight,
   type CoverageRun,
@@ -11,6 +13,7 @@ import { listMaterials, type MaterialRead } from "../../api/materials";
 import { getProject } from "../../api/projects";
 import { Button, Checkbox, Dialog, Field, LoadingState, StatusBadge } from "../ui";
 import { OfflineNotice } from "./OfflineNotice";
+import { researchState, type ResearchState } from "./researchStatus";
 
 interface ResearchLaunchDialogProps {
   open: boolean;
@@ -24,6 +27,12 @@ interface ResearchLaunchDialogProps {
   ) => Promise<{ programRevision: number; materials: MaterialRead[] }>;
   preflightRequest?: typeof preflightCoverage;
   startRequest?: typeof startCoverage;
+  /** Сводка покрытия для подписи «исследован»; без неё диалог работает как прежде. */
+  loadResearch?: (projectId: string, signal: AbortSignal) => Promise<CoverageOverview | null>;
+}
+
+function loadDefaultResearch(projectId: string, signal: AbortSignal) {
+  return getCoverageOverview(projectId, signal).catch(() => null);
 }
 
 /** Предел расхода выбирает человек: молча тратить деньги на обзор книги нельзя. */
@@ -54,6 +63,7 @@ export function ResearchLaunchDialog({
   loadContext = loadDefaultContext,
   preflightRequest = preflightCoverage,
   startRequest = startCoverage,
+  loadResearch = loadDefaultResearch,
 }: ResearchLaunchDialogProps) {
   const [materials, setMaterials] = useState<MaterialRead[]>([]);
   const [programRevision, setProgramRevision] = useState(0);
@@ -64,20 +74,30 @@ export function ResearchLaunchDialog({
   const [error, setError] = useState("");
   const [requestKey, setRequestKey] = useState(() => crypto.randomUUID());
   const [costLimit, setCostLimit] = useState(DEFAULT_COST_USD);
+  const [states, setStates] = useState<Map<string, ResearchState>>(new Map());
 
   useEffect(() => {
     if (!open || !projectId) return;
     const controller = new AbortController();
     setLoading(true);
     setError("");
-    loadContext(projectId, controller.signal)
-      .then(({ programRevision: revision, materials: sourceRows }) => {
+    Promise.all([loadContext(projectId, controller.signal), loadResearch(projectId, controller.signal)])
+      .then(([{ programRevision: revision, materials: sourceRows }, overview]) => {
         if (controller.signal.aborted) return;
         const ready = sourceRows.filter((item) => item.status === "ready");
+        const known = new Map<string, ResearchState>();
+        for (const source of overview?.sources ?? []) {
+          const state = researchState(source);
+          if (state) known.set(source.id, state);
+        }
+        setStates(known);
         setMaterials(sourceRows);
         setProgramRevision(revision);
         const requested = initialMaterialIds?.filter((id) => ready.some((item) => item.id === id));
-        setSelected(requested?.length ? requested : ready.map((item) => item.id));
+        // Повторный обзор читает все блоки заново, поэтому по умолчанию выбрано то,
+        // что ещё не исследовано; если исследовано всё — всё.
+        const unexplored = ready.filter((item) => known.get(item.id)?.needed ?? true);
+        setSelected(requested?.length ? requested : (unexplored.length ? unexplored : ready).map((item) => item.id));
         setRequestKey(crypto.randomUUID());
       })
       .catch((caught) => {
@@ -89,7 +109,7 @@ export function ResearchLaunchDialog({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [open, projectId, initialMaterialIds?.join(","), loadContext]);
+  }, [open, projectId, initialMaterialIds?.join(","), loadContext, loadResearch]);
 
   const cost = Number(costLimit.replace(",", "."));
   const costValid = costLimit.trim() === "" || (Number.isFinite(cost) && cost > 0);
@@ -151,6 +171,7 @@ export function ResearchLaunchDialog({
   }
 
   const unavailable = materials.filter((item) => item.status !== "ready");
+  const repeated = selected.filter((id) => states.get(id)?.researched);
   const model = preflight?.model_roles.overview;
   const researchModel = preflight?.model_roles.research;
 
@@ -180,10 +201,12 @@ export function ResearchLaunchDialog({
                   label={material.display_name}
                 />
                 <StatusBadge tone="neutral">{ROLE_LABEL[material.source_role]}</StatusBadge>
+                {states.get(material.id) && <small className={`materials-research-state is-${states.get(material.id)?.tone}`}>{states.get(material.id)?.label}</small>}
               </div>
             ))}
           </div>
           {unavailable.length > 0 && <p className="research-launch-note">Не готовы и не войдут автоматически: {unavailable.map((item) => item.display_name).join(", ")}.</p>}
+          {repeated.length > 0 && <p className="research-launch-note is-warning">Уже исследованное будет прочитано заново целиком: {materials.filter((item) => repeated.includes(item.id)).map((item) => item.display_name).join(", ")}. Повторный обзор не пропускает готовые блоки и снова тратит вызовы модели.</p>}
         </section>
 
         <section className="research-launch-facts">
