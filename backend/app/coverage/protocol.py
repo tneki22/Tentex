@@ -10,6 +10,7 @@ from app.ai.schemas import AiMessage, AiModelSelection
 from app.coverage.budget import ResearchBudget
 from app.coverage.packets import estimate_tokens
 from app.coverage.schemas import OverviewPacketResponse
+from app.coverage.snapshots import topic_nodes
 from app.coverage.validation import normalize_title
 
 # Модель пишет диапазон любым тире: дефисом, en dash или em dash.
@@ -101,17 +102,6 @@ def prompt_overhead_tokens(program: list[dict]) -> int:
         OverviewPacketResponse.model_json_schema(), ensure_ascii=False
     )
     return estimate_tokens(SYSTEM_RULES) + estimate_tokens(payload)
-
-
-def topic_nodes(program: list[dict]) -> list[dict]:
-    """Темы программы в одном порядке для prompt, оценки и aliases."""
-    return [
-        node
-        for node in program
-        if node["is_in_current_program"]
-        and not node["is_archived"]
-        and node["node_type"] != "section"
-    ]
 
 
 class CoverageOverviewExecutor:

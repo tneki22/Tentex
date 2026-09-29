@@ -14,10 +14,9 @@ from app.coverage.protocol import (
     CoverageOverviewExecutor,
     PacketExecution,
     expand_compact_response,
-    topic_nodes,
 )
 from app.coverage.publication import publish_decision
-from app.coverage.snapshots import block_units, fingerprint, snapshot_current
+from app.coverage.snapshots import block_units, fingerprint, snapshot_current, topic_nodes
 from app.coverage.validation import CheckedDecision, Unit, validate_target
 from app.db import job_write_transaction
 from app.materials.page_numbers import is_page_number

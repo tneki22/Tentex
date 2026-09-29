@@ -104,6 +104,7 @@ def _binding_summaries(session: Session, project_id: UUID) -> list[Binding]:
                 load_only(
                     Binding.id,
                     Binding.program_node_id,
+                    Binding.material_id,
                     Binding.status,
                     Binding.roles,
                     Binding.semantic_kind,

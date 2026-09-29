@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.coverage.budget import budget_usage
 from app.coverage.lifecycle import require_run
-from app.coverage.snapshots import require_project, snapshot_current, snapshots_current
+from app.coverage.snapshots import require_project, runs_currency, snapshot_current
 from app.materials.naming import material_display_name
 from app.models import (
     BackgroundJob,
@@ -118,39 +118,37 @@ def _current_runs(session, project_id):
             .order_by(CoverageRun.created_at.desc())
         )
     )
-    return runs, snapshots_current(session, runs)
+    return runs, runs_currency(session, runs)
 
 
-def binding_fresh(binding, current, task_runs):
-    """Позиционный перенос не делает старое evidence новым, даже при прежнем Binding ID."""
+def binding_state(binding, currency, task_runs) -> tuple[bool, bool]:
+    """Связь «жива» и «актуальна» по правилу запуска, который её опубликовал (шаг 7.1).
+
+    Жива — разбор её источника не менялся, и блоку есть на что опираться. Актуальна —
+    вдобавок её тема на месте под прежним названием, а решение человека (ручная и
+    подтверждённая связь) от переименования темы не устаревает. Связь к переименованной
+    теме читается как устаревшая, но исход её блока учитывает и её: блок устаревает,
+    только когда так ушли все его содержательные связи. Позиционный перенос не делает
+    старое evidence новым, даже при прежнем Binding ID.
+    """
     ref = binding.evidence_ref
     if not ref:
-        return binding.status in {BindingStatus.MANUAL, BindingStatus.CONFIRMED}
+        manual = binding.status in {BindingStatus.MANUAL, BindingStatus.CONFIRMED}
+        return manual, manual
     try:
         task_id = UUID(ref["task_id"])
     except (KeyError, TypeError, ValueError):
-        return False
-    run_id = task_runs.get(task_id)
+        return False, False
+    run = currency.get(task_runs.get(task_id))
     # Активная PASS_TWO-связь появляется только после applied receipt. Повторная
     # проверка того же receipt декодировала тяжёлый JSON задачи при каждом открытии.
-    return bool(run_id and current.get(run_id, False) and not ref.get("retired_reason"))
+    alive = bool(run and run.alive(binding.material_id) and not ref.get("retired_reason"))
+    human = binding.status in {BindingStatus.MANUAL, BindingStatus.CONFIRMED}
+    return alive, alive and (human or str(binding.program_node_id) not in run.stale_topics)
 
 
-def fresh_binding_ids(session, project_id, bindings=None, current=None) -> set[UUID]:
-    """Проверить актуальность пачкой, не перечитывая JSON одной задачи для каждой связи."""
-    if current is None:
-        _, current = _current_runs(session, project_id)
-    if bindings is None:
-        bindings = list(
-            session.scalars(
-                select(Binding).where(
-                    Binding.project_id == project_id,
-                    Binding.status.in_(
-                        [BindingStatus.MANUAL, BindingStatus.CONFIRMED, BindingStatus.MACHINE]
-                    ),
-                )
-            )
-        )
+def binding_currency(session, bindings, currency) -> tuple[set[UUID], set[UUID]]:
+    """Живые и актуальные связи пачкой, не перечитывая JSON одной задачи для каждой."""
     task_ids = set()
     for binding in bindings:
         ref = binding.evidence_ref or {}
@@ -170,11 +168,32 @@ def fresh_binding_ids(session, project_id, bindings=None, current=None) -> set[U
         if task_ids
         else {}
     )
-    return {
-        binding.id
-        for binding in bindings
-        if binding_fresh(binding, current, task_runs)
-    }
+    alive, fresh = set(), set()
+    for binding in bindings:
+        is_alive, is_fresh = binding_state(binding, currency, task_runs)
+        if is_alive:
+            alive.add(binding.id)
+        if is_fresh:
+            fresh.add(binding.id)
+    return alive, fresh
+
+
+def fresh_binding_ids(session, project_id, bindings=None, currency=None) -> set[UUID]:
+    """Актуальные связи проекта: их можно читать, считать покрытием и вставлять в урок."""
+    if currency is None:
+        _, currency = _current_runs(session, project_id)
+    if bindings is None:
+        bindings = list(
+            session.scalars(
+                select(Binding).where(
+                    Binding.project_id == project_id,
+                    Binding.status.in_(
+                        [BindingStatus.MANUAL, BindingStatus.CONFIRMED, BindingStatus.MACHINE]
+                    ),
+                )
+            )
+        )
+    return binding_currency(session, bindings, currency)[1]
 
 
 def _active_blocks(session, project_id):
@@ -256,9 +275,10 @@ def _select_results(session, project_id, runs, current, active_block_ids):
                 previous.work_state != "inspected" and row.work_state == "inspected"
             ):
                 latest[row.block_id] = row
-            if row.work_state == "inspected" and not current[run.id]:
+            alive = current[run.id].alive(row.material_id)
+            if row.work_state == "inspected" and not alive:
                 reviewed.add(row.material_id)
-            if current[run.id] and row.publication_state == "applied":
+            if alive and row.publication_state == "applied":
                 selected.setdefault(row.block_id, row)
         remaining.difference_update(selected)
         if not remaining:
@@ -286,7 +306,7 @@ def _unfinished_bucket(block, previous, current, reviewed):
     """
     if previous is None:
         return "stale" if block.material_id in reviewed else "pending"
-    if not current[previous.run_id]:
+    if not current[previous.run_id].alive(block.material_id):
         return "stale" if previous.work_state == "inspected" else "pending"
     return "unresolved" if previous.work_state == "inspected" else previous.work_state
 
@@ -327,11 +347,14 @@ def current_map(session, project_id, run_state=None):
         )
     )
     bindings = [*machine_bindings, *manual_bindings]
-    fresh_ids = fresh_binding_ids(session, project_id, bindings, current)
+    alive_ids, fresh_ids = binding_currency(session, bindings, current)
     fresh = [binding for binding in bindings if binding.id in fresh_ids]
-    fresh_by_block = defaultdict(list)
-    for binding in fresh:
-        fresh_by_block[binding.block_id].append(binding)
+    # Исход блока опирается на все живые связи, в том числе к переименованной теме:
+    # запуск разобрал блок, и устаревает он лишь тогда, когда ушли все его связи.
+    alive_by_block = defaultdict(list)
+    for binding in bindings:
+        if binding.id in alive_ids:
+            alive_by_block[binding.block_id].append(binding)
     material_names = {
         material_id: display_name or original_name
         for material_id, display_name, original_name in session.execute(
@@ -356,8 +379,9 @@ def current_map(session, project_id, run_state=None):
     }
     for block in active_blocks:
         row = selected.get(block.id)
-        related = fresh_by_block[block.id]
+        related = alive_by_block[block.id]
         content = [b for b in related if b.semantic_kind == "content"]
+        fresh_content = [b for b in content if b.id in fresh_ids]
         manual_content = [
             binding
             for binding in content
@@ -369,6 +393,9 @@ def current_map(session, project_id, run_state=None):
             bucket = "linked"
         elif row:
             bucket = _project_outcome(row, related)
+            if bucket in {"linked", "mixed_resolved"} and content and not fresh_content:
+                # Все содержательные связи блока ушли к темам, которых больше нет.
+                bucket = "stale"
         else:
             bucket = _unfinished_bucket(block, latest.get(block.id), current, reviewed)
         result.append(
@@ -377,7 +404,7 @@ def current_map(session, project_id, run_state=None):
                 "material_id": str(block.material_id),
                 "revision": block.revision,
                 "bucket": bucket,
-                "has_content": bool(content),
+                "has_content": bool(fresh_content),
                 "result_id": str(row.id) if row else None,
                 "title": block.title,
                 "page_from": block.page_from,
@@ -637,12 +664,16 @@ def evidence_read(session, project_id, evidence_id):
             is not None
         )
     else:
-        available = session.get(MaterialFragment, UUID(ref)) is not None
+        fragment = session.get(MaterialFragment, UUID(ref))
+        available = fragment is not None
+        material_id = str(fragment.material_id) if fragment else None
+    # Опора устарела, когда сменился разбор её источника; правка программы её не трогает.
+    currency = runs_currency(session, [run])[run.id]
     return {
         "id": evidence_id,
         **evidence,
         "available": available,
-        "stale": not snapshot_current(session, run),
+        "stale": material_id is None or not currency.alive(material_id),
         "origin": decision.get("origin"),
         "applied": receipt["applied"],
     }
