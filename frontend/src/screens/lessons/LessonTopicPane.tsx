@@ -5,7 +5,7 @@ import {
   FilePlus2, Image, LibraryBig, Link2, ListChecks, Pencil, Plus, RotateCcw, Scissors, Search, Sparkles, SquareDashed, Trash2, Undo2, X,
 } from "lucide-react";
 import {
-  applyLessonProposal, confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, LESSON_TEMPLATE_LABELS, unbindLessonBindings,
+  applyLessonProposal, confirmLesson, deleteLesson, editLessonBlocks, getLessonsOverview, LESSON_STATUS_LABELS, lessonTypeLabel, unbindLessonBindings,
   updateLesson, updateLessonNote, uploadLessonImage, type LessonBlockCommand, type LessonBlockRead,
   type LessonChangeResult, type LessonProposalRead, type LessonStatus, type LessonSummaryRead, type LessonUnbindOffer,
   type LessonAiPlanRead,
@@ -414,8 +414,7 @@ export function LessonTopicPane({ projectId, topic, studyNodes, lessons, lessonI
           {topicLessons.map((item) => (
             <li key={item.id}>
               <button type="button" className={item.id === openId ? "is-active" : ""} onClick={() => onSelectLesson(item.id)}>
-                <strong>{item.title}</strong>
-                {item.build && <span className="lessons-lesson-template"><Sparkles size={12} aria-hidden="true" />{LESSON_TEMPLATE_LABELS[item.build.template]}</span>}
+                <strong>{lessonTypeLabel(item)}</strong>
                 <StatusBadge tone={STATUS_TONE[item.status]}>{LESSON_STATUS_LABELS[item.status]}</StatusBadge>
                 {item.needs_review && <StatusBadge tone="warning">Требует проверки</StatusBadge>}
                 <span>{item.duration_minutes ? `≈ ${item.duration_minutes} мин` : "длительность не оценена"}</span>

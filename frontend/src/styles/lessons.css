@@ -1690,15 +1690,6 @@
   .lesson-build-row { grid-template-columns: 1fr; }
 }
 
-/* Подпись шаблона модельного урока в списке уроков темы. */
-.lessons-lesson-template {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--accent);
-  font-size: var(--text-xs);
-}
-
 /* Откуда пояснение модели: по материалам или из её знаний (FR-L5). */
 .lesson-note-origin {
   margin: var(--space-1) 0 0;
@@ -2341,7 +2332,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
   gap: var(--space-5);
-  align-items: stretch;
+  align-items: start;
 }
 
 .lesson-export-options {
@@ -2350,7 +2341,7 @@
   min-width: 0;
 }
 
-.lesson-export-pick { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; min-height: 0; }
+.lesson-export-pick { display: grid; gap: var(--space-3); min-width: 0; }
 
 .lesson-export-tools {
   display: flex;
@@ -2361,8 +2352,7 @@
 .lesson-export-tools .workspace-tree-search { flex: 1; }
 
 .lesson-export-list {
-  height: 0;
-  flex: 1;
+  height: min(31rem, calc(100vh - 18rem));
   min-height: 16rem;
   overflow-y: auto;
   padding: var(--space-2) var(--space-3);
