@@ -164,6 +164,12 @@ async def test_transcribe_needs_configured_speech_model(
 async def test_speech_model_test_sends_silence_instead_of_a_chat_request(
     session: Session, speech_config: AiModelSelection
 ) -> None:
+    model = session.get(
+        AiModelCatalogEntry, (speech_config.provider_id, speech_config.model_id)
+    )
+    assert model is not None
+    model.output_modalities = []
+    session.commit()
     fake = FakeTransport(transcriptions=[_transcription("")])
     result = await ModelGateway(session, fake).test_model(speech_config)
 
@@ -174,18 +180,29 @@ async def test_speech_model_test_sends_silence_instead_of_a_chat_request(
     assert isinstance(request["bytes"], int) and request["bytes"] > 32_000
     run = session.get(AiRun, result.run_id)
     assert run is not None and run.role == "settings_speech_model_test"
+    session.refresh(model)
+    assert model.input_modalities == ["text", "audio"]
+    assert model.output_modalities == ["text"]
 
 
 @pytest.mark.asyncio
 async def test_speech_model_test_reports_provider_error(
     session: Session, speech_config: AiModelSelection
 ) -> None:
+    model = session.get(
+        AiModelCatalogEntry, (speech_config.provider_id, speech_config.model_id)
+    )
+    assert model is not None
+    model.output_modalities = []
+    session.commit()
     fake = FakeTransport(
         transcriptions=[ProviderError("ai_provider_unavailable", "Провайдер отклонил запрос")]
     )
     with pytest.raises(AiGatewayError) as raised:
         await ModelGateway(session, fake).test_model(speech_config)
     assert raised.value.code == "ai_provider_unavailable"
+    session.refresh(model)
+    assert model.output_modalities == []
 
 
 @pytest.mark.asyncio

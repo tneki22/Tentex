@@ -379,11 +379,20 @@ async def test_stream_records_final_usage(session: Session, ai_config: str) -> N
     assert run.actual_cost_rub == Decimal("0.180000000000")
 
 
+@pytest.mark.parametrize("initial_input", [[], ["image"]])
 @pytest.mark.asyncio
 async def test_model_test_uses_selected_provider_and_writes_safe_run(
-    session: Session, ai_config: str
+    session: Session, ai_config: str, initial_input: list[str]
 ) -> None:
     provider = session.query(AiProviderConnection).one()
+    model = session.get(AiModelCatalogEntry, (provider.id, ai_config))
+    assert model is not None
+    model.input_modalities = initial_input
+    model.output_modalities = []
+    model.manual_overrides = {
+        "input_modalities": initial_input, "output_modalities": []
+    }
+    session.commit()
     fake = FakeTransport(
         completions=[
             ProviderCompletion(
@@ -403,3 +412,8 @@ async def test_model_test_uses_selected_provider_and_writes_safe_run(
     assert run.role == "settings_model_test"
     assert run.context_manifest == []
     assert fake.complete_requests[0]["max_output_tokens"] == 1500
+    session.refresh(model)
+    assert model.input_modalities == [*initial_input, "text"]
+    assert model.output_modalities == ["text"]
+    assert model.manual_overrides["input_modalities"] == model.input_modalities
+    assert model.manual_overrides["output_modalities"] == model.output_modalities

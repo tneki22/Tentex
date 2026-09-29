@@ -223,7 +223,7 @@ function CapabilityTags({ model }: { model: AiModelRead }) {
     ...model.output_modalities.map((item) => `Выход: ${MODALITY_LABELS[item] ?? item}`),
     ...model.supported_parameters,
   ];
-  if (!tags.length) return <strong className="ai-capability-empty">Не указаны</strong>;
+  if (!tags.length) return <strong className="ai-capability-empty">Не определены</strong>;
   const visible = tags.slice(0, 2);
   const hidden = tags.length - visible.length;
 
@@ -647,6 +647,11 @@ function ModelCard({
         />
       </div>
       <TestResult result={testResult} />
+      {(!model.input_modalities.length || !model.output_modalities.length) && (
+        <p className="ai-model-warning">
+          Провайдер не указал все возможности. Для модели с текстовым ответом «Тест» проверит текст; для речевой — аудио. Остальное можно указать через «Изменить модель».
+        </p>
+      )}
       {!model.is_available && <p className="ai-model-warning">Модели нет в актуальном каталоге {provider.label}.</p>}
     </article>
   );
@@ -1007,7 +1012,7 @@ function ModelsPanel({
                 <code>{model.model_id}</code>
                 {model.is_added && <StatusBadge tone="success">Уже добавлена</StatusBadge>}
               </div>
-              <div className="ai-catalog-meta"><span>{model.context_length ? `${model.context_length.toLocaleString("ru-RU")} токенов` : "Контекст не указан"}</span><span>Вход {money(model.prompt_price_usd, true)}</span><span>Выход {money(model.completion_price_usd, true)}</span><span>Рассуждение: {reasoningLabel(model)}</span></div>
+              <div className="ai-catalog-meta"><span>{model.context_length ? `${model.context_length.toLocaleString("ru-RU")} токенов` : "Контекст не указан"}</span><span>Вход {money(model.prompt_price_usd, true)}</span><span>Выход {money(model.completion_price_usd, true)}</span><span>Рассуждение: {reasoningLabel(model)}</span>{(!model.input_modalities.length || !model.output_modalities.length) && <span>Каталог не указал возможности</span>}</div>
               <Button variant={model.is_added ? "ghost" : "secondary"} disabled={model.is_added || addingCatalogModel !== null} onClick={() => void addFromCatalog(model)}>{model.is_added ? "Добавлена" : addingCatalogModel === model.model_id ? "Добавляем…" : "Добавить"}</Button>
             </article>)}
           </div> : <div className="ai-empty-card"><strong>Ничего не найдено</strong><p>Попробуйте другое название или ID модели.</p></div>}

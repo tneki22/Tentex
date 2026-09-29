@@ -499,6 +499,7 @@ class ModelGateway:
             started,
             cache=False,
         )
+        self._record_tested_modalities(selection, "text")
         return AiModelTestRead(
             status="answered",
             run_id=run.id,
@@ -586,6 +587,7 @@ class ModelGateway:
             role="settings_speech_model_test",
             request_model_override=selection,
         )
+        self._record_tested_modalities(selection, "audio")
         return AiModelTestRead(
             status="answered",
             kind="speech",
@@ -596,6 +598,23 @@ class ModelGateway:
             input_tokens=transcription.usage.input_tokens,
             output_tokens=transcription.usage.output_tokens,
         )
+
+    def _record_tested_modalities(self, selection: AiModelSelection, input_modality: str) -> None:
+        """Успешный тест подтверждает только использованный вход и текстовый ответ."""
+        self.session.commit()
+        with job_write_transaction(self.session):
+            row = self.session.get(
+                AiModelCatalogEntry, (selection.provider_id, selection.model_id)
+            )
+            assert row is not None
+            row.input_modalities = list(dict.fromkeys([*row.input_modalities, input_modality]))
+            row.output_modalities = list(dict.fromkeys([*row.output_modalities, "text"]))
+            if "input_modalities" in row.manual_overrides:
+                row.manual_overrides = {
+                    **row.manual_overrides,
+                    "input_modalities": row.input_modalities,
+                    "output_modalities": row.output_modalities,
+                }
 
     def _catalog_model(self, resolved: ResolvedModel) -> AiModelCatalogEntry:
         row = resolved.model
