@@ -27,5 +27,5 @@ export const SCREEN_VIEWS: Record<string, ComponentType> = {
   "library-material": lazy(() => import("../screens/library/LibraryMaterialWorkspace").then((module) => ({ default: module.LibraryMaterialWorkspace }))),
   setup: lazy(() => import("../screens/Setup").then((module) => ({ default: module.Setup }))),
   "ui-kit": lazy(() => import("../screens/UiKit").then((module) => ({ default: module.UiKit }))),
-  guide: lazy(() => import("../screens/Guide").then((module) => ({ default: module.Guide }))),
+  guide: lazy(() => import("../screens/guide/Guide").then((module) => ({ default: module.Guide }))),
 };

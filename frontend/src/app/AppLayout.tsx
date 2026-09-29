@@ -19,6 +19,7 @@ import { BrandMark } from "./BrandMark";
 import { CommandPalette } from "./CommandPalette";
 import { screenById } from "./screens";
 import { SCREEN_VIEWS } from "./views";
+import { useGuideUnopened } from "../screens/guide/guideState";
 import { SystemStatusWidget } from "./SystemStatusWidget";
 import { ThemeToggle } from "./ThemeToggle";
 import { getAiSettings, updateAiDefault, type AiModality, type AiSettingsRead } from "../api/ai";
@@ -289,6 +290,7 @@ const HOME_PATH = screenById("projects").navPath;
 export function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
+  const guideUnopened = useGuideUnopened();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === "1");
   const [scrolled, setScrolled] = useState(false);
   const [aiSnapshot, setAiSnapshot] = useState<AiSettingsRead | null>(null);
@@ -592,8 +594,12 @@ export function AppLayout() {
           <div className="app-nav-footer">
             <span className="app-nav-footer-actions">
               <ThemeToggle />
-              <Tooltip label="Инструкция по использованию" side="top">
-                <NavLink to="/guide" className="footer-icon" aria-label="Инструкция по использованию">
+              <Tooltip label={guideUnopened ? "Руководство пользователя — начните здесь" : "Руководство пользователя"} side="top">
+                <NavLink
+                  to="/guide"
+                  className={`footer-icon${guideUnopened ? " is-calling" : ""}`}
+                  aria-label="Руководство пользователя"
+                >
                   <BookOpenText size={15} aria-hidden="true" />
                 </NavLink>
               </Tooltip>
