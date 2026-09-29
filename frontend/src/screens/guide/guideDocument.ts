@@ -22,11 +22,17 @@ export interface GuideCardData {
   text: string;
 }
 
+/** Цвет группы терминов: `:::terms info`. Без аргумента — акцентный. */
+export type TermsTone = "accent" | "info" | "success" | "warning" | "danger";
+
+const TERMS_TONES: readonly string[] = ["accent", "info", "success", "warning", "danger"];
+
 export type GuideBlock =
   | { kind: "md"; text: string }
   | { kind: "heading"; id: string; title: string }
   | { kind: "callout"; tone: CalloutTone; title: string | null; text: string }
   | { kind: "cards"; cards: GuideCardData[] }
+  | { kind: "terms"; tone: TermsTone; terms: GuideCardData[] }
   | { kind: "steps"; text: string }
   | { kind: "diagram"; name: string; caption: string }
   | { kind: "figure"; alt: string; src: string; caption: string };
@@ -69,6 +75,13 @@ function container(name: string, argument: string, body: string[]): GuideBlock |
   switch (name) {
     case "cards":
       return { kind: "cards", cards: parseCards(body) };
+    case "terms":
+      // Тот же формат записи, что у карточек: `[Иконка] Термин → ссылка` и определение.
+      return {
+        kind: "terms",
+        tone: TERMS_TONES.includes(argument) ? (argument as TermsTone) : "accent",
+        terms: parseCards(body),
+      };
     case "steps":
       return { kind: "steps", text };
     case "diagram":

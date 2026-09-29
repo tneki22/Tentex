@@ -26,6 +26,16 @@ test("карточки: заголовок с иконкой и ссылкой, 
   assert.deepEqual(block.cards[1], { icon: null, title: "Просто карточка", to: null, text: "" });
 });
 
+test("термины: цвет группы из аргумента, записи как у карточек", () => {
+  const [block, plain] = parseGuideDocument(":::terms info\n[Layers] Проект → /guide?section=projects\nОтдельное пространство.\n:::\n:::terms\nТермин\nОпределение.\n:::");
+  assert.deepEqual(block, {
+    kind: "terms",
+    tone: "info",
+    terms: [{ icon: "Layers", title: "Проект", to: "/guide?section=projects", text: "Отдельное пространство." }],
+  });
+  assert.equal(plain.kind === "terms" && plain.tone, "accent");
+});
+
 test("рисунок: первая строка — картинка, дальше подпись", () => {
   const [figure] = parseGuideDocument(":::figure\n![Экран проектов](projects.png)\nСписок проектов.\n:::");
   assert.deepEqual(figure, { kind: "figure", alt: "Экран проектов", src: "projects.png", caption: "Список проектов." });

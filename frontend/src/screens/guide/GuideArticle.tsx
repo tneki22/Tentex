@@ -1,28 +1,51 @@
 import {
   AlertTriangle,
+  Archive,
   ArrowRight,
   BookOpen,
   Bot,
   BrainCircuit,
+  CalendarDays,
   CheckCircle2,
+  Cloud,
+  Coins,
   Compass,
+  Cpu,
+  Database,
   Download,
   FilePenLine,
   FilePlus2,
+  FileText,
   Files,
+  FolderOpen,
   FolderPlus,
   GraduationCap,
   HardDrive,
   Image as ImageIcon,
   Info,
   KeyRound,
+  Layers,
+  Library,
   Lightbulb,
+  Link2,
+  ListChecks,
   ListTree,
+  MessagesSquare,
   Mic,
+  NotebookPen,
   OctagonAlert,
+  Package,
+  Route,
+  ScanSearch,
   ScanText,
   Search,
+  Settings,
+  Share2,
+  ShieldCheck,
   Sparkles,
+  Target,
+  Timer,
+  Upload,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -34,8 +57,10 @@ import type { FlatGuidePage } from "./guideSections";
 
 /** Иконки карточек: в тексте страницы пишется `[FolderPlus] Заголовок`. */
 const CARD_ICONS: Record<string, LucideIcon> = {
-  BookOpen, Bot, BrainCircuit, Compass, Download, FilePenLine, FilePlus2, Files, FolderPlus, GraduationCap, HardDrive,
-  Image: ImageIcon, KeyRound, ListTree, Mic, ScanText, Search, Sparkles,
+  Archive, BookOpen, Bot, BrainCircuit, CalendarDays, Cloud, Coins, Compass, Cpu, Database, Download, FilePenLine,
+  FilePlus2, FileText, Files, FolderOpen, FolderPlus, GraduationCap, HardDrive, Image: ImageIcon, KeyRound, Layers,
+  Library, Link2, ListChecks, ListTree, MessagesSquare, Mic, NotebookPen, Package, Route, ScanSearch, ScanText, Search,
+  Settings, Share2, ShieldCheck, Sparkles, Target, Timer, Upload,
 };
 
 const CALLOUTS: Record<CalloutTone, { icon: LucideIcon; title: string }> = {
@@ -81,6 +106,27 @@ function Card({ card }: { card: GuideCardData }) {
     : <div className="guide-card">{body}</div>;
 }
 
+/** Термин: название, определение и необязательная ссылка «Подробнее» на раздел руководства. */
+function Term({ term }: { term: GuideCardData }) {
+  const Icon = (term.icon && CARD_ICONS[term.icon]) || null;
+  return (
+    <div className="guide-term">
+      <dt>
+        {Icon && <span className="guide-term-icon"><Icon size={16} aria-hidden="true" /></span>}
+        <span>{term.title}</span>
+      </dt>
+      <dd>
+        <span><MarkdownInline text={term.text} /></span>
+        {term.to && (
+          <Link className="guide-term-more" to={term.to}>
+            Подробнее<ArrowRight size={13} aria-hidden="true" />
+          </Link>
+        )}
+      </dd>
+    </div>
+  );
+}
+
 function Block({ block }: { block: GuideBlock }): ReactNode {
   switch (block.kind) {
     case "md":
@@ -101,6 +147,8 @@ function Block({ block }: { block: GuideBlock }): ReactNode {
     }
     case "cards":
       return <div className="guide-cards">{block.cards.map((card, index) => <Card key={index} card={card} />)}</div>;
+    case "terms":
+      return <dl className={`guide-terms is-${block.tone}`}>{block.terms.map((term, index) => <Term key={index} term={term} />)}</dl>;
     case "steps":
       return <div className="guide-steps"><Prose text={block.text} /></div>;
     case "diagram":

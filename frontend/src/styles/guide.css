@@ -403,6 +403,88 @@
 .guide-cards > .guide-card:nth-child(4n + 3) .guide-card-icon { background: color-mix(in srgb, var(--tone-info) 14%, transparent); color: var(--tone-info); }
 .guide-cards > .guide-card:nth-child(4n) .guide-card-icon { background: color-mix(in srgb, var(--tone-warning) 16%, transparent); color: var(--tone-warning); }
 
+/* --- Термины: словарь, каждая группа своего цвета --- */
+
+.guide-terms {
+  --term: var(--accent);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+
+.guide-terms.is-info { --term: var(--tone-info); }
+.guide-terms.is-success { --term: var(--tone-success); }
+.guide-terms.is-warning { --term: var(--tone-warning); }
+.guide-terms.is-danger { --term: var(--tone-danger); }
+
+.guide-term {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border: 1px solid var(--line);
+  border-top: 3px solid color-mix(in srgb, var(--term) 70%, transparent);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--term) 7%, var(--paper)), var(--paper) 60%);
+  transition: border-color var(--ease-fast), box-shadow var(--ease);
+}
+
+.guide-term:hover {
+  border-color: color-mix(in srgb, var(--term) 45%, var(--line));
+  border-top-color: var(--term);
+  box-shadow: var(--shadow-sm);
+}
+
+.guide-term dt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ink);
+  font-weight: var(--weight-semibold);
+}
+
+.guide-term-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--term) 16%, transparent);
+  color: var(--term);
+}
+
+.guide-term dd {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.guide-term dd strong { color: var(--ink); font-weight: var(--weight-bold); }
+.guide-term dd em { color: var(--term); }
+
+.guide-term-more {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: auto;
+  color: var(--term);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  text-decoration: none;
+}
+
+.guide-term-more svg { transition: transform var(--ease); }
+.guide-term-more:hover { text-decoration: underline; }
+.guide-term-more:hover svg { transform: translateX(3px); }
+
 /* --- Шаги --- */
 
 .guide-steps .guide-md ol {
@@ -466,6 +548,12 @@
 .gd-accent rect { fill: color-mix(in srgb, var(--accent) 12%, var(--paper)); stroke: var(--accent); }
 .gd-success rect { fill: color-mix(in srgb, var(--tone-success) 12%, var(--paper)); stroke: var(--tone-success); }
 .gd-warning rect { fill: color-mix(in srgb, var(--tone-warning) 12%, var(--paper)); stroke: var(--tone-warning); }
+
+.gd-danger rect { fill: color-mix(in srgb, var(--tone-danger) 10%, var(--paper)); stroke: var(--tone-danger); }
+
+.gd-frame { fill: none; stroke: var(--line-strong, var(--line)); stroke-width: 1.5; stroke-dasharray: 3 6; }
+.gd-label { fill: var(--muted); font-size: 12.5px; font-weight: 600; letter-spacing: 0.02em; }
+.gd-label-mid { text-anchor: middle; }
 
 .gd-arrow { fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; }
 .gd-arrow-head { fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
