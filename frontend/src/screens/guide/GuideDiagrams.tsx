@@ -158,10 +158,123 @@ function Transfer() {
   );
 }
 
+interface WizardStep { label: string; hot?: boolean }
+
+/** Ряд шагов мастера: боксы одной ширины на всю строку, «горячий» шаг — где рождается программа. */
+function wizardRow(steps: WizardStep[], y: number, labelY: number, title: string, arrowId: string) {
+  const gap = steps.length === 5 ? 20 : 16;
+  const width = (700 - gap * (steps.length - 1)) / steps.length;
+  return (
+    <g key={title}>
+      <text x="10" y={labelY} className="gd-label">{title}</text>
+      {steps.map((step, index) => {
+        const x = 10 + index * (width + gap);
+        return (
+          <g key={step.label}>
+            <g className={`gd-node ${step.hot ? "gd-accent" : "gd-info"}`}>
+              <rect x={x} y={y} width={width} height="52" rx="14" />
+              <text x={x + width / 2} y={y + 31} className="gd-step">{index + 1} · {step.label}</text>
+            </g>
+            {index < steps.length - 1 && (
+              <path d={`M${x + width + 2} ${y + 26} H${x + width + gap - 3}`} className="gd-arrow" markerEnd={`url(#${arrowId})`} />
+            )}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+/** Шаги трёх мастеров создания проекта. */
+function Wizard() {
+  return (
+    <svg viewBox="0 0 720 300" role="img" aria-label="Шаги мастера: экзамен — пять шагов, учебник — пять шагов, свободное изучение — четыре шага">
+      <defs>
+        <marker id="gd-arrow-w" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      {wizardRow(
+        [{ label: "Формат" }, { label: "Материалы" }, { label: "Загрузка", hot: true }, { label: "Паспорт" }, { label: "Проверка" }],
+        30, 20, "Подготовка к экзамену", "gd-arrow-w",
+      )}
+      {wizardRow(
+        [{ label: "Источники" }, { label: "Профиль" }, { label: "Проверка" }, { label: "Программа", hot: true }, { label: "Итог" }],
+        130, 120, "Изучение по учебнику", "gd-arrow-w",
+      )}
+      {wizardRow(
+        [{ label: "Цель" }, { label: "Материалы" }, { label: "Программа", hot: true }, { label: "Проверка" }],
+        230, 220, "Свободное изучение", "gd-arrow-w",
+      )}
+    </svg>
+  );
+}
+
+/** Программа — точка, от которой зависят остальные разделы проекта. */
+function ProgramHub() {
+  return (
+    <svg viewBox="0 0 720 300" role="img" aria-label="Паспорт цели, оглавления материалов и ваши правки формируют программу, а от программы зависят уроки, привязки с покрытием, план, карточки и чат">
+      <defs>
+        <marker id="gd-arrow-h" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+
+      <g className="gd-node gd-info">
+        <rect x="8" y="18" width="184" height="66" rx="14" />
+        <text x="100" y="47" className="gd-title gd-title-sm">Паспорт цели</text>
+        <text x="100" y="67" className="gd-sub">зачем, уровень, срок</text>
+      </g>
+      <g className="gd-node gd-info">
+        <rect x="8" y="118" width="184" height="66" rx="14" />
+        <text x="100" y="147" className="gd-title gd-title-sm">Оглавления</text>
+        <text x="100" y="167" className="gd-sub">карта ваших материалов</text>
+      </g>
+      <g className="gd-node gd-info">
+        <rect x="8" y="218" width="184" height="66" rx="14" />
+        <text x="100" y="247" className="gd-title gd-title-sm">Ваши решения</text>
+        <text x="100" y="267" className="gd-sub">что принять, что убрать</text>
+      </g>
+
+      <g className="gd-node gd-accent">
+        <rect x="268" y="102" width="184" height="98" rx="18" />
+        <text x="360" y="143" className="gd-title">Программа</text>
+        <text x="360" y="167" className="gd-sub">разделы, темы, подпункты</text>
+      </g>
+
+      <g className="gd-node gd-success">
+        <rect x="528" y="18" width="184" height="66" rx="14" />
+        <text x="620" y="47" className="gd-title gd-title-sm">Уроки</text>
+        <text x="620" y="67" className="gd-sub">строятся по темам</text>
+      </g>
+      <g className="gd-node gd-warning">
+        <rect x="528" y="118" width="184" height="66" rx="14" />
+        <text x="620" y="147" className="gd-title gd-title-sm">Привязки и покрытие</text>
+        <text x="620" y="167" className="gd-sub">считаются по темам</text>
+      </g>
+      <g className="gd-node gd-success">
+        <rect x="528" y="218" width="184" height="66" rx="14" />
+        <text x="620" y="247" className="gd-title gd-title-sm">План, карточки, чат</text>
+        <text x="620" y="267" className="gd-sub">работают с темами</text>
+      </g>
+
+      <path d="M196 51 C232 51 232 138 262 138" className="gd-arrow" markerEnd="url(#gd-arrow-h)" />
+      <path d="M196 151 H262" className="gd-arrow" markerEnd="url(#gd-arrow-h)" />
+      <path d="M196 251 C232 251 232 164 262 164" className="gd-arrow" markerEnd="url(#gd-arrow-h)" />
+
+      <path d="M458 138 C492 138 492 51 522 51" className="gd-arrow" markerEnd="url(#gd-arrow-h)" />
+      <path d="M458 151 H522" className="gd-arrow" markerEnd="url(#gd-arrow-h)" />
+      <path d="M458 164 C492 164 492 251 522 251" className="gd-arrow" markerEnd="url(#gd-arrow-h)" />
+    </svg>
+  );
+}
+
 const DIAGRAMS: Record<string, () => ReactNode> = {
   overview: Overview,
   structure: Structure,
   transfer: Transfer,
+  wizard: Wizard,
+  "program-hub": ProgramHub,
 };
 
 export function GuideDiagram({ name }: { name: string }) {
