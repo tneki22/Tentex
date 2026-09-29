@@ -1,7 +1,7 @@
 """Preflight и атомарное планирование полного manifest прохода 2."""
 
 from math import ceil
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 
@@ -13,10 +13,10 @@ from app.coverage.packets import (
     input_token_budget,
 )
 from app.coverage.protocol import prompt_overhead_tokens
+from app.coverage.queries import current_map
 from app.coverage.schemas import RunPlan
 from app.coverage.snapshots import (
     build_snapshot,
-    count_manifest_blocks,
     fingerprint,
     manifest_rows,
     require_project,
@@ -33,6 +33,9 @@ from app.models import (
 from app.projects.errors import ProjectConflictError, ProjectDomainError
 
 ACTIVE = {BackgroundJobState.QUEUED, BackgroundJobState.RUNNING, BackgroundJobState.PAUSED}
+# Статусы блока, при которых «Только нужное» читает его заново; результаты остальных
+# блоков остаются актуальными (шаг 7.1) и запуск их не трогает.
+NEEDS_RESEARCH = frozenset({"pending", "stale", "unresolved", "error"})
 # Повтор по схеме и повтор транспорта тратят тот же бюджет, что и сам вызов.
 GATEWAY_ATTEMPTS = 3
 
@@ -59,7 +62,28 @@ def _resolve_roles(session, plan):
     return result
 
 
-def _preflight_details(session, snapshot, fingerprints, plan):
+def scope_blocks(session, project_id, snapshot, plan) -> tuple[set[UUID], int, int]:
+    """Область запуска: блоки, всего блоков источников и сколько из них «нужных».
+
+    Полный запуск читает все блоки выбранных источников. «Только нужное» — те, что
+    ждут обзора или его требуют (`pending`, `stale`, `unresolved`, `error`), и явные
+    `block_ids`, например блоки родителя после создания новой темы.
+    """
+    materials = {source["id"] for source in snapshot["sources"]}
+    blocks, _ = current_map(session, project_id)
+    mine = [item for item in blocks if item["material_id"] in materials]
+    every = {UUID(item["block_id"]) for item in mine}
+    unknown = set(plan.block_ids) - every
+    if unknown:
+        raise ProjectDomainError(
+            "Блок не входит в выбранные источники", status=422, code="coverage_block_unknown"
+        )
+    needed = {UUID(item["block_id"]) for item in mine if item["bucket"] in NEEDS_RESEARCH}
+    needed |= set(plan.block_ids)
+    return (needed if plan.mode == "incremental" else every), len(every), len(needed)
+
+
+def _preflight_details(session, snapshot, fingerprints, plan, scope):
     overhead = prompt_overhead_tokens(snapshot["program"])
     try:
         roles = _resolve_roles(session, plan)
@@ -67,8 +91,14 @@ def _preflight_details(session, snapshot, fingerprints, plan):
         issue = None
     except ProjectDomainError as error:
         roles, budget, issue = {}, input_token_budget(None, overhead), error.detail
+    # Область входит в отпечаток: блок, решённый после проверки, меняет «Только нужное».
     fingerprint_value = fingerprint(
-        {"scope": fingerprints, "model_roles": roles, "packet_input_tokens": budget}
+        {
+            "scope": fingerprints,
+            "blocks": sorted(str(block_id) for block_id in scope),
+            "model_roles": roles,
+            "packet_input_tokens": budget,
+        }
     )
     return roles, budget, issue, fingerprint_value
 
@@ -76,14 +106,17 @@ def _preflight_details(session, snapshot, fingerprints, plan):
 def preflight(session, project_id, plan):
     """Без платного вызова: снимок, диагностика источников и доступность ролей."""
     snapshot, fingerprints = build_snapshot(session, project_id, plan)
+    scope, total, needed = scope_blocks(session, project_id, snapshot, plan)
     roles, budget, issue, fingerprint_value = _preflight_details(
-        session, snapshot, fingerprints, plan
+        session, snapshot, fingerprints, plan, scope
     )
-    blocks = count_manifest_blocks(session, snapshot)
+    blocks = len(scope)
     return {
         "fingerprint": fingerprint_value,
         "snapshot": snapshot,
         "blocks": blocks,
+        "blocks_all": total,
+        "blocks_needed": needed,
         "execution_available": issue is None,
         "execution_issue": issue,
         "model_roles": roles,
@@ -133,12 +166,18 @@ def start_run(session, project_id, command):
                 "Построение программы подключается отдельно", code="coverage_mode_unavailable"
             )
         snapshot, fingerprints = build_snapshot(session, project_id, plan)
+        scope, _, _ = scope_blocks(session, project_id, snapshot, plan)
         roles, packet_budget, _, fingerprint_value = _preflight_details(
-            session, snapshot, fingerprints, plan
+            session, snapshot, fingerprints, plan, scope
         )
         if fingerprint_value != command.preflight_fingerprint:
             raise ProjectConflictError(
                 "Снимок изменился после проверки", code="coverage_snapshot_changed"
+            )
+        if not scope:
+            raise ProjectConflictError(
+                "Нечего исследовать: все блоки выбранных источников уже разобраны",
+                code="coverage_scope_empty",
             )
         job = BackgroundJob(
             id=uuid4(), project_id=project_id, kind=BackgroundJobKind.COVERAGE_RESEARCH
@@ -159,7 +198,7 @@ def start_run(session, project_id, command):
         )
         session.add(run)
         session.flush()
-        manifest = list(manifest_rows(session, snapshot))
+        manifest = list(manifest_rows(session, snapshot, only=scope))
         overhead = prompt_overhead_tokens(snapshot["program"])
         for block, row_manifest in manifest:
             session.add(

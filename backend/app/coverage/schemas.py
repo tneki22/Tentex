@@ -3,7 +3,7 @@
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models import BackgroundJobState
 
@@ -95,14 +95,29 @@ class RoleSelection(StrictModel):
 
 
 class RunPlan(StrictModel):
-    """Область запуска и явно выбранные модели ролей прохода 2."""
+    """Область запуска и явно выбранные модели ролей прохода 2.
+
+    `initial` читает все блоки выбранных источников. `incremental` («Только нужное») —
+    блоки со статусом `pending`, `stale`, `unresolved`, `error` плюс явный `block_ids`
+    (например, блоки родителя после создания новой темы); остальные результаты
+    остаются как были.
+    """
 
     material_ids: list[UUID] = Field(min_length=1, max_length=100)
     context_material_ids: list[UUID] = Field(default_factory=list, max_length=100)
     mode: Literal["initial", "incremental", "deep_program"] = "initial"
+    # Явные блоки добавляются к нужным; сервер проверяет, что они из выбранных источников.
+    block_ids: list[UUID] = Field(default_factory=list, max_length=5000)
     expected_program_revision: int = Field(ge=0)
     limits: Limits = Field(default_factory=Limits)
     roles: dict[Literal["overview", "research"], RoleSelection] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def block_ids_belong_to_incremental_run(self):
+        """Полный запуск и так читает всё: явный список у него — ошибка запроса."""
+        if self.block_ids and self.mode != "incremental":
+            raise ValueError("Явный список блоков задаётся только для доисследования")
+        return self
 
 
 class RunStart(RunPlan):
@@ -136,7 +151,11 @@ class PreflightRead(StrictModel):
 
     fingerprint: str
     snapshot: dict[str, Any]
+    # Блоков в области запроса; `blocks_all` и `blocks_needed` — оба числа выбора
+    # «Всё заново · N» и «Только нужное · M», независимо от выбранного режима.
     blocks: int
+    blocks_all: int = 0
+    blocks_needed: int = 0
     execution_available: bool
     execution_issue: str | None = None
     model_roles: dict[str, ModelRoleRead] = Field(default_factory=dict)

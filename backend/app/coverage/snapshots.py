@@ -6,7 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.coverage.validation import Unit
 from app.materials.image_meta import fragment_meta, has_readable_text
@@ -303,8 +303,12 @@ def runs_currency(session, runs) -> dict[UUID, RunCurrency]:
     return result
 
 
-def manifest_rows(session, snapshot):
-    """Фиксирует состав, хеши и locators, не копируя весь текст книги."""
+def manifest_rows(session, snapshot, only=None):
+    """Фиксирует состав, хеши и locators, не копируя весь текст книги.
+
+    `only` — область доисследования: остальные блоки не получают строки в запуске,
+    и их прежний результат остаётся в силе.
+    """
     for source in snapshot["sources"]:
         blocks = session.scalars(
             select(MaterialBlock)
@@ -316,6 +320,8 @@ def manifest_rows(session, snapshot):
         )
         by_block = material_units(session, UUID(source["id"]), source["revision"])
         for block in blocks:
+            if only is not None and block.id not in only:
+                continue
             units = by_block.get(str(block.id), {})
             yield (
                 block,
@@ -403,21 +409,6 @@ def material_units(session, material_id, revision) -> dict[str, dict[str, Unit]]
             fragment, page, material
         )
     return result
-
-
-def count_manifest_blocks(session, snapshot) -> int:
-    """Preflight нужно только число: полный manifest ради счётчика стоит десятки секунд."""
-    return sum(
-        session.scalar(
-            select(func.count())
-            .select_from(MaterialBlock)
-            .where(
-                MaterialBlock.material_id == UUID(source["id"]),
-                MaterialBlock.revision == source["revision"],
-            )
-        )
-        for source in snapshot["sources"]
-    )
 
 
 def _locator(fragment, page, material):
