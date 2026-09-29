@@ -12,12 +12,15 @@ from app.models import (
     Binding,
     BindingMechanism,
     BindingStatus,
+    CoverageDecision,
     MaterialFragment,
     PageQuality,
     Project,
     SourceRole,
     utc_now,
 )
+from app.retrieval.schemas import RetrievalScope, RetrievalSearchWrite
+from app.retrieval.search import resolve_scope
 from tests.test_lessons import Book, add_node, make_lessons_project
 
 
@@ -135,3 +138,45 @@ def test_same_text_in_second_material_becomes_also_in(session, project):
     assert len(found.candidates) == 1
     assert found.candidates[0].material_name == "Олифер"
     assert found.candidates[0].also_in == ["Методичка"]
+
+
+def test_only_content_and_human_bindings_are_topic_support(session, project):
+    """Упоминание в оглавлении и привязка самого урока не материал темы (шаг 3.4)."""
+    book = Book(session, project, "Афанасьев")
+    titles = ["Определение", "Содержание", "Пример", "Заметка", "Скрытое"]
+    book.page(3, *(f"h:{title}" for title in titles))
+    node = add_node(session, project, "Гарантия", 0)
+    now = utc_now()
+    made = {}
+    for title, status, mechanism, kind in [
+        ("Определение", BindingStatus.MACHINE, BindingMechanism.PASS_TWO, "content"),
+        ("Содержание", BindingStatus.MACHINE, BindingMechanism.PASS_TWO, "mention"),
+        ("Пример", BindingStatus.MACHINE, BindingMechanism.LESSON, None),
+        ("Заметка", BindingStatus.MANUAL, BindingMechanism.MANUAL, None),
+        ("Скрытое", BindingStatus.MACHINE, BindingMechanism.PASS_TWO, "content"),
+    ]:
+        made[title] = Binding(
+            id=uuid4(), project_id=project.id, program_node_id=node.id,
+            fragment_id=book.ids[title], material_id=book.material.id,
+            block_id=session.get(MaterialFragment, book.ids[title]).block_id,
+            status=status, mechanism=mechanism, semantic_kind=kind,
+            created_at=now, updated_at=now,
+        )
+        session.add(made[title])
+    session.add(CoverageDecision(
+        project_id=project.id, kind="hide_evidence", target_key=str(made["Скрытое"].id),
+        payload={"hidden": True},
+    ))
+    session.commit()
+    kept = ["Определение", "Заметка"]
+
+    found = collect(session, node, book)
+
+    assert {fragment for item in found.candidates for fragment in item.fragment_ids} == {
+        book.ids[title] for title in kept
+    }
+    scope = resolve_scope(session, RetrievalSearchWrite(
+        query="Что такое гарантия?", scope=RetrievalScope.LINKED_TOPIC,
+        project_id=project.id, node_id=node.id,
+    ))
+    assert scope.block_ids == sorted((made[title].block_id for title in kept), key=str)

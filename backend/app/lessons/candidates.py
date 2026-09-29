@@ -22,7 +22,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.bindings.service import ACTIVE_STATUSES
+from app.bindings.service import topic_support
 from app.lessons import boundaries
 from app.lessons.service import (
     ROLE_ORDER,
@@ -33,7 +33,6 @@ from app.lessons.service import (
 )
 from app.materials.image_meta import DESCRIBABLE_PROCESSING
 from app.models import (
-    Binding,
     BindingMechanism,
     BindingStatus,
     BlockClass,
@@ -323,18 +322,11 @@ def _outline(session: Session, pool: _Pool, program: _Program, node: ProgramNode
 def _bindings(session: Session, pool: _Pool, node: ProgramNode,
               sources: dict[UUID, _Source]) -> None:
     by_signal: dict[tuple[UUID, BindingStatus, BindingMechanism], set[UUID]] = defaultdict(set)
-    for binding in session.scalars(
-        select(Binding).where(
-            Binding.project_id == node.project_id,
-            Binding.program_node_id == node.id,
-            Binding.status.in_(ACTIVE_STATUSES),
-            Binding.material_id.in_(list(sources)),
-            Binding.fragment_id.is_not(None),
-        )
-    ):
-        by_signal[(binding.material_id, binding.status, binding.mechanism)].add(
-            binding.fragment_id
-        )
+    for binding in topic_support(session, node.project_id, node.id):
+        if binding.material_id in sources and binding.fragment_id is not None:
+            by_signal[(binding.material_id, binding.status, binding.mechanism)].add(
+                binding.fragment_id
+            )
     # Ручные раньше машинных: сильный сигнал забирает фрагмент первым.
     for (material_id, status, mechanism), ids in sorted(
         by_signal.items(), key=lambda item: -SIGNAL_WEIGHT[item[0][1]]
