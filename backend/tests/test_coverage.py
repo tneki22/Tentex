@@ -28,6 +28,8 @@ from app.coverage.validation import (
     validate_target,
 )
 from app.db import job_write_transaction
+from app.materials.image_meta import described_text, meta_to_json
+from app.materials.parsers.base import IMAGE_PLACEHOLDER, ImageDescription, ImageMeta
 from app.materials.worker import claim_job
 from app.models import (
     BackgroundJob,
@@ -94,6 +96,41 @@ def setup_source(session, count=3):
         )
     session.commit()
     return project, topic, material
+
+
+def add_block(session, material, fragments, *, sort_order):
+    """Блок на единственной странице `setup_source`: `(текст, вид, visual)` на фрагмент."""
+    page = session.scalar(select(MaterialPage).where(MaterialPage.material_id == material.id))
+    block = MaterialBlock(
+        id=uuid4(),
+        material_id=material.id,
+        revision=1,
+        sort_order=sort_order,
+        block_class=BlockClass.CONTENT,
+        page_from=1,
+        page_to=1,
+    )
+    session.add(block)
+    session.flush()
+    refs = []
+    for order, (text, kind, visual) in enumerate(fragments):
+        fragment = MaterialFragment(
+            id=uuid4(),
+            material_id=material.id,
+            page_id=page.id,
+            block_id=block.id,
+            # Порядок чтения сквозной по странице: блоки идут друг за другом.
+            sort_order=sort_order * 100 + order,
+            text=text,
+            bbox=[0, 0, 1, 1],
+            element_kind=kind,
+            quality=PageQuality.NATIVE,
+            visual=visual,
+        )
+        session.add(fragment)
+        refs.append(fragment.id)
+    session.commit()
+    return block, refs
 
 
 def launch(session, project, material, **kwargs):
@@ -904,6 +941,70 @@ def test_unseen_image_drops_its_fragment_not_the_whole_block():
     # Просмотренная страница ничего не снимает.
     seen = validate_target(block, raw, units, units, {"page:1"}, {topic})
     assert seen.outcome == "linked" and len(seen.links) == 2
+
+
+def test_described_image_is_text_but_placeholder_stays_unavailable(session):
+    """Живой прогон «Мат логики»: 34 из 53 «Ждут уточнения» — описанные картинки.
+
+    Описание модели — такой же проверяемый текст, как абзац: связь его фрагмента
+    публикуется. Заглушка без описания по-прежнему снимает только свой фрагмент.
+    """
+    project, topic, material = setup_source(session, 0)
+    described = ImageDescription(
+        kind="diagram", title="Таблица истинности", summary="Значения импликации по строкам."
+    )
+    described_visual = meta_to_json(
+        ImageMeta(role="content", processing="described", description=described)
+    )
+    plain = ImageMeta()
+    block_a, (para_a, image_a) = add_block(
+        session,
+        material,
+        [
+            ("Импликация ложна, лишь если посылка истинна, а следствие ложно.", "paragraph", None),
+            (described_text(described), "image", described_visual),
+        ],
+        sort_order=0,
+    )
+    block_b, (para_b, placeholder_b) = add_block(
+        session,
+        material,
+        [
+            ("Эквиваленция истинна, когда значения совпадают.", "paragraph", None),
+            (IMAGE_PLACEHOLDER, "image", meta_to_json(plain)),
+        ],
+        sort_order=1,
+    )
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+    # Для прохода описанный рисунок — абзац, а заглушка остаётся рисунком.
+    assert task_input.seen[str(image_a)].kind == "paragraph"
+    assert task_input.seen[str(placeholder_b)].kind == "image"
+    publish_packet(session, token, task_input, answer(task_input, topic.id))
+
+    results = {
+        row.block_id: row
+        for row in session.scalars(
+            select(CoverageBlockResult).where(CoverageBlockResult.run_id == run_id)
+        )
+    }
+    described_block = results[block_a.id]
+    assert described_block.outcome == "linked" and described_block.reason is None
+    assert not any(
+        item.get("reason") == "visual_unavailable" for item in described_block.result["diagnostics"]
+    )
+    bound = set(
+        session.scalars(select(Binding.fragment_id).where(Binding.status == BindingStatus.MACHINE))
+    )
+    assert {para_a, image_a} <= bound
+
+    bare_block = results[block_b.id]
+    assert bare_block.outcome == "unresolved" and bare_block.reason == "visual_unavailable"
+    assert {"reason": "visual_unavailable", "ref": str(placeholder_b)} in bare_block.result[
+        "diagnostics"
+    ]
+    # Текст рядом с заглушкой разобран и публикуется, сама заглушка связи не получает.
+    assert para_b in bound and placeholder_b not in bound
 
 
 def test_topic_alias_in_to_target_keeps_the_single_decision(session):

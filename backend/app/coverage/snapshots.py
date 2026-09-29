@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 
 from app.coverage.validation import Unit
+from app.materials.image_meta import fragment_meta, has_readable_text
 from app.materials.naming import project_material_display_name
 from app.models import (
     Binding,
@@ -319,6 +320,22 @@ def manifest_rows(session, snapshot):
             )
 
 
+def _kind(fragment) -> str:
+    """Вид фрагмента для прохода 2: изображение с проверяемым текстом — обычный абзац.
+
+    Проход не смотрит картинок, поэтому любой `image` считался непросмотренным и снимал
+    связь своего фрагмента (`visual_unavailable`). Описание модели, надпись в рисунке или
+    ручная правка — такой же текст, как и остальной: его читают и цитируют. Рисунок без
+    описания и заглушка остаются `image`.
+    """
+    if fragment.element_kind != "image":
+        return fragment.element_kind
+    meta = fragment_meta(
+        fragment.visual, fragment.text, fragment.recognition_source, fragment.asset_path
+    )
+    return "paragraph" if has_readable_text(meta, fragment.text) else "image"
+
+
 def _unit(fragment, page, material) -> Unit:
     """Адрес страницы содержит material ID: page:1 двух книг не совпадает."""
     return Unit(
@@ -326,7 +343,7 @@ def _unit(fragment, page, material) -> Unit:
         fragment.text,
         str(fragment.block_id),
         f"page:{fragment.material_id}:{page.page_number}",
-        fragment.element_kind,
+        _kind(fragment),
         fragment.quality,
         _locator(fragment, page, material),
     )
