@@ -4,10 +4,12 @@ import re
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
+from uuid import UUID
 
 from pydantic import ValidationError
 
-from app.coverage.schemas import BlockDecision, Evidence
+from app.coverage.schemas import BlockDecision, Disposition, Evidence
+from app.materials.page_numbers import is_page_number
 
 # Порог зафиксирован replay-v7, COVERAGE_INTEGRATION/06 §3.
 APPROXIMATE_THRESHOLD = 0.75
@@ -135,6 +137,28 @@ def _supports_target(evidence: dict, units: dict[str, Unit], inspected: set[str]
         and u.page_ref in inspected
         for u in units.values()
     )
+
+
+def _with_page_numbers(decision: BlockDecision, units: dict[str, Unit]) -> BlockDecision:
+    """Номер страницы — служебная часть блока, о которой модель не спрашивают.
+
+    Разбор PDF оставляет «27» отдельным фрагментом, и модель раньше размечала его как
+    содержание: на «Мат логике» так набралось 29 связей. Теперь фрагмент в пакет не
+    попадает, а его исход `service` дописывает сервер; связь и ответ модели о нём,
+    если они всё же пришли (сохранённый ответ старой версии), отбрасываются.
+    """
+    numbers = {ref for ref, unit in units.items() if is_page_number(unit.text)}
+    if not numbers:
+        return decision
+    position = {ref: index for index, ref in enumerate(units)}
+    dispositions = [d for d in decision.dispositions if str(d.fragment_id) not in numbers]
+    dispositions += [
+        Disposition(fragment_id=UUID(ref), start=0, end=len(units[ref].text), outcome="service")
+        for ref in numbers
+    ]
+    dispositions.sort(key=lambda d: (position.get(str(d.fragment_id), len(position)), d.start))
+    links = [link for link in decision.links if str(link.fragment_id) not in numbers]
+    return decision.model_copy(update={"dispositions": dispositions, "links": links})
 
 
 def _check_ranges(decision: BlockDecision, units: dict[str, Unit]) -> None:
@@ -296,6 +320,7 @@ def validate_target(target_id, raw, units, seen, inspected, topics, *, origin="o
         decision = BlockDecision.model_validate(raw[0])
         if str(decision.target_id) != str(target_id):
             raise ValueError("target_scope")
+        decision = _with_page_numbers(decision, units)
         _check_ranges(decision, units)
         links = _check_links(decision, units, seen, inspected, topics, diagnostics)
         dispositions, changes = _align_dispositions(decision.dispositions, links, units, inspected)

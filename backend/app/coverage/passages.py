@@ -14,7 +14,6 @@ auto-merging retrieval: найдено достаточно соседних м�
 
 from __future__ import annotations
 
-import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from uuid import UUID
@@ -22,6 +21,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.materials.page_numbers import is_page_number
 from app.models import (
     Binding,
     BindingStatus,
@@ -32,7 +32,6 @@ from app.models import (
 )
 
 ACTIVE_STATUSES = (BindingStatus.MANUAL, BindingStatus.CONFIRMED, BindingStatus.MACHINE)
-PAGE_NUMBER = re.compile(r"\s*\d{1,4}\s*")
 TRANSPARENT_KINDS = {"heading", "title", "image"}
 #: Столько несвязанных строк подряд кусок перешагивает: «Решение.» между шагами примера.
 MAX_SOFT_GAP = 2
@@ -95,12 +94,12 @@ class _Unit:
         return (
             not self.is_content
             or self.kind in TRANSPARENT_KINDS
-            or bool(PAGE_NUMBER.fullmatch(self.text))
+            or self.page_number
         )
 
     @property
     def page_number(self) -> bool:
-        return bool(PAGE_NUMBER.fullmatch(self.text))
+        return is_page_number(self.text)
 
 
 @dataclass

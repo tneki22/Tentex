@@ -347,3 +347,19 @@ def test_delete_lesson_removes_it_and_disarms_its_undo(session, project, book):
         )
     )
     assert all(item.inverse_data.get("lesson_id") != str(lesson.id) for item in live)
+
+
+def test_page_number_inside_the_range_gets_no_binding(session, project):
+    """Диапазон урока идёт через «27», но номер страницы не опора темы (шаг 3.2)."""
+    book = Book(session, project, "Афанасьев")
+    book.page(26, "h:1.13. Совершенные формы", "p:СДНФ определяется так.", "p:27",
+              "p:Свойства совершенства.")
+    topic = add_node(session, project, "СКНФ и СДНФ", 0)
+    lesson = manual_lesson(session, project, topic)
+
+    edit(session, project, lesson, operation="add_page", material_id=book.material.id,
+         page_from=26)
+
+    bound = {fragment for _, fragment in bindings(session, project)}
+    assert book.ids["27"] not in bound
+    assert {book.ids["СДНФ определяется так."], book.ids["Свойства совершенства."]} <= bound

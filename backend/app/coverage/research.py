@@ -20,6 +20,7 @@ from app.coverage.publication import publish_decision
 from app.coverage.snapshots import block_units, fingerprint, snapshot_current
 from app.coverage.validation import CheckedDecision, Unit, validate_target
 from app.db import job_write_transaction
+from app.materials.page_numbers import is_page_number
 from app.models import BackgroundJobState, CoverageBlockResult, CoverageTask
 from app.projects.errors import ProjectConflictError
 
@@ -49,6 +50,11 @@ class TaskInput:
     scope: dict
     output_tokens: int
     kind: str = "overview"
+
+    @property
+    def visible_targets(self) -> list[str]:
+        """Блоки, о которых спрашивают модель; блок из одних номеров страниц решает сервер."""
+        return [target for target in self.targets if target in self.target_aliases]
 
 
 def prepare_task(session, token, task_id):
@@ -100,7 +106,11 @@ def prepare_task(session, token, task_id):
                     )
                 units = clipped
             seen.update(units)
-            target_refs[target] = list(units)
+            # Номер страницы остаётся в `seen` ради полного учёта фрагментов, но модель
+            # его не видит: validation признаёт такие фрагменты служебными сама.
+            target_refs[target] = [
+                ref for ref, unit in units.items() if not is_page_number(unit.text)
+            ]
             if row.work_state == "pending":
                 row.work_state = "processing"
         context_refs = []
@@ -108,7 +118,7 @@ def prepare_task(session, token, task_id):
             if ref in seen:
                 continue
             context = _context_unit(session, run, ref)
-            if context is not None:
+            if context is not None and not is_page_number(context.text):
                 seen[ref] = context
                 context_refs.append(ref)
         task.state = "processing"
@@ -121,8 +131,10 @@ def prepare_task(session, token, task_id):
         topic_aliases = {
             n["id"]: (f"T{index}", n["title"]) for index, n in enumerate(topic_rows, 1)
         }
-        target_aliases = {target: f"B{index}" for index, target in enumerate(task.targets, 1)}
-        fragment_aliases = {ref: f"F{index}" for index, ref in enumerate(seen, 1)}
+        asked = [target for target in task.targets if target_refs[target]]
+        target_aliases = {target: f"B{index}" for index, target in enumerate(asked, 1)}
+        shown = [ref for ref, unit in seen.items() if not is_page_number(unit.text)]
+        fragment_aliases = {ref: f"F{index}" for index, ref in enumerate(shown, 1)}
         return TaskInput(
             task.id,
             run.project_id,
@@ -142,7 +154,7 @@ def prepare_task(session, token, task_id):
             },
             run.model_roles,
             run.fingerprints,
-            output_reserve_tokens(len(task.targets), len(seen)),
+            output_reserve_tokens(len(asked), len(shown)),
             task.kind,
         )
 

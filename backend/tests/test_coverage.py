@@ -1,5 +1,6 @@
 """И2: инварианты публикации и restart без реального провайдера."""
 
+import json
 from datetime import timedelta
 from uuid import UUID, uuid4
 
@@ -15,7 +16,12 @@ from app.coverage.packets import (
     build_packet_specs,
     output_reserve_tokens,
 )
-from app.coverage.protocol import SYSTEM_RULES, expand_compact_response
+from app.coverage.protocol import (
+    SYSTEM_RULES,
+    CoverageOverviewExecutor,
+    build_prompt,
+    expand_compact_response,
+)
 from app.coverage.queries import evidence_read, overview, run_read
 from app.coverage.research import prepare_task, process_coverage_job, publish_packet
 from app.coverage.schemas import Evidence, RunControl, RunPlan, RunStart
@@ -1005,6 +1011,136 @@ def test_described_image_is_text_but_placeholder_stays_unavailable(session):
     ]
     # Текст рядом с заглушкой разобран и публикуется, сама заглушка связи не получает.
     assert para_b in bound and placeholder_b not in bound
+
+
+def compact_answer(task_input, topic_id):
+    """Ответ модели в alias-протоколе: каждый показанный фрагмент — content по теме."""
+    topic_alias = task_input.topic_aliases[str(topic_id)][0]
+    decisions = []
+    for target in task_input.visible_targets:
+        alias = task_input.target_aliases[target]
+        parts = []
+        for ref in task_input.target_refs[target]:
+            fragment = task_input.fragment_aliases[ref]
+            link = {
+                "topic": topic_alias,
+                "semantic_kind": "content",
+                "roles": ["explanation"],
+                "evidence": [fragment],
+            }
+            parts.append({"fragment": fragment, "outcome": "content", "links": [link]})
+        decisions.append(
+            {"from_target": alias, "to_target": alias, "outcome": "linked", "parts": parts}
+        )
+    return decisions
+
+
+def test_page_numbers_are_not_sent_to_the_model_and_are_service(session):
+    """«27» отдельным фрагментом модель размечала как содержание: 29 связей на «Мат логике»."""
+    project, topic, material = setup_source(session, 0)
+    universal = "Квантор всеобщности читается «для любого»."
+    mixed, (number, text) = add_block(
+        session,
+        material,
+        [("27", "paragraph", None), (universal, "paragraph", None)],
+        sort_order=0,
+    )
+    alone, (lone_number,) = add_block(session, material, [("28", "paragraph", None)], sort_order=1)
+    plain, (plain_text,) = add_block(
+        session, material, [("Квантор существования читается «найдётся».", "paragraph", None)],
+        sort_order=2,
+    )
+    run_id, _, token, _ = launch(session, project, material)
+    task_input = prepare_task(session, token, first_task(session, run_id).id)
+
+    # Модель видит два блока по одному фрагменту; блок из одного «28» ей не показан.
+    assert task_input.visible_targets == [str(mixed.id), str(plain.id)]
+    assert task_input.target_refs[str(mixed.id)] == [str(text)]
+    assert task_input.target_refs[str(alone.id)] == []
+    payload = json.loads(build_prompt(task_input).partition("ВХОД:")[2])
+    shown = [item["text"] for target in payload["targets"] for item in target["fragments"]]
+    assert len(shown) == 2 and not {"27", "28"} & set(shown)
+
+    raw = expand_compact_response(task_input, compact_answer(task_input, topic.id))
+    assert [item["target_id"] for item in raw] == task_input.targets
+    publish_packet(session, token, task_input, raw)
+
+    results = {
+        row.block_id: row
+        for row in session.scalars(
+            select(CoverageBlockResult).where(CoverageBlockResult.run_id == run_id)
+        )
+    }
+    parts = {
+        item["fragment_id"]: item["outcome"] for item in results[mixed.id].result["dispositions"]
+    }
+    assert parts == {str(number): "service", str(text): "content"}
+    assert results[mixed.id].outcome == "mixed_resolved"
+    assert results[alone.id].outcome == "service" and results[alone.id].reason == "Номер страницы"
+    assert results[plain.id].outcome == "linked"
+    bound = set(
+        session.scalars(select(Binding.fragment_id).where(Binding.status == BindingStatus.MACHINE))
+    )
+    assert bound == {text, plain_text}
+    assert number not in bound and lone_number not in bound
+
+
+def test_packet_of_page_numbers_costs_no_model_call(session):
+    """Пакет из одних номеров страниц закрывает сервер: шлюз не вызывается."""
+    project, _, material = setup_source(session, 0)
+    block, _ = add_block(session, material, [("28", "paragraph", None)], sort_order=0)
+    run_id, job, token, _ = launch(session, project, material)
+
+    class NoCalls:
+        async def complete(self, request):
+            raise AssertionError("платный вызов ради номера страницы")
+
+    executor = CoverageOverviewExecutor(session, job.id, token, gateway=NoCalls())
+    try:
+        process_coverage_job(session, job, executor)
+    finally:
+        executor.close()
+
+    assert run_read(session, project.id, run_id)["state"] == "completed"
+    row = session.scalar(select(CoverageBlockResult).where(CoverageBlockResult.run_id == run_id))
+    assert row.block_id == block.id and row.outcome == "service"
+
+
+def test_answer_about_page_number_is_overridden_by_service():
+    """Сохранённый ответ старой версии мог назвать номер страницы содержанием."""
+    topic, block = str(uuid4()), str(uuid4())
+    body_ref, number_ref = str(uuid4()), str(uuid4())
+    units = {
+        body_ref: Unit(body_ref, "Кванторы связывают переменные.", block, "page:1"),
+        number_ref: Unit(number_ref, "27", block, "page:1"),
+    }
+    raw = [
+        {
+            "target_id": block,
+            "outcome": "linked",
+            "dispositions": [
+                {"fragment_id": ref, "start": 0, "end": len(unit.text), "outcome": "content"}
+                for ref, unit in units.items()
+            ],
+            "links": [
+                {
+                    "topic_id": topic,
+                    "fragment_id": ref,
+                    "semantic_kind": "content",
+                    "roles": ["explanation"],
+                    "evidence": [{"key": f"e{index}", "ref": ref}],
+                }
+                for index, ref in enumerate(units)
+            ],
+        }
+    ]
+    checked = validate_target(block, raw, units, units, set(), {topic})
+    assert checked.valid and checked.outcome == "mixed_resolved"
+    assert [link["fragment_id"] for link in checked.links] == [body_ref]
+    assert {part["fragment_id"]: part["outcome"] for part in checked.dispositions} == {
+        body_ref: "content",
+        number_ref: "service",
+    }
 
 
 def test_topic_alias_in_to_target_keeps_the_single_decision(session):

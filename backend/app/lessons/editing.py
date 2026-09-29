@@ -45,6 +45,7 @@ from app.lessons.service import (
     relink_material,
 )
 from app.lessons.task_store import sync_lesson_tasks
+from app.materials.page_numbers import is_page_number
 from app.materials.storage import material_path, store_namespaced_upload
 from app.models import (
     Binding,
@@ -349,26 +350,34 @@ def _bind_fragments(
     session: Session, project_id: UUID, node_id: UUID, material_id: UUID,
     fragment_ids: list[UUID], origin: LessonBlockOrigin,
 ) -> list[UUID]:
-    """Существующая пара (тема, фрагмент) не меняется в любом статусе (§4.4)."""
+    """Существующая пара (тема, фрагмент) не меняется в любом статусе (§4.4).
+
+    Номер страницы привязки не получает: диапазон урока проходит через «27», но темы этот
+    фрагмент не раскрывает, а лишняя привязка попадала в «Источник» как опора.
+    """
     if not fragment_ids:
         return []
     existing = set(session.scalars(select(Binding.fragment_id).where(
         Binding.project_id == project_id, Binding.program_node_id == node_id,
         Binding.fragment_id.in_(fragment_ids),
     )))
-    block_of = dict(session.execute(
-        select(MaterialFragment.id, MaterialFragment.block_id)
-        .where(MaterialFragment.id.in_(fragment_ids))
-    ).tuples().all())
+    fragments = {
+        fragment_id: (block_id, text)
+        for fragment_id, block_id, text in session.execute(
+            select(MaterialFragment.id, MaterialFragment.block_id, MaterialFragment.text)
+            .where(MaterialFragment.id.in_(fragment_ids))
+        ).tuples().all()
+    }
     status, mechanism = BINDING_BY_ORIGIN[origin]
     now = utc_now()
     created: list[UUID] = []
     for fragment_id in fragment_ids:
-        if fragment_id in existing:
+        block_id, text = fragments.get(fragment_id, (None, ""))
+        if fragment_id in existing or is_page_number(text):
             continue
         binding = Binding(
             id=uuid4(), project_id=project_id, program_node_id=node_id,
-            fragment_id=fragment_id, material_id=material_id, block_id=block_of.get(fragment_id),
+            fragment_id=fragment_id, material_id=material_id, block_id=block_id,
             status=status, mechanism=mechanism, created_at=now, updated_at=now,
         )
         session.add(binding)
