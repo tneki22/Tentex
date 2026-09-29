@@ -146,6 +146,8 @@ const preflight = {
   fingerprint: "snapshot-1",
   snapshot: { sources: [], context_sources: [] },
   blocks: 424,
+  blocks_all: 424,
+  blocks_needed: 7,
   execution_available: true,
   execution_issue: null,
   model_roles: {
@@ -233,6 +235,36 @@ test("запуск открывается из Обзора и не создаё
   await page.getByRole("button", { name: "Отменить" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(started).toBe(0);
+});
+
+test("доисследование выбирает нужные блоки и не запускает пустую область", async ({ page }) => {
+  const studied = {
+    ...filledOverview,
+    latest_run_state: "completed",
+    sources: [{ ...filledOverview.sources[0], run_state: "completed", researched_at: "2026-09-28T12:00:00Z" }],
+  };
+  await stub(page, studied, issues);
+  let needed = 7;
+  const plans: Array<Record<string, unknown>> = [];
+  await page.route((url) => url.pathname.endsWith("/coverage/preflight"), (route) => {
+    const plan = JSON.parse(route.request().postData() ?? "{}");
+    plans.push(plan);
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      ...preflight, blocks: plan.mode === "incremental" ? needed : 424, blocks_needed: needed,
+    }) });
+  });
+  await page.goto(`${BASE}/projects/${PROJECT}/coverage`);
+  await page.getByRole("button", { name: "Исследовать материалы" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("Только нужное · 7 блоков")).toBeChecked();
+  await expect(dialog.getByRole("button", { name: "Начать обзор · 7 бл." })).toBeEnabled();
+  expect(plans.at(-1)?.mode).toBe("incremental");
+  await dialog.getByLabel("Всё заново · 424 блоков").check();
+  await expect(dialog.getByRole("button", { name: "Начать обзор · 424 бл." })).toBeEnabled();
+  expect(plans.at(-1)?.mode).toBe("initial");
+  needed = 0;
+  await dialog.getByLabel("Только нужное · 7 блоков").check();
+  await expect(dialog.getByRole("button", { name: "Начать обзор · 0 бл." })).toBeDisabled();
 });
 
 test("остановка по пределу объясняется числами и продолжается новым потолком", async ({ page }) => {

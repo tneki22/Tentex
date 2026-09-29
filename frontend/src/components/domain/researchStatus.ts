@@ -2,14 +2,14 @@ import type { CoverageSourceOverview } from "../../api/coverage";
 import type { StatusTone } from "../ui";
 
 /** Что сделать с материалом дальше: исследовать (впервые или заново) либо смотреть ход. */
-export type ResearchAction = "research" | "rerun" | "progress";
+export type ResearchAction = "research" | "continue" | "rerun" | "progress";
 
 export interface ResearchState {
   label: string;
   detail: string;
   tone: StatusTone;
   action: ResearchAction;
-  /** Повторный запуск прочитает все блоки заново: инкрементального прохода пока нет. */
+  /** Источник уже участвовал в исследовании. */
   researched: boolean;
   /** Нужен запуск: не исследован, исследован частично или текст изменился. */
   needed: boolean;
@@ -49,13 +49,13 @@ export function researchState(source: CoverageSourceOverview | undefined): Resea
       label: "Нужно исследовать заново",
       detail: "текст изменился после исследования",
       tone: "warning",
-      action: "rerun",
+      action: "continue",
       researched: true,
       needed: true,
     };
   }
   if (pending > 0) {
-    return { label: "Исследован частично", detail: progress, tone: "warning", action: "rerun", researched: true, needed: true };
+    return { label: "Исследован частично", detail: progress, tone: "warning", action: "continue", researched: true, needed: true };
   }
   const when = dateLabel(source.researched_at);
   return {
@@ -70,6 +70,7 @@ export function researchState(source: CoverageSourceOverview | undefined): Resea
 
 export const RESEARCH_ACTION_LABEL: Record<ResearchAction, string> = {
   research: "Исследовать",
+  continue: "Доисследовать",
   rerun: "Исследовать заново",
   progress: "Ход исследования",
 };

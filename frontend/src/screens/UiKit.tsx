@@ -132,6 +132,8 @@ const demoCoveragePreflight = async (): Promise<CoveragePreflight> => ({
     context_sources: [],
   },
   blocks: 424,
+  blocks_all: 424,
+  blocks_needed: 424,
   execution_available: true,
   execution_issue: null,
   model_roles: {

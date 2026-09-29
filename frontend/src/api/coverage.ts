@@ -22,6 +22,7 @@ export interface CoveragePlan {
   material_ids: string[];
   context_material_ids: string[];
   mode: "initial" | "incremental";
+  block_ids?: string[];
   expected_program_revision: number;
   limits: CoverageLimits;
   roles?: Record<string, { provider_id: string; model_id: string }>;
@@ -40,6 +41,8 @@ export interface CoveragePreflight {
     context_sources: Array<{ id: string; name: string; revision: number }>;
   };
   blocks: number;
+  blocks_all: number;
+  blocks_needed: number;
   execution_available: boolean;
   execution_issue: string | null;
   model_roles: Record<string, {
