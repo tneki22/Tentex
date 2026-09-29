@@ -17,6 +17,7 @@ class RubricPoint:
     quote: str | None = None
     quote_start: int | None = None
     quote_end: int | None = None
+    source_quote: str | None = None
 
 
 @dataclass(frozen=True)

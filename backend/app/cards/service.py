@@ -40,6 +40,7 @@ from app.models import (
     Activity,
     ActivityKind,
     ActivityOrigin,
+    AiRun,
     Attempt,
     AttemptOutcome,
     Binding,
@@ -286,6 +287,52 @@ def create_card(session: Session, project_id: UUID, command: CardCreate) -> Card
         kind, fragment_id, revision, snapshot = _source_payload(
             session, project_id, unit, command.source
         )
+        if command.generation_run_id is not None:
+            run = session.get(AiRun, command.generation_run_id)
+            candidates = (run.response_payload or {}).get("candidates", []) if run else []
+            index = command.generation_candidate_index
+            if (
+                run is None or run.project_id != project_id
+                or run.role != "exam_card_generation"
+                or run.status not in {"succeeded", "cached"}
+                or {"kind": "card_unit", "unit_id": str(command.program_node_id)}
+                not in (run.context_manifest or [])
+                or not isinstance(candidates, list)
+                or index is None or index >= len(candidates)
+                or not isinstance(candidates[index], dict)
+            ):
+                raise ProjectDomainError(
+                    "Предложение ИИ недоступно", status=409, code="card_generation_unavailable"
+                )
+            proposal = candidates[index]
+            source_matches = (
+                proposal.get("source_kind") == kind.value
+                and (
+                    kind != CardSourceKind.FRAGMENT
+                    or proposal.get("fragment_id") == str(fragment_id)
+                )
+            )
+            quote = str(proposal.get("evidence_quote") or "").strip()
+            if not source_matches or not quote or quote not in str(snapshot.get("text", "")):
+                raise ProjectDomainError(
+                    "Опора карточки больше не совпадает с источником",
+                    status=409, code="card_generation_source_changed",
+                )
+            existing = session.scalars(select(Card).where(
+                Card.project_id == project_id,
+                Card.generation_run_id == command.generation_run_id,
+            ))
+            if any(
+                (card.source_snapshot or {}).get("generation", {}).get("candidate_index") == index
+                for card in existing
+            ):
+                raise ProjectConflictError(
+                    "Эта карточка уже сохранена", code="card_generation_already_accepted"
+                )
+            snapshot["generation"] = {
+                "candidate_index": index,
+                "evidence_quote": quote,
+            }
         activity = Activity(
             project_id=project_id,
             program_node_id=unit.id if unit else None,
@@ -309,6 +356,7 @@ def create_card(session: Session, project_id: UUID, command: CardCreate) -> Card
             source_fragment_id=fragment_id,
             source_reference_revision=revision,
             source_snapshot=snapshot,
+            generation_run_id=command.generation_run_id,
             state=CardState(command.state),
             revision=1,
         )

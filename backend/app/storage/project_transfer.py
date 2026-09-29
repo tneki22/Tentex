@@ -76,6 +76,7 @@ PERSONAL_TABLES = {
     "workspace_states",
     "card_sessions",
     "attempts",
+    "oral_recordings",
     "grades",
     "chat_sessions",
     "chat_messages",

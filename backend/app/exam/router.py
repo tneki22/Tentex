@@ -8,17 +8,20 @@ from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Form, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.dependencies import get_model_gateway
-from app.ai.gateway import AiTextRequest, ModelGateway
+from app.ai.dictation import _audio_format
+from app.ai.gateway import MAX_AUDIO_BYTES, AiTextRequest, ModelGateway
 from app.ai.schemas import AiMessage
 from app.chat_tools.executor import run_tool
 from app.db import SessionLocal, get_session
 from app.exam import attempts as attempt_service
 from app.exam import chat as chat_service
+from app.exam import oral as oral_service
 from app.exam.reply import ChatConfirmationRequired, TurnOptions, prepare_reply
 from app.exam.schemas import (
     AttemptDetailRead,
@@ -39,6 +42,8 @@ from app.exam.schemas import (
     ChatToolRunRead,
     GradeRead,
     GradeUsageRead,
+    OralRecordingRead,
+    OralSubmitWrite,
     SelfAssessmentWrite,
     ToolRunCreateWrite,
 )
@@ -49,6 +54,8 @@ from app.models import (
     ChatMode,
     ChatStreamState,
     Grade,
+    OralRecording,
+    utc_now,
 )
 from app.projects.errors import ProjectDomainError
 from app.retrieval.citations import citation_error
@@ -384,7 +391,7 @@ async def post_chat_answer(
     return ChatAnswerResult(
         messages=[ChatMessageRead.model_validate(item) for item in result.messages],
         attempt=AttemptRead.model_validate(result.attempt),
-        grade=_grade_read(session, result.grade),
+        grade=_grade_read(session, result.grade) if result.grade is not None else None,
     )
 
 
@@ -416,10 +423,88 @@ def _grade_read(session: Session, grade: Grade) -> GradeRead:
     )
 
 
+def _oral_read(row: OralRecording) -> OralRecordingRead:
+    return OralRecordingRead(
+        id=row.id,
+        transcript=row.transcript,
+        metrics=row.metrics,
+        audio_available=bool(row.audio_path and row.audio_expires_at > utc_now()),
+        audio_expires_at=row.audio_expires_at,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/chat/sessions/{session_id}/oral-drafts",
+    response_model=OralRecordingRead,
+)
+async def post_oral_draft(
+    project_id: UUID,
+    session_id: UUID,
+    file: UploadFile,
+    duration_ms: Annotated[int, Form(ge=1, le=300_000)],
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> OralRecordingRead:
+    """Сохранить запись и вернуть транскрипт на исправление перед оценкой."""
+    oral_service.cleanup_expired(session)
+    audio_format = _audio_format(file.content_type)
+    audio = await file.read(MAX_AUDIO_BYTES + 1)
+    row = await oral_service.create_draft(
+        session, gateway, project_id, session_id, audio, audio_format, duration_ms,
+    )
+    return _oral_read(row)
+
+
+@router.get(
+    "/projects/{project_id}/chat/sessions/{session_id}/oral-drafts/{recording_id}",
+    response_model=OralRecordingRead,
+)
+def get_oral_draft(
+    project_id: UUID, session_id: UUID, recording_id: UUID, session: SessionDependency,
+) -> OralRecordingRead:
+    """Восстановить несданный или сданный черновик."""
+    with session.begin():
+        row = oral_service._recording(session, project_id, session_id, recording_id)
+        return _oral_read(row)
+
+
+@router.post(
+    "/projects/{project_id}/chat/sessions/{session_id}/oral-drafts/{recording_id}/submit",
+    response_model=ChatAnswerResult,
+)
+async def post_oral_answer(
+    project_id: UUID, session_id: UUID, recording_id: UUID,
+    command: OralSubmitWrite, session: SessionDependency, gateway: GatewayDependency,
+) -> ChatAnswerResult:
+    """Сдать исправленный транскрипт и проверить его ИИ-судьёй."""
+    result = await oral_service.submit_draft(
+        session, gateway, project_id, session_id, recording_id,
+        command.text, command.answer_mode,
+    )
+    return ChatAnswerResult(
+        messages=[ChatMessageRead.model_validate(item) for item in result.messages],
+        attempt=AttemptRead.model_validate(result.attempt),
+        grade=_grade_read(session, result.grade) if result.grade is not None else None,
+    )
+
+
+@router.get("/projects/{project_id}/oral-recordings/{recording_id}/audio")
+def get_oral_audio(
+    project_id: UUID, recording_id: UUID, session: SessionDependency,
+) -> FileResponse:
+    """Выдать ещё доступную локальную запись только своему проекту."""
+    path = oral_service.audio_path(session, project_id, recording_id)
+    return FileResponse(path)
+
+
 def _attempt_detail(session: Session, item: attempt_service.AttemptWithGrade) -> AttemptDetailRead:
+    oral = session.scalar(select(OralRecording).where(
+        OralRecording.attempt_id == item.attempt.id
+    ))
     return AttemptDetailRead(
         attempt=AttemptRead.model_validate(item.attempt),
         grade=_grade_read(session, item.grade) if item.grade is not None else None,
+        oral=_oral_read(oral) if oral is not None else None,
     )
 
 

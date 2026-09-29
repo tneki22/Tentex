@@ -142,6 +142,19 @@
 .creation-paths > button:disabled { color: var(--faint); background: var(--surface-sunken); }
 .creation-paths strong { color: var(--ink); font-size: var(--text-lg); }
 .creation-paths span { color: var(--muted); line-height: var(--leading-normal); }
+.cards-ai-creator { display: grid; gap: var(--space-5); }
+.cards-ai-creator > p { margin: 0; color: var(--muted); }
+.cards-ai-controls { display: flex; align-items: end; flex-wrap: wrap; gap: var(--space-4); }
+.cards-ai-controls .cards-select-field { flex: 1 1 15rem; }
+.cards-ai-error { color: var(--tone-danger) !important; }
+.cards-ai-list { display: grid; gap: var(--space-4); }
+.cards-ai-candidate { display: grid; gap: var(--space-3); padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); }
+.cards-ai-candidate-head, .cards-ai-actions { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.cards-ai-candidate-head span { color: var(--muted); }
+.cards-ai-candidate label { display: grid; gap: var(--space-2); }
+.cards-ai-candidate textarea, .cards-ai-candidate input { width: 100%; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper-strong); color: var(--ink); font: inherit; }
+.cards-ai-candidate textarea { min-height: 5rem; resize: vertical; }
+.cards-ai-candidate blockquote { margin: 0; padding: var(--space-3); border-left: 2px solid var(--accent); color: var(--muted); }
 .cards-ai-placeholder,
 .fragment-creator { max-width: 48rem; display: grid; justify-items: start; gap: var(--space-3); padding: var(--space-8); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); box-shadow: var(--shadow-sm); }
 .cards-ai-placeholder h2,

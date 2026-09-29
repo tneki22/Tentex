@@ -215,6 +215,9 @@ export function VerdictCard({
                           {point.point}
                         </button>
                       ) : <span>{point.point}</span>}
+                      {point.source_quote && (
+                        <small className="chat-verdict-source">Опора: «{point.source_quote}»</small>
+                      )}
                     </li>
                   );
                 })}

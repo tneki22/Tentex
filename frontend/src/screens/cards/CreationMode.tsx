@@ -7,6 +7,7 @@ import {
 } from "../../api/cards";
 import { Button, ErrorState, LoadingState, PageHead } from "../../components/ui";
 import { CardEditor } from "./CardEditor";
+import { AiCardCreator } from "./AiCardCreator";
 
 export type CreationPath = "manual" | "ai" | "fragment";
 
@@ -78,20 +79,21 @@ export function CreationMode({
               <strong>Из фрагмента</strong>
               <span>Откройте Материалы и нажмите «В карточку» у нужного Фрагмента.</span>
             </button>
-            <button type="button" disabled aria-disabled="true">
+            <button type="button" onClick={() => setPath("ai")}>
               <Sparkles size={22} />
               <strong>С помощью ИИ</strong>
-              <span>Функция будет спроектирована позже.</span>
+              <span>Карточки по ответу и привязанным материалам с проверкой опоры.</span>
             </button>
           </div>
         </>
       ) : path === "ai" ? (
-        <section className="cards-ai-placeholder">
-          <Sparkles size={24} />
-          <h2>Создание с ИИ пока недоступно</h2>
-          <p>Сначала проверим ручной редактор и карточки из Фрагмента, затем отдельно спроектируем генерацию.</p>
-          <Button onClick={() => setPath("manual")}>Создать вручную</Button>
-        </section>
+        <AiCardCreator
+          projectId={projectId}
+          units={units}
+          initialUnitId={initialUnitId}
+          onChanged={onChanged}
+          onOpenBank={onOpenBank}
+        />
       ) : path === "fragment" && !prefill ? (
         <section className="fragment-creator">
           <FileText size={24} />

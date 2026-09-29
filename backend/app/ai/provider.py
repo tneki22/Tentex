@@ -92,6 +92,13 @@ class TimedSegment:
 
 
 @dataclass(frozen=True)
+class TimedWord:
+    start: float
+    end: float
+    word: str
+
+
+@dataclass(frozen=True)
 class ProviderTranscription:
     text: str
     actual_model_id: str
@@ -100,6 +107,7 @@ class ProviderTranscription:
     # Пусто, если провайдер не отдаёт время фраз (чат-модели, gpt-4o-transcribe,
     # OpenRouter): тогда у расшифровки есть только сплошной текст.
     segments: tuple[TimedSegment, ...] = ()
+    words: tuple[TimedWord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -289,6 +297,23 @@ def _timed_segment(raw: object) -> TimedSegment | None:
         return TimedSegment(float(start), float(end), text.strip())  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+
+
+def _timed_word(raw: object) -> TimedWord | None:
+    """Плохая метка не должна ломать расшифровку и готовый текст."""
+    if isinstance(raw, dict):
+        start, end, word = raw.get("start"), raw.get("end"), raw.get("word")
+    else:
+        start, end, word = (getattr(raw, name, None) for name in ("start", "end", "word"))
+    if not isinstance(word, str) or not word.strip():
+        return None
+    try:
+        start_seconds, end_seconds = float(start), float(end)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if end_seconds <= start_seconds:
+        return None
+    return TimedWord(start_seconds, end_seconds, word.strip())
 
 
 class OpenAITransport:
@@ -494,6 +519,7 @@ class OpenAITransport:
                 file=(f"audio.{audio_format}", audio),
                 language=language,
                 response_format="verbose_json",
+                timestamp_granularities=["word", "segment"],
             )
         except Exception as error:
             normalized = normalize_provider_error(error)
@@ -505,11 +531,16 @@ class OpenAITransport:
             for raw in getattr(result, "segments", None) or ()
             if (segment := _timed_segment(raw)) is not None
         )
+        words = tuple(
+            word for raw in getattr(result, "words", None) or ()
+            if (word := _timed_word(raw)) is not None
+        )
         return ProviderTranscription(
             text=getattr(result, "text", "") or "",
             actual_model_id=model,
             usage=_transcription_usage(getattr(result, "usage", None)),
             segments=segments,
+            words=words,
         )
 
     async def _transcribe_via_chat(

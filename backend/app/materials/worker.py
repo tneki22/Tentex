@@ -925,6 +925,7 @@ def run_pool(capacities: dict[WorkerLane, int]) -> None:
     active: dict[WorkerLane, set[Future[None]]] = {lane: set() for lane in WORKER_LANES}
     next_schedule_check = 0.0
     next_pulse = 0.0
+    next_oral_cleanup = 0.0
     with ThreadPoolExecutor(max_workers=sum(capacities.values()), thread_name_prefix="job") as pool:
         while True:
             now = time.monotonic()
@@ -947,6 +948,15 @@ def run_pool(capacities: dict[WorkerLane, int]) -> None:
                     diagnostics.record_error(error, kind="exhausted")
                     log.warning("automatic backup schedule check delayed: %s", error)
                 next_schedule_check = now + 60
+            if now >= next_oral_cleanup and not storage_maintenance.active():
+                from app.exam.oral import cleanup_expired
+
+                try:
+                    with SessionLocal() as session:
+                        cleanup_expired(session)
+                except OperationalError as error:
+                    log.warning("oral audio cleanup delayed: %s", error)
+                next_oral_cleanup = now + 3600
             _reap_finished(active)
             if _fill_slots(pool, active, capacities):
                 continue

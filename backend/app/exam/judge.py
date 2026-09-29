@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.ai.gateway import AiTextRequest, ModelGateway
 from app.ai.schemas import AiMessage, AiModelSelection, AiUsage
+from app.ai.settings import AiGatewayError
 from app.exam.checking import RubricPoint, locate_quote
 from app.exam.prompts import ANSWER_JUDGE_SYSTEM_PROMPT
 from app.models import Attempt, AttemptOutcome, ExaminerPersona, ExaminerStrictness
@@ -23,6 +24,7 @@ class JudgePoint(BaseModel):
         StringConstraints(strip_whitespace=True, min_length=1, max_length=400),
     ]
     quote: str = Field(default="", max_length=1000)
+    source_quote: str = Field(default="", max_length=1000)
 
 
 class JudgeVerdict(BaseModel):
@@ -84,16 +86,31 @@ def _messages(attempt: Attempt) -> list[AiMessage]:
     return [AiMessage(role="system", content=system), AiMessage(role="user", content=user)]
 
 
-def _rubric_points(answer: str, points: list[JudgePoint]) -> list[RubricPoint]:
+def _rubric_points(
+    answer: str, sources: list[str], points: list[JudgePoint], *, missed: bool = False
+) -> list[RubricPoint]:
     verified: list[RubricPoint] = []
     for item in points:
         location = locate_quote(answer, item.quote)
+        if (not missed and location is None) or (missed and item.quote):
+            raise AiGatewayError(
+                "Модель вернула неподтверждённую цитату ответа",
+                code="ai_judge_invalid_quote",
+            )
+        if not item.source_quote or not any(
+            locate_quote(source, item.source_quote) is not None for source in sources
+        ):
+            raise AiGatewayError(
+                "Модель вернула пункт без подтверждения в эталоне или материале",
+                code="ai_judge_invalid_source",
+            )
         verified.append(
             RubricPoint(
                 point=item.point,
                 quote=item.quote or None,
                 quote_start=location[0] if location is not None else None,
                 quote_end=location[1] if location is not None else None,
+                source_quote=item.source_quote,
             )
         )
     return verified
@@ -109,6 +126,21 @@ def _model_override(snapshot: dict) -> AiModelSelection | None:
 async def judge_attempt(gateway: ModelGateway, attempt: Attempt) -> JudgeResult:
     """Судит один неизменяемый снимок попытки и проверяет все цитаты локально."""
     snapshot = attempt.context_snapshot
+    sources = [
+        str(snapshot.get("reference_text") or ""),
+        *[
+            str(fragment.get("text") or "")
+            for fragment in snapshot.get("fragments", [])
+            if isinstance(fragment, dict)
+        ],
+    ]
+    if snapshot.get("answer_modality") == "oral" and not any(
+        source.strip() for source in sources
+    ):
+        raise AiGatewayError(
+            "Для содержательной проверки нет эталона или фрагмента",
+            code="ai_judge_no_source",
+        )
     manifest = snapshot.get("manifest", [])
     if not isinstance(manifest, list):
         manifest = []
@@ -127,11 +159,16 @@ async def judge_attempt(gateway: ModelGateway, attempt: Attempt) -> JudgeResult:
             },
         )
     )
+    if result.value.outcome == "passed" and (result.value.missed or result.value.wrong):
+        raise AiGatewayError(
+            "Итог проверки противоречит перечисленным пунктам",
+            code="ai_judge_inconsistent_verdict",
+        )
     return JudgeResult(
         outcome=AttemptOutcome(result.value.outcome),
-        credited=_rubric_points(attempt.text, result.value.credited),
-        missed=_rubric_points(attempt.text, result.value.missed),
-        wrong=_rubric_points(attempt.text, result.value.wrong),
+        credited=_rubric_points(attempt.text, sources, result.value.credited),
+        missed=_rubric_points(attempt.text, sources, result.value.missed, missed=True),
+        wrong=_rubric_points(attempt.text, sources, result.value.wrong),
         summary=result.value.summary,
         ai_run_id=result.run_id,
         actual_model_id=result.actual_model_id,

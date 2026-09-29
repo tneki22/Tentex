@@ -16,6 +16,20 @@ export type SessionDeferWrite = components["schemas"]["SessionDeferWrite"];
 export type SessionRetryWrite = components["schemas"]["SessionRetryWrite"];
 export type FragmentPrefillRead = components["schemas"]["FragmentPrefillRead"];
 
+export type CardGenerationMode = "connections" | "understanding";
+export interface GeneratedCard {
+  index: number;
+  front: string;
+  back: string;
+  hint: string | null;
+  source: NonNullable<CardCreate["source"]>;
+  evidence_quote: string;
+}
+export interface CardGeneration {
+  run_id: string;
+  candidates: GeneratedCard[];
+}
+
 export interface CardFilters {
   query?: string;
   unitId?: string;
@@ -54,6 +68,23 @@ export const listCards = (
 export const createCard = (
   projectId: string,
   command: CardCreate,
+): Promise<CardRead> =>
+  request(`${projectPath(projectId)}/cards`, {
+    method: "POST",
+    body: JSON.stringify(command),
+  });
+
+export const generateCards = (
+  projectId: string, programNodeId: string, mode: CardGenerationMode,
+): Promise<CardGeneration> =>
+  request(`${projectPath(projectId)}/cards/generate`, {
+    method: "POST",
+    body: JSON.stringify({ program_node_id: programNodeId, mode }),
+  });
+
+export const createGeneratedCard = (
+  projectId: string,
+  command: CardCreate & { generation_run_id: string; generation_candidate_index: number },
 ): Promise<CardRead> =>
   request(`${projectPath(projectId)}/cards`, {
     method: "POST",
