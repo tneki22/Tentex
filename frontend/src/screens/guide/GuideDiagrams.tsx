@@ -448,6 +448,187 @@ function SearchTurn() {
   );
 }
 
+/** Три полосы очереди разборов: сколько задач идёт одновременно. */
+function Lanes() {
+  const lanes = [
+    { title: "Быстро", sub: "ваш процессор", tone: "gd-info", y: 16, slots: 1, queue: 3 },
+    { title: "Облако", sub: "до 4 страниц в каждом", tone: "gd-warning", y: 96, slots: 2, queue: 2 },
+  ];
+  return (
+    <svg viewBox="0 0 720 256" role="img" aria-label="Одновременно идёт один быстрый разбор, два облачных и до восьми задач ИИ; остальные ждут в очереди">
+      {lanes.map((lane) => (
+        <g key={lane.title}>
+          <g className={`gd-node ${lane.tone}`}>
+            <rect x="8" y={lane.y} width="200" height="64" rx="14" />
+            <text x="108" y={lane.y + 28} className="gd-title gd-title-sm">{lane.title}</text>
+            <text x="108" y={lane.y + 47} className="gd-sub gd-sub-sm">{lane.sub}</text>
+          </g>
+          {Array.from({ length: lane.slots }, (_, index) => (
+            <g key={`s${index}`} className={`gd-node ${lane.tone}`}>
+              <rect x={236 + index * 92} y={lane.y + 10} width="80" height="44" rx="10" />
+              <text x={276 + index * 92} y={lane.y + 37} className="gd-step">идёт</text>
+            </g>
+          ))}
+          {Array.from({ length: lane.queue }, (_, index) => (
+            <g key={`q${index}`}>
+              <rect x={236 + lane.slots * 92 + 18 + index * 84} y={lane.y + 10} width="72" height="44" rx="10" className="gd-queue" />
+              <text x={272 + lane.slots * 92 + 18 + index * 84} y={lane.y + 37} className="gd-label gd-label-mid">ждёт</text>
+            </g>
+          ))}
+        </g>
+      ))}
+      <g className="gd-node gd-accent">
+        <rect x="8" y="176" width="200" height="64" rx="14" />
+        <text x="108" y="204" className="gd-title gd-title-sm">Задачи ИИ</text>
+        <text x="108" y="223" className="gd-sub gd-sub-sm">ждут ответа модели</text>
+      </g>
+      {Array.from({ length: 8 }, (_, index) => (
+        <g key={`a${index}`} className="gd-node gd-accent">
+          <rect x={236 + index * 58} y="186" width="48" height="44" rx="10" />
+          <text x={260 + index * 58} y="213" className="gd-step">{index + 1}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+/** Из чего состоит рабочая область проекта. */
+function WorkspaceLayout() {
+  const zones = [
+    { x: 208, title: "Зона 1", tabs: ["Ответ", "Источники"] },
+    { x: 372, title: "Зона 2", tabs: ["Чат"] },
+    { x: 536, title: "Зона 3", tabs: ["Мой конспект"] },
+  ];
+  return (
+    <svg viewBox="0 0 720 330" role="img" aria-label="Рабочая область: слева программа и разделы проекта, сверху название темы, индикаторы и учёт времени, справа до трёх рабочих зон, в каждой свои вкладки">
+      <rect x="6" y="6" width="708" height="318" rx="20" className="gd-frame" />
+      <g className="gd-node gd-info">
+        <rect x="18" y="18" width="176" height="294" rx="14" />
+        <text x="106" y="50" className="gd-title gd-title-sm">Слева</text>
+        <text x="106" y="82" className="gd-sub gd-sub-sm">поиск и фильтры</text>
+        <text x="106" y="112" className="gd-step">Программа</text>
+        <text x="106" y="132" className="gd-sub gd-sub-sm">разделы, темы, вопросы</text>
+        <text x="106" y="152" className="gd-sub gd-sub-sm">с отметками состояния</text>
+        <text x="106" y="222" className="gd-step">Разделы проекта</text>
+        <text x="106" y="244" className="gd-sub gd-sub-sm">Материалы · Ответы</text>
+        <text x="106" y="262" className="gd-sub gd-sub-sm">Уроки · Покрытие</text>
+        <text x="106" y="280" className="gd-sub gd-sub-sm">Настройки</text>
+      </g>
+      <g className="gd-node gd-accent">
+        <rect x="208" y="18" width="496" height="62" rx="14" />
+        <text x="456" y="45" className="gd-title gd-title-sm">Сверху: выбранная тема</text>
+        <text x="456" y="65" className="gd-sub gd-sub-sm">название · индикаторы · учёт времени · «N из M» · разделить · вынести</text>
+      </g>
+      {zones.map((zone) => (
+        <g key={zone.title} className="gd-node gd-success">
+          <rect x={zone.x} y="94" width="152" height="190" rx="14" />
+          <text x={zone.x + 76} y="124" className="gd-title gd-title-sm">{zone.title}</text>
+          <text x={zone.x + 76} y="146" className="gd-label gd-label-mid">вкладки</text>
+          {zone.tabs.map((tab, index) => (
+            <g key={tab}>
+              <rect x={zone.x + 16} y={158 + index * 38} width="120" height="28" rx="8" className="gd-tab" />
+              <text x={zone.x + 76} y={177 + index * 38} className="gd-sub gd-sub-sm">{tab}</text>
+            </g>
+          ))}
+        </g>
+      ))}
+      <text x="456" y="308" className="gd-label gd-label-mid">до трёх зон рядом · любую зону можно вынести в отдельное окно браузера</text>
+    </svg>
+  );
+}
+
+/** Откуда берутся привязки и где они работают. */
+function BindingFlow() {
+  const sources = [
+    { title: "Файл ответов", sub: "по заголовкам", tone: "gd-info" },
+    { title: "Вручную", sub: "вы привязали", tone: "gd-info" },
+    { title: "Поиск", sub: "нашли и привязали", tone: "gd-info" },
+    { title: "Исследование", sub: "выбрал ИИ", tone: "gd-warning" },
+    { title: "Урок", sub: "вы добавили кусок", tone: "gd-info" },
+  ];
+  const users = [
+    { title: "Ответ и Источник", sub: "читать рядом", y: 24 },
+    { title: "Чат", sub: "опора для ответа", y: 86 },
+    { title: "Уроки", sub: "материал для сборки", y: 148 },
+    { title: "Покрытие", sub: "чем закрыта тема", y: 210 },
+  ];
+  return (
+    <svg viewBox="0 0 720 300" role="img" aria-label="Привязку создают файл ответов, ручной выбор, поиск, исследование ИИ и урок; она связывает тему с местом в тексте и работает в ответе, чате, уроках и покрытии">
+      <defs>
+        <marker id="gd-arrow-b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      {sources.map((item, index) => (
+        <g key={item.title}>
+          <g className={`gd-node ${item.tone}`}>
+            <rect x="8" y={10 + index * 56} width="184" height="46" rx="12" />
+            <text x="100" y={31 + index * 56} className="gd-step">{item.title}</text>
+            <text x="100" y={47 + index * 56} className="gd-sub gd-sub-sm">{item.sub}</text>
+          </g>
+          <path d={`M196 ${33 + index * 56} C232 ${33 + index * 56} 226 ${112 + index * 19} 262 ${112 + index * 19}`} className="gd-arrow" markerEnd="url(#gd-arrow-b)" />
+        </g>
+      ))}
+      <g className="gd-node gd-accent">
+        <rect x="266" y="82" width="188" height="136" rx="18" />
+        <text x="360" y="120" className="gd-title">Привязка</text>
+        <text x="360" y="144" className="gd-sub">тема + точное место</text>
+        <text x="360" y="162" className="gd-sub">в тексте материала</text>
+        <text x="360" y="190" className="gd-sub gd-sub-sm">ручная · подтверждена</text>
+        <text x="360" y="206" className="gd-sub gd-sub-sm">или машинная</text>
+      </g>
+      {users.map((item, index) => (
+        <g key={item.title}>
+          <path d={`M458 ${112 + index * 25} C494 ${112 + index * 25} 488 ${47 + index * 62} 522 ${47 + index * 62}`} className="gd-arrow" markerEnd="url(#gd-arrow-b)" />
+          <g className="gd-node gd-success">
+            <rect x="526" y={item.y} width="186" height="46" rx="12" />
+            <text x="619" y={item.y + 21} className="gd-step">{item.title}</text>
+            <text x="619" y={item.y + 37} className="gd-sub gd-sub-sm">{item.sub}</text>
+          </g>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+/** Как работает исследование материалов. */
+function ResearchFlow() {
+  const steps = [
+    { title: "Программа", a: "темы вашего", b: "проекта", tone: "gd-accent" },
+    { title: "Блоки", a: "готовый текст", b: "материала", tone: "gd-info" },
+    { title: "ИИ читает", a: "пакетами", b: "соседних блоков", tone: "gd-warning" },
+    { title: "Проверка", a: "сервер сверяет", b: "каждое место", tone: "gd-info" },
+    { title: "Результат", a: "куски, пробелы,", b: "неразобранное", tone: "gd-success" },
+  ];
+  return (
+    <svg viewBox="0 0 720 170" role="img" aria-label="Исследование: программа и блоки материала попадают к ИИ, тот читает их пакетами, сервер проверяет каждое решение, результат показывается кусками, пробелами и неразобранным">
+      <defs>
+        <marker id="gd-arrow-r" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      {steps.map((step, index) => {
+        const x = 10 + index * 143;
+        return (
+          <g key={step.title}>
+            <g className={`gd-node ${step.tone}`}>
+              <rect x={x} y="12" width="128" height="86" rx="14" />
+              <text x={x + 64} y="40" className="gd-title gd-title-sm">{step.title}</text>
+              <text x={x + 64} y="64" className="gd-sub gd-sub-sm">{step.a}</text>
+              <text x={x + 64} y="80" className="gd-sub gd-sub-sm">{step.b}</text>
+            </g>
+            {index < steps.length - 1 && (
+              <path d={`M${x + 131} 55 H${x + 140}`} className="gd-arrow" markerEnd="url(#gd-arrow-r)" />
+            )}
+          </g>
+        );
+      })}
+      <path d="M217 102 V120 H503 V102" className="gd-arrow gd-dashed" />
+      <text x="360" y="146" className="gd-label gd-label-mid">запускаете вы сами · сначала бесплатная проверка объёма и цены</text>
+    </svg>
+  );
+}
+
 const DIAGRAMS: Record<string, () => ReactNode> = {
   overview: Overview,
   structure: Structure,
@@ -458,6 +639,10 @@ const DIAGRAMS: Record<string, () => ReactNode> = {
   "text-blocks": TextBlocks,
   "two-passes": TwoPasses,
   "search-turn": SearchTurn,
+  lanes: Lanes,
+  workspace: WorkspaceLayout,
+  bindings: BindingFlow,
+  research: ResearchFlow,
 };
 
 export function GuideDiagram({ name }: { name: string }) {

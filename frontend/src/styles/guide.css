@@ -562,6 +562,8 @@
 .gd-arrow { fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; }
 .gd-arrow-head { fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .gd-dashed { stroke-dasharray: 4 6; }
+.gd-queue { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 4 5; }
+.gd-tab { fill: color-mix(in srgb, var(--tone-success) 8%, var(--paper)); stroke: var(--tone-success); stroke-width: 1; }
 
 /* --- Страница без текста --- */
 

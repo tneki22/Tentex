@@ -36,6 +36,7 @@ import {
   NotebookPen,
   OctagonAlert,
   Package,
+  PanelsTopLeft,
   Route,
   ScanSearch,
   ScanText,
@@ -47,6 +48,7 @@ import {
   Target,
   Timer,
   Upload,
+  UserRound,
   Video,
   Zap,
   Eye,
@@ -64,7 +66,7 @@ const CARD_ICONS: Record<string, LucideIcon> = {
   Archive, BookOpen, Bot, BrainCircuit, CalendarDays, Cloud, Coins, Compass, Cpu, Database, Download, FilePenLine,
   FilePlus2, FileText, Files, FolderOpen, FolderPlus, GraduationCap, HardDrive, Image: ImageIcon, KeyRound, Layers,
   Library, Link2, ListChecks, ListTree, MessagesSquare, Mic, NotebookPen, Package, Route, ScanSearch, ScanText, Search,
-  Settings, Share2, ShieldCheck, Sparkles, Target, Timer, Upload, Globe, Video, Zap, Eye,
+  Settings, Share2, ShieldCheck, Sparkles, Target, Timer, Upload, Globe, Video, Zap, Eye, PanelsTopLeft, UserRound,
 };
 
 const CALLOUTS: Record<CalloutTone, { icon: LucideIcon; title: string }> = {
