@@ -1,11 +1,16 @@
 """Оценка PDF не повторяет дорогой анализ при опросе одного материала."""
 
 from types import SimpleNamespace
+from decimal import Decimal
 
 import pymupdf
+import pytest
 
 from app.materials import processing_plan
+from app.materials.schemas import ProcessingStart
+from app.models import ParserMode
 from app.ocr.engines import OcrRuntimeParams
+from app.projects.errors import ProjectConflictError
 
 
 def test_pdf_shape_samples_and_reuses_diagnosis(tmp_path, monkeypatch):
@@ -47,3 +52,35 @@ def test_pdf_shape_samples_and_reuses_diagnosis(tmp_path, monkeypatch):
     assert processing_plan._pdf_shape(path, pages, params) == first
     assert processing_plan._pdf_shape(path, pages, params) == first
     assert len(submitted) == 1
+
+
+def test_quick_budget_does_not_need_pdf_estimate(monkeypatch):
+    """Быстрый лимит известной модели не запускает диагностику страниц."""
+    selection = SimpleNamespace(model_id="vision")
+    monkeypatch.setattr(processing_plan, "page_model", lambda session: selection)
+    monkeypatch.setattr(
+        processing_plan, "_price", lambda session, model: (Decimal("0.001"), Decimal("0.002"))
+    )
+    command = ProcessingStart(parser_mode=ParserMode.CLOUD)
+
+    budget = processing_plan.run_budget(None, command, 46, "describe")
+
+    assert budget["max_cost_usd"] == "10"
+    assert budget["max_calls"] == 46 * processing_plan.QUICK_CALLS_PER_PAGE + 4
+    assert budget["allow_unknown_price"] is False
+
+
+def test_quick_budget_unknown_price_needs_consent(monkeypatch):
+    """Без тарифа подтверждение остаётся обязательным до первого вызова."""
+    monkeypatch.setattr(processing_plan, "page_model", lambda session: None)
+    with pytest.raises(ProjectConflictError) as caught:
+        processing_plan.run_budget(
+            None, ProcessingStart(parser_mode=ParserMode.CLOUD), 1, "skip"
+        )
+    assert caught.value.code == "ai_price_unknown"
+    budget = processing_plan.run_budget(
+        None, ProcessingStart(parser_mode=ParserMode.CLOUD, confirm_unknown_price=True),
+        1, "skip",
+    )
+    assert budget["max_cost_usd"] is None
+    assert budget["max_calls"] == processing_plan.QUICK_CALLS_PER_PAGE + 4

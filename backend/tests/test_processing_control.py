@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.main import create_app
-from app.materials import library
+from app.materials import library, processing_plan
+from app.materials.schemas import ProcessingStart
 from app.materials.parsers.base import ParsedElement
 from app.materials.worker import _prepare_revision, _renew_lease
 from app.models import (
@@ -104,6 +105,25 @@ def test_task_read_exposes_launch_snapshot(session: Session) -> None:
     legacy = library.task_read(task)
     assert legacy.model_id is None
     assert legacy.cloud_strategy is None
+
+
+def test_cloud_start_does_not_wait_for_estimate(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Постановка облачного разбора не открывает файл ради оценки."""
+    material = make_material(session, "quick-start")
+    monkeypatch.setattr(library.ocr_settings, "engine_ready", lambda *args: (True, None))
+
+    def unexpected_estimate(*args):
+        pytest.fail("Запуск не должен ждать подробную оценку")
+
+    monkeypatch.setattr(processing_plan, "estimate", unexpected_estimate)
+    task = library.start_processing_core(
+        session, material.id,
+        ProcessingStart(parser_mode=ParserMode.CLOUD, confirm_unknown_price=True),
+    )
+    assert task.state == BackgroundJobState.QUEUED
+    assert task.checkpoint["budget"]["max_calls"] == processing_plan.QUICK_CALLS_PER_PAGE + 4
 
 
 def test_progress_endpoint_does_not_read_material_detail(
