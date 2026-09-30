@@ -449,7 +449,10 @@ function CloudModelPicker({
 
   return (
     <div className="ocr-cloud-picker">
-      <Field label="Модель распознавания" hint="Годные — сверху, у остальных написана причина">
+      <Field
+        label="Модель распознавания"
+        hint="Рекомендуется использовать качественные модели с поддержкой анализа изображений (vision): они лучше распознают формулы, таблицы и сложную вёрстку."
+      >
         <div className="ocr-inline-field">
           <Search size={15} aria-hidden="true" />
           <input
@@ -595,10 +598,6 @@ function CloudEngineCard({
               </div>
             </dl>
           )}
-          <p className="inspector-warning" role="note">
-            Страницы и вырезы уходят на сервер провайдера. Учебник с чужими данными или
-            закрытую методичку туда отправлять не стоит.
-          </p>
         </>
       )}
       <StatusNote note={note} />
