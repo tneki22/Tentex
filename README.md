@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="Tentex — единая среда для обучения. Свои материалы. Своя программа. Свой темп.">
+  <img src="./assets/readme/hero.png" width="100%" alt="Tentex — единая среда для обучения. Свои материалы. Своя программа. Свой темп.">
 </p>
 
 <p align="center">
