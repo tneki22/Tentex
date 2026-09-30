@@ -244,13 +244,6 @@
 
 .chat-retrieval-controls > .retrieval-error { grid-column: 1 / -1; margin: 0; }
 
-.workspace-free-chat {
-  min-height: 0;
-  height: 100%;
-}
-
-.workspace-free-chat > .exam-chat-panel { height: 100%; }
-
 .chat-citation {
   display: inline-flex;
   align-items: center;

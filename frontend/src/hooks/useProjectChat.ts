@@ -230,7 +230,9 @@ export function useProjectChat({ projectId, channel, streaming = false }: UsePro
           : current);
       }
       if (failure) {
-        setSendError(failure);
+        if (!(channel === "program-chat" && fresh?.messages.at(-1)?.stream_state === "failed")) {
+          setSendError(failure);
+        }
         setDraft((current) => current || clean);
       }
     }

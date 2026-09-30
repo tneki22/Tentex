@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.gateway import AiTextRequest, ModelGateway
 from app.ai.schemas import AiMessage, AiModelSelection
+from app.ai.settings import AiGatewayError
 from app.background.schemas import BackgroundJobStartRead
 from app.bindings.service import search_project_materials
 from app.chat import common as chat_common
@@ -42,6 +43,7 @@ from app.models import (
     ChatMode,
     ChatPayloadKind,
     ChatSession,
+    ChatStreamState,
     ChatToolRun,
     ChatToolRunState,
     GoalPassport,
@@ -677,7 +679,23 @@ async def send_message(
         confirmed=True,
         minimum_output_tokens=2000,
     )
-    result = await gateway.complete(request)
+    try:
+        result = await gateway.complete(request)
+    except AiGatewayError as error:
+        # Ошибка запроса должна остаться рядом с репликой и после возвращения
+        # в чат. Системные отметки не попадают в следующий prompt.
+        with project_write_transaction(session, project_id):
+            chat = project_sessions.require_session(session, project_id, session_id, CHANNEL)
+            chat.draft_text = text
+            chat_common.append_message_row(
+                session, chat, role=ChatMessageRole.SYSTEM,
+                text=(
+                    f"Не удалось получить ответ: {error.detail}. "
+                    "Проверьте модель и попробуйте ещё раз."
+                ),
+                stream_state=ChatStreamState.FAILED,
+            )
+        raise
     reply = result.value
     payload_kind = ChatPayloadKind.PROGRAM_DIFF if reply.operations else ChatPayloadKind.NONE
     with project_write_transaction(session, project_id):

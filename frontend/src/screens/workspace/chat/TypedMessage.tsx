@@ -104,7 +104,7 @@ export function TypedMessage({
   }
 
   if (message.role === "system") {
-    return <p className="chat-system-note">{message.text}</p>;
+    return <p className={`chat-system-note${message.stream_state === "failed" ? " is-error" : ""}`} role={message.stream_state === "failed" ? "alert" : undefined}>{message.text}</p>;
   }
 
   if (payload.kind === "unknown") {

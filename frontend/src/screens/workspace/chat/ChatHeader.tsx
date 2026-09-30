@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { History, Minus, Plus } from "lucide-react";
 import type { ChatSessionDetail, ChatSettingsPatch } from "../../../api/chat";
 import { Button, IconButton, Popover } from "../../../components/ui";
@@ -89,14 +89,28 @@ const STUDY_DEPTHS = [
 /** Предел ответа и инструкция тьютора читают один параметр роли; остальные параметры модели сохраняются. */
 function StudyDepthControl({ session, onChange }: { session: ChatSessionDetail; onChange: (patch: ChatSettingsPatch) => void | Promise<void> }) {
   const [open, setOpen] = useState(false);
-  const max = Number(session.model_parameters.max_output_tokens ?? 3000);
-  const active = STUDY_DEPTHS.find((item) => item.max === max);
+  const normalized = useRef("");
+  const max = Number(session.model_parameters.max_output_tokens ?? STUDY_DEPTHS[2].max);
+  const active = STUDY_DEPTHS[max <= STUDY_DEPTHS[0].max ? 0 : max <= STUDY_DEPTHS[1].max ? 1 : 2];
+  useEffect(() => {
+    // Старые чаты и смена модели могли оставить произвольный лимит (например,
+    // 8000), хотя в учебном чате доступны только три режима.
+    if (max === active.max) {
+      normalized.current = "";
+      return;
+    }
+    const key = `${session.id}:${max}`;
+    if (normalized.current !== key) {
+      normalized.current = key;
+      void onChange({ model_parameters: { ...session.model_parameters, max_output_tokens: active.max } });
+    }
+  }, [active.max, max, onChange, session.model_parameters]);
   return <Popover open={open} onOpenChange={setOpen} title="Глубина ответа" align="end"
-    trigger={<button type="button" className="chat-depth-trigger" aria-label={`Глубина ответа: ${active?.label ?? `${max} токенов`}`}>
-      <span className="chat-depth-full">{active?.label ?? `${max} токенов`}</span><span className="chat-depth-short" aria-hidden="true">{active?.label.slice(0, 1) ?? "Г"}</span>
+    trigger={<button type="button" className="chat-depth-trigger" aria-label={`Глубина ответа: ${active.label}`}>
+      <span className="chat-depth-full">{active.label}</span><span className="chat-depth-short" aria-hidden="true">{active.label.slice(0, 1)}</span>
     </button>}>
     <div className="chat-depth-options">
-      {STUDY_DEPTHS.map((item) => <button type="button" key={item.max} aria-pressed={max === item.max}
+      {STUDY_DEPTHS.map((item) => <button type="button" key={item.max} aria-pressed={active.max === item.max}
         onClick={() => { void onChange({ model_parameters: { ...session.model_parameters, max_output_tokens: item.max } }); setOpen(false); }}>
         <strong>{item.label}</strong><small>{item.detail}</small>
       </button>)}

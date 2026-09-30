@@ -7,6 +7,7 @@ const MATERIAL = "22222222-2222-4222-8222-222222222222";
 const NOW = "2026-09-20T10:00:00Z";
 
 interface StubOptions {
+  programChatFails?: boolean;
   projectTemplate?: "free" | "textbook" | "exam";
   library?: Array<Record<string, unknown>>;
   initialMaterials?: Array<Record<string, unknown>>;
@@ -236,6 +237,7 @@ async function installStub(page: Page, options: StubOptions = {}) {
   let programNodes: Array<Record<string, unknown>> = [...(options.initialNodes ?? [])];
   let modelRequests = 0;
   let chatMessages: Array<Record<string, unknown>> = [];
+  let chatDraft = "";
   // Чат «Поиск в интернете» в Материалах.
   let searchCreated = false;
   let searchMessages: Array<Record<string, unknown>> = [];
@@ -337,7 +339,7 @@ async function installStub(page: Page, options: StubOptions = {}) {
       id: CHAT_SESSION, project_id: PROJECT, section_scope_node_id: null, title: "Программа",
       model_override: null, model_parameters: {},
       context_flags: { profile: true, primary_sources: true, secondary_sources: true, reference_sources: false },
-      draft_text: "", created_at: NOW, updated_at: NOW, messages: chatMessages,
+      draft_text: chatDraft, created_at: NOW, updated_at: NOW, messages: chatMessages,
     });
     if (path === `${chatBase}/sessions` && method === "GET") {
       return json(chatCreated
@@ -352,10 +354,22 @@ async function installStub(page: Page, options: StubOptions = {}) {
     if (path === `${chatBase}/sessions/${CHAT_SESSION}/context`) {
       return json({ session_id: CHAT_SESSION, manifest: [], fingerprint: "f", total_bytes: 0 });
     }
-    if (path === `${chatBase}/sessions/${CHAT_SESSION}/draft`) return json(chatDetail());
+    if (path === `${chatBase}/sessions/${CHAT_SESSION}/draft`) {
+      chatDraft = request.postDataJSON().text;
+      return json(chatDetail());
+    }
     if (path === `${chatBase}/sessions/${CHAT_SESSION}/messages` && method === "POST") {
       modelRequests += 1;
       const body = request.postDataJSON();
+      if (options.programChatFails) {
+        chatDraft = body.text;
+        chatMessages = [
+          chatMessage(1, "user", body.text),
+          { ...chatMessage(2, "assistant", "Не удалось получить ответ: провайдер недоступен."),
+            role: "system", stream_state: "failed" },
+        ];
+        return json({ code: "ai_provider_unavailable", detail: "Провайдер недоступен" }, 503);
+      }
       chatMessages = [
         chatMessage(1, "user", body.text),
         chatMessage(2, "assistant", "Черновик программы от цели", {
@@ -715,6 +729,31 @@ test("вкладка С ИИ составляет программу по цел
   await page.getByRole("tab", { name: "Вручную" }).click();
   await expect(page.getByRole("treeitem").filter({ hasText: "Операция свёртки" })).toContainText("Предложено ИИ");
   await expect.poll(state.modelRequests).toBe(1);
+});
+
+test("ошибка первого хода программы остаётся в переписке после повторного открытия", async ({ page }) => {
+  await installStub(page, { aiEnabled: true, programChatFails: true });
+  await page.goto(`${BASE}/projects/${PROJECT}/program`);
+  await page.getByRole("tab", { name: "С ИИ" }).click();
+  await page.getByRole("button", { name: "Составь программу по моей цели" }).click();
+  await expect(page.getByRole("alert")).toContainText("Не удалось получить ответ");
+  await expect(page.locator(".chat-composer-input")).toHaveValue("Составь программу по моей цели");
+  await page.reload();
+  await page.getByRole("tab", { name: "С ИИ" }).click();
+  await expect(page.getByRole("alert")).toContainText("провайдер недоступен");
+  await expect(page.locator(".chat-composer-input")).toHaveValue("Составь программу по моей цели");
+});
+
+test("длинный запрос программы оставляет кнопки чата в пределах окна", async ({ page }) => {
+  await installStub(page, { aiEnabled: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${BASE}/projects/${PROJECT}/program`);
+  await page.getByRole("tab", { name: "С ИИ" }).click();
+  await page.locator(".chat-composer-input").fill(Array.from({ length: 35 }, (_, i) => `Тема ${i}`).join("\n"));
+  const send = page.getByRole("button", { name: "Отправить" });
+  await expect(send).toBeVisible();
+  const bounds = await send.boundingBox();
+  expect(bounds && bounds.y + bounds.height).toBeLessThanOrEqual(720);
 });
 
 test("без внешних моделей вкладка С ИИ объясняет причину и ведёт в ручной режим", async ({ page }) => {

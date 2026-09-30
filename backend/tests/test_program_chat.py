@@ -175,6 +175,26 @@ async def test_send_message_creates_program_diff_message(session: Session, ai_co
     assert set(schema["required"]) == set(schema["properties"])
 
 
+@pytest.mark.asyncio
+async def test_failed_program_reply_stays_visible_in_chat(session: Session, ai_config: str) -> None:
+    del ai_config
+    project = _project(session)
+    chat = project_sessions.create_session(session, project.id, program_chat.CHANNEL)
+    gateway = ModelGateway(session, FakeTransport(), retry_backoff=())
+
+    with pytest.raises(ProjectDomainError) as caught:
+        await program_chat.send_message(session, gateway, project.id, chat.id, "Составь программу")
+
+    assert caught.value.code == "ai_provider_unavailable"
+    detail = project_sessions.get_session_detail(session, project.id, chat.id, program_chat.CHANNEL)
+    assert [message.role for message in detail.messages] == [
+        ChatMessageRole.USER, ChatMessageRole.SYSTEM,
+    ]
+    assert detail.messages[-1].stream_state.value == "failed"
+    assert "Не удалось получить ответ" in detail.messages[-1].text
+    assert detail.draft_text == "Составь программу"
+
+
 def test_outline_build_runs_as_background_job_and_appends_message(
     session: Session, ai_config: str,
 ) -> None:

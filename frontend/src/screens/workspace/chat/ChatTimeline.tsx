@@ -14,6 +14,9 @@ export interface StreamFailure {
 
 const OFFLINE_CODES = new Set(["ai_disabled", "ai_role_disabled", "ai_model_not_configured", "ai_credentials_missing"]);
 const UNREACHABLE_CODES = new Set(["ai_provider_unavailable", "ai_timeout", "ai_rate_limited"]);
+const WAIT_TIME_LABEL_DELAY_SECONDS = 15;
+const SLOW_REPLY_SECONDS = 30;
+const WAIT_TIME_TICK_MS = 1000;
 
 interface ChatTimelineProps {
   projectId: string;
@@ -55,6 +58,16 @@ export function ChatTimeline({
   const wasStreaming = useRef(false);
   const [showJump, setShowJump] = useState(false);
   const [streamAnnouncement, setStreamAnnouncement] = useState("");
+  const [waitingSeconds, setWaitingSeconds] = useState(0);
+  useEffect(() => {
+    if (!preparing) {
+      setWaitingSeconds(0);
+      return;
+    }
+    const started = Date.now();
+    const timer = window.setInterval(() => setWaitingSeconds(Math.floor((Date.now() - started) / WAIT_TIME_TICK_MS)), WAIT_TIME_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [preparing]);
   const verdictAttemptIds = new Set(
     messages.flatMap((message) => message.grade_attempt_id ? [message.grade_attempt_id] : []),
   );
@@ -192,7 +205,11 @@ export function ChatTimeline({
           {preparing && !preparingContent && (
             <div className="chat-timeline-item">
               <p className="chat-status-line" role="status">
-                {preparingLabel}
+                {waitingSeconds >= SLOW_REPLY_SECONDS
+                  ? `Ответ задерживается · ${waitingSeconds} с`
+                  : waitingSeconds >= WAIT_TIME_LABEL_DELAY_SECONDS
+                    ? `${preparingLabel} · ${waitingSeconds} с`
+                    : preparingLabel}
                 <span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span>
               </p>
             </div>

@@ -153,7 +153,7 @@ export function ProgramChatWorkspace({
 
       {chat.session && !chat.detailLoading && !chat.detailError && (
         <>
-          {isEmpty ? (
+          {isEmpty && !chat.sending && !chat.sendError ? (
             <div className="chat-empty-invite">
               <h2>Составьте программу вместе с ИИ</h2>
               {variant === "free" ? (

@@ -23,6 +23,38 @@ test("в учебном чате нет выбора режима, а глуби
   await page.screenshot({ path: "test-results/chat-study-controls.png" });
 });
 
+test("старый предел 8000 отображается режимом и приводится к его лимиту", async ({ page }) => {
+  const stub = await installChatStub(page, { studyMaxTokens: 8000 });
+  await page.goto(`${BASE}/projects/${PROJECT}`);
+  await expect(page.getByRole("button", { name: "Глубина ответа: Подробно" })).toBeVisible();
+  await expect.poll(() => stub.settingsPatches.length).toBe(1);
+  expect(stub.settingsPatches[0].model_parameters).toMatchObject({ max_output_tokens: 4000 });
+});
+
+test("пустая программа закрывает сохранённый чат рабочей области", async ({ page }) => {
+  await installChatStub(page, { emptyProgram: true });
+  await page.goto(`${BASE}/projects/${PROJECT}`);
+  await expect(page.getByText("Программа пока пуста")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: /Спросите/ })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Открыть программу" })).toBeVisible();
+});
+
+test("Ctrl+Enter добавляет строку, длинный ввод оставляет кнопки на экране", async ({ page }) => {
+  const stub = await installChatStub(page);
+  await page.setViewportSize({ width: 1000, height: 600 });
+  await page.goto(`${BASE}/projects/${PROJECT}`);
+  const composer = page.locator(".chat-composer-input");
+  await composer.fill("Первая строка");
+  await composer.press("Control+Enter");
+  await expect(composer).toHaveValue("Первая строка\n");
+  expect(stub.sent).toHaveLength(0);
+  await composer.fill(Array.from({ length: 35 }, (_, i) => `Строка ${i}`).join("\n"));
+  const send = page.getByRole("button", { name: "Отправить" });
+  await expect(send).toBeVisible();
+  const bounds = await send.boundingBox();
+  expect(bounds && bounds.y + bounds.height).toBeLessThanOrEqual(600);
+});
+
 test("кнопка операции уходит полем operation, а не словами в тексте, и сбрасывается после отправки", async ({ page }) => {
   const stub = await installChatStub(page, { onSend: () => ({ sse: answer("a1", "Сравнение [S1]") }) });
   await page.goto(`${BASE}/projects/${PROJECT}`);
@@ -37,7 +69,7 @@ test("кнопка операции уходит полем operation, а не �
   await composer.press("Enter");
   await expect(page.locator(".chat-bubble.is-examiner")).toContainText("Сравнение");
 
-  expect(stub.sent[0]).toMatchObject({ text: "нормальные формы", operation: "compare_sources", retrieval_scope: "project" });
+  expect(stub.sent[0]).toMatchObject({ text: "нормальные формы", operation: "compare_sources", retrieval_scope: "topic_project" });
   await expect(page.locator(".chat-composer-operation")).toHaveCount(0);
 });
 
@@ -77,11 +109,14 @@ test("пустая область «Связано с темой»: объясн
       : { status: 409, json: { code: "retrieval_scope_empty", detail: "К теме ничего не привязано — искать в «Связано с темой» негде" } },
   });
   await page.goto(`${BASE}/projects/${PROJECT}`);
+  await page.getByText("Контекст и поиск").click();
+  await page.getByRole("combobox", { name: "Область поиска" }).click();
+  await page.getByRole("option", { name: "Связано с темой" }).click();
   const composer = page.getByRole("textbox").last();
   await composer.fill("что такое 3НФ");
   await composer.press("Enter");
   await expect(page.getByRole("alert")).toContainText("К теме ничего не привязано");
   await page.getByRole("button", { name: "Искать по теме" }).click();
   await expect(page.locator(".chat-bubble.is-examiner")).toContainText("По теме");
-  expect(stub.sent.map((body) => body.retrieval_scope)).toEqual(["project", "topic_project"]);
+  expect(stub.sent.map((body) => body.retrieval_scope)).toEqual(["linked_topic", "topic_project"]);
 });

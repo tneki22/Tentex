@@ -72,6 +72,8 @@
 
 .chat-empty-invite {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: grid;
   place-content: center;
   justify-items: center;
@@ -193,6 +195,7 @@
   color: var(--muted);
   font-style: italic;
 }
+.chat-system-note.is-error { color: var(--tone-danger); font-style: normal; }
 
 .chat-stream-flag {
   display: inline-block;
@@ -643,6 +646,7 @@
 .chat-composer {
   display: flex;
   flex-direction: column;
+  flex: none;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-5) var(--space-4);
   border-top: 1px solid var(--line);
@@ -653,7 +657,8 @@
   width: 100%;
   resize: none;
   min-height: 44px;
-  max-height: 240px;
+  max-height: min(240px, 28dvh);
+  overflow-y: auto;
   padding: var(--space-3);
   border-radius: var(--radius-md);
   border: 1px solid var(--line);

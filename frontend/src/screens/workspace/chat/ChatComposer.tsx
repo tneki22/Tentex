@@ -33,7 +33,7 @@ interface ChatComposerProps {
 
 /**
  * Композер: авторастущее поле, `+` и `/` открывают палитру команд,
- * Enter отправляет, Shift+Enter переносит строку (AI-CHATS.md §21.3).
+ * Enter отправляет, Shift+Enter и Ctrl/⌘+Enter переносят строку.
  */
 export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer(
   {
@@ -68,7 +68,15 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   }, [value]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (event.key === "Enter" && !event.nativeEvent.isComposing && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      const input = event.currentTarget;
+      const cursor = input.selectionStart + 1;
+      onChange(`${value.slice(0, input.selectionStart)}\n${value.slice(input.selectionEnd)}`);
+      requestAnimationFrame(() => input.setSelectionRange(cursor, cursor));
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       if (!sending && value.trim()) onSend();
       return;

@@ -206,6 +206,14 @@ function sanitizeLayout(
   preferredTab: WorkspaceTab | null = null,
 ): WorkspaceLayout {
   const visibleNodes = nodes.filter((node) => node.is_in_current_program && !node.is_archived);
+  // Сохранённые вкладки относятся к выбранному узлу. После удаления всей
+  // программы им больше не к чему привязываться.
+  if (visibleNodes.length === 0) {
+    return {
+      ...DEFAULT_LAYOUT,
+      tree_width: Math.round(Math.min(460, Math.max(260, source?.tree_width ?? 320))),
+    };
+  }
   const currentIds = new Set(visibleNodes.map((node) => node.id));
   const firstStudyId = visibleNodes.find(isStudyNode)?.id ?? null;
   const selected = preferredNodeId && currentIds.has(preferredNodeId)
@@ -1336,16 +1344,7 @@ export function ProjectWorkspace({ detached = false }: { detached?: boolean }) {
       />}
 
       <main className="workspace-main">
-        {!selectedNode && freeProject ? (
-          <div className="workspace-free-chat">
-            <Suspense fallback={<LoadingState label="Открываем чат" />}><ExamChatPanel
-              projectId={projectId}
-              node={null}
-              studyOnly
-              projectChat
-            /></Suspense>
-          </div>
-        ) : !selectedNode ? (
+        {!selectedNode ? (
           <div className="workspace-section-overview is-empty"><EmptyState title="Программа пока пуста"><p>Добавьте разделы и темы, не покидая проектную рабочую область.</p><Link className="primary-button" to={`/projects/${projectId}/program`}>Открыть программу</Link></EmptyState></div>
         ) : selectedNode.node_type === "section" ? (
           <div className="workspace-section-overview">
