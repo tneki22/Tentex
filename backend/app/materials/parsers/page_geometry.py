@@ -46,6 +46,8 @@ FIGURE_PATH_SHARE = 0.3
 # Рамка составного растра подтверждает почти всю область фигуры; вложенная
 # миниатюра в большом кластере таким подтверждением не является.
 RASTER_SUPPORT_SHARE = 0.8
+# Растр вложен в рамку иллюстрации, если внутри неё почти вся его площадь.
+SAME_FIGURE_SHARE = 0.8
 # Куски одного рисунка у модели стоят вплотную или налезают друг на друга.
 SPLIT_IMAGE_GAP = 0.02
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]+", re.IGNORECASE)
@@ -113,6 +115,7 @@ def _expanded(box: Box) -> Box:
 
 
 def union_boxes(boxes: Sequence[Box]) -> Box:
+    """Общая рамка непустого набора областей в координатах страницы."""
     return (
         min(box[0] for box in boxes),
         min(box[1] for box in boxes),
@@ -221,6 +224,12 @@ def page_geometry(page: fitz.Page, zones: Sequence[FormulaZone]) -> PageGeometry
     words, lines = _layer_lines(page)
     vector, grids = _drawing_clusters(page)
     rasters = tuple(_embedded_figures(page))
+    # Соприкасающиеся рамки соседних рисунков попадают в один кластер путей.
+    # Такой кластер не доказывает, что самостоятельные растры — одна схема.
+    vector = [box for box in vector if sum(
+        _intersection(box, raster) >= SAME_FIGURE_SHARE * _area(raster)
+        for raster in rasters
+    ) < 2]
     return PageGeometry(
         tuple(words),
         tuple(lines),

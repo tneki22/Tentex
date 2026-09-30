@@ -16,7 +16,13 @@ from docx import Document
 from docx.text.paragraph import Paragraph
 from PIL import Image
 
-from app.materials.image_candidates import TINY_SIDE_PX, XREF_REPEATED, auto_send, classify
+from app.materials.image_candidates import (
+    PAGE_SCAN_AREA,
+    TINY_SIDE_PX,
+    XREF_REPEATED,
+    auto_send,
+    classify,
+)
 from app.materials.image_meta import (
     crop_hash,
     element_meta,
@@ -1225,6 +1231,20 @@ def _missed_regions(parsed: ParsedPage, image: bytes, owner: str) -> ParsedPage:
         raster.unread_regions(page_image, [element.bbox for element in parsed.elements]),
         parsed.elements,
     )
+    # Чернила цветного фона или текстуры не доказывают, что модель пропустила
+    # всю страницу. Такой кандидат остаётся диагностикой; дублировать лист
+    # среди уже прочитанных элементов нельзя.
+    page_background = any(
+        (box[2] - box[0]) * (box[3] - box[1]) >= PAGE_SCAN_AREA for box in regions
+    )
+    regions = [
+        box for box in regions
+        if (box[2] - box[0]) * (box[3] - box[1]) < PAGE_SCAN_AREA
+    ]
+    if page_background:
+        parsed = replace(
+            parsed, diagnostics=(*parsed.diagnostics, "unread_page_background")
+        )
     if not regions:
         return parsed
     added: list[ParsedElement] = []

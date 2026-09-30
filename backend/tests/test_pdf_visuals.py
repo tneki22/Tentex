@@ -194,3 +194,94 @@ def test_layout_parts_become_one_crop_of_the_complete_raster(tmp_path, monkeypat
     assert reconciled.elements[0].bbox == (0.2, 200 / 700, 0.6, 400 / 700)
     assert reconciled.elements[0].asset_path
     document.close()
+
+
+def test_legitimate_inline_image_is_content():
+    document, page = _page()
+    _prose(page)
+    xref = document.get_new_xref()
+    document.update_object(xref, "<<>>")
+    colors = bytes([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255])
+    document.update_stream(xref, b"q 100 0 0 100 100 200 cm\n"
+                           b"BI /W 2 /H 2 /BPC 8 /CS /RGB ID " + colors + b"\nEI\nQ")
+    contents = page.get_contents()
+    document.xref_set_key(page.xref, "Contents",
+                          "[" + " ".join(f"{value} 0 R" for value in (*contents, xref)) + "]")
+    assert len(pdf_visuals.raster_regions(page)) == 1
+    document.close()
+
+
+@pytest.mark.parametrize("main_position", ["absent", "before", "after"])
+def test_images_in_soft_mask_definitions_are_not_independent_figures(main_position):
+    document, page = _page()
+    _prose(page)
+    source = document.new_page(width=100, height=100)
+    image_xref = source.insert_image(source.rect, stream=_png())
+    page = document[0]
+    form = document.get_new_xref()
+    document.update_object(form, "<< /Type /XObject /Subtype /Form /BBox [0 0 500 700] "
+                           f"/Resources << /XObject << /I {image_xref} 0 R >> >> "
+                           "/Group << /S /Transparency /CS /DeviceGray >> >>")
+    document.update_stream(form, b"q 200 0 0 200 100 200 cm /I Do Q")
+    state = document.get_new_xref()
+    document.update_object(state,
+                           f"<< /Type /ExtGState /SMask << /S /Luminosity /G {form} 0 R >> >>")
+    resources = int(document.xref_get_key(page.xref, "Resources")[1].split()[0])
+    document.xref_set_key(resources, "ExtGState", f"<< /E {state} 0 R >>")
+    main_rect = fitz.Rect(250, 430, 400, 580)
+    if main_position == "before":
+        page.insert_image(main_rect, xref=image_xref)
+    content = document.get_new_xref()
+    document.update_object(content, "<<>>")
+    document.update_stream(content, b"q /E gs .8 g 100 200 200 200 re f Q")
+    contents = (*page.get_contents(), content)
+    document.xref_set_key(page.xref, "Contents",
+                          "[" + " ".join(f"{value} 0 R" for value in contents) + "]")
+    if main_position == "after":
+        page.insert_image(main_rect, xref=image_xref)
+    assert page.get_image_info(), "MuPDF видит bitmap внутри определения SMask"
+    regions = pdf_visuals.raster_regions(page)
+    assert [region.rect for region in regions] == ([] if main_position == "absent" else [main_rect])
+    document.close()
+
+
+def test_colored_background_cannot_be_recovered_as_a_copy_of_the_whole_page(tmp_path, monkeypatch):
+    image = Image.new("RGB", (500, 700), "navy")
+    output = BytesIO()
+    image.save(output, format="PNG")
+    parsed = ParsedPage(1, 500, 700, "", "", "ocr", (
+        ParsedElement("heading", "Document title", (0.1, 0.1, 0.9, 0.15)),
+    ))
+    monkeypatch.setattr(storage.settings, "data_dir", tmp_path)
+    recovered = native._missed_regions(parsed, output.getvalue(), "cover")
+    assert recovered.elements == parsed.elements
+    assert "unread_page_background" in recovered.diagnostics
+
+
+def test_illustration_with_explanatory_text_is_not_a_page_backdrop():
+    document, page = _page()
+    _prose(page)
+    page.insert_image(fitz.Rect(20, 290, 420, 410), stream=_png(), keep_proportion=False)
+    _prose(page, y=310)
+    _prose(page, y=500)
+    assert len(pdf_visuals.raster_regions(page)) == 1
+    document.close()
+
+
+def test_connected_vector_frames_do_not_merge_separate_raster_illustrations():
+    document, page = _page()
+    _prose(page)
+    first, second = fitz.Rect(50, 300, 200, 450), fitz.Rect(270, 300, 420, 450)
+    for rect in (first, second):
+        page.insert_image(rect, stream=_png())
+        page.draw_rect(rect, radius=0.1)
+    page.draw_line((200, 375), (270, 375))
+    geometry = page_geometry.page_geometry(page, [])
+    assert len(geometry.figures) == 2
+    answer = ParsedPage(1, 500, 700, "", "", "ocr", (
+        ParsedElement("image", IMAGE_PLACEHOLDER, (0.1, 300 / 700, 0.4, 450 / 700)),
+        ParsedElement("image", IMAGE_PLACEHOLDER, (0.54, 300 / 700, 0.84, 450 / 700)),
+    ))
+    snapped = page_geometry.snap_to_layer(answer, geometry)
+    assert len([item for item in snapped.elements if item.kind == "image"]) == 2
+    document.close()

@@ -7,7 +7,7 @@
 """
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 import pymupdf as fitz
@@ -20,6 +20,9 @@ log = logging.getLogger("tentex.materials")
 # Одна подпись или короткие названия узлов схемы этого сигнала не дают.
 MIN_PROSE_WORDS = 4
 MIN_OVERLAID_LINES = 3
+# Содержательная иллюстрация может иметь пояснения поверх неё. Подложка
+# объясняет большую часть текста листа, а не только подписи одной схемы.
+BACKDROP_TEXT_SHARE = 0.5
 # Наложения одного объекта почти полностью совпадают; одинаковые картинки
 # в разных местах страницы остаются разными областями.
 SAME_REGION_SHARE = 0.8
@@ -33,6 +36,8 @@ MIN_GRAPHIC_WIDTH = 72.0
 REPRESENTED_SHARE = 0.5
 # Ограничение обхода рекурсивных Form XObject, как защита от циклических PDF.
 MAX_FORM_DEPTH = 32
+# MuPDF и pypdf округляют преобразования по-разному; допуск меньше одного pt.
+PAINT_RECT_TOLERANCE = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,14 +70,16 @@ def is_backdrop(
 Проверяем строки внутри самой области: фон может быть плиточным или занимать
 лишь панель. Скан с тонким слоем не исключается — его содержимое ещё не прочитано.
     """
-    return sum(
+    prose = [(line, text) for line, text in lines if len(text.split()) >= MIN_PROSE_WORDS]
+    covered = sum(
         len(text.split()) >= MIN_PROSE_WORDS and rect.contains(line)
         and (
             seqno < 0
             or any(trace["seqno"] > seqno and line.intersects(trace["bbox"]) for trace in traces)
         )
         for line, text in lines
-    ) >= MIN_OVERLAID_LINES
+    )
+    return covered >= MIN_OVERLAID_LINES and covered >= BACKDROP_TEXT_SHARE * len(prose)
 
 
 def _same_region(first: fitz.Rect, second: fitz.Rect) -> bool:
@@ -97,50 +104,122 @@ def _adjacent_tiles(first: RasterRegion, second: RasterRegion) -> bool:
     )
 
 
-def _artifact_occurrences(page: fitz.Page) -> list[bool]:
-    """Порядок изображений и их marked-content /Artifact, включая Form XObject.
+@dataclass(frozen=True, slots=True)
+class _ImagePaint:
+    """Команда рисования растра с её преобразованием, до обрезки."""
 
-Токены PDF разбирает pypdf: строка с буквами «/Artifact» внутри текста не
-меняет семантику. Служебность относится к вхождению, а не к xref ресурса.
-    """
+    key: tuple[int, int, int]
+    rect: fitz.Rect
+    artifact: bool
+
+
+def _graphic_operations(
+    data: bytes, matrix: fitz.Matrix, inherited: bool,
+) -> Iterator[tuple[list | dict, bytes, fitz.Matrix, bool]]:
+    """Состояние графики и marked content в пределах одного потока."""
+    stream = DecodedStreamObject()
+    stream.set_data(data)
+    marked = [inherited]
+    states: list[fitz.Matrix] = []
+    for operands, operator in ContentStream(stream, None).operations:
+        if operator in {b"BMC", b"BDC"}:
+            marked.append(marked[-1] or str(operands[0]) == "/Artifact")
+        elif operator == b"EMC" and len(marked) > 1:
+            marked.pop()
+        elif operator == b"q":
+            states.append(fitz.Matrix(matrix))
+        elif operator == b"Q" and states:
+            matrix = states.pop()
+        elif operator == b"cm":
+            matrix = fitz.Matrix(*(float(value) for value in operands)) * matrix
+        elif operator in {b"Do", b"INLINE IMAGE"}:
+            yield operands, operator, matrix, marked[-1]
+
+
+def _image_commands(page: fitz.Page) -> list[_ImagePaint]:
+    """Обход содержимого и Form, без определений Pattern и SMask."""
     images = {(item[9], "/" + item[7]): item[0] for item in page.get_images(full=True)}
     forms = {(item[2], "/" + item[1]): item[0] for item in page.get_xobjects()}
     document = page.parent
-    result: list[bool] = []
+    painted: list[_ImagePaint] = []
+    unit = fitz.Rect(0, 0, 1, 1)
+    transform = page.transformation_matrix
 
-    def visit(data: bytes, parent: int, inherited: bool, ancestors: tuple[int, ...]) -> None:
-        """Область marked content наследуется вызванной формой, но не соседями."""
-        stream = DecodedStreamObject()
-        stream.set_data(data)
-        stack = [inherited]
-        for operands, operator in ContentStream(stream, None).operations:
-            if operator in {b"BMC", b"BDC"}:
-                stack.append(stack[-1] or str(operands[0]) == "/Artifact")
-            elif operator == b"EMC" and len(stack) > 1:
-                stack.pop()
-            elif operator == b"INLINE IMAGE":
-                result.append(stack[-1])
+    def visit(data: bytes, parent: int, matrix: fitz.Matrix,
+              inherited: bool, ancestors: tuple[int, ...]) -> None:
+        """Состояние графики и marked content наследуются вызванной формой."""
+        for operands, operator, current, artifact in _graphic_operations(data, matrix, inherited):
+            if operator == b"INLINE IMAGE":
+                settings = operands["settings"]
+                width = int(settings.get("/W", settings.get("/Width", 0)))
+                height = int(settings.get("/H", settings.get("/Height", 0)))
+                painted.append(_ImagePaint((0, width, height),
+                                           unit * current * transform, artifact))
             elif operator == b"Do":
                 key = (parent, str(operands[0]))
                 if key in images:
-                    result.append(stack[-1])
-                elif key in forms:
-                    xref = forms[key]
-                    if xref not in ancestors and len(ancestors) < MAX_FORM_DEPTH:
-                        visit(document.xref_stream(xref), xref, stack[-1], (*ancestors, xref))
+                    painted.append(_ImagePaint((images[key], 0, 0),
+                                               unit * current * transform, artifact))
+                    continue
+                xref = forms.get(key)
+                if xref is None or xref in ancestors or len(ancestors) >= MAX_FORM_DEPTH:
+                    continue
+                kind, value = document.xref_get_key(xref, "Matrix")
+                local = fitz.Matrix(1, 1) if kind == "null" else fitz.Matrix(
+                    *(float(number) for number in value.strip("[]").split()))
+                visit(document.xref_stream(xref), xref, local * current,
+                      artifact, (*ancestors, xref))
 
+    data = b"\n".join(document.xref_stream(xref) for xref in page.get_contents())
+    visit(data, 0, fitz.Matrix(1, 1), False, ())
+    return painted
+
+
+def _same_pixels(
+    paint: _ImagePaint, info: dict, document: fitz.Document, digests: dict[int, bytes],
+) -> bool:
+    """Алиасы одинаковых растров сопоставляются только в уже совпавшей рамке."""
+    xref, width, height = paint.key
+    if not xref:
+        return (width, height) == (info["width"], info["height"])
+    if xref not in digests:
+        digests[xref] = fitz.Pixmap(document, xref).digest
+    return digests[xref] == info["digest"]
+
+
+def _painted_images(page: fitz.Page, infos: Sequence[dict]) -> dict[int, _ImagePaint]:
+    """Связывает вхождения MuPDF с командами по ресурсу и преобразованной рамке.
+
+    Ресурс может одновременно служить картинкой и маской. Поэтому ни наличие
+    xref, ни число вхождений, ни порядок обхода не определяют его назначение.
+    pypdf разбирает операторы, а MuPDF даёт итоговую геометрию с clipping.
+    """
     try:
-        data = b"\n".join(document.xref_stream(xref) for xref in page.get_contents())
-        # Большинство PDF не размечены. Не разбираем их команды повторно.
-        if b"/Artifact" not in data and not any(
-            b"/Artifact" in document.xref_stream(xref) for xref in forms.values()
-        ):
-            return []
-        visit(data, 0, False, ())
+        commands = _image_commands(page)
     except (PdfReadError, ValueError, RuntimeError) as error:
-        log.warning("Не прочитаны PDF-артефакты страницы %s: %s", page.number + 1,
+        log.warning("Не прочитан поток изображений PDF-страницы %s: %s", page.number + 1,
                     type(error).__name__)
-        return []
+        return {info["number"]: _ImagePaint(
+            (int(info.get("xref") or 0), info["width"], info["height"]),
+            fitz.Rect(info["bbox"]), False,
+        ) for info in infos}
+    result: dict[int, _ImagePaint] = {}
+    digests: dict[int, bytes] = {}
+    for info in infos:
+        xref = int(info.get("xref") or 0)
+        key = (xref, 0, 0) if xref else (0, info["width"], info["height"])
+        rect = fitz.Rect(info["bbox"])
+        candidates = [i for i, paint in enumerate(commands)
+                      if all(abs(a - b) < PAINT_RECT_TOLERANCE
+                             for a, b in zip(rect, paint.rect, strict=True))]
+        index = next((i for i in candidates if commands[i].key == key), None)
+        if index is None:
+            # get_image_info присваивает xref по digest и может выбрать другой
+            # ресурс с теми же пикселями. Идентификатор берём из реальной Do.
+            index = next((i for i in candidates
+                          if _same_pixels(commands[i], info, page.parent, digests)), None)
+        if index is not None:
+            result[info["number"]] = commands.pop(index)
     return result
 
 
@@ -159,11 +238,7 @@ def raster_regions(page: fitz.Page) -> list[RasterRegion]:
                     if kind == "fill-image"]
     sequences = {info["number"]: seqno for info, seqno in zip(infos, image_seqnos, strict=False)}
     traces = page.get_texttrace()
-    artifacts = _artifact_occurrences(page)
-    tagged = (
-        {info["number"]: flag for info, flag in zip(infos, artifacts, strict=True)}
-        if len(artifacts) == len(infos) else {}
-    )
+    tagged = _painted_images(page, infos)
     for block in blocks:
         if block.get("type") != 1:
             continue
@@ -171,10 +246,13 @@ def raster_regions(page: fitz.Page) -> list[RasterRegion]:
         # Номер блока связывает ресурс с его собственным вхождением. Сравнение
         # только по перекрытию выбирало вместо картинки полный фон страницы.
         info = by_number.get(block["number"], {})
-        xref = int(info.get("xref") or 0)
+        if block["number"] not in tagged:
+            continue  # определение маски или узора, а не команда рисования картинки
+        paint = tagged[block["number"]]
+        xref = paint.key[0]
         region = RasterRegion(rect, frozenset({xref}) if xref else frozenset(),
                               info.get("digest", b""), sequences.get(block["number"], -1),
-                              tagged.get(block["number"], False))
+                              paint.artifact)
         if rect.is_empty:
             continue
         partners = [
