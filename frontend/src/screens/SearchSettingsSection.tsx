@@ -49,18 +49,18 @@ const MODEL_SUPPORT: Record<ModelSupport, { label: string; hint: string; tone: "
     tone: "success",
   },
   recipe: {
-    label: "Шаблоны известны",
-    hint: "Инструкция запроса и pooling подставляются сами, но на контрольных запросах модель не прогонялась",
+    label: "Настройки подготовлены",
+    hint: "Tentex подставляет нужные настройки запроса и текста. Качество поиска по учебным материалам ещё не проверено",
     tone: "info",
   },
   short_window: {
-    label: "Видит начало куска",
-    hint: "Окно модели — 128 токенов, кусок — до 500: конец куска в поиск по смыслу не попадает",
+    label: "Для коротких текстов",
+    hint: "Модель рассчитана на короткие тексты. Качество поиска по длинным отрывкам в Tentex не проверено",
     tone: "warning",
   },
   unknown: {
-    label: "Шаблоны неизвестны",
-    hint: "Tentex не знает, в каком виде модель ждёт запрос и документ: поиск по смыслу может быть слабым",
+    label: "Настройки неизвестны",
+    hint: "Для этой модели не заданы специальные настройки запроса и текста. Получение вектора не гарантирует хорошего поиска",
     tone: "warning",
   },
   not_embedding: null,
@@ -207,7 +207,7 @@ export function SearchSettingsSection({
       const profile = await testEmbeddingProfile(profileId);
       setTestFeedback({
         tone: "success",
-        text: `Проверка прошла: ${profile.dimension ?? "?"} измерений. Профиль готов для сборки индекса.`,
+        text: `Модель вернула вектор: ${profile.dimension ?? "?"} измерений. Можно собирать индекс; качество поиска эта проверка не оценивает.`,
       });
       await load();
     } catch (caught) {
@@ -476,7 +476,7 @@ export function SearchSettingsSection({
             </div>
           )}
           <div className="retrieval-manual-model">
-            <div><strong>Добавить модель вручную</strong><small>Любой совместимый репозиторий Hugging Face. Код модели не запускается.</small></div>
+            <div><strong>Добавить модель вручную</strong><small>Текстовая embedding-модель для Transformers, без кода из репозитория. Совместимость и качество поиска нужно проверять.</small></div>
             <input value={manualModelId} onChange={(event) => setManualModelId(event.target.value)} placeholder="owner/model" aria-label="Идентификатор embedding-модели" />
             <input value={manualModelLabel} onChange={(event) => setManualModelLabel(event.target.value)} placeholder="Название (необязательно)" aria-label="Название embedding-модели" />
             <Button variant="secondary" disabled={busy !== "" || !manualModelId.trim()} onClick={() => void addManualModel()}><Download size={14} /> Добавить модель</Button>
@@ -484,7 +484,7 @@ export function SearchSettingsSection({
           <div className="ai-setting-row">
             <div>
               <strong>LM Studio или внешний API</strong>
-              <small>Переиспользует подключение и секрет из раздела «ИИ»; размерность проверяется настоящим /embeddings-вызовом.</small>
+              <small>Подключение из раздела «ИИ». Нужна embedding-модель с OpenAI-совместимым API. «Проверить» проверяет получение вектора, а не качество поиска. При внешнем API текст отправляется провайдеру.</small>
             </div>
             <div className="ai-group-actions">
               <Select

@@ -53,7 +53,7 @@ class ModelSupport(StrEnum):
     VERIFIED = "verified"
     #: Шаблоны и pooling известны из карточки модели, прогона на корпусе не было.
     RECIPE = "recipe"
-    #: Окно модели меньше куска: хвост куска в вектор не попадает.
+    #: Рекомендована для коротких текстов; фактическое обрезание зависит от runtime.
     SHORT_WINDOW = "short_window"
     #: Reranker и прочие модели, которые не строят векторы.
     NOT_EMBEDDING = "not_embedding"
@@ -62,7 +62,7 @@ class ModelSupport(StrEnum):
 
 #: Проверено 26.09.2026: 10 контрольных запросов, старая и новая нарезка.
 _VERIFIED = ("multilingual-e5-base",)
-#: sentence-transformers paraphrase-* и MiniLM видят 128 токенов, кусок — до ≈ 500.
+#: Короткий режим SentenceTransformer; внутренний /embed читает лимит токенизатора.
 _SHORT_WINDOW = ("minilm", "paraphrase-")
 
 

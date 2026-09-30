@@ -34,14 +34,19 @@ CURATED_MODELS = (
         "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         "MiniLM multilingual",
         "embedding",
-        "Быстрая, но видит только начало куска",
+        "Лёгкая модель для коротких текстов; для учебных материалов рекомендуем E5",
     ),
-    ("intfloat/multilingual-e5-base", "Multilingual E5 Base", "embedding", "Базовая линия"),
+    (
+        "intfloat/multilingual-e5-base",
+        "Multilingual E5 Base",
+        "embedding",
+        "Стандартная модель — обычный выбор для поиска по учебным материалам",
+    ),
     (
         "Qwen/Qwen3-Embedding-0.6B",
         "Qwen3 Embedding 0.6B",
         "embedding",
-        "Сильнее на запросах по смыслу, медленнее на CPU",
+        "Альтернатива E5 для поиска по смыслу; более требовательна к ресурсам",
     ),
     ("Qwen/Qwen3-Reranker-0.6B", "Qwen3 Reranker 0.6B", "reranker", "Профиль «Точно»"),
 )
