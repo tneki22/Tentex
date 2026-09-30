@@ -1171,22 +1171,6 @@
   border-radius: var(--radius-lg);
 }
 
-.guide-placeholder {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--space-4);
-  align-items: start;
-  max-width: 760px;
-  padding: var(--space-6);
-}
-
-.guide-placeholder > svg { color: var(--accent); }
-.guide-placeholder .eyebrow { margin: 0 0 var(--space-1); }
-.guide-placeholder h2 { margin: 0 0 var(--space-2); font-size: var(--text-xl); }
-.guide-placeholder p:not(.eyebrow) { margin: 0; color: var(--ink-soft); }
-.guide-placeholder-topics { display: flex; grid-column: 2; flex-wrap: wrap; gap: var(--space-2); }
-.guide-placeholder-topics span { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-2) var(--space-3); border-radius: var(--radius-pill); color: var(--muted); background: var(--surface-sunken); font-size: var(--text-sm); }
-
 .dash-templates {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
