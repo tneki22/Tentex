@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 from app.db import get_session
 from app.main import create_app
 from app.materials import library, processing_plan
-from app.materials.schemas import ProcessingStart
 from app.materials.parsers.base import ParsedElement
+from app.materials.schemas import ProcessingStart
 from app.materials.worker import _prepare_revision, _renew_lease
 from app.models import (
     BackgroundJob,
@@ -111,7 +111,7 @@ def test_cloud_start_does_not_wait_for_estimate(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Постановка облачного разбора не открывает файл ради оценки."""
-    material = make_material(session, "quick-start")
+    material = make_material(session, "c10d")
     monkeypatch.setattr(library.ocr_settings, "engine_ready", lambda *args: (True, None))
 
     def unexpected_estimate(*args):

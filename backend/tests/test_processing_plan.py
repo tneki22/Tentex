@@ -1,7 +1,7 @@
 """Оценка PDF не повторяет дорогой анализ при опросе одного материала."""
 
-from types import SimpleNamespace
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pymupdf
 import pytest
