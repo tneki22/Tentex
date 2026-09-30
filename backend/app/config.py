@@ -18,7 +18,8 @@ class Settings(BaseSettings):
 
     # Откуда ходит фронтенд в режиме разработки.
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
-    seed_demo_project: bool = True
+    # Новая установка начинается без учебных данных; пример включается явно.
+    seed_demo_project: bool = False
 
     # Уровень корневого логгера приложения. Ниже INFO стоит опускать только при
     # отладке: DEBUG в SQLAlchemy очень многословен.
