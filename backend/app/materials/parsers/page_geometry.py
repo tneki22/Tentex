@@ -24,7 +24,7 @@ from difflib import SequenceMatcher
 
 import pymupdf as fitz
 
-from app.materials.image_candidates import PAGE_SCAN_AREA
+from app.materials.parsers import pdf_visuals
 from app.materials.parsers.base import IMAGE_PLACEHOLDER, ImageMeta, ParsedElement, ParsedPage
 from app.materials.parsers.formula_zones import FormulaZone, readable
 
@@ -43,6 +43,9 @@ MISSED_WORD_SHARE = 0.6
 MIN_MISSED_TOKENS = 3
 # Кластер путей — рисунок, если кривых и косых линий в нём хотя бы столько.
 FIGURE_PATH_SHARE = 0.3
+# Рамка составного растра подтверждает почти всю область фигуры; вложенная
+# миниатюра в большом кластере таким подтверждением не является.
+RASTER_SUPPORT_SHARE = 0.8
 # Куски одного рисунка у модели стоят вплотную или налезают друг на друга.
 SPLIT_IMAGE_GAP = 0.02
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]+", re.IGNORECASE)
@@ -71,6 +74,7 @@ class PageGeometry:
     figures: tuple[Box, ...]
     grids: tuple[Box, ...]
     zones: tuple[FormulaZone, ...]
+    rasters: tuple[Box, ...] = ()
 
 
 def _tokens(text: str) -> tuple[str, ...]:
@@ -108,7 +112,7 @@ def _expanded(box: Box) -> Box:
     return (box[0] - DRIFT_X, box[1] - DRIFT_Y, box[2] + DRIFT_X, box[3] + DRIFT_Y)
 
 
-def _union(boxes: Sequence[Box]) -> Box:
+def union_boxes(boxes: Sequence[Box]) -> Box:
     return (
         min(box[0] for box in boxes),
         min(box[1] for box in boxes),
@@ -152,7 +156,7 @@ def _figure_share(drawings: Sequence[dict]) -> float:
 def _drawing_clusters(page: fitz.Page) -> tuple[list[Box], list[Box]]:
     """Векторные рисунки и сетки таблиц страницы."""
     try:
-        drawings = page.get_drawings()
+        drawings = pdf_visuals.content_drawings(page)
         clusters = page.cluster_drawings(drawings=drawings) if drawings else []
     except (RuntimeError, ValueError, AttributeError):
         return [], []
@@ -168,33 +172,13 @@ def _drawing_clusters(page: fitz.Page) -> tuple[list[Box], list[Box]]:
     return figures, grids
 
 
-def _embedded_figures(page: fitz.Page, words: Sequence[_Word]) -> list[Box]:
-    """Встроенные растры-рисунки без подложки скана.
-
-    У скана с текстовым слоем вся страница — один растр, а слова слоя лежат
-    поверх него. Рисунком он не считается: иначе модель его «пропустила», и
-    копия всего листа вставлялась вырезом в середину распознанного текста.
-    """
-    try:
-        infos = page.get_image_info()
-    except (RuntimeError, ValueError):
-        return []
-    boxes: list[Box] = []
-    for info in infos:
-        rect = fitz.Rect(info.get("bbox", (0, 0, 0, 0))) & page.rect
-        if rect.width < MIN_FIGURE_SIDE_PT or rect.height < MIN_FIGURE_SIDE_PT:
-            continue
-        box = _normalized(rect, page)
-        if _area(box) >= PAGE_SCAN_AREA and _is_backdrop(box, words):
-            continue
-        boxes.append(box)
-    return boxes
-
-
-def _is_backdrop(box: Box, words: Sequence[_Word]) -> bool:
-    """Большая часть слов слоя стоит на растре — это подложка, а не рисунок."""
-    covered = sum(1 for word in words if _inside(_center(word.box), box))
-    return bool(words) and covered >= 0.5 * len(words)
+def _embedded_figures(page: fitz.Page) -> list[Box]:
+    """Общие видимые растровые области: одинаковы в native и облачном пути."""
+    return [
+        _normalized(region.rect, page)
+        for region in pdf_visuals.raster_regions(page)
+        if region.rect.width >= MIN_FIGURE_SIDE_PT and region.rect.height >= MIN_FIGURE_SIDE_PT
+    ]
 
 
 def _distinct(boxes: Sequence[Box]) -> list[Box]:
@@ -215,7 +199,8 @@ def _layer_lines(page: fitz.Page) -> tuple[list[_Word], list[_LayerLine]]:
         tokens = _tokens(readable(word))
         if tokens:
             words.append(_Word((x0 / width, y0 / height, x1 / width, y1 / height), tokens))
-    for block in page.get_text("dict").get("blocks", []):
+    flags = fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES
+    for block in page.get_text("dict", flags=flags).get("blocks", []):
         if block.get("type") != 0:
             continue
         for line in block.get("lines", []):
@@ -232,14 +217,17 @@ def _layer_lines(page: fitz.Page) -> tuple[list[_Word], list[_LayerLine]]:
 
 
 def page_geometry(page: fitz.Page, zones: Sequence[FormulaZone]) -> PageGeometry:
+    """Общая видимая геометрия и отдельные опоры для составных растров."""
     words, lines = _layer_lines(page)
     vector, grids = _drawing_clusters(page)
+    rasters = tuple(_embedded_figures(page))
     return PageGeometry(
         tuple(words),
         tuple(lines),
-        tuple(_distinct([*_embedded_figures(page, words), *vector])),
+        tuple(_distinct([*rasters, *vector])),
         tuple(grids),
         tuple(zones),
+        rasters,
     )
 
 
@@ -307,7 +295,7 @@ def _word_box(element: ParsedElement, words: Sequence[_Word]) -> Box | None:
         return None
     first = flat[blocks[0].a][0]
     last = flat[blocks[-1].a + blocks[-1].size - 1][0]
-    words_box = _union([word.box for word in window[first : last + 1]])
+    words_box = union_boxes([word.box for word in window[first : last + 1]])
     # По вертикали модель ошибается на строки, по горизонтали почти нет, а
     # слова абзаца с формулами внутри находятся не все: ширина — от модели.
     return (
@@ -341,7 +329,9 @@ def _insert(elements: list[ParsedElement], added: ParsedElement) -> None:
     elements.append(added)
 
 
-def _merge_images(elements: list[ParsedElement], owners: dict[int, int]) -> list[ParsedElement]:
+def merge_image_regions(
+    elements: list[ParsedElement], owners: dict[int, int],
+) -> list[ParsedElement]:
     """Элементы-картинки, привязанные к одному рисунку, — один элемент."""
     first: dict[int, int] = {}
     result: list[ParsedElement] = []
@@ -357,8 +347,15 @@ def _merge_images(elements: list[ParsedElement], owners: dict[int, int]) -> list
         kept = result[positions[figure]]
         texts = [text for text in (kept.text, element.text) if text != IMAGE_PLACEHOLDER]
         merged = "\n".join(texts) if texts else IMAGE_PLACEHOLDER
-        result[positions[figure]] = _snapped_image(replace(kept, text=merged), kept.bbox)
+        result[positions[figure]] = _snapped_image(
+            replace(kept, text=merged, asset_path=None), union_boxes([kept.bbox, element.bbox])
+        )
     return result
+
+
+def best_image_region(box: Box, candidates: Sequence[Box]) -> int | None:
+    """Привязка части схемы к её видимой растровой области."""
+    return _best(box, candidates, pieces=True)
 
 
 def snap_to_layer(parsed: ParsedPage, geometry: PageGeometry) -> ParsedPage:
@@ -377,7 +374,18 @@ def snap_to_layer(parsed: ParsedPage, geometry: PageGeometry) -> ParsedPage:
             continue
         box: Box | None = None
         if element.kind == "image":
-            found = _best(element.bbox, figures, pieces=True)
+            # Векторный кластер может объединять несколько самостоятельных
+            # областей. Растягивать часть до его рамки разрешено только там,
+            # где размер фигуры подтверждён видимым растром.
+            found = _best(element.bbox, figures)
+            if found is None:
+                trusted = [
+                    figure for figure in figures
+                    if any(_intersection(figure, raw) >= RASTER_SUPPORT_SHARE * _area(figure)
+                           for raw in geometry.rasters)
+                ]
+                part = _best(element.bbox, trusted, pieces=True)
+                found = figures.index(trusted[part]) if part is not None else None
             if found is not None:
                 owners[index] = found
                 used_figures.add(found)
@@ -398,7 +406,7 @@ def snap_to_layer(parsed: ParsedPage, geometry: PageGeometry) -> ParsedPage:
         if box is not None:
             elements[index] = replace(element, bbox=box)
             snapped += 1
-    elements = _merge_images(elements, owners)
+    elements = merge_image_regions(elements, owners)
     added = _missed_from_layer(elements, geometry, used_figures, used_zones)
     for element in added:
         _insert(elements, element)
@@ -468,7 +476,7 @@ def _missed_from_layer(
                 if text.endswith("-") and line.text[:1].islower()
                 else f"{text} {line.text}"
             )
-        added.append(ParsedElement("paragraph", text, _union([line.box for line in group])))
+        added.append(ParsedElement("paragraph", text, union_boxes([line.box for line in group])))
     return added
 
 
@@ -518,7 +526,7 @@ def merge_split_images(parsed: ParsedPage) -> ParsedPage:
         texts = [text for text in (element.text, other.text) if text != IMAGE_PLACEHOLDER]
         elements[index] = replace(
             element,
-            bbox=_union([element.bbox, other.bbox]),
+            bbox=union_boxes([element.bbox, other.bbox]),
             text="\n".join(texts) if texts else IMAGE_PLACEHOLDER,
         )
         merged += 1
@@ -551,7 +559,7 @@ def unread_candidates(regions: Sequence[Box], elements: Sequence[ParsedElement])
                 horizontal = max(a[0], b[0]) - min(a[2], b[2])
                 vertical = max(a[1], b[1]) - min(a[3], b[3])
                 if horizontal <= REGION_MERGE_GAP and vertical <= REGION_MERGE_GAP:
-                    boxes[first] = _union([a, b])
+                    boxes[first] = union_boxes([a, b])
                     del boxes[second]
                     merged = True
                     break

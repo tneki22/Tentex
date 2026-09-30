@@ -38,6 +38,7 @@ from app.materials.parsers.cloud_vlm import (
 )
 from app.materials.parsers.formula_zones import find_zones
 from app.materials.parsers.native import MIN_IMAGE_SIDE, repeated_image_xrefs
+from app.materials.parsers.pdf_visuals import has_unmapped_graphics, raster_regions
 from app.materials.parsers.text_layer import diagnose
 from app.materials.schemas import ProcessingEstimateRead, ProcessingStart
 from app.materials.storage import material_path
@@ -242,6 +243,7 @@ def _local_pdf_shape(
                 whole_by_strategy
                 or route == "scan"
                 or (route in {"partial", "broken"} and strategy == "auto")
+                or (route == "text" and strategy == "auto" and has_unmapped_graphics(page))
             )
             suspicious += route in {"partial", "broken"}
             if goes_whole:
@@ -254,9 +256,9 @@ def _local_pdf_shape(
                 repeated = repeated_image_xrefs(document)
             images += sum(
                 1
-                for info in page.get_image_info(xrefs=True)
-                if info.get("xref") not in repeated
-                and _side_ok(info.get("bbox"))
+                for region in raster_regions(page)
+                if not region.xrefs & repeated
+                and _side_ok(tuple(region.rect))
             )
     factor = len(pages) / max(1, len(sample))
     return _Shape(
