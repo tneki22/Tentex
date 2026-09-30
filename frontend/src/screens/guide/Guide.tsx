@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router";
+import { useLocation, useSearchParams } from "react-router";
 import { PageHead } from "../../components/ui";
 import { GuideArticle } from "./GuideArticle";
 import { GuideTree } from "./GuideTree";
@@ -57,6 +57,17 @@ export function Guide() {
     if (firstRender.current) firstRender.current = false;
     else window.scrollTo({ top: 0 });
   }, [slug]);
+
+  // Ссылка вида `/guide?section=slug#якорь` ведёт к секции страницы: заголовки имеют `id` из `{#якорь}`.
+  const { hash } = useLocation();
+  useEffect(() => {
+    const id = hash.slice(1);
+    if (!id || !blocks) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [hash, slug, blocks]);
 
   // Подсветка текущей секции в дереве: первая из видимых в верхней части окна.
   useEffect(() => {

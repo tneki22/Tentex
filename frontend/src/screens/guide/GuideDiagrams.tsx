@@ -816,6 +816,322 @@ function CardsFlow() {
   );
 }
 
+/** Из чего состоит настройка ИИ и как функция находит себе модель. */
+function AiSetupFlow() {
+  const steps = [
+    { title: "Провайдер", a: "адрес и ключ,", b: "проверка «Тест»", tone: "gd-info" },
+    { title: "Модели", a: "ваш список", b: "из каталога", tone: "gd-info" },
+    { title: "По умолчанию", a: "текст и речь:", b: "страховка для всех", tone: "gd-accent" },
+    { title: "Функции", a: "своя модель и", b: "параметры", tone: "gd-warning" },
+    { title: "Лимиты", a: "потолки расхода", b: "и история", tone: "gd-success" },
+  ];
+  const chain = [
+    { title: "Выбор при запуске", sub: "чат, урок, проход 2" },
+    { title: "Модель функции", sub: "блок «Функции»" },
+    { title: "По умолчанию", sub: "для текста или речи" },
+  ];
+  return (
+    <svg viewBox="0 0 720 252" role="img" aria-label="Настройка ИИ идёт слева направо: провайдер, модели, модель по умолчанию, функции, лимиты. Модель для функции берётся по порядку: выбор при запуске, модель функции, модель по умолчанию">
+      <defs>
+        <marker id="gd-arrow-as" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      {steps.map((step, index) => {
+        const x = 10 + index * 143;
+        return (
+          <g key={step.title}>
+            <g className={`gd-node ${step.tone}`}>
+              <rect x={x} y="10" width="128" height="86" rx="14" />
+              <text x={x + 64} y="38" className="gd-title gd-title-sm">{step.title}</text>
+              <text x={x + 64} y="62" className="gd-sub gd-sub-sm">{step.a}</text>
+              <text x={x + 64} y="78" className="gd-sub gd-sub-sm">{step.b}</text>
+            </g>
+            {index < steps.length - 1 && (
+              <path d={`M${x + 131} 53 H${x + 140}`} className="gd-arrow" markerEnd="url(#gd-arrow-as)" />
+            )}
+          </g>
+        );
+      })}
+      <text x="360" y="130" className="gd-label gd-label-mid">какую модель получит функция: берётся первая найденная</text>
+      {chain.map((item, index) => {
+        const x = 10 + index * 252;
+        return (
+          <g key={item.title}>
+            <g className="gd-node gd-info">
+              <rect x={x} y="144" width="196" height="56" rx="12" />
+              <text x={x + 98} y="169" className="gd-step">{item.title}</text>
+              <text x={x + 98} y="186" className="gd-sub gd-sub-sm">{item.sub}</text>
+            </g>
+            {index < chain.length - 1 && (
+              <path d={`M${x + 199} 172 H${x + 249}`} className="gd-arrow gd-dashed" markerEnd="url(#gd-arrow-as)" />
+            )}
+          </g>
+        );
+      })}
+      <text x="360" y="230" className="gd-label gd-label-mid">если нет ни одной: «Модель для функции не настроена»</text>
+    </svg>
+  );
+}
+
+/** Что задаётся в настройках распознавания, а что при запуске. */
+function OcrSettingsFlow() {
+  return (
+    <svg viewBox="0 0 720 232" role="img" aria-label="Настройки распознавания задают значения по умолчанию; в панели запуска в Библиотеке их можно поменять для одного запуска; задача хранит снимок параметров, поэтому пауза и повтор его не меняют; нагрузка процессора, порог проверки и подробность страницы читаются при старте каждого разбора">
+      <defs>
+        <marker id="gd-arrow-os" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      <g className="gd-node gd-accent">
+        <rect x="8" y="12" width="204" height="118" rx="16" />
+        <text x="110" y="42" className="gd-title gd-title-sm">Параметры</text>
+        <text x="110" y="68" className="gd-sub">значения по умолчанию</text>
+        <text x="110" y="92" className="gd-sub gd-sub-sm">режим · стратегия облака</text>
+        <text x="110" y="108" className="gd-sub gd-sub-sm">модель · качество</text>
+      </g>
+      <g className="gd-node gd-warning">
+        <rect x="258" y="12" width="204" height="118" rx="16" />
+        <text x="360" y="42" className="gd-title gd-title-sm">Панель запуска</text>
+        <text x="360" y="68" className="gd-sub">в Библиотеке</text>
+        <text x="360" y="92" className="gd-sub gd-sub-sm">можно поменять режим,</text>
+        <text x="360" y="108" className="gd-sub gd-sub-sm">стратегию, область, картинки</text>
+      </g>
+      <g className="gd-node gd-success">
+        <rect x="508" y="12" width="204" height="118" rx="16" />
+        <text x="610" y="42" className="gd-title gd-title-sm">Задача</text>
+        <text x="610" y="68" className="gd-sub">снимок параметров</text>
+        <text x="610" y="92" className="gd-sub gd-sub-sm">пауза, повтор и смена</text>
+        <text x="610" y="108" className="gd-sub gd-sub-sm">настроек её не меняют</text>
+      </g>
+      <path d="M216 71 H254" className="gd-arrow" markerEnd="url(#gd-arrow-os)" />
+      <path d="M466 71 H504" className="gd-arrow" markerEnd="url(#gd-arrow-os)" />
+      <g className="gd-node gd-info">
+        <rect x="8" y="156" width="704" height="62" rx="14" />
+        <text x="360" y="182" className="gd-step">нагрузка процессора · порог «Нужно проверить» · подробность страницы</text>
+        <text x="360" y="202" className="gd-sub gd-sub-sm">читаются при старте каждого нового разбора</text>
+      </g>
+    </svg>
+  );
+}
+
+/** Путь одного поискового запроса: два поиска, слияние, необязательное перечитывание. */
+function SearchPipeline() {
+  return (
+    <svg viewBox="0 0 720 318" role="img" aria-label="Запрос ищется двумя способами: по словам и по смыслу; результаты сливаются; в режиме Точно лучшие места перечитывает reranker; на выходе места с адресами или сообщение, что ответа нет">
+      <defs>
+        <marker id="gd-arrow-sp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      <g className="gd-node gd-accent">
+        <rect x="8" y="112" width="112" height="68" rx="14" />
+        <text x="64" y="142" className="gd-title gd-title-sm">Запрос</text>
+        <text x="64" y="162" className="gd-sub gd-sub-sm">ваш вопрос</text>
+      </g>
+      <g className="gd-node gd-info">
+        <rect x="168" y="20" width="192" height="78" rx="14" />
+        <text x="264" y="50" className="gd-title gd-title-sm">По словам</text>
+        <text x="264" y="72" className="gd-sub gd-sub-sm">BM25 · работает всегда,</text>
+        <text x="264" y="86" className="gd-sub gd-sub-sm">без настройки</text>
+      </g>
+      <g className="gd-node gd-accent">
+        <rect x="168" y="196" width="192" height="78" rx="14" />
+        <text x="264" y="226" className="gd-title gd-title-sm">По смыслу</text>
+        <text x="264" y="248" className="gd-sub gd-sub-sm">векторы · нужны модель</text>
+        <text x="264" y="262" className="gd-sub gd-sub-sm">эмбеддингов и индекс</text>
+      </g>
+      <g className="gd-node gd-warning">
+        <rect x="402" y="108" width="122" height="76" rx="14" />
+        <text x="463" y="138" className="gd-title gd-title-sm">Слияние</text>
+        <text x="463" y="158" className="gd-sub gd-sub-sm">RRF: места из двух</text>
+        <text x="463" y="172" className="gd-sub gd-sub-sm">списков вместе</text>
+      </g>
+      <g className="gd-node gd-warning">
+        <rect x="566" y="20" width="146" height="78" rx="14" />
+        <text x="639" y="50" className="gd-title gd-title-sm">Reranker</text>
+        <text x="639" y="72" className="gd-sub gd-sub-sm">только «Точно»:</text>
+        <text x="639" y="86" className="gd-sub gd-sub-sm">читает 10 лучших</text>
+      </g>
+      <g className="gd-node gd-success">
+        <rect x="566" y="196" width="146" height="78" rx="14" />
+        <text x="639" y="226" className="gd-title gd-title-sm">Результат</text>
+        <text x="639" y="248" className="gd-sub gd-sub-sm">места с адресами</text>
+        <text x="639" y="262" className="gd-sub gd-sub-sm">или «ответа нет»</text>
+      </g>
+      <path d="M124 136 C146 136 144 60 164 60" className="gd-arrow" markerEnd="url(#gd-arrow-sp)" />
+      <path d="M124 156 C146 156 144 236 164 236" className="gd-arrow" markerEnd="url(#gd-arrow-sp)" />
+      <path d="M364 60 C384 60 382 132 398 132" className="gd-arrow" markerEnd="url(#gd-arrow-sp)" />
+      <path d="M364 236 C384 236 382 160 398 160" className="gd-arrow" markerEnd="url(#gd-arrow-sp)" />
+      <path d="M528 146 C548 146 546 232 562 232" className="gd-arrow" markerEnd="url(#gd-arrow-sp)" />
+      <path d="M528 128 C548 128 546 66 562 66" className="gd-arrow gd-dashed" markerEnd="url(#gd-arrow-sp)" />
+      <path d="M639 102 V192" className="gd-arrow gd-dashed" markerEnd="url(#gd-arrow-sp)" />
+      <text x="360" y="304" className="gd-label gd-label-mid">«Быстро» и «Сбалансированно» идут прямо к результату, «Точно» добавляет перечитывание</text>
+    </svg>
+  );
+}
+
+/** Жизнь индекса: кандидат строится рядом с активным и включается вручную. */
+function SearchIndexLife() {
+  const steps = [
+    { title: "Модель", a: "скачать, добавить", b: "профиль, проверить", tone: "gd-info" },
+    { title: "Кандидат", a: "строится рядом,", b: "поиск идёт по старому", tone: "gd-accent" },
+    { title: "Активация", a: "вы включаете", b: "новый индекс", tone: "gd-warning" },
+    { title: "Активный", a: "по нему ищут", b: "все функции", tone: "gd-success" },
+  ];
+  return (
+    <svg viewBox="0 0 720 262" role="img" aria-label="Индекс: модель и профиль, затем кандидат строится рядом с активным индексом, потом вы его активируете и он становится активным; при смене модели строится новый кандидат; новые материалы добавляются в активный индекс сами">
+      <defs>
+        <marker id="gd-arrow-si" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      {steps.map((step, index) => {
+        const x = 8 + index * 182;
+        return (
+          <g key={step.title}>
+            <g className={`gd-node ${step.tone}`}>
+              <rect x={x} y="12" width="158" height="88" rx="14" />
+              <text x={x + 79} y="40" className="gd-title gd-title-sm">{step.title}</text>
+              <text x={x + 79} y="64" className="gd-sub gd-sub-sm">{step.a}</text>
+              <text x={x + 79} y="80" className="gd-sub gd-sub-sm">{step.b}</text>
+            </g>
+            {index < steps.length - 1 && (
+              <path d={`M${x + 161} 56 H${x + 179}`} className="gd-arrow" markerEnd="url(#gd-arrow-si)" />
+            )}
+          </g>
+        );
+      })}
+      <path d="M672 104 V130 H87 V104" className="gd-arrow gd-dashed" markerEnd="url(#gd-arrow-si)" />
+      <text x="380" y="152" className="gd-label gd-label-mid">сменили модель или нарезку: строится новый кандидат, прежний работает до активации</text>
+      <g className="gd-node gd-info">
+        <rect x="8" y="180" width="330" height="66" rx="14" />
+        <text x="173" y="206" className="gd-step">Новый или обновлённый материал</text>
+        <text x="173" y="226" className="gd-sub gd-sub-sm">добавляется в активный индекс сам (локальная модель)</text>
+      </g>
+      <path d="M342 213 C500 213 600 180 606 104" className="gd-arrow" markerEnd="url(#gd-arrow-si)" />
+    </svg>
+  );
+}
+
+/** Службы Tentex и папка с данными. */
+function StorageMap() {
+  const services = [
+    { title: "Интерфейс · web", sub: "экраны в браузере" },
+    { title: "API · api", sub: "команды, данные, очередь" },
+    { title: "Воркер · worker", sub: "фоновые задачи" },
+    { title: "Сервис моделей", sub: "эмбеддинги и reranker" },
+    { title: "SearXNG", sub: "поиск в интернете" },
+  ];
+  const data = [
+    { title: "tentex.sqlite", a: "база: проекты,", b: "программы, история", tone: "gd-accent" },
+    { title: "storage/", a: "файлы материалов,", b: "страницы, вырезы", tone: "gd-accent" },
+    { title: "models/", a: "локальные модели", b: "не входят в копию", tone: "gd-warning" },
+    { title: "backups/", a: "резервные копии", b: "папку можно сменить", tone: "gd-success" },
+    { title: "transfers/", a: "временные пакеты", b: "экспорта и импорта", tone: "gd-info" },
+    { title: "installation.secret", a: "ключ шифрования", b: "не входит в копию", tone: "gd-warning" },
+  ];
+  return (
+    <svg viewBox="0 0 720 336" role="img" aria-label="Слева пять служб Tentex: интерфейс, API, воркер, сервис моделей и SearXNG; справа папка data на вашем диске: база, файлы, модели, копии, временные пакеты и ключ шифрования; API, воркер и сервис моделей читают и пишут данные">
+      <defs>
+        <marker id="gd-arrow-sm" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      {services.map((item, index) => (
+        <g key={item.title} className={`gd-node ${index === 4 ? "gd-info" : "gd-accent"}`}>
+          <rect x="8" y={12 + index * 62} width="236" height="48" rx="12" />
+          <text x="126" y={33 + index * 62} className="gd-step">{item.title}</text>
+          <text x="126" y={50 + index * 62} className="gd-sub gd-sub-sm">{item.sub}</text>
+        </g>
+      ))}
+      {[1, 2, 3].map((index) => (
+        <path key={index} d={`M248 ${36 + index * 62} H334`} className="gd-arrow" markerEnd="url(#gd-arrow-sm)" />
+      ))}
+      <rect x="340" y="8" width="372" height="320" rx="20" className="gd-frame" />
+      <text x="526" y="34" className="gd-label gd-label-mid">папка data/ на вашем диске</text>
+      {data.map((item, index) => {
+        const x = 354 + (index % 2) * 178;
+        const y = 50 + Math.floor(index / 2) * 84;
+        return (
+          <g key={item.title} className={`gd-node ${item.tone}`}>
+            <rect x={x} y={y} width="166" height="72" rx="12" />
+            <text x={x + 83} y={y + 24} className="gd-step">{item.title}</text>
+            <text x={x + 83} y={y + 46} className="gd-sub gd-sub-sm">{item.a}</text>
+            <text x={x + 83} y={y + 60} className="gd-sub gd-sub-sm">{item.b}</text>
+          </g>
+        );
+      })}
+      <text x="526" y="316" className="gd-label gd-label-mid">жёлтое не входит в резервную копию</text>
+    </svg>
+  );
+}
+
+/** Жизнь фоновой задачи: очередь, работа, три итога. */
+function JobLifecycle() {
+  return (
+    <svg viewBox="0 0 720 304" role="img" aria-label="Задача стоит в очереди, затем идёт; идущую можно поставить на паузу или отменить; итог один из трёх: готово, ждёт проверки или ошибка; готовое и проверенное убирается из панели, упавшую можно повторить с сохранённого места">
+      <defs>
+        <marker id="gd-arrow-jl" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      <g className="gd-node gd-info">
+        <rect x="8" y="100" width="128" height="64" rx="14" />
+        <text x="72" y="128" className="gd-step">В очереди</text>
+        <text x="72" y="147" className="gd-sub gd-sub-sm">ждёт своей полосы</text>
+      </g>
+      <g className="gd-node gd-accent">
+        <rect x="196" y="100" width="128" height="64" rx="14" />
+        <text x="260" y="128" className="gd-step">Идёт</text>
+        <text x="260" y="147" className="gd-sub gd-sub-sm">ход и остаток</text>
+      </g>
+      <g className="gd-node gd-info">
+        <rect x="196" y="212" width="128" height="56" rx="14" />
+        <text x="260" y="236" className="gd-step">На паузе</text>
+        <text x="260" y="254" className="gd-sub gd-sub-sm">можно продолжить</text>
+      </g>
+      <g className="gd-node gd-info">
+        <rect x="8" y="212" width="128" height="56" rx="14" />
+        <text x="72" y="236" className="gd-step">Отменена</text>
+        <text x="72" y="254" className="gd-sub gd-sub-sm">готовое цело</text>
+      </g>
+      <g className="gd-node gd-success">
+        <rect x="420" y="12" width="174" height="64" rx="14" />
+        <text x="507" y="40" className="gd-step">Готово</text>
+        <text x="507" y="59" className="gd-sub gd-sub-sm">применено само</text>
+      </g>
+      <g className="gd-node gd-warning">
+        <rect x="420" y="100" width="174" height="64" rx="14" />
+        <text x="507" y="128" className="gd-step">Ждёт проверки</text>
+        <text x="507" y="147" className="gd-sub gd-sub-sm">предложение, решать вам</text>
+      </g>
+      <g className="gd-node gd-danger">
+        <rect x="420" y="188" width="174" height="64" rx="14" />
+        <text x="507" y="216" className="gd-step">Ошибка</text>
+        <text x="507" y="235" className="gd-sub gd-sub-sm">причина и «N из M»</text>
+      </g>
+      <g className="gd-node gd-accent">
+        <rect x="632" y="100" width="80" height="64" rx="14" />
+        <text x="672" y="128" className="gd-step">Убрано</text>
+        <text x="672" y="147" className="gd-sub gd-sub-sm">из панели</text>
+      </g>
+      <path d="M140 132 H192" className="gd-arrow" markerEnd="url(#gd-arrow-jl)" />
+      <path d="M244 168 V208" className="gd-arrow" markerEnd="url(#gd-arrow-jl)" />
+      <path d="M276 208 V170" className="gd-arrow" markerEnd="url(#gd-arrow-jl)" />
+      <path d="M212 166 C190 208 160 224 140 238" className="gd-arrow gd-dashed" markerEnd="url(#gd-arrow-jl)" />
+      <path d="M328 116 C372 116 372 44 416 44" className="gd-arrow" markerEnd="url(#gd-arrow-jl)" />
+      <path d="M328 132 H416" className="gd-arrow" markerEnd="url(#gd-arrow-jl)" />
+      <path d="M328 148 C372 148 372 220 416 220" className="gd-arrow" markerEnd="url(#gd-arrow-jl)" />
+      <path d="M598 44 C640 44 672 70 672 96" className="gd-arrow" markerEnd="url(#gd-arrow-jl)" />
+      <path d="M598 132 H628" className="gd-arrow" markerEnd="url(#gd-arrow-jl)" />
+      <path d="M598 220 C640 220 672 194 672 168" className="gd-arrow" markerEnd="url(#gd-arrow-jl)" />
+      <path d="M507 256 V292 H72 V168" className="gd-arrow gd-dashed" markerEnd="url(#gd-arrow-jl)" />
+      <text x="310" y="286" className="gd-label gd-label-mid">повторить: работа продолжится с сохранённого места</text>
+    </svg>
+  );
+}
+
 const DIAGRAMS: Record<string, () => ReactNode> = {
   overview: Overview,
   structure: Structure,
@@ -834,6 +1150,12 @@ const DIAGRAMS: Record<string, () => ReactNode> = {
   "lesson-ai": LessonAiFlow,
   "prep-screen": PrepScreen,
   "cards-flow": CardsFlow,
+  "ai-setup": AiSetupFlow,
+  "ocr-settings": OcrSettingsFlow,
+  "search-pipeline": SearchPipeline,
+  "search-index": SearchIndexLife,
+  "storage-map": StorageMap,
+  "job-lifecycle": JobLifecycle,
 };
 
 export function GuideDiagram({ name }: { name: string }) {
