@@ -338,6 +338,7 @@
   justify-content: space-between;
   gap: var(--space-3);
   width: 100%;
+  min-width: 0;
   min-height: 42px;
   padding: 0 var(--space-3);
   border: 1px solid var(--line);
@@ -373,6 +374,12 @@
 
 .select-trigger[data-placeholder] {
   color: var(--muted);
+}
+
+.select-trigger > span:first-child {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .select-chevron {
@@ -512,21 +519,23 @@
   cursor: not-allowed;
 }
 
-/* Бегунок: приподнятая плашка, которая едет под выбранную вкладку */
+/* Бегунок: приподнятая плашка, которая едет под выбранную вкладку.
+   left/width приходят из JS-измерения фактической кнопки (SegmentedTabs.tsx);
+   пока измерения нет (первый кадр, скрытый блок) — запасной путь по равным
+   долям через --tab-index/--tab-count, ровно как считалось раньше. */
 .segmented-tabs-indicator {
   position: absolute;
   z-index: 0;
   top: var(--tabs-pad);
   bottom: var(--tabs-pad);
-  left: var(--tabs-pad);
-  width: calc((100% - 2 * var(--tabs-pad)) / var(--tab-count, 1));
+  left: var(--tab-left, calc(var(--tabs-pad) + var(--tab-index, 0) * (100% - 2 * var(--tabs-pad)) / var(--tab-count, 1)));
+  width: var(--tab-width, calc((100% - 2 * var(--tabs-pad)) / var(--tab-count, 1)));
   border-radius: var(--radius-sm);
   /* Приподнятая поверхность, а не --paper: на вдавленном треке тёмной темы
      обычная бумага почти не отличается от фона. */
   background: var(--paper-strong);
   box-shadow: var(--shadow-sm);
-  transform: translateX(calc(var(--tab-index, 0) * 100%));
-  transition: transform var(--motion-base) var(--motion-ease-out);
+  transition: left var(--motion-base) var(--motion-ease-out), width var(--motion-base) var(--motion-ease-out);
 }
 
 /* --- Всплывашка. Поведение — Radix Popover, вид — наш --- */
@@ -544,6 +553,12 @@
   animation: popover-in var(--motion-fast) var(--motion-ease-out);
 }
 
+/* Пошире обычной: имя обрабатываемого файла бывает длинным, и на 296px
+   перенос (.task-row-label) сминал бы карточку в узкую колонку. */
+.popover-tasks {
+  width: 360px;
+}
+
 .popover-title {
   margin: 0 0 var(--space-3);
   color: var(--ink);
@@ -552,6 +567,26 @@
 }
 
 .popover-arrow {
+  fill: var(--paper-strong);
+}
+
+/* Карточка по наведению. Живёт над всплывашкой, из которой её вызвали, —
+   отдельного уровня для «слой над слоем» в токенах нет, и `.select-content`
+   решает это тем же способом. */
+.hover-card {
+  transform-origin: var(--radix-hover-card-content-transform-origin);
+  z-index: calc(var(--z-popover) + 1);
+  width: 300px;
+  max-width: calc(100vw - var(--space-6));
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper-strong);
+  box-shadow: var(--shadow-lg);
+  animation: popover-in var(--motion-fast) var(--motion-ease-out);
+}
+
+.hover-card-arrow {
   fill: var(--paper-strong);
 }
 
@@ -1213,6 +1248,14 @@
 .menu-item-chevron {
   margin-left: auto;
   color: var(--faint);
+}
+
+/* Место под галочку держится и у неотмеченных пунктов, чтобы подписи стояли в столбик. */
+.menu-item-check {
+  display: inline-flex;
+  width: 14px;
+  flex: none;
+  color: var(--accent);
 }
 
 /* --- Общие мелочи, на которые опирается кит --- */

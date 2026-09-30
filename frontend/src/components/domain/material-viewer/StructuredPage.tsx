@@ -1,15 +1,19 @@
 import katex from "katex";
+import { splitMarkdownRow } from "../markdown/parse";
 import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
 import type {
   MaterialFragmentRead,
   MaterialPageRead,
   RecognitionSource,
 } from "../../../api/materials";
+import { MODEL_DESCRIPTION_MARK } from "../../../api/materials";
 import { QualityBadge } from "../QualityBadge";
 
 interface StructuredPageProps {
   page: MaterialPageRead;
   showOcrReview?: boolean;
+  /** «Текст из файла» — шум там, где виден сам текст; отметки распознавания остаются. */
+  showNativeQuality?: boolean;
   /** Подсветка совпадений поиска. Пустая строка — ничего не подсвечивать. */
   /** Словоформы для подсветки — их считает поиск, здесь морфологии нет. */
   terms?: string[];
@@ -41,6 +45,7 @@ interface StructuredPageProps {
 export function StructuredPage({
   page,
   showOcrReview = true,
+  showNativeQuality = true,
   terms = [],
   assetUrl,
   focusedFragmentId = null,
@@ -57,7 +62,8 @@ export function StructuredPage({
     <article className={`structured-page ${withCrops ? "with-crops" : ""} ${spatial ? "is-spatial" : ""} ${className}`.trim()}>
       <header className="structured-page-head">
         <span>Страница {page.page_number}</span>
-        <QualityBadge quality={page.quality} showReview={showOcrReview} />
+        {(showNativeQuality || page.quality !== "native")
+          && <QualityBadge quality={page.quality} showReview={showOcrReview} />}
       </header>
       <div
         className={spatial ? "structured-page-canvas" : "structured-page-flow"}
@@ -130,7 +136,12 @@ function FragmentBody({
   preserveLayout?: boolean;
 }) {
   if (fragment.element_kind === "image") {
-    const transcript = fragment.text.trim();
+    // Описание модели показывается своим заголовком и без служебной метки:
+    // что это не текст книги, сообщает заголовок блока.
+    const described = fragment.visual?.processing === "described";
+    const transcript = described
+      ? fragment.text.replace(MODEL_DESCRIPTION_MARK, "").trim()
+      : fragment.text.trim();
     const hasTranscript = fragment.recognition_source !== "native"
       && transcript.length > 0
       && !/^\[?(изображение|image)\]?$/iu.test(transcript);
@@ -154,9 +165,16 @@ function FragmentBody({
         />
         {hasTranscript && (
           <details className="structured-transcript">
-            <summary>Распознанный текст</summary>
-            <p className="structured-transcript-note">Может содержать ошибки, особенно в формулах.</p>
-            <p>{renderInlineMath(transcript, terms)}</p>
+            <summary>
+              {described ? "Описание модели" : "Распознанный текст"}
+              {described && fragment.visual?.review === "needs_review" ? " · требует проверки" : ""}
+            </summary>
+            <p className="structured-transcript-note">
+              {described
+                ? "Сделано моделью по вырезу — сверяйтесь с изображением."
+                : "Может содержать ошибки, особенно в формулах."}
+            </p>
+            <p className="structured-transcript-text">{renderInlineMath(transcript, terms)}</p>
           </details>
         )}
       </figure>
@@ -493,27 +511,6 @@ function renderInlineMath(text: string, terms: string[]): ReactNode {
   return parts;
 }
 
-function splitMarkdownRow(row: string): string[] {
-  const cells: string[] = [];
-  let cell = "";
-  let escaped = false;
-  for (const character of row.trim().replace(/^\|/, "").replace(/\|$/, "")) {
-    if (escaped) {
-      cell += character;
-      escaped = false;
-    } else if (character === "\\") {
-      escaped = true;
-    } else if (character === "|") {
-      cells.push(cell.trim());
-      cell = "";
-    } else {
-      cell += character;
-    }
-  }
-  cells.push(cell.trim());
-  return cells;
-}
-
 export function MarkdownTable({ markdown }: { markdown: string }) {
   // Строка таблицы — любая с вертикальной чертой внутри, а не только та, что с
   // неё начинается: внешняя модель часто пишет «№ | Функция | Первообразная»
@@ -531,11 +528,17 @@ export function MarkdownTable({ markdown }: { markdown: string }) {
     <div className="structured-table-scroll" role="region" aria-label="Таблица из документа" tabIndex={0}>
       <table className="structured-table">
         <thead>
-          <tr>{head.map((cell, index) => <th scope="col" key={`${index}-${cell}`}>{cell}</th>)}</tr>
+          <tr>
+            {head.map((cell, index) => (
+              <th scope="col" key={`${index}-${cell}`}>{renderInlineMath(cell, [])}</th>
+            ))}
+          </tr>
         </thead>
         <tbody>
           {body.map((row, rowIndex) => (
-            <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>
+            <tr key={rowIndex}>
+              {row.map((cell, cellIndex) => <td key={cellIndex}>{renderInlineMath(cell, [])}</td>)}
+            </tr>
           ))}
         </tbody>
       </table>

@@ -25,7 +25,8 @@ MAX_HEADER_FRAGMENTS = 4
 MAX_HEADER_LENGTH = 500
 NUMBERED_CONFIDENCE = 0.45
 NUMBER_RE = re.compile(
-    r"^\s*(?:(?:вопрос|задача|задание)\s*(?:№|#)?\s*)?(\d{1,3})(?:[.)]|\s)",
+    r"^\s*(?:(?:вопрос|задача|задание)\s*(?:№|#)?\s*)?"
+    r"(\d{1,3})(?:\.(\d{1,3}))?(?:[.)]|\s)",
     re.IGNORECASE,
 )
 TEXT_KINDS = {"heading", "paragraph", "list"}
@@ -76,6 +77,51 @@ class _Candidate:
 def _number(text: str) -> int | None:
     match = NUMBER_RE.match(text)
     return int(match.group(1)) if match else None
+
+
+def _number_targets(nodes: list[ProgramNode]) -> dict[tuple[int, int | None], int]:
+    """Номера основных вопросов и подпунктов для подсказки из файла ответов."""
+    targets: dict[tuple[int, int | None], int] = {}
+    root_number = 0
+    children: dict[UUID, int] = {}
+    for index, node in enumerate(nodes):
+        if node.node_type.value == "subpoint" and node.parent_id in children:
+            parent_number = children[node.parent_id]
+            targets[(parent_number, node.sort_order + 1)] = index
+        elif node.node_type.value == "topic":
+            root_number += 1
+            children[node.id] = root_number
+            targets[(root_number, None)] = index
+    return targets
+
+
+def _trust_heading_numbering(
+    rows: list[tuple[MaterialFragment, int]],
+    targets: dict[tuple[int, int | None], int],
+) -> bool:
+    """Доверять номеру при перефразированном заголовке лишь для цельной серии.
+
+    Разрыв или повтор нумерации обычно означает внутренний список ответа либо
+    другой раздел документа. Точное совпадение текста и без номера сохранится.
+    """
+    numbers: list[tuple[int, int | None]] = []
+    for fragment, _page in rows:
+        if fragment.element_kind != "heading":
+            continue
+        match = NUMBER_RE.match(fragment.text)
+        if match:
+            numbers.append((int(match.group(1)), int(match.group(2)) if match.group(2) else None))
+    if len(numbers) < 2 or any(number not in targets for number in numbers):
+        return False
+    for previous, current in zip(numbers, numbers[1:], strict=False):
+        root, child = previous
+        next_root, next_child = current
+        if next_child is None and next_root == root + 1:
+            continue
+        if next_root == root and next_child is not None and next_child == (child or 0) + 1:
+            continue
+        return False
+    return True
 
 
 def _joined_title(
@@ -151,20 +197,28 @@ def _candidate_for_anchor(
     node_index: dict[UUID, int],
     resolved: dict[str, UUID],
     question_signatures: tuple[frozenset[str], ...],
+    number_targets: dict[tuple[int, int | None], int],
+    trusted_numbering: bool,
 ) -> _Candidate | None:
     fragment = rows[anchor][0]
     if fragment.element_kind not in TEXT_KINDS or not fragment.text.strip():
         return None
-    number = _number(fragment.text)
-    if number is not None and not 1 <= number <= len(nodes):
-        # Раздел файла начал нумерацию заново (второй, третий раздел ответов) —
-        # число не указывает ни на один узел программы, но заголовок остаётся
-        # заголовком: ищем его по смыслу вместо того, чтобы выбросить якорь целиком.
-        number = None
+    number_match = NUMBER_RE.match(fragment.text)
+    number = (
+        number_targets.get(
+            (
+                int(number_match.group(1)),
+                int(number_match.group(2)) if number_match.group(2) else None,
+            )
+        )
+        if number_match else None
+    )
 
     choices: list[_Candidate] = []
     limit = min(len(rows), anchor + MAX_HEADER_FRAGMENTS)
     for end in range(anchor + 1, limit + 1):
+        if fragment.element_kind == "heading" and end > anchor + 1:
+            break  # следующий абзац — тело ответа, а не продолжение явного заголовка
         if end > anchor + 1 and _number(rows[end - 1][0].text) is not None:
             break
         title = _joined_title(rows, anchor, end)
@@ -188,7 +242,7 @@ def _candidate_for_anchor(
             continue
         ranked = index.rank(title)
         if number is not None:
-            target = number - 1
+            target = number
             score = next(
                 (candidate.score for candidate in ranked if candidate.node_id == nodes[target].id),
                 0.0,
@@ -206,7 +260,8 @@ def _candidate_for_anchor(
                         else ReferenceAnswerMatchMethod.NUMBERED_ORDER
                     ),
                     ranked,
-                    score >= NUMBERED_CONFIDENCE,
+                    score >= NUMBERED_CONFIDENCE
+                    or (fragment.element_kind == "heading" and trusted_numbering),
                 )
             )
             if score < NUMBERED_CONFIDENCE and ranked:
@@ -320,6 +375,8 @@ def detect_sections(
     index = HeadingIndex((node.id, node.title) for node in nodes)
     node_index = {node.id: position for position, node in enumerate(nodes)}
     question_signatures = tuple(_surface_signature(node.title) for node in nodes)
+    number_targets = _number_targets(nodes)
+    trusted_numbering = _trust_heading_numbering(rows, number_targets)
     candidates = [
         candidate
         for anchor in range(len(rows))
@@ -332,6 +389,8 @@ def detect_sections(
                 node_index,
                 resolved,
                 question_signatures,
+                number_targets,
+                trusted_numbering,
             )
         )
         is not None
@@ -428,7 +487,8 @@ def section_for_resolution(
     index = HeadingIndex((node.id, node.title) for node in nodes)
     question_signatures = tuple(_surface_signature(node.title) for node in nodes)
     candidate = _candidate_for_anchor(
-        rows, anchor, nodes, index, node_index, {}, question_signatures
+        rows, anchor, nodes, index, node_index, {}, question_signatures,
+        _number_targets(nodes), _trust_heading_numbering(rows, _number_targets(nodes)),
     )
     if candidate is None:
         return None

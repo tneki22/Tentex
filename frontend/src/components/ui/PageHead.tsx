@@ -24,6 +24,7 @@ interface PageHeadProps {
 
 export interface PageHeadSlots {
   title: HTMLElement | null;
+  view: HTMLElement | null;
   actions: HTMLElement | null;
 }
 
@@ -32,10 +33,11 @@ const SlotContext = createContext<PageHeadSlots | null>(null);
 /** Оболочка отдаёт сюда узлы своей верхней полосы. */
 export function PageHeadSlotProvider({
   title,
+  view,
   actions,
   children,
 }: PropsWithChildren<PageHeadSlots>) {
-  const slots = useMemo(() => ({ title, actions }), [title, actions]);
+  const slots = useMemo(() => ({ title, view, actions }), [title, view, actions]);
   return <SlotContext.Provider value={slots}>{children}</SlotContext.Provider>;
 }
 
@@ -61,6 +63,7 @@ export function PageHead({
     return (
       <>
         {createPortal(<h1 className="topbar-title">{title}</h1>, slots.title)}
+        {center && slots.view && createPortal(center, slots.view)}
         {actions && createPortal(actions, slots.actions)}
         {(eyebrow || lead || children) && (
           <header className="page-head is-lifted">

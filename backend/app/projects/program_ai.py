@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.ai.gateway import AiTextRequest, ModelGateway
 from app.ai.schemas import AiMessage, AiPreflight, AiUsage
 from app.background.schemas import BackgroundJobStartRead
+from app.db import project_write_transaction
 from app.models import (
     AiRun,
     BackgroundJob,
@@ -293,7 +294,7 @@ async def start(
     _check_snapshot(snapshot, command.expected_program_revision, command.expected_source_hash)
     await gateway.preflight_confirmed(_request(snapshot, command.confirmed))
     session.rollback()
-    with session.begin():
+    with project_write_transaction(session, project_id):
         job = BackgroundJob(
             kind=BackgroundJobKind.AI_GROUPING,
             project_id=project_id,
@@ -344,7 +345,7 @@ def apply(
         for node in snapshot.nodes
     ]
     session.rollback()
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = program._require_writable_project(session, project_id)
         current = _eligible_snapshot(session, project_id)
         _check_snapshot(current, command.expected_program_revision, command.expected_source_hash)

@@ -7,10 +7,12 @@ from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.ai.credentials import decrypt_secret, encrypt_secret
+from app.ai.provider import is_speech_to_text_id
 from app.ai.roles import (
     ROLE_SPECS,
     AiModality,
@@ -19,6 +21,7 @@ from app.ai.roles import (
     validate_role_parameters,
 )
 from app.ai.schemas import (
+    AiChatPreset,
     AiDefaultWrite,
     AiGlobalSettingsWrite,
     AiManualModelWrite,
@@ -66,6 +69,18 @@ def model_capabilities(row: AiModelCatalogEntry) -> set[str]:
     return capabilities
 
 
+def is_transcription_model(row: AiModelCatalogEntry) -> bool:
+    """Модель распознавания речи: принимает аудио и не умеет вести чат.
+
+    Только `audio` во входе недостаточно: Gemini принимает и аудио, но отвечает
+    в чате. У OpenRouter Whisper приходит с `text` во входе, поэтому решает ещё и
+    семейство по ID.
+    """
+    if "audio" not in row.input_modalities:
+        return False
+    return "text" not in row.input_modalities or is_speech_to_text_id(row.model_id)
+
+
 def validate_model_selection(
     session: Session, selection: AiModelSelection, *, required: frozenset[str]
 ) -> AiModelCatalogEntry:
@@ -86,6 +101,65 @@ def validate_model_selection(
             context={"model_id": selection.model_id, "missing": sorted(missing)},
         )
     return model
+
+
+def read_chat_preset(session: Session) -> AiChatPreset | None:
+    """Последний выбор модели в композере. Мусор в JSON — то же, что его нет."""
+    raw = _ensure_row(session).chat_model_preset
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return AiChatPreset.model_validate(raw)
+    except ValidationError:
+        return None
+
+
+def store_chat_preset(session: Session, preset: AiChatPreset | None) -> None:
+    """Без своей транзакции: вызывается изнутри транзакции чата, сменившего модель."""
+    row = _ensure_row(session)
+    row.chat_model_preset = None if preset is None else preset.model_dump(mode="json")
+    row.updated_at = utc_now()
+
+
+def set_chat_preset(session: Session, preset: AiChatPreset | None) -> AiSettingsRead:
+    with session.begin():
+        store_chat_preset(session, preset)
+    return read_settings(session)
+
+
+def seed_from_preset(
+    session: Session, *, role: str, required: frozenset[str]
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+    """Снимок выбора и параметры для нового чата — из пресета, если он ещё годен.
+
+    Провайдера могли удалить, модель — убрать из каталога, а требования чата
+    различаются (чату программы не нужен streaming). Непригодный пресет молча
+    даёт «Auto»: новый чат не место для сообщения об ошибке.
+    """
+    preset = read_chat_preset(session)
+    if preset is None:
+        return None, None
+    selection = AiModelSelection(provider_id=preset.provider_id, model_id=preset.model_id)
+    try:
+        validate_model_selection(session, selection, required=required)
+        parameters = validate_role_parameters(role, preset.parameters)
+    except ProjectDomainError:
+        return None, None
+    return (
+        {"provider_id": str(selection.provider_id), "model_id": selection.model_id},
+        parameters,
+    )
+
+
+def model_display_name(session: Session, selection: dict[str, object] | None) -> str:
+    """Читаемое имя модели для отметки в ленте; снятая модель остаётся по ID."""
+    if not selection:
+        return "по умолчанию"
+    model_id = str(selection.get("model_id") or "")
+    row = session.get(
+        AiModelCatalogEntry, (UUID(str(selection.get("provider_id"))), model_id)
+    )
+    return row.display_name if row is not None else model_id
 
 
 class AiGatewayError(ProjectDomainError):
@@ -425,6 +499,11 @@ def resolve_model(
         )
         source = "role_override"
     else:
+        if spec.requires_explicit_model:
+            raise AiGatewayError(
+                "Для прохода 2 явно выберите модель уровня построения программы",
+                code="ai_model_not_configured", context={"role": role},
+            )
         provider_id = getattr(global_row, f"default_{spec.modality}_provider_id")
         model_id = getattr(global_row, f"default_{spec.modality}_model_id")
         if provider_id is None or model_id is None:
@@ -459,9 +538,14 @@ def provider_read(session: Session, row: AiProviderConnection, model_count: int)
 
 def _today_usage(session: Session) -> AiTodayUsage:
     start = datetime.combine(date.today(), time.min)
-    rows = list(session.scalars(select(AiRun).where(AiRun.created_at >= start)))
+    # Обзору нужны только числовые поля; payload и JSON журнала не читаем.
+    rows = list(session.execute(select(
+        AiRun.status, AiRun.input_tokens, AiRun.output_tokens,
+        AiRun.actual_cost_usd, AiRun.actual_cost_rub,
+    ).where(AiRun.created_at >= start)))
     succeeded = [row for row in rows if row.status == "succeeded"]
     return AiTodayUsage(
+        run_count=len(rows),
         input_tokens=sum(row.input_tokens or 0 for row in succeeded),
         output_tokens=sum(row.output_tokens or 0 for row in succeeded),
         actual_cost_usd=sum(
@@ -543,6 +627,7 @@ def read_settings(session: Session) -> AiSettingsRead:
         usd_rub_rate_date=row.usd_rub_rate_date,
         default_text=_selection(row.default_text_provider_id, row.default_text_model_id),
         default_speech=_selection(row.default_speech_provider_id, row.default_speech_model_id),
+        chat_preset=read_chat_preset(session),
         providers=[provider_read(session, item, counts.get(item.id, 0)) for item in providers],
         roles=roles,
         models=[AiModelRead.model_validate(item) for item in models],

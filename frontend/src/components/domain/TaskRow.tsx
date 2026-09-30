@@ -1,20 +1,19 @@
 import { Check, Pause, Play, RotateCcw, X } from "lucide-react";
 import { IconButton, Progress } from "../ui";
+import type { BackgroundJobKind } from "../../api/backgroundJobs";
 
 /** Что именно считается. Названия — из словаря проекта, без синонимов.
- *  Виды ИИ (ai_*, link_answers) — из `BackgroundJobKind` бэкенда (Ш1 плана). */
-export type TaskKind =
-  | "parse"
-  | "typst_compile"
-  | "ocr"
-  | "pass1"
-  | "pass2"
-  | "ai_grouping"
-  | "ai_import_repair"
-  | "ai_preparation"
-  | "ai_cleanup"
-  | "link_answers"
-  | "ai_answer_sections";
+ *  Виды из `BackgroundJobKind` (реальные виды бэкенда) плюс три фазы
+ *  разбора материала, у которых нет отдельной задачи в очереди — это стадии
+ *  одной и той же `parse`, показанные отдельной строкой в мастере.
+ *
+ *  `TaskKind` берёт `BackgroundJobKind` типом, а не копирует его вручную:
+ *  `KIND_LABEL` ниже — `Record<TaskKind, string>`, и TypeScript откажется
+ *  собираться, если бэкенд заведёт новый вид задачи, а подпись для него здесь
+ *  забудут добавить. Так и завелось «undefined · Вся установка» у
+ *  `backup_create`/`storage_verify` 22.09.2026: раньше список видов держали
+ *  отдельно от `BackgroundJobKind`, и обе стороны разошлись без единой ошибки. */
+export type TaskKind = BackgroundJobKind | "ocr" | "pass1" | "pass2";
 
 export interface BackgroundTask {
   id: string;
@@ -29,11 +28,19 @@ export interface BackgroundTask {
   done: number;
   total: number;
   /** Оценка остатка. null — пока не считается. */
-  etaMinutes: number | null;
+  etaSeconds: number | null;
   /** `review` — работа досчитана, но предложение ещё ждёт человека. */
   state: "queued" | "running" | "paused" | "failed" | "review";
   /** Причина падения. Показывается как есть: обтекаемое «что-то пошло не так» бесполезно. */
   error?: string;
+  /** У candidate-индекса отмена означает сохранение частичного результата. */
+  finishable?: boolean;
+  /** Отмена или снятие из панели уже отправлены и ждут ответа сервера —
+   *  кнопки прячутся, а строка честно говорит «Завершаем…» вместо того чтобы
+   *  выглядеть нерабочей до следующего опроса. */
+  pending?: boolean;
+  /** Страницы уже доступны, но ревизия ещё публикуется. */
+  finalizing?: boolean;
 }
 
 const KIND_LABEL: Record<TaskKind, string> = {
@@ -48,6 +55,19 @@ const KIND_LABEL: Record<TaskKind, string> = {
   ai_cleanup: "Очистка текста",
   link_answers: "Автопривязка ответов",
   ai_answer_sections: "Разметка ответов моделью",
+  ai_program_build: "Составление программы",
+  coverage_research: "Исследование покрытия",
+  retrieval_index: "Сбор индекса",
+  retrieval_model_install: "Установка embedding-модели",
+  retrieval_exhaustive: "Полный поиск по источникам",
+  backup_create: "Резервная копия",
+  project_export: "Экспорт проекта",
+  project_import: "Импорт проекта",
+  storage_verify: "Проверка хранилища",
+  storage_cleanup: "Очистка временного",
+  image_descriptions: "Описание изображений",
+  ai_lesson: "Сборка урока",
+  ai_cards: "Предложения карточек",
 };
 
 interface TaskRowProps {
@@ -69,6 +89,8 @@ interface TaskRowProps {
  *  хотя работа шла. Вместо выдуманного нуля — состояние словами.
  */
 function metaText(task: BackgroundTask): string {
+  if (task.pending) return "Завершаем…";
+  if (task.finalizing) return "Завершаем обработку";
   if (task.state === "review") return "результат готов — откройте и проверьте";
   if (task.state === "queued") return "в очереди";
   const parts: string[] = [];
@@ -76,7 +98,11 @@ function metaText(task: BackgroundTask): string {
   if (task.total > 0) parts.push(`${task.unit ? `${task.unit} ` : ""}${task.done} из ${task.total}`);
   else if (task.state === "running") parts.push("идёт");
   if (task.state === "paused") parts.push("на паузе");
-  if (task.etaMinutes !== null && task.state === "running") parts.push(`≈${task.etaMinutes} мин`);
+  if (task.etaSeconds !== null && task.state === "running") {
+    const minutes = Math.floor(task.etaSeconds / 60);
+    const seconds = task.etaSeconds % 60;
+    parts.push(minutes > 0 ? `≈${minutes} мин ${seconds} с` : `≈${seconds} с`);
+  }
   return parts.join(" · ");
 }
 
@@ -99,28 +125,37 @@ export function TaskRow({ task, onPause, onResume, onRetry, onCancel, onDismiss 
       <div className="task-row-head">
         <span className="task-row-label">{label}</span>
         <span className="task-row-actions">
-          {task.state === "running" && onPause && (
+          {task.pending && <RotateCcw size={14} className="task-row-spinner" aria-hidden="true" />}
+          {!task.pending && task.state === "running" && onPause && (
             <IconButton label="Приостановить" onClick={() => onPause(task.id)}>
               <Pause size={14} />
             </IconButton>
           )}
-          {task.state === "paused" && onResume && (
+          {!task.pending && task.state === "paused" && onResume && (
             <IconButton label="Возобновить" onClick={() => onResume(task.id)}>
               <Play size={14} />
             </IconButton>
           )}
-          {failed && onRetry && (
+          {!task.pending && failed && onRetry && (
             <IconButton label="Повторить" onClick={() => onRetry(task.id)}>
               <RotateCcw size={14} />
             </IconButton>
           )}
-          {waiting && onDismiss && (
+          {!task.pending && failed && onDismiss && (
+            <IconButton label="Убрать ошибку" onClick={() => onDismiss(task.id)}>
+              <X size={14} />
+            </IconButton>
+          )}
+          {!task.pending && waiting && onDismiss && (
             <IconButton label="Убрать из ожидающих" onClick={() => onDismiss(task.id)}>
               <Check size={14} />
             </IconButton>
           )}
-          {cancellable && onCancel && (
-            <IconButton label="Отменить разбор" onClick={() => onCancel(task.id)}>
+          {!task.pending && cancellable && onCancel && (
+            <IconButton
+              label={task.finishable ? "Завершить сейчас" : "Отменить задачу"}
+              onClick={() => onCancel(task.id)}
+            >
               <X size={14} />
             </IconButton>
           )}
@@ -129,14 +164,17 @@ export function TaskRow({ task, onPause, onResume, onRetry, onCancel, onDismiss 
 
       <p className="task-row-meta">
         {failed
-          ? <span className="task-row-error">{task.error ?? "задача остановилась"}</span>
+          ? <span className="task-row-error">
+            {task.total > 0 ? `${task.done} из ${task.total} · ` : ""}
+            {task.error ?? "задача остановилась"}
+          </span>
           : metaText(task)}
       </p>
 
       {/* Полоса рисуется там, где у работы есть измеримый конец. У ролей ИИ его
           нет: одна неделимая операция вместо обхода страниц — там полоса либо
           врала бы нулём, либо всегда стояла бы полной. */}
-      {(task.total > 0 || waiting) && (
+      {!task.finalizing && (task.total > 0 || waiting) && (
         <Progress
           value={waiting ? 1 : task.done}
           max={waiting ? 1 : task.total}

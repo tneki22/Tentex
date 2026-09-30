@@ -1,0 +1,37 @@
+.lesson-planning-main { display: grid; align-content: start; gap: var(--space-6); max-width: 1360px; padding-bottom: var(--space-12); }
+.lesson-planning-main > .page-head { margin: 0; }
+.lesson-planning-lead, .lesson-planning-note { margin: 0; color: var(--muted); line-height: var(--leading-snug); }
+.lesson-planning-note a { color: var(--accent); }
+.lesson-planning-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); }
+.lesson-planning-summary article { display: grid; gap: var(--space-2); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); }
+.lesson-planning-summary article span { color: var(--muted); font-size: var(--text-sm); }
+.lesson-planning-summary article strong { font-size: var(--text-lg); }
+.lesson-planning-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.lesson-planning-actions > span { color: var(--muted); font-size: var(--text-sm); }
+.lesson-planning-calendar, .lesson-planning-day-list, .lesson-planning-unassigned, .lesson-planning-time { display: grid; gap: var(--space-4); padding: var(--space-5); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.lesson-planning-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.lesson-planning-section-head h2 { margin: 0; font-size: var(--text-lg); }
+.lesson-planning-section-head > span { color: var(--muted); }
+.lesson-planning-section-head > div { display: flex; align-items: center; gap: var(--space-2); }
+.lesson-planning-section-head > div strong { min-width: 160px; text-align: center; text-transform: capitalize; }
+.lesson-planning-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--space-2); }
+.lesson-planning-weekday { color: var(--muted); font-size: var(--text-xs); text-align: center; }
+.lesson-planning-day { min-height: 72px; display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); padding: var(--space-3); text-align: left; color: var(--ink); background: var(--canvas); border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
+.lesson-planning-day:hover { background: var(--surface-hover); }
+.lesson-planning-day.is-selected { border-color: var(--accent); box-shadow: var(--focus-ring); }
+.lesson-planning-day.is-today > span { color: var(--accent); font-weight: var(--weight-bold); }
+.lesson-planning-day small { font-size: var(--text-xs); color: var(--ink-soft); }
+.lesson-planning-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--line); }
+.lesson-planning-row > div { display: grid; gap: var(--space-1); min-width: 0; flex: 1; }
+.lesson-planning-row > div strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lesson-planning-row > div span { color: var(--muted); font-size: var(--text-sm); }
+.lesson-planning-row input[type="date"] { border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--ink); background: var(--surface-sunken); padding: var(--space-2); }
+.lesson-planning-time-row { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(120px, 3fr) auto; align-items: center; gap: var(--space-3); }
+.lesson-planning-time-row > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-medium); }
+.lesson-planning-time-row > span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
+.lesson-planning-preview { max-height: 50vh; overflow: auto; }
+.lesson-planning-preview ul { margin: var(--space-3) 0 0; padding-left: var(--space-5); }
+.lesson-planning-preview li { padding: var(--space-1) 0; }
+.lesson-planning-unavailable { display: grid; justify-content: center; gap: var(--space-4); padding: var(--space-8); }
+@media (max-width: 1050px) { .lesson-planning-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .lesson-planning-grid { gap: var(--space-1); } .lesson-planning-day { min-height: 56px; padding: var(--space-2); } .lesson-planning-day small { font-size: var(--text-xs); } .lesson-planning-time-row { grid-template-columns: 1fr; } }

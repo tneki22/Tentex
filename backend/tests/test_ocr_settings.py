@@ -6,11 +6,12 @@ from sqlalchemy.exc import StatementError
 from sqlalchemy.orm import Session
 
 from app.config import settings as app_settings
+from app.materials.processing_plan import params_from_options
 from app.models import OcrSettings, ParserMode
 from app.ocr import downloads
 from app.ocr import settings as ocr_settings
 from app.ocr.catalog import MODELS_BY_KEY, OCR_MODELS, ModelRepo
-from app.ocr.engines import OcrRuntimeParams
+from app.ocr.engines import OcrRuntimeParams, cpu_threads_for
 from app.ocr.schemas import OcrEngineWrite, OcrGlobalSettingsWrite
 from app.projects.errors import ProjectDomainError
 
@@ -21,6 +22,12 @@ def test_read_settings_creates_default_row_and_lists_full_registry(session: Sess
     assert snapshot.default_mode == ParserMode.FAST
     assert snapshot.quality_threshold == 0.75
     assert snapshot.raster_scale == 2.0
+    assert snapshot.cpu_profile == "balanced"
+    assert snapshot.cpu_available >= 1
+    assert (
+        snapshot.cpu_threads_by_profile["balanced"] < snapshot.cpu_available
+        or snapshot.cpu_available <= 2
+    )
     modes = {engine.mode: engine for engine in snapshot.engines}
     assert set(modes) == {"fast", "cloud"}
     # Облако без включённых внешних моделей недоступно, и экран должен
@@ -35,15 +42,33 @@ def test_update_global_settings_persists(session: Session) -> None:
     updated = ocr_settings.update_global_settings(
         session,
         OcrGlobalSettingsWrite(
-            default_mode=ParserMode.FAST, quality_threshold=0.6, raster_scale=1.5
+            default_mode=ParserMode.FAST, quality_threshold=0.6, raster_scale=1.5,
+            cpu_profile="gentle",
         ),
     )
 
     assert updated.quality_threshold == 0.6
     assert updated.raster_scale == 1.5
+    assert updated.cpu_profile == "gentle"
     reread = ocr_settings.read_settings(session)
     assert reread.default_mode == ParserMode.FAST
     assert reread.raster_scale == 1.5
+    assert reread.cpu_profile == "gentle"
+
+
+def test_cpu_profiles_scale_with_available_processors() -> None:
+    """Профили оставляют запас на маленьких машинах и масштабируются на больших."""
+    profiles = ("gentle", "balanced", "maximum")
+    assert [cpu_threads_for(profile, 24) for profile in profiles] == [3, 6, 24]
+    assert [cpu_threads_for(profile, 4) for profile in profiles] == [1, 2, 4]
+    assert [cpu_threads_for(profile, 1) for profile in profiles] == [1, 1, 1]
+
+
+def test_running_ocr_keeps_cpu_profile_from_checkpoint() -> None:
+    """Смена глобального профиля не меняет ранее запущенную задачу."""
+    current = OcrRuntimeParams(cpu_profile="maximum")
+    assert params_from_options({"cpu_profile": "gentle"}, current).cpu_profile == "gentle"
+    assert params_from_options({}, current).cpu_profile == "maximum"
 
 
 def test_global_settings_reject_unknown_raster_scale() -> None:
@@ -89,7 +114,8 @@ def test_runtime_params_reflects_saved_settings(session: Session) -> None:
     ocr_settings.update_global_settings(
         session,
         OcrGlobalSettingsWrite(
-            default_mode=ParserMode.FAST, quality_threshold=0.6, raster_scale=3.0
+            default_mode=ParserMode.FAST, quality_threshold=0.6, raster_scale=3.0,
+            cpu_profile="maximum",
         ),
     )
     session.rollback()
@@ -103,6 +129,7 @@ def test_runtime_params_reflects_saved_settings(session: Session) -> None:
     assert params.raster_scale == 3.0
     assert params.fast_language == "ru"
     assert params.fast_model_id == "PP-OCRv4"
+    assert params.cpu_profile == "maximum"
 
 
 # ── Фазы 2–3: каталог, установка моделей ─────────────────────────────────────

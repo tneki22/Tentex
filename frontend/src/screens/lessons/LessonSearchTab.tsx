@@ -1,0 +1,210 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Plus, Search } from "lucide-react";
+import type { FoundPage, LessonBlockCommand } from "../../api/lessons";
+import { searchProjectMaterials } from "../../api/search";
+import { QualityBadge } from "../../components/domain/QualityBadge";
+import { Button, Checkbox, ErrorState, LoadingState, StatusBadge } from "../../components/ui";
+import { renderSearchHighlights } from "../workspace/searchHighlights";
+import { toSourcePlaces, type SourcePlace } from "../workspace/sourcePlaces";
+import { errorText } from "./lessonTree";
+import type { LessonPickerTarget } from "./LessonSourcePicker";
+
+export interface MaterialSearchState {
+  query: string;
+  setQuery(value: string): void;
+  places: SourcePlace[];
+  terms: string[];
+  loading: boolean;
+  error: string;
+  /** Поиск уже выполнялся — пустой список тогда значит «ничего не нашлось». */
+  searched: boolean;
+  run(value: string): void;
+}
+
+/**
+ * Поиск по материалам проекта для правой панели.
+ *
+ * Состояние живёт в панели, а не во вкладке: найденные места нужны и диалогу
+ * выбора — рельс «Найдено» листает ту же выдачу, что и список.
+ */
+export function useMaterialSearch(
+  projectId: string,
+  topicId: string | undefined,
+  topicTitle: string,
+  /** Вкладка «Поиск» открыта: только тогда выдача по названию темы нужна. */
+  active: boolean,
+): MaterialSearchState {
+  const [query, setQuery] = useState(topicTitle);
+  const [places, setPlaces] = useState<SourcePlace[]>([]);
+  const [terms, setTerms] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [searched, setSearched] = useState(false);
+  const [error, setError] = useState("");
+
+  const search = useCallback(async (value: string, signal?: AbortSignal) => {
+    if (!value.trim()) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await searchProjectMaterials(projectId, value.trim(), { nodeId: topicId, limit: 20 }, signal);
+      if (signal?.aborted) return;
+      setPlaces(toSourcePlaces(response.results));
+      setTerms(response.terms);
+      setSearched(true);
+    } catch (caught) {
+      if (!signal?.aborted) setError(errorText(caught, "Поиск не выполнился"));
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, [projectId, topicId]);
+
+  useEffect(() => {
+    setQuery(topicTitle);
+    setPlaces([]);
+    setTerms([]);
+    setSearched(false);
+  }, [topicTitle, search]);
+
+  // Гибридный поиск по проекту стоит сотни миллисекунд сервера и не
+  // отменяется вместе с fetch. Раньше он шёл при каждой смене темы, хотя панель
+  // открывается на «Предложено»; теперь — один раз на тему при открытой вкладке.
+  const autoSearched = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${topicId ?? ""}|${topicTitle}`;
+    if (!active || !topicTitle || autoSearched.current === key) return;
+    autoSearched.current = key;
+    const controller = new AbortController();
+    let finished = false;
+    void search(topicTitle, controller.signal).finally(() => { finished = true; });
+    return () => {
+      controller.abort();
+      // Прерванный уходом с вкладки поиск повторится при возвращении.
+      if (!finished) autoSearched.current = null;
+    };
+  }, [active, topicId, topicTitle, search]);
+
+  const run = useCallback((value: string) => { void search(value); }, [search]);
+  return useMemo(
+    () => ({ query, setQuery, places, terms, loading, error, searched, run }),
+    [query, places, terms, loading, error, searched, run],
+  );
+}
+
+interface LessonSearchTabProps {
+  search: MaterialSearchState;
+  busy: boolean;
+  lessonId: string | null;
+  lessonPages: Set<string>;
+  onOpenPlace(target: LessonPickerTarget): void;
+  onAdd(command: Omit<LessonBlockCommand, "expected_revision">): void;
+  /** Отмеченные страницы — новым уроком темы или в конец открытого урока. */
+  onUseFound?(pages: FoundPage[]): Promise<boolean>;
+}
+
+/**
+ * Найденные места темы. Строка ведёт не к привязке, а на свою страницу в
+ * диалоге выбора: по одному абзацу выдачи нельзя решить, тот ли это кусок.
+ */
+export function LessonSearchTab({ search, busy, lessonId, lessonPages, onOpenPlace, onAdd, onUseFound }: LessonSearchTabProps) {
+  const [marked, setMarked] = useState<string[]>([]);
+
+  /* Новая выдача — новый выбор: отметки старых мест к ней не относятся. */
+  useEffect(() => { setMarked([]); }, [search.places]);
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    search.run(search.query);
+  }
+
+  function toggle(key: string, checked: boolean) {
+    setMarked((current) => checked ? [...current, key] : current.filter((item) => item !== key));
+  }
+
+  async function applyMarked() {
+    if (!onUseFound) return;
+    const byKey = new Map(search.places.map((place) => [place.key, place]));
+    const pages = marked.flatMap((key) => {
+      const place = byKey.get(key);
+      return place ? [{ material_id: place.materialId, page: place.pageNumber }] : [];
+    });
+    if (await onUseFound(pages)) setMarked([]);
+  }
+
+  return (
+    <div className="lessons-search-tab">
+      <form className="lessons-search-form" onSubmit={submit}>
+        <label className="workspace-tree-search">
+          <Search size={15} />
+          <span className="sr-only">Поиск по материалам</span>
+          <input
+            type="search"
+            placeholder="Ethernet кадр FCS"
+            value={search.query}
+            onChange={(event) => search.setQuery(event.target.value)}
+          />
+        </label>
+        <Button type="submit" variant="secondary" disabled={search.loading}>Найти</Button>
+      </form>
+      {search.error && <ErrorState message={search.error} />}
+      {search.loading && <LoadingState label="Ищем" />}
+      {search.terms.length > 0 && !search.loading && (
+        <p className="lessons-panel-hint">Искали по: {search.terms.join(" · ")}</p>
+      )}
+      {search.searched && search.places.length === 0 && !search.loading && (
+        <p className="lessons-panel-hint">Ничего не найдено.</p>
+      )}
+      {search.places.length > 0 && onUseFound && !lessonId && (
+        <p className="lessons-panel-hint">Отметьте подходящие страницы — из них соберётся урок темы.</p>
+      )}
+      {search.places.length > 0 && (
+        <ul className="lessons-search-results">
+          {search.places.map((place) => (
+            <li key={place.key}>
+              <button
+                type="button"
+                className="lessons-search-result"
+                onClick={() => onOpenPlace({ materialId: place.materialId, page: place.pageNumber })}
+              >
+                <p>{renderSearchHighlights(place.text, place.highlights)}</p>
+                <small>{place.materialName} · стр. {place.pageNumber} · {place.fragmentIds.length} совпад.</small>
+              </button>
+              <div className="lessons-search-result-actions">
+                {onUseFound && (
+                  <Checkbox
+                    label="Отметить"
+                    checked={marked.includes(place.key)}
+                    disabled={busy}
+                    onCheckedChange={(checked) => toggle(place.key, checked)}
+                  />
+                )}
+                <QualityBadge quality={place.quality} />
+                {lessonPages.has(`${place.materialId}#${place.pageNumber}`) && <StatusBadge tone="info">в уроке</StatusBadge>}
+                <Button
+                  variant="ghost"
+                  disabled={!lessonId || busy}
+                  onClick={() => onAdd({ operation: "add_page", material_id: place.materialId, page_from: place.pageNumber })}
+                >
+                  <Plus size={14} />Страницу
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => onOpenPlace({ materialId: place.materialId, page: place.pageNumber })}
+                >
+                  Открыть страницу…
+                </Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {marked.length > 0 && onUseFound && (
+        <div className="lessons-search-selection" role="region" aria-label="Отмеченные страницы">
+          <span>Отмечено страниц: {marked.length}</span>
+          <Button disabled={busy} onClick={() => void applyMarked()}>
+            {lessonId ? "Добавить отмеченное в урок" : "Создать урок из отмеченного"}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}

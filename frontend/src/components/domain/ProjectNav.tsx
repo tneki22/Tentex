@@ -8,13 +8,14 @@ import {
   ListTree,
   Settings,
   Target,
+  ScanSearch,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ModuleKey } from "../../api/projects";
 import { Tooltip } from "../ui";
 import { usePreparationInvitation } from "../../hooks/usePreparationInvitation";
 
-export type ProjectNavKey = "materials" | "program" | "answers" | "lessons" | "plan" | "cards" | "settings";
+export type ProjectNavKey = "materials" | "program" | "answers" | "lessons" | "coverage" | "plan" | "lesson-planning" | "cards" | "settings";
 
 interface NavEntry {
   key: ProjectNavKey;
@@ -36,8 +37,8 @@ interface ProjectNavProps {
 }
 
 /**
- * Единый список разделов проекта: одни и те же шесть пунктов от «Материалов»
- * до «Настроек» на всех экранах проекта, а не урезанный подбор по месту.
+ * Единый список разделов проекта: состав зависит только от режима и модулей,
+ * а не от открытого экрана.
  */
 export function ProjectNav({ projectId, active, textbook = false, modules, counts = {}, className = "" }: ProjectNavProps) {
   const hasModule = (key: ModuleKey) => (modules ? modules.includes(key) : true);
@@ -47,7 +48,7 @@ export function ProjectNav({ projectId, active, textbook = false, modules, count
     { key: "materials", to: `/projects/${projectId}/materials`, icon: Files, label: "Материалы" },
     {
       key: "program",
-      to: `/projects/${projectId}/program${textbook ? "?mode=textbook" : ""}`,
+      to: `/projects/${projectId}/program`,
       icon: ListTree,
       label: textbook ? "Программа" : "Вопросы экзамена",
     },
@@ -57,20 +58,20 @@ export function ProjectNav({ projectId, active, textbook = false, modules, count
     ...(hasModule("lessons")
       ? [{ key: "lessons" as const, to: `/projects/${projectId}/lessons`, icon: GraduationCap, label: "Уроки" }]
       : []),
+    ...(textbook
+      ? [{ key: "coverage" as const, to: `/projects/${projectId}/coverage`, icon: ScanSearch, label: "Покрытие" }]
+      : []),
     ...(!textbook && hasModule("plan")
       ? [{ key: "plan" as const, to: `/projects/${projectId}/plan`, icon: CalendarDays, label: "Моя подготовка" }]
       : []),
-    ...(textbook
-      ? [{
-        key: "cards" as const,
-        to: `/projects/${projectId}/cards`,
-        icon: Layers,
-        label: "Карточки",
-        disabledReason: "Учебная конфигурация Карточек будет спроектирована отдельно",
-      }]
-      : hasModule("cards")
-        ? [{ key: "cards" as const, to: `/projects/${projectId}/cards`, icon: Layers, label: "Карточки" }]
-        : []),
+    ...(textbook && hasModule("lesson_planning")
+      ? [{ key: "lesson-planning" as const, to: `/projects/${projectId}/lesson-planning`, icon: CalendarDays, label: "Планирование занятий" }]
+      : []),
+    // Карточек в учебниковом режиме нет (решение 17.09.2026, TEXTBOOK_MODE.md §10):
+    // самопроверка там — задания урока.
+    ...(!textbook && hasModule("cards")
+      ? [{ key: "cards" as const, to: `/projects/${projectId}/cards`, icon: Layers, label: "Карточки" }]
+      : []),
     { key: "settings", to: `/projects/${projectId}/settings`, icon: Settings, label: "Настройки" },
   ];
 
@@ -88,13 +89,13 @@ export function ProjectNav({ projectId, active, textbook = false, modules, count
         }
         if (entry.key === active) {
           return (
-            <span className={`workspace-project-link is-active${entry.key === "plan" && invite ? " is-inviting" : ""}`} key={entry.key}>
+              <span className={`workspace-project-link is-active${entry.key === "plan" && invite ? " is-inviting" : ""}`} key={entry.key} title={entry.label}>
               <Icon size={15} /><span>{entry.label}</span>{count !== undefined && <small>{count}</small>}
             </span>
           );
         }
         return (
-          <Link className={`workspace-project-link${entry.key === "plan" && invite ? " is-inviting" : ""}`} to={entry.to} key={entry.key}>
+          <Link className={`workspace-project-link${entry.key === "plan" && invite ? " is-inviting" : ""}`} to={entry.to} key={entry.key} aria-label={entry.label} title={entry.label}>
             <Icon size={15} /><span>{entry.label}</span>{count !== undefined && <small>{count}</small>}
           </Link>
         );

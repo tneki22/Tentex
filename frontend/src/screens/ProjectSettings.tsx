@@ -15,7 +15,7 @@ import {
   ProjectApiError,
   updateProjectSettings,
 } from "../api/projects";
-import { ProjectNav } from "../components/domain";
+import { ProjectNav } from "../components/domain/ProjectNav";
 import type {
   ExamFormat,
   GoalPassportWrite,
@@ -29,7 +29,7 @@ import type {
   StudyFormat,
   TargetOutcome,
 } from "../api/projects";
-import { PROJECT_ICONS } from "../components/domain";
+import { PROJECT_ICONS } from "../components/domain/ProjectChip";
 import {
   Button,
   Card,
@@ -48,6 +48,7 @@ interface SettingsForm {
     icon: ProjectIconName | null;
     color: number | null;
     deadline: string;
+    lessonPlanning: boolean;
   };
   goal: Omit<GoalPassportWrite, "minutes_per_day" | "days_per_week" | "session_minutes" | "expected_item_count" | "exam_time"> & {
     minutes_per_day: string;
@@ -120,6 +121,7 @@ function formFromDetail(detail: ProjectDetail): SettingsForm {
       icon: detail.project.icon,
       color: detail.project.color,
       deadline: text(detail.project.deadline),
+      lessonPlanning: detail.project.enabled_modules.includes("lesson_planning"),
     },
     goal: {
       subject: goal?.subject ?? null,
@@ -165,9 +167,10 @@ function commandFromForm(
       icon: form.project.icon,
       color: form.project.color,
       deadline: form.project.deadline || null,
-      // Настройки проекта больше не управляют доступностью разделов. Поле пока
-      // требуется существующим контрактом API, поэтому сохраняем его как есть.
-      enabled_modules: enabledModules,
+      // Только учебниковое планирование управляется здесь; остальные модули сохраняются.
+      enabled_modules: form.project.lessonPlanning
+        ? [...new Set([...enabledModules, "lesson_planning" as ModuleKey])]
+        : enabledModules.filter((module) => module !== "lesson_planning"),
     },
     goal_passport: {
       subject: nullableText(form.goal.subject),
@@ -321,6 +324,10 @@ export function ProjectSettings() {
       setForm(nextForm);
       setBaseline(nextForm);
       setSaved(true);
+      window.dispatchEvent(new Event("tentex-lesson-planning-changed"));
+      const channel = new BroadcastChannel("tentex-project-modules");
+      channel.postMessage({ projectId });
+      channel.close();
       return true;
     } catch (error: unknown) {
       setSaveError(requestErrorMessage(error));
@@ -349,7 +356,7 @@ export function ProjectSettings() {
 
   if (loadError instanceof ProjectApiError && loadError.status === 404) {
     return (
-      <div className="screen project-settings-screen settings-state">
+      <div className="screen screen-error-state project-settings-screen settings-state">
         <ErrorState title="Проект не найден" message={loadError.message} />
         <Link className="secondary-button" to="/projects"><ArrowLeft size={15} aria-hidden="true" /> К проектам</Link>
       </div>
@@ -358,7 +365,7 @@ export function ProjectSettings() {
 
   if (loadError || !detail || !form) {
     return (
-      <div className="screen project-settings-screen settings-state">
+      <div className="screen screen-error-state project-settings-screen settings-state">
         <ErrorState message={requestErrorMessage(loadError)} />
         <Button variant="secondary" onClick={() => setReloadKey((value) => value + 1)}>Повторить</Button>
       </div>
@@ -388,6 +395,7 @@ export function ProjectSettings() {
         <ProjectNav
           projectId={projectId}
           active="settings"
+          textbook={detail.project.workspace_variant === "textbook"}
           modules={detail.project.enabled_modules}
           className="project-side-nav"
         />
@@ -543,6 +551,16 @@ export function ProjectSettings() {
               </Field>
             </div>
           </Card>
+
+          {detail.project.workspace_variant === "textbook" && (
+            <Card className="settings-section">
+              <h2><CalendarDays size={17} aria-hidden="true" /> Планирование занятий</h2>
+              <label className="settings-module-toggle">
+                <span><strong>Включить планирование занятий</strong><small>Появятся календарь и таймер за открытыми готовыми уроками. Можно включить до завершения программы.</small></span>
+                <input type="checkbox" checked={form.project.lessonPlanning} onChange={(event) => updateProject("lessonPlanning", event.target.checked)} />
+              </label>
+            </Card>
+          )}
 
           {detail.project.workspace_variant === "exam" && (
             <Card className="settings-section">

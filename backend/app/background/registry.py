@@ -9,22 +9,26 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.background.schemas import BackgroundJobRead
+from app.db import retry_on_locked
 from app.materials import library
+from app.materials.naming import material_display_name
 from app.models import (
     AiSettings,
     BackgroundJob,
     BackgroundJobKind,
     BackgroundJobState,
     Material,
+    MaterialSourceKind,
     OcrEngineConfig,
     ParserMode,
     Project,
     utc_now,
 )
+from app.ocr import speech
 from app.ocr.engines import DEFAULT_FAST_MODEL_ID
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 
@@ -41,15 +45,38 @@ ACTIVE_JOB_STATES = {
 #
 # Остальные виды сюда не входят по существу, а не по недосмотру:
 # `parse` и `link_answers` применяют результат сами и подтверждения не просят;
-# `ai_cleanup` относится к одной странице материала, а её номера в строке
-# задачи нет — вернуть пользователя ровно на неё панель пока не может;
 # `ai_preparation` живёт внутри мастера, который подставляет оценку в форму сам,
 # как только шаг открыт заново.
 REVIEW_REQUIRED_KINDS = {
     BackgroundJobKind.AI_GROUPING,
     BackgroundJobKind.AI_IMPORT_REPAIR,
     BackgroundJobKind.AI_ANSWER_SECTIONS,
+    BackgroundJobKind.AI_CLEANUP,
+    BackgroundJobKind.AI_CARDS,
 }
+#: У `ai_lesson` предложением заканчиваются только эти подвиды: план урока,
+#: дополнение и задания. Сборка урока создаёт черновик сама — проверять нечего.
+LESSON_REVIEW_SUBTYPES = ("plan", "enrich", "practice")
+
+
+def _review_kind(job: BackgroundJob) -> bool:
+    return job.kind in REVIEW_REQUIRED_KINDS or (
+        job.kind == BackgroundJobKind.AI_LESSON
+        and job.checkpoint.get("subtype") in LESSON_REVIEW_SUBTYPES
+    )
+
+
+def _review_kind_condition():
+    """То же условие, что `_review_kind`, для выборки из базы."""
+    return or_(
+        BackgroundJob.kind.in_(REVIEW_REQUIRED_KINDS),
+        and_(
+            BackgroundJob.kind == BackgroundJobKind.AI_LESSON,
+            func.json_extract(BackgroundJob.checkpoint, "$.subtype").in_(
+                LESSON_REVIEW_SUBTYPES
+            ),
+        ),
+    )
 
 
 def _needs_review(job: BackgroundJob) -> bool:
@@ -59,7 +86,7 @@ def _needs_review(job: BackgroundJob) -> bool:
     показывать её как ожидающую проверки значило бы звать в пустой диалог.
     """
     return (
-        job.kind in REVIEW_REQUIRED_KINDS
+        _review_kind(job)
         and job.state == BackgroundJobState.COMPLETED
         and job.reviewed_at is None
         and job.checkpoint.get("result") is not None
@@ -68,26 +95,116 @@ def _needs_review(job: BackgroundJob) -> bool:
 
 def _subject(session: Session, job: BackgroundJob) -> str:
     """Над чем идёт работа — именем файла или проекта, а не идентификатором."""
+    if job.kind == BackgroundJobKind.AI_CARDS:
+        count = len((job.checkpoint.get("command") or {}).get("program_node_ids") or [])
+        return f"Карточки по вопросам · {count}"
+    if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
+        from app.models import EmbeddingProfile, RetrievalIndex
+
+        profile = None
+        profile_id = job.checkpoint.get("profile_id")
+        if profile_id:
+            profile = session.get(EmbeddingProfile, UUID(str(profile_id)))
+        if profile is None:
+            index_id = job.checkpoint.get("index_id")
+            index = session.get(RetrievalIndex, UUID(str(index_id))) if index_id else None
+            profile = session.get(EmbeddingProfile, index.profile_id) if index else None
+        model_label = (
+            f"с моделью {profile.model_id}" if profile is not None else "с embedding-моделью"
+        )
+        if job.material_id is not None:
+            material = session.get(Material, job.material_id)
+            if material is not None:
+                return f"{material_display_name(material)} · {model_label}"
+        return model_label
     if job.material_id is not None:
         material = session.get(Material, job.material_id)
         if material is not None:
-            return material.original_name
+            return material_display_name(material)
+    if job.kind == BackgroundJobKind.AI_LESSON and job.checkpoint.get("subtype") == "bulk":
+        return f"Уроки с ИИ · {job.checkpoint.get('topic_title') or 'по списку тем'}"
+    if job.kind == BackgroundJobKind.AI_LESSON and job.checkpoint.get("topic_title"):
+        return f"Урок «{job.checkpoint['topic_title']}»"
     if job.project_id is not None:
         project = session.get(Project, job.project_id)
         if project is not None:
             return project.name or "Проект без названия"
+    if job.kind == BackgroundJobKind.RETRIEVAL_MODEL_INSTALL:
+        return str(job.checkpoint.get("model_id") or "embedding-модель")
+    if job.kind == BackgroundJobKind.BACKUP_CREATE:
+        return "Вся установка"
+    if job.kind in {BackgroundJobKind.PROJECT_EXPORT, BackgroundJobKind.PROJECT_IMPORT}:
+        return "Перенос проекта"
     return ""
+
+
+def _is_audio(session: Session, job: BackgroundJob) -> bool:
+    if job.material_id is None:
+        return False
+    material = session.get(Material, job.material_id)
+    return material is not None and material.source_kind == MaterialSourceKind.AUDIO
+
+
+def _progress_unit(session: Session, job: BackgroundJob) -> str:
+    """Чем измеряется `done` из `total`: у разбора страницы, у записи минуты."""
+    if job.kind == BackgroundJobKind.RETRIEVAL_MODEL_INSTALL:
+        return "файлов"
+    if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
+        return "материалов"
+    if job.kind == BackgroundJobKind.BACKUP_CREATE:
+        return "страниц базы" if job.checkpoint.get("backup_label") == "Снимок базы" else "файлов"
+    if job.kind in {BackgroundJobKind.PROJECT_EXPORT, BackgroundJobKind.PROJECT_IMPORT}:
+        return "пакетов"
+    if job.kind == BackgroundJobKind.IMAGE_DESCRIPTIONS:
+        return "изображений"
+    if job.kind not in (BackgroundJobKind.PARSE, BackgroundJobKind.TYPST_COMPILE):
+        return ""
+    return "минут" if _is_audio(session, job) else "страниц"
 
 
 def _model_label(session: Session, job: BackgroundJob) -> str:
     """Чем именно читается материал: локальный движок или внешняя модель.
 
-    Заполняется только у разбора: у ролей ИИ модель выбирается по роли уже
-    внутри шлюза, и в самой задаче её названия нет.
+    У ролей ИИ модель выбирается по роли уже внутри шлюза, и в самой задаче её
+    названия нет; retrieval-задачи, наоборот, всегда показывают понятный тип
+    операции.
     """
+    if job.kind == BackgroundJobKind.RETRIEVAL_MODEL_INSTALL:
+        return "Скачивание embedding-модели"
+    if job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
+        return "Сбор индекса"
+    if job.kind == BackgroundJobKind.BACKUP_CREATE:
+        return str(job.checkpoint.get("backup_label") or "Резервная копия")
+    if job.kind == BackgroundJobKind.PROJECT_EXPORT:
+        return "Экспорт проекта"
+    if job.kind == BackgroundJobKind.PROJECT_IMPORT:
+        return "Импорт проекта"
+    if job.kind == BackgroundJobKind.STORAGE_VERIFY:
+        return "Проверка хранилища"
+    if job.kind == BackgroundJobKind.STORAGE_CLEANUP:
+        return "Очистка временного"
+    if job.kind in {
+        BackgroundJobKind.IMAGE_DESCRIPTIONS, BackgroundJobKind.AI_LESSON,
+        BackgroundJobKind.AI_CARDS,
+    }:
+        return str(job.checkpoint.get("model_label") or "внешняя модель")
+    if job.kind in REVIEW_REQUIRED_KINDS:
+        checkpoint = job.checkpoint
+        return str(
+            checkpoint.get("model_label")
+            or (checkpoint.get("result") or {}).get("actual_model_id")
+            or "внешняя модель"
+        )
     if job.kind != BackgroundJobKind.PARSE:
         return ""
+    if _is_audio(session, job):
+        # Запись читает не OCR: подпись «PP-OCRv5» у неё была бы неправдой.
+        return speech.mode_label(session, job.parser_mode)
     if job.parser_mode == ParserMode.CLOUD:
+        # Модель запуска зафиксирована в снимке задачи; у старых задач снимка нет.
+        snapshot = (job.checkpoint.get("options") or {}).get("page_model") or {}
+        if snapshot.get("model_id"):
+            return str(snapshot["model_id"])
         row = session.get(AiSettings, 1)
         return (row.default_vision_model_id if row else None) or "внешняя модель"
     engine = session.get(OcrEngineConfig, "fast")
@@ -99,9 +216,40 @@ def _read(session: Session, job: BackgroundJob) -> BackgroundJobRead:
         update={
             "subject": _subject(session, job),
             "model_label": _model_label(session, job),
+            "program_node_id": (
+                UUID(str(job.checkpoint["program_node_id"]))
+                if job.kind == BackgroundJobKind.AI_LESSON
+                and job.checkpoint.get("program_node_id") else None
+            ),
+            "page_number": _positive_int(job.checkpoint.get("page_number")),
+            "source_revision": _positive_int(
+                (job.checkpoint.get("command") or {}).get("expected_revision")
+            ),
+            "deadline_seconds": _positive_int(job.checkpoint.get("deadline_seconds")),
+            "max_attempts": _positive_int(job.checkpoint.get("max_attempts")),
+            "progress_unit": _progress_unit(session, job),
             "needs_review": _needs_review(job),
+            "control_action": (
+                "cancel"
+                if job.kind == BackgroundJobKind.BACKUP_CREATE and job.pause_requested
+                else "finish"
+                if job.kind == BackgroundJobKind.RETRIEVAL_INDEX
+                and job.checkpoint.get("finish_requested")
+                else "pause"
+                if job.kind == BackgroundJobKind.RETRIEVAL_INDEX and job.pause_requested
+                else None
+            ),
         }
     )
+
+
+def _positive_int(value: object) -> int | None:
+    """Безопасно вывести числовую деталь из JSON checkpoint."""
+    try:
+        result = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
 
 
 def _job_or_404(session: Session, job_id: UUID) -> BackgroundJob:
@@ -116,26 +264,34 @@ def list_jobs(
     *,
     active_only: bool = False,
     pending_review: bool = False,
+    failed_only: bool = False,
     project_id: UUID | None = None,
     material_id: UUID | None = None,
+    kind: str | None = None,
+    page_number: int | None = None,
 ) -> list[BackgroundJobRead]:
     """Список задач с фильтрами.
 
-    `active_only` и `pending_review` вместе дают объединение, а не пересечение:
-    это ровно то, что показывает панель фоновых задач — и то, что идёт сейчас,
-    и то, что уже досчиталось и ждёт человека. Пересечение этих двух условий
-    пусто по определению, так что второго смысла у сочетания флагов нет.
+    Флаги дают объединение корзин: активные, ожидающие проверки и просмотренные
+    ещё не пользователем ошибки. Их пересечение пусто по определению.
     """
     stmt = select(BackgroundJob).order_by(BackgroundJob.created_at.desc())
-    if active_only or pending_review:
+    if active_only or pending_review or failed_only:
         buckets = []
         if active_only:
             buckets.append(BackgroundJob.state.in_(ACTIVE_JOB_STATES))
         if pending_review:
             buckets.append(
                 and_(
-                    BackgroundJob.kind.in_(REVIEW_REQUIRED_KINDS),
+                    _review_kind_condition(),
                     BackgroundJob.state == BackgroundJobState.COMPLETED,
+                    BackgroundJob.reviewed_at.is_(None),
+                )
+            )
+        if failed_only:
+            buckets.append(
+                and_(
+                    BackgroundJob.state == BackgroundJobState.FAILED,
                     BackgroundJob.reviewed_at.is_(None),
                 )
             )
@@ -144,7 +300,25 @@ def list_jobs(
         stmt = stmt.where(BackgroundJob.project_id == project_id)
     if material_id is not None:
         stmt = stmt.where(BackgroundJob.material_id == material_id)
-    jobs = [_read(session, job) for job in session.scalars(stmt)]
+    if kind is not None:
+        try:
+            job_kind = BackgroundJobKind(kind)
+        except ValueError as error:
+            raise ProjectConflictError(
+                "Неизвестный вид фоновой задачи", code="background_job_kind_invalid"
+            ) from error
+        stmt = stmt.where(BackgroundJob.kind == job_kind)
+    rows = list(session.scalars(stmt))
+    # `checkpoint` — общий JSON-контейнер; номер страницы не заслуживает
+    # колонки или завязки общего реестра на SQLite JSON-диалект. Список задач
+    # мал, а Python-проверка одинаково читает старое число и старую строку.
+    if page_number is not None:
+        rows = [
+            job
+            for job in rows
+            if _positive_int(job.checkpoint.get("page_number")) == page_number
+        ]
+    jobs = [_read(session, job) for job in rows]
     if not pending_review:
         return jobs
     # Задача без сохранённого результата в корзину не попадает (см.
@@ -152,7 +326,11 @@ def list_jobs(
     return [
         job
         for job in jobs
-        if job.needs_review or (active_only and job.state in ACTIVE_JOB_STATES)
+        if (
+            job.needs_review
+            or (active_only and job.state in ACTIVE_JOB_STATES)
+            or (failed_only and job.state == BackgroundJobState.FAILED)
+        )
     ]
 
 
@@ -176,6 +354,48 @@ def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:
     `completed` (см. `app.ai.jobs`).
     """
     job = _job_or_404(session, job_id)
+    from app.storage import maintenance
+
+    if maintenance.active():
+        lock = maintenance.read_state() or {}
+        if (
+            job.kind != BackgroundJobKind.BACKUP_CREATE
+            or lock.get("operation") != "backup"
+            or lock.get("operation_id") != job.checkpoint.get("backup_id")
+        ):
+            raise ProjectConflictError(
+                "Хранилище временно работает в режиме обслуживания", code="maintenance_busy"
+            )
+    if job.kind == BackgroundJobKind.BACKUP_CREATE:
+        from app.storage.service import cancel_backup
+
+        cancel_backup(session, job_id)
+        session.expire_all()
+        return get_job(session, job_id)
+    if (
+        job.kind == BackgroundJobKind.RETRIEVAL_INDEX
+        and job.checkpoint.get("mode") != "incremental"
+    ):
+        from app.retrieval.indexing import finish_index_build
+
+        return finish_index_build(session, job_id)
+    # У прохода 2 отмена обязана пройти через control_run: он один снимает
+    # `paused`, освобождает lease и закрывает поколение, которого общий путь ниже
+    # не знает.
+    if job.kind == BackgroundJobKind.COVERAGE_RESEARCH:
+        from app.coverage.lifecycle import control_run
+        from app.coverage.schemas import RunControl
+        from app.models import CoverageRun
+
+        run = session.scalar(select(CoverageRun).where(CoverageRun.job_id == job_id))
+        control_run(
+            session,
+            run.project_id,
+            run.id,
+            RunControl(action="cancel", expected_generation=run.execution_generation),
+        )
+        return get_job(session, job_id)
+
     # Чтение выше уже открыло транзакцию само (autobegin), а `session.begin()`
     # поверх начатой падает. Поэтому состояние снимается до отката, а не после:
     # откат сбрасывает объект, и обращение к его полю открыло бы транзакцию
@@ -188,17 +408,35 @@ def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:
     session.rollback()
     if material_scoped:
         assert material_id is not None and snapshot is not None
-        with session.begin():
-            library.control_task_core(session, material_id, "cancel")
+
+        def _cancel_material() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with session.begin():
+                library.control_task_core(session, material_id, "cancel")
+
+        retry_on_locked(_cancel_material)
         return snapshot.model_copy(update={"state": BackgroundJobState.CANCELLED})
     if state == BackgroundJobState.QUEUED:
-        with session.begin():
-            job.state = BackgroundJobState.CANCELLED
-            job.updated_at = utc_now()
+
+        def _cancel_queued() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with session.begin():
+                job.state = BackgroundJobState.CANCELLED
+                job.updated_at = utc_now()
+
+        retry_on_locked(_cancel_queued)
     elif state == BackgroundJobState.RUNNING:
-        with session.begin():
-            job.pause_requested = True
-            job.updated_at = utc_now()
+
+        def _pause_running() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with session.begin():
+                job.pause_requested = True
+                job.updated_at = utc_now()
+
+        retry_on_locked(_pause_running)
     else:
         raise ProjectConflictError(
             "Задачу нельзя отменить в текущем состоянии", code="background_job_not_cancellable"
@@ -208,7 +446,7 @@ def cancel_job(session: Session, job_id: UUID) -> BackgroundJobRead:
 
 
 def resolve_job(session: Session, job_id: UUID) -> BackgroundJobRead:
-    """Отметить, что готовое предложение разобрано, — принято или убрано.
+    """Убрать из панели разобранный результат или просмотренную ошибку.
 
     Чем именно кончилось, реестр не хранит: применённый план виден по самим
     данным (структура программы, привязки ответов), и вторая запись об этом
@@ -220,17 +458,21 @@ def resolve_job(session: Session, job_id: UUID) -> BackgroundJobRead:
     """
     job = _job_or_404(session, job_id)
     state, reviewed_at = job.state, job.reviewed_at
-    if state != BackgroundJobState.COMPLETED:
+    if state not in {BackgroundJobState.COMPLETED, BackgroundJobState.FAILED}:
         raise ProjectConflictError(
-            "Разбирать нечего: задача ещё не завершена",
+            "Задачу ещё нельзя убрать из панели",
             code="background_job_not_completed",
         )
     if reviewed_at is None:
         # Как и в `cancel_job`: читающая транзакция закрывается до записи.
-        session.rollback()
-        with session.begin():
-            job.reviewed_at = utc_now()
-            job.updated_at = utc_now()
+        def _mark_reviewed() -> None:
+            if session.in_transaction():
+                session.rollback()
+            with session.begin():
+                job.reviewed_at = utc_now()
+                job.updated_at = utc_now()
+
+        retry_on_locked(_mark_reviewed)
         session.expire_all()
     return get_job(session, job_id)
 

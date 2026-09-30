@@ -12,6 +12,10 @@ interface PopoverProps {
   /** Управляемое состояние — нужно, чтобы закрыть всплывашку по выбору пункта списка внутри. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Закрытие возвращает фокус кнопке-триггеру; `preventDefault()` отменяет
+   *  это, когда следом открывается другая всплывашка: возвращённый фокус
+   *  оказался бы «снаружи» неё и тут же её закрыл. */
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 /**
@@ -29,6 +33,7 @@ export function Popover({
   className = "",
   open,
   onOpenChange,
+  onCloseAutoFocus,
   children,
 }: PropsWithChildren<PopoverProps>) {
   return (
@@ -41,6 +46,7 @@ export function Popover({
           align={align}
           sideOffset={8}
           collisionPadding={12}
+          onCloseAutoFocus={onCloseAutoFocus}
         >
           {title && <p className="popover-title">{title}</p>}
           {children}

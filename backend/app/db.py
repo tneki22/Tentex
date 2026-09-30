@@ -1,16 +1,21 @@
+import logging
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from uuid import UUID
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import URL, MetaData, create_engine, event, text
+from sqlalchemy import URL, Engine, MetaData, create_engine, event, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import NullPool, QueuePool
 
 from app.config import BACKEND_ROOT, settings
+from app.system import diagnostics
+
+log = logging.getLogger("tentex.db")
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -25,20 +30,49 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-engine = create_engine(
-    URL.create("sqlite+pysqlite", database=str(settings.database_path)),
-    connect_args={"autocommit": False, "check_same_thread": False, "timeout": 30},
-    # SQLAlchemy-пул рассчитан на дорогие сетевые соединения. Для SQLite
-    # соединение — это просто open() файла, а WAL и busy_timeout уже решают
-    # конкуренцию на уровне самого SQLite. С QueuePool по умолчанию (5+10)
-    # пачка параллельных запросов с экрана (~6 GET разом) исчерпывала пул и
-    # часть запросов падала с sqlalchemy.exc.TimeoutError после 30с ожидания.
-    poolclass=NullPool,
-)
+#: Кэш страниц одного постоянного соединения API. Соединение сбрасывает его
+#: само, как только другой процесс записал в WAL, поэтому устаревших данных нет.
+POOLED_CACHE_KIB = 65536
+#: Постоянные соединения поиска. Пачка GET экрана разбирает общий пул, и поиск
+#: попадал на соединение с холодным кэшем: первый поиск на нём 3 с вместо 0,3 с
+#: (чтение с bind-mount). Свой маленький пул держит индекс кусков прогретым.
+SEARCH_POOL_SIZE = 2
+
+
+def _pool_arguments(pool_size: int) -> dict[str, object]:
+    """Пул для API или новое соединение на сессию для воркера и скриптов."""
+    if pool_size == 0:
+        return {"poolclass": NullPool}
+    # QueuePool по умолчанию (5+10, 30 с) исчерпывался пачкой GET с экрана.
+    # Большой overflow снимает этот предел: лишние соединения закрываются
+    # при возврате. LIFO отдаёт последнее соединение, у которого кэш прогрет.
+    return {
+        "poolclass": QueuePool,
+        "pool_size": pool_size,
+        "max_overflow": 64,
+        "pool_timeout": 60,
+        "pool_use_lifo": True,
+    }
+
+
+def _create_engine(pool_size: int) -> Engine:
+    return create_engine(
+        URL.create("sqlite+pysqlite", database=str(settings.database_path)),
+        connect_args={"autocommit": False, "check_same_thread": False, "timeout": 30},
+        **_pool_arguments(pool_size),
+    )
+
+
+engine = _create_engine(settings.sqlite_pool_size)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+search_engine = (
+    _create_engine(min(SEARCH_POOL_SIZE, settings.sqlite_pool_size))
+    if settings.sqlite_pool_size
+    else engine
+)
+SearchSessionLocal = sessionmaker(bind=search_engine, expire_on_commit=False)
 
 
-@event.listens_for(engine, "connect")
 def configure_sqlite(dbapi_connection: object, _: object) -> None:
     previous_autocommit = dbapi_connection.autocommit
     dbapi_connection.autocommit = True
@@ -55,14 +89,32 @@ def configure_sqlite(dbapi_connection: object, _: object) -> None:
             # и роняет параллельные запросы с "disk I/O error".
             # Обычный файловый ввод-вывод работает.
             cursor.execute("PRAGMA mmap_size=0")
+            if settings.sqlite_pool_size:
+                cursor.execute(f"PRAGMA cache_size=-{POOLED_CACHE_KIB}")
         finally:
             cursor.close()
     finally:
         dbapi_connection.autocommit = previous_autocommit
 
 
+for _engine in {engine, search_engine}:
+    event.listen(_engine, "connect", configure_sqlite)
+
+
 def get_session() -> Iterator[Session]:
     with SessionLocal() as session:
+        yield session
+
+
+def dispose_engines() -> None:
+    """Закрыть соединения обоих пулов перед подменой файла базы."""
+    for pooled in {engine, search_engine}:
+        pooled.dispose()
+
+
+def get_search_session() -> Iterator[Session]:
+    """Сессия поисковых GET: те же данные, но соединения из пула поиска."""
+    with SearchSessionLocal() as session:
         yield session
 
 
@@ -84,6 +136,70 @@ def project_write_transaction(session: Session, project_id: UUID):
     with session.begin():
         session.execute(text("UPDATE projects SET id = id WHERE id = :id"), {"id": project_id.hex})
         yield
+
+
+@contextmanager
+def chat_write_transaction(session: Session, project_id: UUID | None):
+    """Резервировать writer для проектного либо библиотечного чата."""
+    if project_id is not None:
+        with project_write_transaction(session, project_id):
+            yield
+        return
+    if session.in_transaction():
+        session.commit()
+    with session.begin():
+        session.execute(text("UPDATE chat_sessions SET id = id WHERE 1=0"))
+        yield
+
+
+@contextmanager
+def job_write_transaction(session: Session, job_id: UUID | None = None):
+    """Тот же приём резервирования writer, что у `project_write_transaction`,
+    но для фоновой задачи (`SQLITE_BUSY_SNAPSHOT` объяснён там же).
+
+    `job_id=None` — вариант для `claim_job`: конкретная задача ещё не выбрана
+    (это чтение и есть первый шаг), поэтому резервирующий `UPDATE` не находит
+    ни одной строки (`WHERE 1=0`). SQLite всё равно запрашивает write-lock при
+    подготовке write-опкода, до сканирования совпадений — нулевой результат
+    ничего не портит и ничего не меняет.
+    """
+    if session.in_transaction():
+        session.commit()
+    with session.begin():
+        if job_id is None:
+            session.execute(text("UPDATE background_jobs SET updated_at = updated_at WHERE 1=0"))
+        else:
+            session.execute(
+                text("UPDATE background_jobs SET updated_at = updated_at WHERE id = :id"),
+                {"id": job_id.hex},
+            )
+        yield
+
+
+def retry_on_locked[T](operation: Callable[[], T], *, attempts: int = 5) -> T:
+    """Повторить операцию при `SQLITE_BUSY_SNAPSHOT` вместо немедленного отказа.
+
+    Эта ошибка не проходит через busy handler (`PRAGMA busy_timeout` не спасает),
+    поэтому единственный выход — короткая пауза и новая попытка на свежем снимке.
+    Любая другая ошибка пробрасывается сразу: ретраить её бессмысленно.
+    """
+    delays = (0.2, 0.5, 1, 2)
+    for attempt in range(attempts):
+        try:
+            return operation()
+        except OperationalError as error:
+            message = str(error).lower()
+            if "database is locked" not in message and "database is busy" not in message:
+                raise
+            if attempt == attempts - 1:
+                # Одиночный исчерпанный повтор ещё не сбой: сводка «Состояние»
+                # покажет блокировку, только если они повторяются.
+                diagnostics.record_failure("database_locked", kind="exhausted")
+                raise
+            delay = delays[min(attempt, len(delays) - 1)]
+            log.warning("retrying after sqlite lock, attempt=%d delay=%.1fs", attempt + 1, delay)
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def _ensure_wal_mode(attempts: int = 5, delay: float = 0.5) -> None:
@@ -109,7 +225,19 @@ def _ensure_wal_mode(attempts: int = 5, delay: float = 0.5) -> None:
 
 
 def upgrade_database() -> None:
+    """Поднять схему до head.
+
+    Api и worker зовут это на своём старте независимо (`docker compose restart
+    api worker web` их не упорядочивает — `depends_on: condition:
+    service_healthy` работает только на `up`). Если оба стартуют одновременно,
+    один успевает применить миграцию первым; вторая транзакция уже прочитала
+    старый снимок alembic_version и на попытке записи ловит
+    `SQLITE_BUSY_SNAPSHOT` ("database is locked") мимо busy handler — 24.09.2026
+    так падал api сразу после того, как worker применял 0059/0060, и оставался
+    нездоровым до ручного перезапуска. `retry_on_locked` берёт свежий снимок и
+    на повторной попытке видит, что миграция уже на head — no-op.
+    """
     _ensure_wal_mode()
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "migrations"))
-    command.upgrade(config, "head")
+    retry_on_locked(lambda: command.upgrade(config, "head"))

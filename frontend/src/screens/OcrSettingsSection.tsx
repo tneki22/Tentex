@@ -24,6 +24,7 @@ import {
   type OcrCloudRead,
   type OcrCloudSettingsWrite,
   type OcrCloudStrategy,
+  type OcrCpuProfile,
   type OcrEngineRead,
   type OcrEngineWrite,
   type OcrModelRead,
@@ -53,6 +54,13 @@ interface Note {
 
 function errorText(caught: unknown, fallback: string): string {
   return caught instanceof Error ? caught.message : fallback;
+}
+
+function countLabel(count: number, one: string, few: string, many: string): string {
+  const lastTwo = count % 100;
+  const last = count % 10;
+  const noun = lastTwo >= 11 && lastTwo <= 14 ? many : last === 1 ? one : last >= 2 && last <= 4 ? few : many;
+  return `${count} ${noun}`;
 }
 
 function formatBytes(bytes: number): string {
@@ -136,6 +144,23 @@ function OverviewPanel({
 }) {
   const [note, setNote] = useState<Note | null>(null);
 
+  async function setCpuProfile(profile: OcrCpuProfile) {
+    if (profile === settings.cpu_profile) return;
+    setNote({ text: "Сохраняем…", tone: "muted" });
+    try {
+      const next = await updateOcrSettings({
+        default_mode: settings.default_mode,
+        quality_threshold: settings.quality_threshold,
+        raster_scale: settings.raster_scale,
+        cpu_profile: profile,
+      });
+      onSettings(next);
+      setNote({ text: "Сохранено. Применится со следующего разбора.", tone: "success" });
+    } catch (caught) {
+      setNote({ text: errorText(caught, "Не сохранено"), tone: "danger" });
+    }
+  }
+
   async function setDefaultMode(mode: ParserMode) {
     if (mode === settings.default_mode) return;
     setNote({ text: "Сохраняем…", tone: "muted" });
@@ -144,6 +169,7 @@ function OverviewPanel({
         default_mode: mode,
         quality_threshold: settings.quality_threshold,
         raster_scale: settings.raster_scale,
+        cpu_profile: settings.cpu_profile,
       });
       onSettings(next);
       setNote({ text: "Сохранено", tone: "success" });
@@ -165,6 +191,30 @@ function OverviewPanel({
             </p>
           </div>
         </header>
+        <div className="ocr-cpu-setting">
+          <div>
+            <strong>Нагрузка при быстром разборе</strong>
+            <small>
+              Доступно {countLabel(settings.cpu_available, "логический процессор", "логических процессора", "логических процессоров")}. Настройка меняет
+              число потоков локального OCR; облачный разбор и уже запущенная задача
+              продолжат работать как прежде. Это не жёсткий лимит всего процессора.
+            </small>
+          </div>
+          <RadioCards
+            label="Нагрузка при быстром разборе"
+            value={settings.cpu_profile}
+            onChange={(value) => void setCpuProfile(value)}
+            options={([
+              ["gentle", "Бережный", "Больше ресурсов остаётся для работы в приложении."],
+              ["balanced", "Сбалансированный", "Разбор идёт быстрее, приложению остаётся запас."],
+              ["maximum", "Максимальный", "OCR использует все доступные потоки; приложение может замедлиться."],
+            ] as const).map(([value, title, description]) => ({
+              value,
+              title: `${title} · ${countLabel(settings.cpu_threads_by_profile[value], "поток", "потока", "потоков")}`,
+              description,
+            }))}
+          />
+        </div>
         <div className="ai-setting-row">
           <div>
             <strong>Режим по умолчанию</strong>
@@ -399,7 +449,10 @@ function CloudModelPicker({
 
   return (
     <div className="ocr-cloud-picker">
-      <Field label="Модель распознавания" hint="Годные — сверху, у остальных написана причина">
+      <Field
+        label="Модель распознавания"
+        hint="Рекомендуется использовать качественные модели с поддержкой анализа изображений (vision): они лучше распознают формулы, таблицы и сложную вёрстку."
+      >
         <div className="ocr-inline-field">
           <Search size={15} aria-hidden="true" />
           <input
@@ -545,10 +598,6 @@ function CloudEngineCard({
               </div>
             </dl>
           )}
-          <p className="inspector-warning" role="note">
-            Страницы и вырезы уходят на сервер провайдера. Учебник с чужими данными или
-            закрытую методичку туда отправлять не стоит.
-          </p>
         </>
       )}
       <StatusNote note={note} />
@@ -773,9 +822,10 @@ function ModelsPanel({
       <section className="ai-settings-group is-first">
         <header className="ai-group-head">
           <div>
-            <h2>Модели</h2>
+            <h2>Установка</h2>
             <p>
-              Файлы моделей не входят в поставку Tentex и качаются отдельно. Всё
+              Быстрая установка локальных моделей распознавания. Основные модели,
+              включая облачные, выбираются в режимах выше. Файлы моделей не входят в поставку Tentex и качаются отдельно. Всё
               приходит с Hugging Face, из репозиториев организации PaddlePaddle —
               тех же, что публикует авторов PaddleOCR. Ссылку на каждый репозиторий
               можно открыть и посмотреть, что именно вы ставите.
@@ -843,6 +893,7 @@ function QualityPanel({
         default_mode: settings.default_mode,
         quality_threshold: percent / 100,
         raster_scale: Number(scale),
+        cpu_profile: settings.cpu_profile,
       });
       onSettings(next);
       setNote({ text: "Сохранено", tone: "success" });

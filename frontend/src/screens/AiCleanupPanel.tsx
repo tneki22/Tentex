@@ -13,9 +13,10 @@ import {
   type CleanupRunRead,
   type MaterialPageRead,
   type PageCorrectionRead,
+  getLibraryPage,
 } from "../api/materials";
 import { ProjectApiError } from "../api/projects";
-import { ACTIVE_JOB_STATES, cancelBackgroundJob, findResumableBackgroundJob, getBackgroundJobResult } from "../api/backgroundJobs";
+import { ACTIVE_JOB_STATES, cancelBackgroundJob, findResumableBackgroundJob, getBackgroundJob, getBackgroundJobResult, listBackgroundJobs, resolveBackgroundJob, type BackgroundJobRead } from "../api/backgroundJobs";
 import { useBackgroundJob } from "../hooks/useBackgroundJob";
 import { AiFailureNotice } from "../components/domain";
 import {
@@ -53,6 +54,7 @@ interface AiCleanupPanelProps {
   onManualEdit: () => void;
   onReload: () => Promise<void>;
   onApplied: (result: PageCorrectionRead, undo: CleanupUndoSnapshot) => void;
+  initialJobId?: string | null;
 }
 
 function decimal(value: DecimalValue | null): number | null {
@@ -101,8 +103,11 @@ export function AiCleanupPanel({
   onManualEdit,
   onReload,
   onApplied,
+  initialJobId = null,
 }: AiCleanupPanelProps) {
-  const originalText = page.markdown || page.text;
+  const currentOriginalText = page.markdown || page.text;
+  const [proposalSource, setProposalSource] = useState<string | null>(null);
+  const originalText = proposalSource ?? currentOriginalText;
   const [instruction, setInstruction] = useState("");
   const [preflight, setPreflight] = useState<CleanupPreflightRead | null>(null);
   const [runResult, setRunResult] = useState<CleanupRunRead | null>(null);
@@ -115,19 +120,21 @@ export function AiCleanupPanel({
   const [compareTab, setCompareTab] = useState<"result" | "source">("result");
   const [discardOpen, setDiscardOpen] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [pendingJobs, setPendingJobs] = useState<BackgroundJobRead[]>([]);
+  const [newRunRequested, setNewRunRequested] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const dirty = Boolean(runResult && preview !== originalSuggestion);
   const { job, error: jobError } = useBackgroundJob(jobId);
   const jobActive = Boolean(job && ACTIVE_JOB_STATES.has(job.state));
-
-  const wasOpen = useRef(false);
+  const resumeKey = `${projectId ?? "library"}:${material.id}:${page.page_number}:${initialJobId ?? "latest"}`;
+  const [resumeReadyKey, setResumeReadyKey] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open || wasOpen.current) {
-      wasOpen.current = open;
+    if (!open) {
+      setResumeReadyKey(null);
       return;
     }
-    wasOpen.current = true;
+    setResumeReadyKey(null);
     setInstruction("");
     setPreflight(null);
     setRunResult(null);
@@ -138,21 +145,52 @@ export function AiCleanupPanel({
     setConflict(false);
     setCompareTab("result");
     setJobId(null);
-    // При открытии сверяемся с реестром: уборка этой страницы могла остаться
-    // идти в фоне с прошлого раза, когда диалог был закрыт.
+    setProposalSource(null);
+    setBusy(null);
+    setNewRunRequested(false);
+    // Сначала восстанавливаем конкретную задачу или последнее неразобранное
+    // предложение. Пока поиск идёт, не оцениваем новый запуск.
     const controller = new AbortController();
-    void findResumableBackgroundJob(
-      "ai_cleanup",
-      { materialId: material.id, projectId: projectId ?? undefined },
-      controller.signal,
-    )
-      .then((active) => { if (!controller.signal.aborted && active) setJobId(active.id); })
-      .catch(() => undefined);
+    const lookup = initialJobId
+      ? getBackgroundJob(initialJobId, controller.signal).then((candidate) => {
+        if (candidate.kind !== "ai_cleanup" || candidate.material_id !== material.id
+          || candidate.project_id !== projectId || candidate.page_number !== page.page_number
+          || (!candidate.needs_review && !ACTIVE_JOB_STATES.has(candidate.state))) {
+          throw new Error("Предложение этой страницы больше не ожидает проверки.");
+        }
+        return candidate;
+      })
+      : findResumableBackgroundJob(
+        "ai_cleanup",
+        { materialId: material.id, projectId: projectId ?? undefined, pageNumber: page.page_number },
+        controller.signal,
+      );
+    void lookup.then((active) => {
+      if (controller.signal.aborted) return;
+      setJobId(active?.id ?? null);
+      setResumeReadyKey(resumeKey);
+    }).catch((caught) => {
+      if (controller.signal.aborted) return;
+      setError(caught);
+      setResumeReadyKey(resumeKey);
+    });
     return () => controller.abort();
-  }, [open, material.id, projectId]);
+  }, [open, resumeKey, material.id, projectId, page.page_number, initialJobId]);
 
   useEffect(() => {
-    if (!open || busy === "starting" || busy === "apply" || jobActive) return;
+    if (!open) return;
+    const controller = new AbortController();
+    void listBackgroundJobs({
+      activeOnly: true, pendingReview: true, failedOnly: true,
+      kind: "ai_cleanup", materialId: material.id, projectId: projectId ?? undefined,
+      pageNumber: page.page_number,
+    }, controller.signal).then((items) => { if (!controller.signal.aborted) setPendingJobs(items); })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [open, material.id, projectId, page.page_number, job?.updated_at]);
+
+  useEffect(() => {
+    if (!open || resumeReadyKey !== resumeKey || (initialJobId && !newRunRequested) || busy === "starting" || busy === "apply" || jobActive || jobId || runResult) return;
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
@@ -177,8 +215,9 @@ export function AiCleanupPanel({
     return () => {
       window.clearTimeout(timer);
       controller.abort();
+      setBusy((current) => current === "preflight" ? null : current);
     };
-  }, [open, projectId, material.id, page.id, page.page_number, instruction, jobActive]);
+  }, [open, resumeReadyKey, resumeKey, initialJobId, newRunRequested, projectId, material.id, page.id, page.page_number, instruction, jobActive, jobId, runResult]);
 
   // Закрытие панели задачу не отменяет — она живёт в очереди, и вернувшийся
   // экран забирает её готовую уборку из реестра, а не зовёт модель заново.
@@ -191,6 +230,11 @@ export function AiCleanupPanel({
         setRunResult(result);
         setPreview(result.suggestion.markdown);
         setOriginalSuggestion(result.suggestion.markdown);
+        if (result.revision !== material.active_parse_revision) {
+          void getLibraryPage(material.id, result.page_number, { revision: result.revision })
+            .then((source) => setProposalSource(source.markdown || source.text))
+            .catch(() => setProposalSource(null));
+        }
       })
       .catch((caught) => {
         if (!controller.signal.aborted) setError(caught);
@@ -257,6 +301,9 @@ export function AiCleanupPanel({
         markdown: preview,
       }, controller.signal);
       const appliedText = result.page.markdown || result.page.text;
+      // Сначала отмечаем фоновой результат разобранным. Если это не удалось,
+      // окно остаётся открытым: повторное «Применить» безопасно.
+      if (jobId) await resolveBackgroundJob(jobId);
       onApplied(result, {
         originalText,
         appliedRevision: runResult.revision + 1,
@@ -281,6 +328,24 @@ export function AiCleanupPanel({
     void cancelBackgroundJob(job.id).catch((caught) => setError(caught));
   }
 
+  function reject() {
+    if (!jobId) return;
+    setBusy("apply");
+    void resolveBackgroundJob(jobId)
+      .then(() => { setRunResult(null); setJobId(null); setPreview(""); setOriginalSuggestion(""); onOpenChange(false); })
+      .catch(setError)
+      .finally(() => setBusy(null));
+  }
+
+  function prepareNewRun() {
+    setNewRunRequested(true);
+    setRunResult(null);
+    setJobId(null);
+    setPreflight(null);
+    setPreview("");
+    setOriginalSuggestion("");
+  }
+
   const aiFailure = describeAiFailure(error);
   const preflightValue = preflight?.preflight ?? null;
 
@@ -298,8 +363,9 @@ export function AiCleanupPanel({
             <Button variant="secondary" onClick={stop}><Square size={13} />Остановить</Button>
           ) : runResult ? (
             <>
-              <Button variant="secondary" disabled={busy !== null} onClick={() => void runCleanup()}><RotateCcw size={14} />Запустить ещё раз</Button>
-              <Button disabled={busy !== null || !preview.trim() || conflict} onClick={() => void applyCleanup()}>{busy === "apply" ? "Применяем…" : "Применить"}</Button>
+              <Button variant="secondary" disabled={busy !== null} onClick={prepareNewRun}><RotateCcw size={14} />Новый запуск</Button>
+              <Button variant="ghost" disabled={busy !== null} onClick={reject}>Отказаться</Button>
+              <Button disabled={busy !== null || !preview.trim() || conflict || runResult.revision !== material.active_parse_revision} onClick={() => void applyCleanup()}>{busy === "apply" ? "Применяем…" : "Применить"}</Button>
             </>
           ) : (
             <Button disabled={busy !== null || !preflight || (preflightValue?.confirmation_required && !confirmed)} onClick={() => void runCleanup()}><Sparkles size={14} />Прибрать текст</Button>
@@ -307,16 +373,16 @@ export function AiCleanupPanel({
         </>}
       >
         <div className="ai-cleanup-flow">
-          <section className="ai-cleanup-source">
+          {!runResult && <section className="ai-cleanup-source">
             <header><strong>Исходный текст</strong><span>ревизия {preflight?.revision ?? material.active_parse_revision}</span></header>
             <pre>{originalText}</pre>
-          </section>
+          </section>}
 
-          <label className="ai-instruction-field">
+          {!runResult && <label className="ai-instruction-field">
             <span>Что изменить</span>
             <textarea value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Например: сократи вступление, убери повторы и сохрани определения" />
             <small>Пустая инструкция исправляет разрывы строк, пунктуацию, списки, заголовки и отступы — без новых фактов, удаления смысла и сокращения текста.</small>
-          </label>
+          </label>}
 
           {busy === "preflight" && !preflightValue && !jobId && <LoadingState label="Оцениваем состав и стоимость" />}
           {preflightValue && !jobId && (
@@ -348,7 +414,18 @@ export function AiCleanupPanel({
           {Boolean(error) && !aiFailure && <p className="inline-error" role="alert">{error instanceof Error ? error.message : "Вызов не выполнен"}</p>}
           {jobError && <p className="inline-error" role="alert">{jobError}</p>}
 
-          {jobActive && <LoadingState label="Модель готовит предложение; страницу пока не меняем" />}
+          {!runResult && pendingJobs.length > 1 && (
+            <section className="ai-change-list">
+              <strong>Нерешённые результаты этой страницы</strong>
+              <ul>{pendingJobs.map((item) => <li key={item.id}>
+                {item.state === "completed" ? "Предложение готово" : item.state === "failed" ? item.error ?? "Ошибка" : "Модель работает"} · {item.model_label || "модель не указана"}
+                <Button variant="ghost" disabled={busy !== null || item.id === jobId} onClick={() => { setRunResult(null); setProposalSource(null); setJobId(item.id); }}>Открыть</Button>
+                {!ACTIVE_JOB_STATES.has(item.state) && <Button variant="ghost" disabled={busy !== null} onClick={() => void resolveBackgroundJob(item.id).then(() => setPendingJobs((all) => all.filter((job) => job.id !== item.id))).catch(setError)}>Отказаться</Button>}
+              </li>)}</ul>
+            </section>
+          )}
+
+          {jobActive && <LoadingState label={`Модель ${job?.model_label || "работает"}; ждём до ${job?.deadline_seconds ?? 120} с, максимум ${job?.max_attempts ?? 2} попытки`} />}
           {job?.state === "failed" && <p className="inline-error" role="alert">{job.error ?? "Вызов не выполнен"}</p>}
           {job?.state === "cancelled" && <p className="ai-muted" role="status">Остановлено. Страница не изменена.</p>}
           {runResult && (
@@ -357,6 +434,7 @@ export function AiCleanupPanel({
                 <div><strong>Предложение готово</strong>{runResult.cached && <StatusBadge tone="info">из кэша · новая стоимость 0</StatusBadge>}</div>
                 <p>{runResult.usage.input_tokens.toLocaleString("ru-RU")} входных, {runResult.usage.output_tokens.toLocaleString("ru-RU")} выходных токенов · {cost(runResult.usage.actual_cost_usd, "$")}{runResult.usage.actual_cost_rub !== null ? `, ${cost(runResult.usage.actual_cost_rub, "₽")}` : ""} · курс на {dateLabel(preflightValue?.usd_rub_rate_date ?? null)}</p>
               </header>
+              {runResult.revision !== material.active_parse_revision && <p className="inline-error">Исходная страница уже изменилась. Сравнение доступно, но применять это предложение нельзя.</p>}
               <SegmentedTabs
                 className="ai-cleanup-mobile-tabs"
                 label="Сравнение текста"

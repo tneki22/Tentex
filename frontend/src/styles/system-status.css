@@ -1,0 +1,531 @@
+/*
+ * Панель «Состояние» в приборном блоке оболочки: сводка здоровья установки.
+ * Цвет несёт уровень строки: красный — нужна помощь, янтарный — замечание,
+ * бирюзовый — нейтральная настройка, зелёный — проверено и работает.
+ * Каждый уровень дублируется значком, а не только цветом.
+ */
+
+/* --- Кнопка в приборном блоке --- */
+
+.status-widget.is-danger > svg {
+  color: var(--tone-danger);
+}
+
+.status-widget.is-warning > svg {
+  color: var(--tone-warning);
+}
+
+.status-widget.is-ok > svg {
+  color: var(--tone-success);
+}
+
+.app-widget-value.is-ok {
+  color: var(--tone-success);
+}
+
+.status-count {
+  min-width: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.status-count.is-danger {
+  background: var(--tone-danger);
+  color: var(--on-danger);
+}
+
+/* Янтарный фон с белым текстом в тёмной теме не читается — пилюля тонирована */
+.status-count.is-warning {
+  background: color-mix(in srgb, var(--tone-warning) 20%, transparent);
+  color: var(--tone-warning);
+}
+
+/* Точка нужна только свёрнутой панели: в развёрнутой есть число */
+.status-dot {
+  display: none;
+}
+
+.is-collapsed .status-dot {
+  display: block;
+}
+
+/* --- Всплывашка --- */
+
+/* Прокручивается тело, а не вся всплывашка: заголовок со статусом и строка
+   бота остаются на месте при любой высоте окна. overflow у самой .popover
+   не ставится — он обрезал бы стрелку Radix. */
+.popover.status-popover {
+  width: 480px;
+  padding: 0;
+}
+
+.status-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: min(680px, calc(var(--radix-popover-content-available-height, 80vh) - 2px));
+}
+
+.status-head {
+  --status-tone: var(--muted);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-3) var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+  /* Внутренний радиус = внешний минус рамка всплывашки */
+  border-radius: calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0 0;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--status-tone) 12%, transparent),
+    color-mix(in srgb, var(--status-tone) 3%, transparent)
+  );
+}
+
+.status-head.is-danger {
+  --status-tone: var(--tone-danger);
+}
+
+.status-head.is-warning {
+  --status-tone: var(--tone-warning);
+}
+
+.status-head.is-ok {
+  --status-tone: var(--tone-success);
+}
+
+.status-head-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--status-tone) 16%, transparent);
+  color: var(--status-tone);
+}
+
+.status-head-text b {
+  display: block;
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.status-head-text small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.status-refresh {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--ease-fast), background-color var(--ease-fast), scale var(--ease-fast);
+}
+
+.status-refresh:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.status-refresh:active:not(:disabled) {
+  scale: 0.96;
+}
+
+.status-refresh:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.status-refresh:disabled {
+  cursor: default;
+}
+
+.status-refresh .is-spinning {
+  animation: status-spin 0.9s linear infinite;
+}
+
+@keyframes status-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+.status-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.status-group {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.status-group-title {
+  margin: 0;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.status-list {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.status-empty {
+  margin: 0;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.status-notice {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+
+.status-notice.is-success {
+  background: color-mix(in srgb, var(--tone-success) 12%, transparent);
+  color: var(--tone-success);
+}
+
+.status-notice.is-danger {
+  background: color-mix(in srgb, var(--tone-danger) 10%, transparent);
+  color: var(--tone-danger);
+}
+
+/* --- Строка сводки --- */
+
+.status-row {
+  --status-tone: var(--muted);
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+}
+
+/* Требующие действия строки выделены подложкой и полосой своего тона;
+   спокойные — только цветом значка, чтобы не спорить с ними. */
+.status-row.is-danger {
+  --status-tone: var(--tone-danger);
+  background: color-mix(in srgb, var(--tone-danger) 8%, transparent);
+  box-shadow: inset 3px 0 0 var(--tone-danger);
+}
+
+.status-row.is-warning {
+  --status-tone: var(--tone-warning);
+  background: color-mix(in srgb, var(--tone-warning) 9%, transparent);
+  box-shadow: inset 3px 0 0 var(--tone-warning);
+}
+
+.status-row.is-unknown {
+  --status-tone: var(--muted);
+  background: var(--surface-sunken);
+  box-shadow: inset 3px 0 0 var(--line-strong);
+}
+
+.status-row.is-info {
+  --status-tone: var(--tone-info);
+}
+
+.status-row.is-ok {
+  --status-tone: var(--tone-success);
+}
+
+.status-row-icon {
+  display: grid;
+  place-items: center;
+  height: 20px;
+  color: var(--status-tone);
+}
+
+.status-row-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.status-row-text b {
+  color: var(--ink);
+  font-weight: var(--weight-medium);
+}
+
+.status-row-text small {
+  display: block;
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-row-action {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  transition: background-color var(--ease-fast), color var(--ease-fast), scale var(--ease-fast),
+    box-shadow var(--ease-fast);
+}
+
+.status-row-action:hover:not(:disabled) {
+  background: var(--accent-wash);
+  color: var(--accent-hover);
+}
+
+.status-row-action:active:not(:disabled) {
+  scale: 0.96;
+}
+
+.status-row-action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.status-row-action svg {
+  transition: translate var(--ease-fast);
+}
+
+.status-row-action:hover svg {
+  translate: 2px 0;
+}
+
+/* Команда у серьёзной строки — кнопка-поверхность с контуром тона строки */
+.status-row-action.is-primary {
+  background: var(--paper-strong);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--status-tone) 45%, transparent), var(--shadow-sm);
+}
+
+.status-row-action.is-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-tone) 12%, var(--paper-strong));
+  color: var(--ink);
+}
+
+.status-row-action:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* --- Хранилище: две постоянные строки --- */
+
+.status-storage {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.status-storage-row {
+  --status-tone: var(--accent);
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.status-storage-row + .status-storage-row {
+  border-top: 1px solid var(--line);
+}
+
+.status-storage-row.is-warning {
+  --status-tone: var(--tone-warning);
+}
+
+.status-storage-row.is-danger {
+  --status-tone: var(--tone-danger);
+}
+
+.status-storage-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--status-tone) 12%, transparent);
+  color: var(--status-tone);
+}
+
+.status-storage-row:not(:first-child) .status-storage-icon {
+  --status-tone: var(--muted);
+}
+
+.status-storage-row .status-storage-icon.is-ok {
+  --status-tone: var(--tone-success);
+}
+
+.status-storage-text p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.status-storage-text b {
+  color: var(--ink);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-storage-row.is-warning .status-free,
+.status-storage-row.is-danger .status-free {
+  color: var(--status-tone);
+}
+
+.status-storage-text small {
+  display: block;
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+/* Метка-легенда: тот же цвет, что доля Tentex на шкале диска */
+.status-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--space-2);
+  border-radius: 2px;
+  vertical-align: 1px;
+}
+
+/* Доля Tentex всегда акцентом: тоном нехватки места красится «свободно» */
+.status-swatch.is-tentex {
+  background: var(--accent);
+}
+
+.status-dot-sep {
+  margin: 0 var(--space-2);
+  color: var(--faint);
+}
+
+.status-faint {
+  color: var(--faint);
+}
+
+.status-live {
+  color: var(--accent);
+}
+
+/* Весь диск: доля Tentex акцентом, остальное занятое — нейтрально, свободное — фон */
+.status-meter {
+  display: flex;
+  height: 6px;
+  margin-top: var(--space-2);
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+}
+
+.status-meter-tentex {
+  background: var(--accent);
+}
+
+.status-meter-other {
+  background: var(--line-strong);
+}
+
+/* --- Первая загрузка --- */
+
+.status-skeleton {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.status-skeleton span {
+  height: 40px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--surface-sunken), var(--surface-hover), var(--surface-sunken));
+  background-size: 200% 100%;
+  animation: status-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes status-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* --- Закреплённая строка бота --- */
+
+.status-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.status-foot-icon {
+  display: grid;
+  place-items: center;
+  color: var(--subject-ink);
+}
+
+.status-foot-tag {
+  margin-left: auto;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--subject-ink) 14%, transparent);
+  color: var(--subject-ink);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+@media (max-width: 900px) {
+  /* В узкой оболочке значения видны и в «свёрнутом» режиме — точка лишняя */
+  .is-collapsed .status-dot {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .status-row {
+    grid-template-columns: 16px minmax(0, 1fr);
+  }
+
+  .status-row-action {
+    grid-column: 2;
+    justify-self: start;
+  }
+}

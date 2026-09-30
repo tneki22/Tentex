@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.roles import validate_role_parameters
 from app.ai.schemas import AiModelSelection
-from app.ai.settings import validate_model_selection
+from app.ai.settings import seed_from_preset, validate_model_selection
+from app.chat import common as chat_common
+from app.db import project_write_transaction
 from app.exam.context import (
     CONTEXT_FLAG_KEYS,
-    ChatContext,
     build_context,
     section_scope,
 )
+from app.exam.prompts import STUDY_DETAILED_MIN_TOKENS
 from app.exam.schemas import (
     CapabilityRead,
     ChatCapabilitiesRead,
@@ -29,7 +32,6 @@ from app.models import (
     ChatMessage,
     ChatMessageRole,
     ChatMode,
-    ChatPayloadKind,
     ChatSession,
     ChatStreamState,
     ExaminerPersona,
@@ -41,11 +43,14 @@ from app.models import (
     WorkspaceVariant,
     utc_now,
 )
-from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
+from app.projects.errors import ProjectDomainError, ProjectNotFoundError
 
 # Требуются одновременно и streaming, и structured output: одна выбранная
 # модель обслуживает и обычный ответ, и судью той же сессии (AI-CHATS.md §21.3).
 REQUIRED_MODEL_CAPABILITIES = frozenset({"streaming", "structured_output"})
+# Параметры чата проверяются по роли ответа: судья той же сессии работает на
+# параметрах своей роли из Параметров, его снимок фиксирует только модель.
+CHAT_PARAMETERS_ROLE = "exam_chat_reply"
 
 STUDY_NODE_TYPES = {NodeType.TOPIC, NodeType.SUBPOINT}
 TITLE_MAX_LEN = 60
@@ -55,11 +60,6 @@ def _require_exam_project(session: Session, project_id: UUID) -> Project:
     project = session.get(Project, project_id)
     if project is None or project.status != ProjectStatus.ACTIVE:
         raise ProjectNotFoundError()
-    if project.workspace_variant != WorkspaceVariant.EXAM:
-        raise ProjectConflictError(
-            "Чат доступен только экзаменационным проектам",
-            code="chat_exam_only",
-        )
     return project
 
 
@@ -71,9 +71,7 @@ def _require_chat_node(session: Session, project_id: UUID, node_id: UUID) -> Pro
         or node.is_archived
         or node.node_type not in STUDY_NODE_TYPES
     ):
-        raise ProjectDomainError(
-            "Вопрос не найден", status=404, code="chat_node_not_found"
-        )
+        raise ProjectDomainError("Вопрос не найден", status=404, code="chat_node_not_found")
     return node
 
 
@@ -100,53 +98,73 @@ def _summary(chat: ChatSession, message_count: int) -> ChatSessionSummary:
     )
 
 
-def list_sessions(session: Session, project_id: UUID, node_id: UUID) -> list[ChatSession]:
+def list_sessions(session: Session, project_id: UUID, node_id: UUID | None) -> list[ChatSession]:
     _require_exam_project(session, project_id)
-    _require_chat_node(session, project_id, node_id)
+    if node_id is not None:
+        _require_chat_node(session, project_id, node_id)
     return list(
         session.scalars(
             select(ChatSession)
-            .where(ChatSession.project_id == project_id, ChatSession.program_node_id == node_id)
+            .where(
+                ChatSession.project_id == project_id,
+                ChatSession.program_node_id == node_id,
+                # Чаты построения программы и поиска в интернете тоже живут без
+                # темы, но это другие режимы со своими списками — в ленту чата
+                # проекта они не попадают.
+                ChatSession.mode.in_((ChatMode.EXAM, ChatMode.STUDY)),
+            )
             .order_by(ChatSession.updated_at.desc())
         )
     )
 
 
 def list_session_summaries(
-    session: Session, project_id: UUID, node_id: UUID
+    session: Session, project_id: UUID, node_id: UUID | None
 ) -> list[ChatSessionSummary]:
     chats = list_sessions(session, project_id, node_id)
     if not chats:
         return []
-    counts = dict(
-        session.execute(
-            select(ChatMessage.session_id, func.count(ChatMessage.id))
-            .where(ChatMessage.session_id.in_([chat.id for chat in chats]))
-            .group_by(ChatMessage.session_id)
-        ).all()
-    )
+    counts = chat_common.message_counts(session, [chat.id for chat in chats])
     return [_summary(chat, counts.get(chat.id, 0)) for chat in chats]
 
 
-def create_session(session: Session, project_id: UUID, node_id: UUID) -> ChatSession:
-    with session.begin():
-        _require_exam_project(session, project_id)
-        node = _require_chat_node(session, project_id, node_id)
+def create_session(session: Session, project_id: UUID, node_id: UUID | None) -> ChatSession:
+    with project_write_transaction(session, project_id):
+        project = _require_exam_project(session, project_id)
+        node = _require_chat_node(session, project_id, node_id) if node_id else None
+        if node is None and project.template_key != "free":
+            raise ProjectDomainError(
+                "Чат без темы доступен только в свободном проекте",
+                status=422,
+                code="chat_node_required",
+            )
         existing = session.scalar(
             select(func.count(ChatSession.id)).where(
                 ChatSession.project_id == project_id, ChatSession.program_node_id == node_id
             )
         )
         ordinal = existing + 1
-        base_title = _title(node)
+        base_title = _title(node) if node else "Свободное изучение"
         title = base_title if ordinal == 1 else f"{base_title} · {ordinal}"
+        selection, parameters = seed_from_preset(
+            session, role=CHAT_PARAMETERS_ROLE, required=REQUIRED_MODEL_CAPABILITIES
+        )
+        if project.workspace_variant != WorkspaceVariant.EXAM and parameters is None:
+            parameters = {"max_output_tokens": STUDY_DETAILED_MIN_TOKENS}
         chat = ChatSession(
             project_id=project_id,
             program_node_id=node_id,
-            section_scope_node_id=section_scope(session, node),
+            section_scope_node_id=section_scope(session, node) if node else None,
             title=title,
             persona=ExaminerPersona.NEUTRAL_EXAMINER,
             strictness=ExaminerStrictness.NORMAL,
+            mode=(
+                ChatMode.EXAM
+                if project.workspace_variant == WorkspaceVariant.EXAM
+                else ChatMode.STUDY
+            ),
+            model_override=selection,
+            model_parameters=parameters,
             draft_text="",
         )
         session.add(chat)
@@ -156,7 +174,7 @@ def create_session(session: Session, project_id: UUID, node_id: UUID) -> ChatSes
 
 
 def _message_read(message: ChatMessage) -> ChatMessageRead:
-    return ChatMessageRead.model_validate(message)
+    return chat_common.message_read(message)
 
 
 def get_session(session: Session, project_id: UUID, chat_id: UUID) -> ChatSession:
@@ -178,9 +196,7 @@ def get_session_detail(session: Session, project_id: UUID, chat_id: UUID) -> Cha
     _require_exam_project(session, project_id)
     chat = _require_session(session, project_id, chat_id)
     messages = session.scalars(
-        select(ChatMessage)
-        .where(ChatMessage.session_id == chat.id)
-        .order_by(ChatMessage.sequence)
+        select(ChatMessage).where(ChatMessage.session_id == chat.id).order_by(ChatMessage.sequence)
     )
     return ChatSessionDetail(
         id=chat.id,
@@ -192,6 +208,7 @@ def get_session_detail(session: Session, project_id: UUID, chat_id: UUID) -> Cha
         persona=chat.persona,
         strictness=chat.strictness,
         model_override=_model_override_read(chat),
+        model_parameters=chat.model_parameters or {},
         context_flags=chat.context_flags,
         draft_text=chat.draft_text,
         created_at=chat.created_at,
@@ -201,14 +218,17 @@ def get_session_detail(session: Session, project_id: UUID, chat_id: UUID) -> Cha
 
 
 def save_draft(session: Session, project_id: UUID, chat_id: UUID, text: str) -> ChatSession:
-    with session.begin():
+    # Открытие чата отправляет только что загруженный черновик обратно. Тот же
+    # текст не пишем: любая запись сбрасывает кэш страниц у всех соединений API,
+    # а новый updated_at поднимал бы сессию в списке без действий пользователя.
+    _require_exam_project(session, project_id)
+    current = _require_session(session, project_id, chat_id)
+    if current.draft_text == text:
+        return current
+    with project_write_transaction(session, project_id):
         _require_exam_project(session, project_id)
         chat = _require_session(session, project_id, chat_id)
-        chat.draft_text = text
-        chat.updated_at = utc_now()
-        session.flush()
-        session.refresh(chat)
-    return chat
+        return chat_common.save_draft_text(session, chat, text)
 
 
 def update_settings(
@@ -216,34 +236,42 @@ def update_settings(
 ) -> ChatSession:
     """Частичный PATCH: поле трогается, только если явно прислано (`model_fields_set`)."""
     fields = command.model_fields_set
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_exam_project(session, project_id)
         chat = _require_session(session, project_id, chat_id)
         if "mode" in fields and command.mode is not None:
-            if command.mode is ChatMode.STUDY:
-                raise ProjectDomainError(
-                    "Режим «Разобраться» пока недоступен",
-                    status=422,
-                    code="chat_mode_unavailable",
-                )
             chat.mode = command.mode
+            if chat.mode == ChatMode.STUDY and not chat.model_parameters:
+                chat.model_parameters = {"max_output_tokens": STUDY_DETAILED_MIN_TOKENS}
         if "persona" in fields and command.persona is not None:
             chat.persona = command.persona
         if "strictness" in fields and command.strictness is not None:
             chat.strictness = command.strictness
         if "model_override" in fields:
-            if command.model_override is None:
-                chat.model_override = None
-            else:
+            snapshot = None
+            parameters = None
+            if command.model_override is not None:
                 selection = AiModelSelection(
                     provider_id=command.model_override.provider_id,
                     model_id=command.model_override.model_id,
                 )
                 validate_model_selection(session, selection, required=REQUIRED_MODEL_CAPABILITIES)
-                chat.model_override = {
+                snapshot = {
                     "provider_id": str(selection.provider_id),
                     "model_id": selection.model_id,
                 }
+                parameters = validate_role_parameters(
+                    CHAT_PARAMETERS_ROLE, command.model_parameters or {}
+                )
+            chat_common.apply_model_choice(
+                session, chat, selection=snapshot, parameters=parameters
+            )
+            if chat.mode == ChatMode.STUDY and parameters is None:
+                chat.model_parameters = {"max_output_tokens": STUDY_DETAILED_MIN_TOKENS}
+        elif "model_parameters" in fields and command.model_parameters is not None:
+            chat.model_parameters = validate_role_parameters(
+                CHAT_PARAMETERS_ROLE, command.model_parameters
+            )
         if "context_flags" in fields and command.context_flags is not None:
             unknown = set(command.context_flags) - CONTEXT_FLAG_KEYS
             if unknown:
@@ -260,9 +288,7 @@ def update_settings(
     return chat
 
 
-def context_preview(
-    session: Session, project_id: UUID, chat_id: UUID
-) -> ChatContextPreviewRead:
+def context_preview(session: Session, project_id: UUID, chat_id: UUID) -> ChatContextPreviewRead:
     _require_exam_project(session, project_id)
     chat = _require_session(session, project_id, chat_id)
     ctx = build_context(session, chat, for_judge=False)
@@ -271,7 +297,7 @@ def context_preview(
     return ChatContextPreviewRead(
         session_id=chat.id,
         node_id=chat.program_node_id,
-        question=ctx.node.title,
+        question=ctx.question,
         persona=chat.persona,
         strictness=chat.strictness,
         model_source="override" if override else "auto",
@@ -282,56 +308,15 @@ def context_preview(
     )
 
 
-def _append_message_row(
-    session: Session,
-    chat: ChatSession,
-    *,
-    role: ChatMessageRole,
-    text: str = "",
-    stream_state: ChatStreamState = ChatStreamState.COMPLETE,
-    payload_kind: ChatPayloadKind = ChatPayloadKind.NONE,
-    payload: dict[str, Any] | None = None,
-    context_snapshot: dict[str, Any] | None = None,
-    skill: str | None = None,
-    ai_run_id: UUID | None = None,
-    attempt_id: UUID | None = None,
-    grade_attempt_id: UUID | None = None,
-    message_id: UUID | None = None,
-) -> ChatMessage:
+def _append_message_row(session: Session, chat: ChatSession, **fields: Any) -> ChatMessage:
     """Raw insert, no transaction of its own — caller must already be inside one.
 
-    SQLAlchemy autobegins a transaction on the session's first read, so a
-    second `with session.begin():` inside the same request raises
-    "A transaction is already begun". Compound flows (build context, then
-    append) call this directly inside their own single `with session.begin():`;
-    `append_message` below stays the transactional entry point for callers
-    that touch nothing else on the session first.
+    Delegates to `app.chat.common` (вынесено оттуда — логика domain-agnostic,
+    её же использует `app.projects.program_chat`). Тонкая обёртка остаётся
+    здесь ради существующих вызывающих (`exam/attempts.py`, `chat_tools/executor.py`
+    зовут `chat_service._append_message_row` по имени).
     """
-    next_sequence = session.scalar(
-        select(func.coalesce(func.max(ChatMessage.sequence), 0) + 1).where(
-            ChatMessage.session_id == chat.id
-        )
-    )
-    message = ChatMessage(
-        id=message_id or uuid4(),
-        session_id=chat.id,
-        sequence=next_sequence,
-        role=role,
-        text=text,
-        stream_state=stream_state,
-        payload_kind=payload_kind,
-        payload=payload or {},
-        context_snapshot=context_snapshot or {},
-        skill=skill,
-        ai_run_id=ai_run_id,
-        attempt_id=attempt_id,
-        grade_attempt_id=grade_attempt_id,
-    )
-    session.add(message)
-    chat.updated_at = utc_now()
-    session.flush()
-    session.refresh(message)
-    return message
+    return chat_common.append_message_row(session, chat, **fields)
 
 
 def append_message(session: Session, chat: ChatSession, **fields: Any) -> ChatMessage:
@@ -339,18 +324,67 @@ def append_message(session: Session, chat: ChatSession, **fields: Any) -> ChatMe
         return _append_message_row(session, chat, **fields)
 
 
-def start_turn(
-    session: Session, project_id: UUID, chat_id: UUID, text: str
-) -> tuple[ChatSession, ChatContext]:
-    """Validate, build the reply context and record the user's turn — one transaction."""
-    with session.begin():
-        _require_exam_project(session, project_id)
-        chat = _require_session(session, project_id, chat_id)
-        ctx = build_context(session, chat, for_judge=False)
-        _append_message_row(
-            session, chat, role=ChatMessageRole.USER, text=text, context_snapshot=ctx.snapshot
+def require_turn_session(session: Session, project_id: UUID, chat_id: UUID) -> ChatSession:
+    """Чат для нового хода: проект экзаменационный или свободный, сессия его."""
+    _require_exam_project(session, project_id)
+    return _require_session(session, project_id, chat_id)
+
+
+def find_turn(
+    session: Session, chat_id: UUID, client_turn_id: str
+) -> tuple[ChatMessage, ChatMessage | None] | None:
+    """Прежний ход с этим ID: реплика пользователя и завершённый ответ на неё, если есть."""
+    user = session.scalar(
+        select(ChatMessage).where(
+            ChatMessage.session_id == chat_id,
+            ChatMessage.client_turn_id == client_turn_id,
         )
-    return chat, ctx
+    )
+    if user is None:
+        return None
+    # Ответ хода — завершённый ответ до следующего вопроса: после упавшей
+    # попытки повтор дописывает новый ответ ниже неудачного.
+    for message in session.scalars(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == chat_id, ChatMessage.sequence > user.sequence)
+        .order_by(ChatMessage.sequence)
+    ):
+        if message.role == ChatMessageRole.USER:
+            break
+        if (
+            message.role == ChatMessageRole.EXAMINER
+            and message.stream_state == ChatStreamState.COMPLETE
+        ):
+            return user, message
+    return user, None
+
+
+def record_turn(
+    session: Session,
+    project_id: UUID,
+    chat_id: UUID,
+    text: str,
+    *,
+    skill: str | None,
+    client_turn_id: str | None,
+    snapshot: dict[str, Any],
+    remember_budget: int | None = None,
+) -> UUID:
+    """Записать реплику пользователя — только после подготовки и подтверждения хода."""
+    with project_write_transaction(session, project_id):
+        chat = require_turn_session(session, project_id, chat_id)
+        if remember_budget is not None:
+            chat.context_budget_tokens = remember_budget
+        user_message = _append_message_row(
+            session,
+            chat,
+            role=ChatMessageRole.USER,
+            text=text,
+            skill=skill,
+            client_turn_id=client_turn_id,
+            context_snapshot=snapshot,
+        )
+    return user_message.id
 
 
 def finish_turn(
@@ -362,8 +396,10 @@ def finish_turn(
     text: str,
     stream_state: ChatStreamState,
     ai_run_id: UUID | None,
+    skill: str | None = None,
+    context_snapshot: dict[str, Any] | None = None,
 ) -> ChatMessage:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _require_exam_project(session, project_id)
         chat = _require_session(session, project_id, chat_id)
         return _append_message_row(
@@ -374,6 +410,8 @@ def finish_turn(
             text=text,
             stream_state=stream_state,
             ai_run_id=ai_run_id,
+            skill=skill,
+            context_snapshot=context_snapshot or {},
         )
 
 
@@ -392,26 +430,43 @@ _SKILL_TITLES: dict[str, str] = {
 _AVAILABLE_SKILLS = frozenset({"answer"})
 
 
-def get_capabilities(session: Session, project_id: UUID, node_id: UUID) -> ChatCapabilitiesRead:
+def get_capabilities(
+    session: Session, project_id: UUID, node_id: UUID | None
+) -> ChatCapabilitiesRead:
     from app.chat_tools.registry import list_tool_specs
 
-    _require_exam_project(session, project_id)
-    _require_chat_node(session, project_id, node_id)
+    project = _require_exam_project(session, project_id)
+    if node_id is not None:
+        _require_chat_node(session, project_id, node_id)
     modes = [
-        CapabilityRead(key="exam", title="Экзамен", available=True),
+        CapabilityRead(
+            key="exam",
+            title="Экзамен",
+            available=project.workspace_variant == WorkspaceVariant.EXAM,
+            unavailable_reason=(
+                None
+                if project.workspace_variant == WorkspaceVariant.EXAM
+                else "exam_mode_not_applicable"
+            ),
+        ),
         CapabilityRead(
             key="study",
             title="Разобраться",
-            available=False,
-            unavailable_reason="chat_mode_unavailable",
+            available=True,
         ),
     ]
     skills = [
         CapabilityRead(
             key=key,
             title=title,
-            available=key in _AVAILABLE_SKILLS,
-            unavailable_reason=None if key in _AVAILABLE_SKILLS else "skill_not_implemented",
+            available=(
+                key in _AVAILABLE_SKILLS and project.workspace_variant == WorkspaceVariant.EXAM
+            ),
+            unavailable_reason=(
+                None
+                if key in _AVAILABLE_SKILLS and project.workspace_variant == WorkspaceVariant.EXAM
+                else "skill_not_implemented"
+            ),
         )
         for key, title in _SKILL_TITLES.items()
     ]

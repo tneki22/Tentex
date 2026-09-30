@@ -16,7 +16,7 @@ from app.models import (
     OcrSettings,
     utc_now,
 )
-from app.ocr import cloud_catalog, downloads
+from app.ocr import cloud_catalog, downloads, speech
 from app.ocr.catalog import (
     LICENSE_TITLE,
     LICENSE_URL,
@@ -30,9 +30,14 @@ from app.ocr.engines import (
     CLOUD_STRATEGY_HINTS,
     CLOUD_STRATEGY_TITLES,
     DEFAULT_CLOUD_STRATEGY,
+    IMAGE_MODE_HINTS,
+    IMAGE_MODE_TITLES,
+    IMAGE_MODES_BY_ENGINE,
     OCR_ENGINES,
     CloudStrategy,
     OcrRuntimeParams,
+    available_cpu_count,
+    cpu_threads_for,
 )
 from app.ocr.schemas import (
     OcrCloudModelRead,
@@ -42,6 +47,7 @@ from app.ocr.schemas import (
     OcrEngineRead,
     OcrEngineWrite,
     OcrGlobalSettingsWrite,
+    OcrImageModeRead,
     OcrModelRead,
     OcrSettingsRead,
 )
@@ -74,6 +80,7 @@ def runtime_params(session: Session) -> OcrRuntimeParams:
     return OcrRuntimeParams(
         quality_threshold=row.quality_threshold if row else defaults.quality_threshold,
         raster_scale=row.raster_scale if row else defaults.raster_scale,
+        cpu_profile=row.cpu_profile if row else defaults.cpu_profile,
         fast_language=defaults.fast_language,
         fast_model_id=(fast.model_id if fast and fast.model_id else defaults.fast_model_id),
         cloud_strategy=_cloud_strategy(session),
@@ -93,6 +100,7 @@ def update_global_settings(session: Session, command: OcrGlobalSettingsWrite) ->
         row.default_mode = command.default_mode
         row.quality_threshold = command.quality_threshold
         row.raster_scale = command.raster_scale
+        row.cpu_profile = command.cpu_profile
         row.updated_at = utc_now()
     return read_settings(session)
 
@@ -259,7 +267,7 @@ def _external_models_enabled(session: Session) -> bool:
     return bool(row and row.external_models_enabled)
 
 
-def _cloud_readiness(session: Session) -> tuple[str, str, str]:
+def cloud_readiness(session: Session) -> tuple[str, str, str]:
     """Готов ли режим «Облако» прямо сейчас и чего ему не хватает.
 
     Порядок проверок повторяет порядок действий пользователя: сначала общий
@@ -281,14 +289,15 @@ def _cloud_readiness(session: Session) -> tuple[str, str, str]:
 
 
 def _model_price(
-    session: Session, provider_id: UUID | None, model_id: str | None
+    session: Session, provider_id: UUID | None, model_id: str | None, *, image: bool = False
 ) -> Decimal | None:
     if provider_id is None or model_id is None:
         return None
     row = session.get(AiModelCatalogEntry, (provider_id, model_id))
     if row is None:
         return None
-    return cloud_catalog.price_per_page(row.prompt_price_usd, row.completion_price_usd)
+    price = cloud_catalog.price_per_image if image else cloud_catalog.price_per_page
+    return price(row.prompt_price_usd, row.completion_price_usd)
 
 
 def _cloud_read(session: Session) -> OcrCloudRead:
@@ -310,6 +319,7 @@ def _cloud_read(session: Session) -> OcrCloudRead:
             for value, title in CLOUD_STRATEGY_TITLES.items()
         ],
         price_per_page_usd=_model_price(session, provider_id, model_id),
+        price_per_image_usd=_model_price(session, provider_id, model_id, image=True),
     )
 
 
@@ -399,7 +409,7 @@ def read_settings(session: Session) -> OcrSettingsRead:
         if spec.key == "fast":
             readiness, detail, active = _fast_readiness(models)
         elif spec.key == "cloud":
-            readiness, detail, active = _cloud_readiness(session)
+            readiness, detail, active = cloud_readiness(session)
         else:
             readiness, detail, active = "unavailable", spec.unavailable_reason or "", ""
 
@@ -429,8 +439,24 @@ def read_settings(session: Session) -> OcrSettingsRead:
         default_mode=row.default_mode,
         quality_threshold=row.quality_threshold,
         raster_scale=row.raster_scale,
+        cpu_profile=row.cpu_profile,
+        cpu_available=available_cpu_count(),
+        cpu_threads_by_profile={
+            profile: cpu_threads_for(profile)
+            for profile in ("gentle", "balanced", "maximum")
+        },
         engines=engines,
         cloud=_cloud_read(session),
+        speech=speech.speech_engines(session),
+        image_modes={
+            engine: [
+                OcrImageModeRead(
+                    value=mode, title=IMAGE_MODE_TITLES[mode], hint=IMAGE_MODE_HINTS[mode]
+                )
+                for mode in modes
+            ]
+            for engine, modes in IMAGE_MODES_BY_ENGINE.items()
+        },
     )
 
 

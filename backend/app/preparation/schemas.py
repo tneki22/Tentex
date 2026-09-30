@@ -8,7 +8,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 WorkKind = Literal["learn", "answer", "review", "gaps", "final"]
-ActivityKind = Literal["view", "reading", "material", "conspect", "chat", "answer", "manual"]
+ActivityKind = Literal[
+    "view", "reading", "material", "conspect", "chat", "answer", "manual", "lesson"
+]
 AnswerMode = Literal["memory", "supported"]
 Origin = Literal["manual", "local", "ai"]
 

@@ -19,6 +19,7 @@ from app.models import (
     GoalPassport,
     NodeType,
     ProgramNode,
+    Project,
     ReferenceAnswer,
     TargetOutcome,
 )
@@ -33,7 +34,9 @@ CONTEXT_CHARS = 12_000
 # Ключи ChatSession.context_flags — AI-CHATS.md §21.4. attempts и
 # section_memory зарегистрированы в модели заранее, но контекст их пока не
 # заполняет: соответствующая часть не существует до итерации 2.
-CONTEXT_FLAG_KEYS = frozenset({"profile", "reference", "fragments", "attempts", "section_memory"})
+CONTEXT_FLAG_KEYS = frozenset(
+    {"profile", "reference", "fragments", "retrieval", "attempts", "section_memory"}
+)
 
 TARGET_OUTCOME_LABELS = {
     TargetOutcome.AWARENESS: "иметь общее представление",
@@ -87,7 +90,8 @@ class FragmentSnippet:
 
 @dataclass(frozen=True)
 class ChatContext:
-    node: ProgramNode
+    node: ProgramNode | None
+    question: str
     reference_text: str | None
     fragments: list[FragmentSnippet]
     tail: list[ChatMessage]
@@ -169,6 +173,7 @@ def _budget_fragments(
             "page_number": fragment.page_number,
             "sha256": _sha256(fragment.text),
             "bytes": len(fragment.text.encode()),
+            "chars": size,
         }
         if exhausted:
             entry["included"] = False
@@ -193,6 +198,7 @@ def _budget_fragments(
             )
             entry["included"] = True
             entry["truncated"] = True
+            entry["chars"] = len(truncated_text)
         else:
             entry["included"] = False
         entries.append(entry)
@@ -202,20 +208,30 @@ def _budget_fragments(
 
 
 def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> ChatContext:
-    node = session.get(ProgramNode, chat.program_node_id)
-    assert node is not None
+    node = session.get(ProgramNode, chat.program_node_id) if chat.program_node_id else None
+    project = session.get(Project, chat.project_id)
+    assert node is not None or project is not None
+    question = node.title if node else (project.name or "Свободное изучение")
     flags = chat.context_flags or {}
     include_reference = flags.get("reference", True)
     include_fragments = flags.get("fragments", True)
     include_profile = flags.get("profile", True)
 
-    answer = session.get(ReferenceAnswer, (chat.project_id, chat.program_node_id))
+    answer = (
+        session.get(ReferenceAnswer, (chat.project_id, chat.program_node_id))
+        if chat.program_node_id
+        else None
+    )
     reference_available = is_reference_answer_available(answer) and bool(
         answer and answer.text.strip()
     )
     reference_text = answer.text if include_reference and reference_available else None
 
-    all_bound_fragments = bound_fragments(session, chat.project_id, chat.program_node_id)
+    all_bound_fragments = (
+        bound_fragments(session, chat.project_id, chat.program_node_id)
+        if chat.program_node_id
+        else []
+    )
     all_fragments = all_bound_fragments if include_fragments else []
     # Хвост сообщений судье не передаётся вообще (FR-V7): роль судьи получает
     # тот же вопрос, эталон и фрагменты, но не переписку чата.
@@ -234,15 +250,17 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
                 "included": False,
                 "reason": "excluded_by_user",
                 "bytes": 0,
+                "chars": 0,
             }
         ]
 
     manifest: list[dict[str, Any]] = [
         {
             "kind": "program_node",
-            "id": str(node.id),
-            "sha256": _sha256(node.title),
-            "bytes": len(node.title.encode()),
+            "id": str(node.id) if node else str(chat.project_id),
+            "sha256": _sha256(question),
+            "bytes": len(question.encode()),
+            "chars": len(question),
             "included": True,
         },
         {
@@ -250,13 +268,10 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
             "id": str(chat.project_id),
             "sha256": _sha256(json.dumps(profile, ensure_ascii=False, sort_keys=True)),
             "bytes": len(json.dumps(profile, ensure_ascii=False).encode()),
+            "chars": len(json.dumps(profile, ensure_ascii=False)),
             "included": include_profile and bool(profile),
             "reason": (
-                "excluded_by_user"
-                if not include_profile
-                else None
-                if profile
-                else "profile_empty"
+                "excluded_by_user" if not include_profile else None if profile else "profile_empty"
             ),
         },
         {
@@ -265,6 +280,7 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
             "revision": answer.revision if answer is not None else None,
             "sha256": _sha256(reference_text) if reference_text is not None else None,
             "bytes": len(reference_text.encode()) if reference_text is not None else 0,
+            "chars": len(reference_text) if reference_text is not None else 0,
             "included": reference_text is not None,
             "reason": (
                 None
@@ -280,6 +296,7 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
             "id": str(chat.id),
             "count": len(tail),
             "bytes": sum(len(message.text.encode()) for message in tail),
+            "chars": sum(len(message.text) for message in tail),
             "included": bool(tail),
         },
         {
@@ -298,7 +315,7 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
     fingerprint = _sha256(json.dumps(manifest, ensure_ascii=False, sort_keys=True, default=str))
 
     snapshot = {
-        "question": node.title,
+        "question": question,
         "reference_included": reference_text is not None,
         "fragment_count": len(fragments),
         "tail_count": len(tail),
@@ -311,6 +328,7 @@ def build_context(session: Session, chat: ChatSession, *, for_judge: bool) -> Ch
     }
     return ChatContext(
         node=node,
+        question=question,
         reference_text=reference_text,
         fragments=fragments,
         tail=tail,

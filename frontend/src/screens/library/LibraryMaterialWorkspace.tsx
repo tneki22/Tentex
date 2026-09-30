@@ -8,6 +8,7 @@ import {
   deleteLibraryMaterial,
   getLibraryPage,
   getMaterialDeletePreview,
+  listLibrarySubjects,
   refreshLibrarySource,
   restoreMaterialRevision,
   searchLibraryMaterial,
@@ -16,9 +17,12 @@ import {
   type MaterialPageRead,
   type MaterialPurpose,
 } from "../../api/materials";
+import { indexLibraryMaterial } from "../../api/retrieval";
 import {
   DocumentStage,
   getMaterialPresentation,
+  MaterialSourceView,
+  MaterialTextView,
   PdfOutline,
   ViewerToolbar,
   type MaterialViewMode,
@@ -37,10 +41,11 @@ import { useDocumentSearch } from "../../hooks/useDocumentSearch";
 import { useLibraryMaterial } from "../../hooks/useLibraryMaterial";
 import { useMaterialViewport } from "../../hooks/useMaterialViewport";
 import { AiCleanupPanel } from "../AiCleanupPanel";
+import { HeaderFooterDialog } from "../HeaderFooterDialog";
 import { AddToProjectDialog } from "./AddToProjectDialog";
 import { LibraryMaterialInspector, type InspectorTab } from "./LibraryMaterialInspector";
-import { MaterialSourceView, MaterialTextView } from "./MaterialSourceView";
 import { editablePageText, PageTextEditor } from "./PageTextEditor";
+import { removeYoutubeTimestamps } from "./youtubeTranscript";
 
 const PURPOSE: Record<MaterialPurpose, string> = {
   exam_structure: "список вопросов",
@@ -65,10 +70,12 @@ export function LibraryMaterialWorkspace() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const revisionParam = Number(searchParams.get("revision"));
+  const requestedPage = Number(searchParams.get("page"));
   const selectedRevision = Number.isFinite(revisionParam) && revisionParam > 0 ? revisionParam : null;
   const compareParam = Number(searchParams.get("compareRevision"));
   const compareRevision = Number.isFinite(compareParam) && compareParam > 0 ? compareParam : null;
   const inspectorTab = (searchParams.get("panel") as InspectorTab | null) ?? "processing";
+  const requestedCleanupJob = searchParams.get("job");
 
   const [mode, setMode] = useState<MaterialViewMode | null>(null);
   const wideEnough = () => window.innerWidth >= 900;
@@ -86,9 +93,11 @@ export function LibraryMaterialWorkspace() {
   const [editError, setEditError] = useState<string | null>(null);
   const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
   const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [headerFooterOpen, setHeaderFooterOpen] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
   const [deletePreview, setDeletePreview] = useState<MaterialDeletePreview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [subjects, setSubjects] = useState<string[]>([]);
   const [comparisonPage, setComparisonPage] = useState<MaterialPageRead | null>(null);
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
@@ -115,6 +124,11 @@ export function LibraryMaterialWorkspace() {
     page: view.page,
     revision: selectedRevision,
   });
+  useEffect(() => {
+    const controller = new AbortController();
+    void listLibrarySubjects(controller.signal).then(setSubjects).catch(() => undefined);
+    return () => controller.abort();
+  }, [materialId]);
   const { detail } = store;
   const page = editSession?.page ?? store.page;
   const editDirty = editSession !== null && editText !== editSession.initial;
@@ -130,6 +144,15 @@ export function LibraryMaterialWorkspace() {
     setMode(null);
     view.setPage(1);
   }, [materialId]);
+
+  useEffect(() => {
+    if (requestedCleanupJob) setCleanupOpen(true);
+  }, [requestedCleanupJob]);
+
+  useEffect(() => {
+    if (!Number.isFinite(requestedPage) || requestedPage < 1) return;
+    view.setPage(requestedPage);
+  }, [materialId, requestedPage]);
 
   useEffect(() => {
     if (!editSession) return;
@@ -276,6 +299,15 @@ export function LibraryMaterialWorkspace() {
     navigate(returnTo ?? state?.libraryReturnTo ?? "/library");
   }
 
+  async function addMaterialToIndex() {
+    try {
+      await indexLibraryMaterial(materialId);
+      setNotice("Материал поставлен в очередь добавления в активный индекс.");
+    } catch (caught) {
+      setNotice(caught instanceof Error ? caught.message : "Не удалось поставить материал в индекс");
+    }
+  }
+
   const returnTo = searchParams.get("returnTo");
   const backLabel = returnTo?.startsWith("/projects/")
     ? "Вернуться в проект"
@@ -303,13 +335,15 @@ export function LibraryMaterialWorkspace() {
     }
   }
 
-  function openTextEditor() {
+  function openTextEditor(draft?: string) {
     if (!page || !detail || store.pageLoading || page.page_number !== activePage || readOnly || isVersionComparison || store.busy || editOpen
       || (detail.task && ["running", "queued", "paused"].includes(detail.task.state))) return;
+    // Предложенный черновик (например, транскрипт без таймкодов) сравниваем
+    // с текстом страницы, а не с самим собой: он уже изменён до открытия.
     const initial = editablePageText(page);
     const draftKey = `tentex-page-draft:${detail.id}:${primaryRevision}:${page.page_number}`;
     setEditSession({ page, revision: primaryRevision, initial, draftKey });
-    setEditText(sessionStorage.getItem(draftKey) ?? initial);
+    setEditText(draft ?? sessionStorage.getItem(draftKey) ?? initial);
     setEditError(null);
     setEditOpen(true);
   }
@@ -422,6 +456,10 @@ export function LibraryMaterialWorkspace() {
             focusedFragmentId={focusedFragmentId}
             currentTime={currentTime}
             onTimeUpdate={setCurrentTime}
+            flow={editOpen ? "paged" : view.flow}
+            pageCount={pageCount}
+            pageAspect={geometry.pageAspect}
+            onPageChange={view.reportPage}
             scrollRef={view.attachScroll}
           />
         )
@@ -495,7 +533,7 @@ export function LibraryMaterialWorkspace() {
             </button>
           </Tooltip>
           <div className="library-head-title">
-            <h1 title={detail.original_name}>{detail.original_name}</h1>
+            <h1 title={detail.original_name}>{detail.display_name}</h1>
             {detail.status !== "ready" && <div className="library-head-meta">
               <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
             </div>}
@@ -508,6 +546,7 @@ export function LibraryMaterialWorkspace() {
           canCompare={!isVersionComparison && canCompare}
           page={activePage}
           pageCount={pageCount}
+          flow={view.flow}
           query={search.query}
           zoom={view.zoom}
           zoomPercent={view.zoomPercent}
@@ -519,7 +558,7 @@ export function LibraryMaterialWorkspace() {
           onEditText={detail.capabilities.can_edit_text
             ? editOpen
               ? () => requestLeave(closeEditor)
-              : openTextEditor
+              : () => openTextEditor()
             : undefined}
           editDisabled={editOpen
             ? editBusy
@@ -528,6 +567,7 @@ export function LibraryMaterialWorkspace() {
           editing={editOpen}
           panelTools={panelTools}
           onModeChange={isVersionComparison ? () => undefined : setMode}
+          onFlowChange={view.setFlow}
           onPageChange={view.goToPage}
           onQueryChange={search.setQuery}
           onQuerySubmit={search.step}
@@ -608,21 +648,22 @@ export function LibraryMaterialWorkspace() {
             onTabChange={(tab) => setParam("panel", tab === "processing" ? null : tab)}
             onSelectRevision={selectRevision}
             onCompareRevision={compareWithRevision}
-            onStart={(command) => void store.startProcessing({
-              parser_mode: command.parser_mode,
-              scope: command.scope,
-              page_from: command.page_from ?? null,
-              page_to: command.page_to ?? null,
-            })}
+            onStart={(command) => void store.startProcessing(command)}
+            onImagesQueued={() => void store.refreshDetail()}
             onControl={(action) => void store.controlProcessing(action)}
             onTypstBuild={(downloadPackages, entrypoint) => void store.buildTypst(downloadPackages, entrypoint)}
             onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
-            onEditPage={openTextEditor}
+            onEditPage={() => openTextEditor()}
             onCleanupPage={() => setCleanupOpen(true)}
+            onRemoveTimestamps={() => {
+              if (page) openTextEditor(removeYoutubeTimestamps(page.markdown || page.text));
+            }}
+            onFindHeaderFooter={() => setHeaderFooterOpen(true)}
             onConfirmPageReview={() => {
               if (!page) return;
               void store.run(() => confirmLibraryPageReview(detail.id, page.page_number));
             }}
+            onIndexMaterial={() => void addMaterialToIndex()}
             onRestore={(revision) => void store.run(async () => {
               const restored = await restoreMaterialRevision(detail.id, revision);
               setParam("revision", null);
@@ -638,6 +679,15 @@ export function LibraryMaterialWorkspace() {
               return result;
             })}
             onDelete={() => void getMaterialDeletePreview(detail.id).then(setDeletePreview)}
+            subjects={subjects}
+            onSaveMetadata={async (command) => {
+              const saved = await store.updateMetadata(command);
+              if (saved) {
+                if (command.subject) setSubjects((current) => [...new Set([...current, command.subject!])].sort((a, b) => a.localeCompare(b, "ru")));
+                setNotice("Название и предмет сохранены.");
+              }
+              return saved;
+            }}
           />
         )}
       </div>
@@ -695,25 +745,35 @@ export function LibraryMaterialWorkspace() {
             onTabChange={(tab) => setParam("panel", tab === "processing" ? null : tab)}
             onSelectRevision={selectRevision}
             onCompareRevision={compareWithRevision}
-            onStart={(command) => void store.startProcessing({
-              parser_mode: command.parser_mode,
-              scope: command.scope,
-              page_from: command.page_from ?? null,
-              page_to: command.page_to ?? null,
-            })}
+            onStart={(command) => void store.startProcessing(command)}
+            onImagesQueued={() => void store.refreshDetail()}
             onControl={(action) => void store.controlProcessing(action)}
             onTypstBuild={(downloadPackages, entrypoint) => void store.buildTypst(downloadPackages, entrypoint)}
             onTypstAddFile={(file, targetPath) => void store.addTypstFile(file, targetPath)}
-            onEditPage={openTextEditor}
+            onEditPage={() => openTextEditor()}
             onCleanupPage={() => setCleanupOpen(true)}
+            onRemoveTimestamps={() => {
+              if (page) openTextEditor(removeYoutubeTimestamps(page.markdown || page.text));
+            }}
+            onFindHeaderFooter={() => setHeaderFooterOpen(true)}
             onConfirmPageReview={() => {
               if (!page) return;
               void store.run(() => confirmLibraryPageReview(detail.id, page.page_number));
             }}
+            onIndexMaterial={() => void addMaterialToIndex()}
             onRestore={(revision) => void store.run(() => restoreMaterialRevision(detail.id, revision))}
             onAddToProject={() => setAttachOpen(true)}
             onRefreshSource={() => void store.run(() => refreshLibrarySource(detail.id))}
             onDelete={() => void getMaterialDeletePreview(detail.id).then(setDeletePreview)}
+            subjects={subjects}
+            onSaveMetadata={async (command) => {
+              const saved = await store.updateMetadata(command);
+              if (saved) {
+                if (command.subject) setSubjects((current) => [...new Set([...current, command.subject!])].sort((a, b) => a.localeCompare(b, "ru")));
+                setNotice("Название и предмет сохранены.");
+              }
+              return saved;
+            }}
           />
         </div>
       )}
@@ -735,15 +795,23 @@ export function LibraryMaterialWorkspace() {
 
       {page && detail.presentation_kind !== "typst" && (
         <AiCleanupPanel
-          open={cleanupOpen}
+          open={cleanupOpen && (!requestedCleanupJob || page.page_number === requestedPage)}
           projectId={null}
           material={{
             id: detail.id,
-            display_name: detail.original_name,
+            display_name: detail.display_name,
             active_parse_revision: detail.active_parse_revision,
           }}
           page={page}
-          onOpenChange={setCleanupOpen}
+          onOpenChange={(open) => {
+            setCleanupOpen(open);
+            if (!open && requestedCleanupJob) {
+              const next = new URLSearchParams(searchParams);
+              next.delete("job");
+              setSearchParams(next, { replace: true });
+            }
+          }}
+          initialJobId={requestedCleanupJob}
           onManualEdit={openTextEditor}
           onReload={async () => {
             await store.refreshDetail();
@@ -755,10 +823,25 @@ export function LibraryMaterialWorkspace() {
         />
       )}
 
+      <HeaderFooterDialog
+        open={headerFooterOpen}
+        projectId={null}
+        material={{ id: detail.id, display_name: detail.display_name }}
+        onOpenChange={setHeaderFooterOpen}
+        onReload={async () => {
+          await store.refreshDetail();
+        }}
+        onApplied={(result) => {
+          setNotice(
+            `Колонтитулы удалены новой версией: ${result.removed_occurrences} вхождений.`,
+          );
+        }}
+      />
+
       <AddToProjectDialog
         open={attachOpen}
         materialId={detail.id}
-        materialName={detail.original_name}
+        materialName={detail.display_name}
         attachedProjectIds={detail.usage.map((usage) => usage.project_id)}
         onOpenChange={setAttachOpen}
         onAttached={() => {
@@ -770,7 +853,7 @@ export function LibraryMaterialWorkspace() {
       <ConfirmDialog
         open={deletePreview !== null}
         onOpenChange={(open) => !open && setDeletePreview(null)}
-        title={`Удалить ${detail.original_name}?`}
+        title={`Удалить ${detail.display_name}?`}
         confirmLabel="Удалить файл везде"
         destructive
         onConfirm={() => void deleteLibraryMaterial(detail.id).then(goBack)}

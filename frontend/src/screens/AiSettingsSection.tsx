@@ -1,6 +1,7 @@
 import {
   Check,
   CircleAlert,
+  ChevronRight,
   CircleCheck,
   KeyRound,
   MoreHorizontal,
@@ -12,6 +13,7 @@ import {
   Wifi,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Collapsible } from "radix-ui";
 import { useSearchParams } from "react-router";
 import {
   addAiCatalogModel,
@@ -20,7 +22,7 @@ import {
   deleteAiModel,
   deleteAiProvider,
   getAiSettings,
-  listAiRuns,
+  listAiRunsPage,
   searchAiModels,
   testAiModel,
   testAiProvider,
@@ -38,11 +40,16 @@ import {
   type AiProviderRead,
   type AiProviderWrite,
   type AiRoleRead,
-  type AiRunRead,
+  type AiRunPageRead,
   type AiSettingsRead,
-  type DecimalValue,
 } from "../api/ai";
 import { OfflineNotice, ProviderModelPicker } from "../components/domain";
+import {
+  modelKey,
+  money,
+  reasoningLabel,
+  sameModel,
+} from "../components/domain/modelFacts";
 import {
   Button,
   Checkbox,
@@ -60,6 +67,7 @@ import {
   StatusBadge,
   Switch,
 } from "../components/ui";
+import { groupAiRoles, type AiRoleGroup } from "./aiRoleCategories";
 import type { AiSettingsSubsection } from "./Setup";
 
 /** Запрос «покажи вот эту модель в списке»: nonce нужен, чтобы повторный клик тоже сработал. */
@@ -82,6 +90,13 @@ interface TestOutcome {
   facts?: { label: string; value: string }[];
 }
 
+const REASONING_OPTIONS = [
+  { value: "off", label: "Выключено" },
+  { value: "low", label: "Низкий" },
+  { value: "medium", label: "Средний" },
+  { value: "high", label: "Высокий" },
+];
+
 const MODALITY_LABELS: Record<string, string> = {
   text: "текст",
   image: "изображение",
@@ -90,37 +105,12 @@ const MODALITY_LABELS: Record<string, string> = {
   video: "видео",
 };
 
-function modelKey(selection: { provider_id: string; model_id: string }): string {
-  return `${selection.provider_id}:${selection.model_id}`;
-}
-
 function modelDomId(selection: { provider_id: string; model_id: string }): string {
   return `ai-model-${modelKey(selection)}`;
 }
 
-function sameModel(
-  left: { provider_id: string; model_id: string },
-  right: { provider_id: string; model_id: string } | null | undefined,
-): boolean {
-  return right !== null && right !== undefined
-    && left.provider_id === right.provider_id && left.model_id === right.model_id;
-}
-
 function errorText(caught: unknown, fallback: string): string {
   return caught instanceof Error ? caught.message : fallback;
-}
-
-function numberValue(value: DecimalValue | null): number | null {
-  if (value === null) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function money(value: DecimalValue | null, perMillion = false): string {
-  const amount = numberValue(value);
-  if (amount === null) return "Цена неизвестна";
-  const displayed = perMillion ? amount * 1_000_000 : amount;
-  return `$${displayed.toLocaleString("ru-RU", { maximumFractionDigits: 4 })}`;
 }
 
 function dateTime(value: string | null): string {
@@ -233,7 +223,7 @@ function CapabilityTags({ model }: { model: AiModelRead }) {
     ...model.output_modalities.map((item) => `Выход: ${MODALITY_LABELS[item] ?? item}`),
     ...model.supported_parameters,
   ];
-  if (!tags.length) return <strong className="ai-capability-empty">Не указаны</strong>;
+  if (!tags.length) return <strong className="ai-capability-empty">Не определены</strong>;
   const visible = tags.slice(0, 2);
   const hidden = tags.length - visible.length;
 
@@ -263,13 +253,11 @@ function CapabilityTags({ model }: { model: AiModelRead }) {
 
 function OverviewPanel({
   settings,
-  runs,
   onSettings,
   navigate,
   onFocusModel,
 }: {
   settings: AiSettingsRead;
-  runs: AiRunRead[];
   onSettings: (settings: AiSettingsRead) => void;
   navigate: (subsection: AiSettingsSubsection, providerId?: string) => void;
   onFocusModel: (selection: AiModelSelection) => void;
@@ -281,9 +269,6 @@ function OverviewPanel({
   const connected = settings.providers.filter((provider) => (
     provider.last_test_status === "connected"
   )).length;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayRunCount = runs.filter((run) => new Date(run.created_at) >= today).length;
 
   async function toggleExternal(enabled: boolean) {
     setNote({ text: "Сохраняем…", tone: "muted" });
@@ -335,7 +320,7 @@ function OverviewPanel({
         </button>
         <button type="button" onClick={() => navigate("usage")}>
           <span>Расход сегодня</span><strong>{money(settings.today_usage.actual_cost_usd)}</strong>
-          <small>Запросов: {todayRunCount} · из кэша: {settings.today_usage.cache_hits}</small>
+          <small>Запросов: {settings.today_usage.run_count} · из кэша: {settings.today_usage.cache_hits}</small>
         </button>
       </div>
 
@@ -395,8 +380,8 @@ function ProvidersPanel({
 }) {
   const [editing, setEditing] = useState<string | "new" | null>(null);
   const [label, setLabel] = useState("");
-  const [profile, setProfile] = useState<AiProviderWrite["catalog_profile"]>("openrouter");
-  const [baseUrl, setBaseUrl] = useState("https://openrouter.ai/api/v1");
+  const [profile, setProfile] = useState<AiProviderWrite["catalog_profile"]>("openai_compatible");
+  const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<Note | null>(null);
@@ -406,8 +391,8 @@ function ProvidersPanel({
   function openEditor(provider?: AiProviderRead) {
     setEditing(provider?.id ?? "new");
     setLabel(provider?.label ?? "");
-    setProfile(provider?.catalog_profile ?? "openrouter");
-    setBaseUrl(provider?.base_url ?? "https://openrouter.ai/api/v1");
+    setProfile(provider?.catalog_profile ?? "openai_compatible");
+    setBaseUrl(provider?.base_url ?? "");
     setApiKey("");
     setNote(null);
   }
@@ -573,13 +558,6 @@ function ProvidersPanel({
   );
 }
 
-function reasoningLabel(model: { reasoning: Record<string, unknown> }): string {
-  const efforts = model.reasoning.supported_efforts;
-  if (Array.isArray(efforts) && efforts.length) return efforts.join(" · ");
-  if (model.reasoning.mandatory === true) return "обязательно";
-  return Object.keys(model.reasoning).length ? "поддерживается" : "нет данных";
-}
-
 /** Что модель умеет: то, что нельзя вычитать из ID и приходится задавать руками. */
 interface ModelCapabilities {
   text: boolean;
@@ -669,6 +647,11 @@ function ModelCard({
         />
       </div>
       <TestResult result={testResult} />
+      {(!model.input_modalities.length || !model.output_modalities.length) && (
+        <p className="ai-model-warning">
+          Провайдер не указал все возможности. Для модели с текстовым ответом «Тест» проверит текст; для речевой — аудио. Остальное можно указать через «Изменить модель».
+        </p>
+      )}
       {!model.is_available && <p className="ai-model-warning">Модели нет в актуальном каталоге {provider.label}.</p>}
     </article>
   );
@@ -767,20 +750,24 @@ function ModelsPanel({
     const key = modelKey(model);
     setBusy(key);
     setNote(null);
-    setTests((current) => ({ ...current, [key]: { status: "pending", title: "спрашиваем модель…", detail: "" } }));
+    setTests((current) => ({ ...current, [key]: { status: "pending", title: "проверяем модель…", detail: "" } }));
     try {
       const result = await testAiModel({ provider_id: model.provider_id, model_id: model.model_id });
-      const facts = [
-        { label: "Время ответа", value: duration(result.duration_ms) },
-        { label: "Токены", value: `${result.input_tokens} → ${result.output_tokens}` },
-      ];
+      const speech = result.kind === "speech";
+      const facts = [{ label: "Время ответа", value: duration(result.duration_ms) }];
+      // Модель речи получает секунду тишины, токенов у неё нет.
+      if (!speech) facts.push({ label: "Токены", value: `${result.input_tokens} → ${result.output_tokens}` });
       if (result.actual_model_id && result.actual_model_id !== model.model_id) {
         facts.push({ label: "Ответила модель", value: result.actual_model_id });
       }
       setTests((current) => ({ ...current, [key]: {
         status: "ok",
-        title: "модель ответила",
-        detail: `«${result.answer}»`,
+        title: speech ? "модель приняла аудио" : "модель ответила",
+        detail: speech
+          ? (result.answer
+            ? `Тестовая запись — тишина, модель услышала: «${result.answer}»`
+            : "Тестовая запись — секунда тишины, слов в ней нет, поэтому текст пустой.")
+          : `«${result.answer}»`,
         facts,
       } }));
       onSettings(await getAiSettings());
@@ -1025,7 +1012,7 @@ function ModelsPanel({
                 <code>{model.model_id}</code>
                 {model.is_added && <StatusBadge tone="success">Уже добавлена</StatusBadge>}
               </div>
-              <div className="ai-catalog-meta"><span>{model.context_length ? `${model.context_length.toLocaleString("ru-RU")} токенов` : "Контекст не указан"}</span><span>Вход {money(model.prompt_price_usd, true)}</span><span>Выход {money(model.completion_price_usd, true)}</span><span>Рассуждение: {reasoningLabel(model)}</span></div>
+              <div className="ai-catalog-meta"><span>{model.context_length ? `${model.context_length.toLocaleString("ru-RU")} токенов` : "Контекст не указан"}</span><span>Вход {money(model.prompt_price_usd, true)}</span><span>Выход {money(model.completion_price_usd, true)}</span><span>Рассуждение: {reasoningLabel(model)}</span>{(!model.input_modalities.length || !model.output_modalities.length) && <span>Каталог не указал возможности</span>}</div>
               <Button variant={model.is_added ? "ghost" : "secondary"} disabled={model.is_added || addingCatalogModel !== null} onClick={() => void addFromCatalog(model)}>{model.is_added ? "Добавлена" : addingCatalogModel === model.model_id ? "Добавляем…" : "Добавить"}</Button>
             </article>)}
           </div> : <div className="ai-empty-card"><strong>Ничего не найдено</strong><p>Попробуйте другое название или ID модели.</p></div>}
@@ -1071,6 +1058,7 @@ function RoleCard({ settings, role, onSettings }: { settings: AiSettingsRead; ro
   const [note, setNote] = useState<Note | null>(null);
   const [maxTokens, setMaxTokens] = useState(String(role.parameters.max_output_tokens ?? ""));
   const [temperature, setTemperature] = useState(String(role.parameters.temperature ?? ""));
+  const [effort, setEffort] = useState(String(role.parameters.reasoning_effort ?? ""));
   const [language, setLanguage] = useState(String(role.parameters.language ?? "ru"));
 
   async function save(patch: { enabled?: boolean; selection?: AiModelSelection | null; parameters?: Record<string, unknown> }) {
@@ -1103,11 +1091,23 @@ function RoleCard({ settings, role, onSettings }: { settings: AiSettingsRead; ro
         <div className="ai-form-grid compact">
           <Field label="Максимум токенов ответа"><input type="number" min="64" value={maxTokens} onChange={(event) => setMaxTokens(event.target.value)} placeholder="По умолчанию" /></Field>
           <Field label="Температура"><input type="number" min="0" max="2" step="0.1" value={temperature} onChange={(event) => setTemperature(event.target.value)} placeholder="По умолчанию" /></Field>
+          {/* Применяется только к моделям, которые умеют рассуждать; остальные
+              провайдер просто игнорирует. Пустое — «как решит модель». */}
+          <Field label="Уровень рассуждения" hint="Только у рассуждающих моделей">
+            <Select
+              ariaLabel="Уровень рассуждения"
+              value={effort || null}
+              emptyOption="По умолчанию"
+              options={REASONING_OPTIONS}
+              onValueChange={(value) => setEffort(value ?? "")}
+            />
+          </Field>
         </div>
         <Button variant="secondary" onClick={() => void save({ parameters: {
           ...role.parameters,
           ...(maxTokens ? { max_output_tokens: Number(maxTokens) } : {}),
           ...(temperature ? { temperature: Number(temperature) } : {}),
+          ...(effort ? { reasoning_effort: effort } : {}),
         } })}>Сохранить параметры</Button>
       </>}
     </Disclosure>
@@ -1115,8 +1115,27 @@ function RoleCard({ settings, role, onSettings }: { settings: AiSettingsRead; ro
   </article>;
 }
 
+function RoleCategory({ group, settings, onSettings }: { group: AiRoleGroup; settings: AiSettingsRead; onSettings: (settings: AiSettingsRead) => void }) {
+  const [open, setOpen] = useState(false);
+  const [first, ...rest] = group.roles;
+  return <Collapsible.Root open={open} onOpenChange={setOpen} className="ai-role-category">
+    <header className="ai-role-category-head"><h3>{group.title}</h3><p>{group.description}</p></header>
+    <div className="ai-role-list">
+      <RoleCard settings={settings} role={first} onSettings={onSettings} />
+      <Collapsible.Content className="disclosure-content">
+        {rest.map((role) => <RoleCard key={role.role} settings={settings} role={role} onSettings={onSettings} />)}
+      </Collapsible.Content>
+    </div>
+    {rest.length > 0 && <Collapsible.Trigger className="disclosure-trigger ai-role-category-toggle">
+      <ChevronRight size={15} aria-hidden="true" />
+      {open ? "Свернуть" : `Показать остальные (${rest.length})`}
+    </Collapsible.Trigger>}
+  </Collapsible.Root>;
+}
+
 function FunctionsPanel({ settings, onSettings }: { settings: AiSettingsRead; onSettings: (settings: AiSettingsRead) => void }) {
-  return <section className="ai-settings-group is-first"><header className="ai-group-head"><div><h2>Функции</h2><p>Для каждой функции можно оставить модель по умолчанию или выбрать другую.</p></div></header><div className="ai-role-list">{settings.roles.map((role) => <RoleCard key={role.role} settings={settings} role={role} onSettings={onSettings} />)}</div></section>;
+  const groups = groupAiRoles(settings.roles);
+  return <section className="ai-settings-group is-first"><header className="ai-group-head"><div><h2>Функции</h2><p>Для каждой функции можно оставить модель по умолчанию или выбрать другую. Откройте категорию, чтобы увидеть все её функции.</p></div></header>{groups.map((group) => <RoleCategory key={group.id} group={group} settings={settings} onSettings={onSettings} />)}</section>;
 }
 
 function LimitsPanel({ settings, onSettings }: { settings: AiSettingsRead; onSettings: (settings: AiSettingsRead) => void }) {
@@ -1163,42 +1182,77 @@ function LimitsPanel({ settings, onSettings }: { settings: AiSettingsRead; onSet
 
 const USAGE_PAGE_SIZE = 20;
 
-function UsagePanel({ settings, runs }: { settings: AiSettingsRead; runs: AiRunRead[] }) {
+function UsagePanel({ settings, enabled }: { settings: AiSettingsRead; enabled: boolean }) {
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [role, setRole] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
-  const filtered = runs.filter((run) => (
-    (!provider || run.provider_id === provider)
-    && (!model || run.requested_model_id === model)
-    && (!role || run.role === role)
-    && (!status || run.status === status)
-  ));
-  const total = filtered.reduce((sum, run) => sum + (numberValue(run.actual_cost_usd) ?? 0), 0);
-  const providerModels = settings.models.filter((item) => !provider || item.provider_id === provider);
-  const pageCount = Math.max(1, Math.ceil(filtered.length / USAGE_PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount);
-  const pageRuns = filtered.slice((currentPage - 1) * USAGE_PAGE_SIZE, currentPage * USAGE_PAGE_SIZE);
+  const [data, setData] = useState<AiRunPageRead | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  // Журнал нужен, когда раздел выбран в навигации или просто прокручен в
+  // окно: подсветка навигации не всегда доходит до последнего раздела, и
+  // заглушка «Загружаем» оставалась навсегда. Увиденный раздел не забывается,
+  // чтобы прокрутка мимо не отменяла и не повторяла запрос.
+  const panelRef = useRef<HTMLElement>(null);
+  const [seen, setSeen] = useState(false);
+  const wanted = enabled || seen;
+  useEffect(() => {
+    const node = panelRef.current;
+    if (seen || !node) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setSeen(true);
+    }, { rootMargin: "200px 0px" });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [seen]);
+  useEffect(() => {
+    if (!wanted) return;
+    const controller = new AbortController();
+    const since = new Date();
+    since.setDate(since.getDate() - 30);
+    setLoading(true);
+    setError("");
+    setData(null);
+    void listAiRunsPage({
+      from: since.toISOString(), providerId: provider, modelId: model, role, status,
+      limit: USAGE_PAGE_SIZE, offset: (page - 1) * USAGE_PAGE_SIZE,
+    }, controller.signal)
+      .then(setData)
+      .catch((caught: unknown) => {
+        if (!controller.signal.aborted) setError(errorText(caught, "История ИИ не загрузилась"));
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [wanted, provider, model, role, status, page]);
+
+  // Один model_id может быть добавлен у нескольких провайдеров; значение Select уникально.
+  const providerModels = Array.from(new Map(
+    settings.models.filter((item) => !provider || item.provider_id === provider)
+      .map((item) => [item.model_id, item]),
+  ).values());
+  const pageCount = Math.max(1, Math.ceil((data?.total ?? 0) / USAGE_PAGE_SIZE));
+  const pageRuns = data?.items ?? [];
 
   function setFilter(setter: (value: string) => void, value: string) {
     setter(value);
     setPage(1);
   }
 
-  return <section className="ai-settings-group is-first"><header className="ai-group-head"><div><h2>Использование</h2><p>История запросов к ИИ: какая функция работала, сколько токенов потратила и сколько это стоило.</p></div></header><div className="ai-usage-summary"><div><span>Запросов</span><strong>{filtered.length}</strong></div><div><span>Стоимость</span><strong>{money(total)}</strong></div><div><span>Входные токены</span><strong>{filtered.reduce((sum, run) => sum + (run.input_tokens ?? 0), 0).toLocaleString("ru-RU")}</strong></div><div><span>Выходные токены</span><strong>{filtered.reduce((sum, run) => sum + (run.output_tokens ?? 0), 0).toLocaleString("ru-RU")}</strong></div></div><div className="ai-filter-row">
+  return <section ref={panelRef} className="ai-settings-group is-first"><header className="ai-group-head"><div><h2>Использование</h2><p>История запросов к ИИ: какая функция работала, сколько токенов потратила и сколько это стоило.</p></div></header>{error && <ErrorState message={error} />}{wanted && loading && <LoadingState label="Загружаем историю ИИ" />}<div className="ai-usage-summary"><div><span>Запросов</span><strong>{data?.total ?? "…"}</strong></div><div><span>Стоимость</span><strong>{money(data?.actual_cost_usd ?? null)}</strong></div><div><span>Входные токены</span><strong>{(data?.input_tokens ?? 0).toLocaleString("ru-RU")}</strong></div><div><span>Выходные токены</span><strong>{(data?.output_tokens ?? 0).toLocaleString("ru-RU")}</strong></div></div><div className="ai-filter-row">
     <Select ariaLabel="Фильтр по провайдеру" value={provider || null} emptyOption="Все провайдеры" onValueChange={(value) => { setFilter(setProvider, value ?? ""); setModel(""); }} options={settings.providers.map((item) => ({ value: item.id, label: item.label }))} />
     <Select ariaLabel="Фильтр по модели" value={model || null} emptyOption="Все модели" onValueChange={(value) => setFilter(setModel, value ?? "")} options={providerModels.map((item) => ({ value: item.model_id, label: item.display_name, description: item.model_id }))} />
     <Select ariaLabel="Фильтр по функции" value={role || null} emptyOption="Все функции" onValueChange={(value) => setFilter(setRole, value ?? "")} options={settings.roles.map((item) => ({ value: item.role, label: item.title }))} />
     <Select ariaLabel="Фильтр по статусу" value={status || null} emptyOption="Все статусы" onValueChange={(value) => setFilter(setStatus, value ?? "")} options={[{ value: "succeeded", label: "Готово" }, { value: "failed", label: "Ошибка" }, { value: "cached", label: "Из кэша" }, { value: "cancelled", label: "Отменено" }]} />
-  </div>{filtered.length ? <>
+  </div>{pageRuns.length ? <>
     <div className="ai-table-wrap"><table className="ai-table ai-usage-table"><thead><tr><th>Время</th><th>Функция</th><th>Провайдер и модель</th><th>Токены</th><th>Стоимость</th><th>Статус</th></tr></thead><tbody>{pageRuns.map((run) => <tr key={run.id}><td>{dateTime(run.created_at)}</td><td>{settings.roles.find((item) => item.role === run.role)?.title ?? run.role}</td><td><strong>{run.provider_label_snapshot}</strong><code>{run.requested_model_id}</code></td><td>{(run.input_tokens ?? 0).toLocaleString("ru-RU")} → {(run.output_tokens ?? 0).toLocaleString("ru-RU")}</td><td>{money(run.actual_cost_usd)}</td><td><StatusBadge tone={run.status === "succeeded" || run.status === "cached" ? "success" : run.status === "failed" ? "danger" : "neutral"}>{runStatusLabel(run.status)}</StatusBadge>{run.error_code && <small>{run.error_code}</small>}</td></tr>)}</tbody></table></div>
     {pageCount > 1 && <div className="ai-pagination">
-      <Button variant="secondary" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>Назад</Button>
-      <span>Страница {currentPage} из {pageCount}</span>
-      <Button variant="secondary" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}>Дальше</Button>
+      <Button variant="secondary" disabled={page <= 1 || loading} onClick={() => setPage(page - 1)}>Назад</Button>
+      <span>Страница {page} из {pageCount}</span>
+      <Button variant="secondary" disabled={page >= pageCount || loading} onClick={() => setPage(page + 1)}>Дальше</Button>
     </div>}
-  </> : <div className="ai-empty-card"><strong>Подходящих запросов нет</strong><p>Измените фильтры или вернитесь сюда после первого обращения к модели.</p></div>}<Disclosure summary="Какие данные сохраняются"><p className="ai-muted">В журнал попадают провайдер, модель, функция, токены, стоимость и результат. API-ключи, вопросы, ответы модели и полный текст материалов не сохраняются.</p></Disclosure></section>;
+  </> : !loading && !error && <div className="ai-empty-card"><strong>Подходящих запросов нет</strong><p>Измените фильтры или вернитесь сюда после первого обращения к модели.</p></div>}<Disclosure summary="Какие данные сохраняются"><p className="ai-muted">В журнал попадают провайдер, модель, функция, токены, стоимость и результат. API-ключи, вопросы, ответы модели и полный текст материалов не сохраняются.</p></Disclosure></section>;
 }
 
 export function AiSettingsSection({
@@ -1210,7 +1264,6 @@ export function AiSettingsSection({
 }) {
   const [searchParams] = useSearchParams();
   const [settings, setSettings] = useState<AiSettingsRead | null>(null);
-  const [runs, setRuns] = useState<AiRunRead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(() => (
@@ -1246,15 +1299,7 @@ export function AiSettingsSection({
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
-    const since = new Date();
-    since.setDate(since.getDate() - 30);
-    Promise.all([
-      getAiSettings(controller.signal),
-      listAiRuns({ from: since.toISOString() }, controller.signal),
-    ]).then(([nextSettings, nextRuns]) => {
-      setSettings(nextSettings);
-      setRuns(nextRuns);
-    }).catch((caught: unknown) => {
+    getAiSettings(controller.signal).then(setSettings).catch((caught: unknown) => {
       if (!controller.signal.aborted) {
         setError(errorText(caught, "Параметры ИИ не загрузились"));
       }
@@ -1295,12 +1340,12 @@ export function AiSettingsSection({
   if (error) return <><ErrorState message={error} /><Button onClick={() => window.location.reload()}>Загрузить ещё раз</Button></>;
   if (!settings) return null;
   return <div className="ai-settings">
-    <div id="ai-overview" className="ai-anchor-section"><OverviewPanel settings={settings} runs={runs} onSettings={acceptSettings} navigate={navigate} onFocusModel={focusModel} /></div>
+    <div id="ai-overview" className="ai-anchor-section"><OverviewPanel settings={settings} onSettings={acceptSettings} navigate={navigate} onFocusModel={focusModel} /></div>
     <div id="ai-providers" className="ai-anchor-section"><ProvidersPanel settings={settings} onSettings={acceptSettings} onModels={(id) => navigate("models", id)} /></div>
     <div id="ai-models" className="ai-anchor-section"><ModelsPanel settings={settings} onSettings={acceptSettings} providerId={selectedProviderId} onProvider={setSelectedProviderId} focusRequest={focusRequest} /></div>
     <div id="ai-defaults" className="ai-anchor-section"><DefaultsPanel settings={settings} onSettings={acceptSettings} /></div>
     <div id="ai-functions" className="ai-anchor-section"><FunctionsPanel settings={settings} onSettings={acceptSettings} /></div>
     <div id="ai-limits" className="ai-anchor-section"><LimitsPanel settings={settings} onSettings={acceptSettings} /></div>
-    <div id="ai-usage" className="ai-anchor-section"><UsagePanel settings={settings} runs={runs} /></div>
+    <div id="ai-usage" className="ai-anchor-section"><UsagePanel settings={settings} enabled={subsection === "usage"} /></div>
   </div>;
 }

@@ -1,8 +1,12 @@
+import { useMemo } from "react";
 import { QualityControl } from "../../preparation/QualityControl";
 import type { AttemptOutcome, ChatMessageRead } from "../../../api/chat";
 import { AnswerFormCard } from "./AnswerFormCard";
+import { citedIds } from "../../../components/domain/markdown/parse";
+import { ChatSourcesList } from "./ChatSources";
 import { Markdown } from "./Markdown";
-import { parsePayload } from "./payload";
+import { parsePayload, retrievalSources } from "./payload";
+import { ProgramDiffCard } from "./ProgramDiffCard";
 import { ToolRunCard } from "./ToolRunCard";
 import { VerdictCard } from "./VerdictCard";
 
@@ -12,12 +16,20 @@ interface TypedMessageProps {
   answerText: string;
   needsCheck: boolean;
   isStreaming: boolean;
-  onAnswerAgain: () => void;
-  onCheckAgain: (attemptId: string) => Promise<void>;
-  onSelfAssessment: (
+  /** Экзаменационный чат — форма ответа и вердикт. Program-чат их не показывает. */
+  onAnswerAgain?: () => void;
+  onCheckAgain?: (attemptId: string) => Promise<void>;
+  onSelfAssessment?: (
     attemptId: string,
     outcome: Exclude<AttemptOutcome, "unscored">,
   ) => Promise<void>;
+  /** Чат построения программы — карточка предложения. */
+  onApplyProposal?: (messageId: string, selected: number[]) => Promise<void>;
+  onRejectProposal?: (messageId: string) => Promise<void>;
+  proposalBusy?: boolean;
+  nodeTitles?: Record<string, string>;
+  /** Чат поиска — кнопки «что ещё поискать» под результатом. */
+  onFollowUp?: (text: string) => void;
   headingRef: (node: HTMLHeadingElement | null) => void;
 }
 
@@ -28,18 +40,24 @@ interface TypedMessageProps {
  */
 export function TypedMessage({
   projectId, message, answerText, needsCheck, isStreaming,
-  onAnswerAgain, onCheckAgain, onSelfAssessment, headingRef,
+  onAnswerAgain, onCheckAgain, onSelfAssessment,
+  onApplyProposal, onRejectProposal, proposalBusy = false, nodeTitles, onFollowUp,
+  headingRef,
 }: TypedMessageProps) {
   const payload = parsePayload(message);
+  // Снимок не меняется при потоке (меняется только текст), поэтому окно цитаты
+  // и уже нарисованные блоки не пересобираются на каждый кусок ответа.
+  const sources = useMemo(() => retrievalSources(message), [message.context_snapshot]);
 
-  if (payload.kind === "answer_form") {
+  if (payload.kind === "answer_form" && onAnswerAgain) {
     return (
       <AnswerFormCard
         mode="submitted"
+        projectId={projectId}
         payload={payload.data}
         createdAt={message.created_at}
         onAnswerAgain={onAnswerAgain}
-        onCheckAgain={needsCheck && message.attempt_id
+        onCheckAgain={needsCheck && message.attempt_id && onCheckAgain
           ? () => onCheckAgain(message.attempt_id as string)
           : undefined}
         headingRef={headingRef}
@@ -60,11 +78,33 @@ export function TypedMessage({
   }
 
   if (payload.kind === "tool_result") {
-    return <ToolRunCard projectId={projectId} payload={payload.data} headingRef={headingRef} />;
+    return (
+      <ToolRunCard
+        projectId={projectId}
+        payload={payload.data}
+        headingRef={headingRef}
+        nodeTitles={nodeTitles}
+        onFollowUp={onFollowUp}
+      />
+    );
+  }
+
+  if (payload.kind === "program_diff") {
+    return (
+      <ProgramDiffCard
+        summary={message.text}
+        diff={payload.data}
+        busy={proposalBusy}
+        onApply={onApplyProposal ? (selected) => onApplyProposal(message.id, selected) : undefined}
+        onReject={onRejectProposal ? () => onRejectProposal(message.id) : undefined}
+        nodeTitles={nodeTitles}
+        headingRef={headingRef}
+      />
+    );
   }
 
   if (message.role === "system") {
-    return <p className="chat-system-note">{message.text}</p>;
+    return <p className={`chat-system-note${message.stream_state === "failed" ? " is-error" : ""}`} role={message.stream_state === "failed" ? "alert" : undefined}>{message.text}</p>;
   }
 
   if (payload.kind === "unknown") {
@@ -78,7 +118,12 @@ export function TypedMessage({
 
   return (
     <div className={`chat-bubble is-${message.role}`}>
-      {message.role === "examiner" ? <Markdown text={message.text} /> : <p>{message.text}</p>}
+      {message.role === "examiner" || message.role === "assistant"
+        ? <>
+          <Markdown text={message.text} sources={sources} />
+          {!isStreaming && <ChatSourcesList sources={sources} cited={citedIds(message.text)} />}
+        </>
+        : <p>{message.text}</p>}
       {isStreaming && message.stream_state === "complete" && (
         <span className="chat-typing" aria-hidden="true" />
       )}

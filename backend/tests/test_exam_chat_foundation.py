@@ -10,6 +10,7 @@ from conftest import (
     link_material,
     make_exam_project,
     make_material,
+    make_textbook_project,
     make_topic_node,
 )
 from sqlalchemy import select
@@ -92,17 +93,35 @@ def test_new_session_defaults_to_exam_mode(session: Session) -> None:
     assert chat.mode == ChatMode.EXAM
 
 
-def test_study_mode_rejected_with_stable_reason(session: Session) -> None:
+def test_study_mode_can_be_enabled_for_exam_chat(session: Session) -> None:
     project = make_exam_project(session)
     topic = make_topic_node(session, project, title="Режим Разобраться")
     chat = chat_service.create_session(session, project.id, topic.id)
 
-    with pytest.raises(ProjectDomainError) as excinfo:
-        chat_service.update_settings(
-            session, project.id, chat.id, ChatSettingsWrite(mode=ChatMode.STUDY)
-        )
-    assert excinfo.value.code == "chat_mode_unavailable"
-    assert chat.mode == ChatMode.EXAM  # настройка не применилась
+    updated = chat_service.update_settings(
+        session, project.id, chat.id, ChatSettingsWrite(mode=ChatMode.STUDY)
+    )
+
+    assert updated.mode == ChatMode.STUDY
+    assert updated.model_parameters["max_output_tokens"] == 4000
+
+
+def test_study_depth_patch_persists_without_model_change(session: Session) -> None:
+    project = make_textbook_project(session)
+    topic = make_topic_node(session, project, title="Глубина объяснения")
+    chat = chat_service.create_session(session, project.id, topic.id)
+    assert chat.model_parameters["max_output_tokens"] == 4000
+
+    updated = chat_service.update_settings(
+        session, project.id, chat.id,
+        ChatSettingsWrite(model_parameters={"max_output_tokens": 1000}),
+    )
+
+    assert updated.model_parameters["max_output_tokens"] == 1000
+    assert updated.model_override is None
+    assert chat_service.get_session_detail(
+        session, project.id, chat.id
+    ).model_parameters["max_output_tokens"] == 1000
 
 
 def test_unknown_model_override_rejected(session: Session) -> None:
@@ -222,6 +241,20 @@ def test_profile_included_in_context_and_persona_changes_prompt_not_reference(
     assert "Теория вероятностей" not in calm and "Теория вероятностей" not in strict
 
 
+def test_study_prompt_uses_depth_without_examiner_persona() -> None:
+    short = build_chat_reply_prompt(
+        ExaminerPersona.STRICT_REVIEWER, ExaminerStrictness.STRICT, ChatMode.STUDY, 1000
+    )
+    long = build_chat_reply_prompt(
+        ExaminerPersona.CALM_TEACHER, ExaminerStrictness.SOFT, ChatMode.STUDY, 4000
+    )
+    assert "Ответь сжато" in short
+    assert "Разбери тему по шагам" in long
+    assert "придирчивый рецензент" not in short
+    assert "спокойный преподаватель" not in long
+    assert "[S1]" in short and "[S1]" in long
+
+
 def test_context_flag_off_excludes_profile(session: Session) -> None:
     project = make_exam_project(session)
     topic = make_topic_node(session, project, title="Профиль выключен")
@@ -257,12 +290,15 @@ def test_judge_never_receives_chat_tail(session: Session) -> None:
 
 def test_preview_and_actual_request_share_fingerprint(session: Session) -> None:
     project = make_exam_project(session)
-    topic = make_topic_node(session, project, title="Fingerprint")
+    topic = make_topic_node(session, project, title="Отпечаток")
     chat = chat_service.create_session(session, project.id, topic.id)
 
     preview = chat_service.context_preview(session, project.id, chat.id)
     ctx = build_context(session, chat, for_judge=False)
     assert preview.fingerprint == ctx.fingerprint
+    question = next(entry for entry in preview.manifest if entry.kind == "program_node")
+    assert question.chars == len(topic.title)
+    assert question.bytes > question.chars
 
 
 def test_answers_file_binding_is_not_duplicated_in_chat_context(session: Session) -> None:

@@ -10,13 +10,16 @@
 """
 
 import hashlib
+import os
+import re
 import shutil
-from collections import defaultdict
+import threading
+from collections import OrderedDict, defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pymupdf as fitz
 from fastapi import UploadFile
@@ -36,11 +39,22 @@ from app.bindings.service import (
     transfer_bindings_on_revision,
 )
 from app.config import settings
+from app.db import job_write_transaction
+from app.materials import processing_plan
 from app.materials import revisions as revision_registry
 from app.materials.external import fetch_web_page, fetch_youtube_transcript
+from app.materials.image_meta import (
+    element_meta,
+    meta_from_json,
+    meta_to_json,
+    needs_description,
+)
 from app.materials.lexicon import index_text, prefix_term, query_terms
-from app.materials.parsers.base import ParsedElement, ParsedPage
-from app.materials.parsers.native import inspect, parse_text_page
+from app.materials.naming import material_display_name, project_material_display_name
+from app.materials.outline import find_printed_outline
+from app.materials.outline_titles import GENERAL_TITLE_RE, TOPIC_TITLE_RE
+from app.materials.parsers.base import ImageMeta, ParsedElement, ParsedPage
+from app.materials.parsers.native import extract_outline, inspect, parse_text_page
 from app.materials.presentation import (
     MaterialPresentationKind,
     presentation_kind,
@@ -49,10 +63,13 @@ from app.materials.schemas import (
     BlockRead,
     ExamMaterialSlot,
     FragmentRead,
+    ImageCountsRead,
     LibraryExternalMaterialCreate,
     LibraryMaterialAttachWrite,
     LibraryMaterialCapabilities,
     LibraryMaterialDetailRead,
+    LibraryMaterialMetadataRead,
+    LibraryMaterialMetadataUpdate,
     LibraryMaterialRead,
     LibrarySearchHit,
     LibrarySearchResult,
@@ -62,19 +79,21 @@ from app.materials.schemas import (
     MaterialPurpose,
     MaterialRevisionRead,
     MaterialsDeletePreview,
+    OutlineDetailRead,
     OutlineItem,
     OutlineSource,
     PageCorrectionRead,
     PageRead,
     PageStateRead,
     PageTextUpdate,
+    ProcessingEstimateRead,
     ProcessingStart,
     ProcessingTaskRead,
     SourceRefreshResult,
     TypstIssueRead,
     TypstMaterialRead,
 )
-from app.materials.segmentation import build_blocks
+from app.materials.segmentation import BlockSpec, build_blocks
 from app.materials.storage import material_path, store_revision_text, store_text, store_upload
 from app.materials.typst import Bundle, entrypoint_candidates, store_bundle
 from app.models import (
@@ -82,14 +101,17 @@ from app.models import (
     BackgroundJobKind,
     BackgroundJobState,
     BlockClass,
+    GoalPassport,
     Material,
     MaterialBlock,
     MaterialFragment,
     MaterialPage,
+    MaterialRevision,
     MaterialRevisionOrigin,
     MaterialSourceKind,
     MaterialState,
     PageQuality,
+    ParserMode,
     ProcessingStage,
     Project,
     ProjectMaterial,
@@ -100,6 +122,7 @@ from app.models import (
     utc_now,
 )
 from app.ocr import settings as ocr_settings
+from app.ocr import speech
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
 
 ACTIVE_TASK_STATES = {
@@ -112,7 +135,18 @@ AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
 TEXT_MEDIA_TYPES = {"text/plain", "text/markdown", "text/x-markdown"}
 # Оглавление из заголовков имеет смысл, пока его можно прочитать глазами.
 RECOGNIZED_OUTLINE_LIMIT = 400
+RECOGNIZED_SCAN_LIMIT = 20_000
 SEARCH_LIMIT_MAX = 100
+#: Форматы, у которых страница материала — готовый растр, а не разметка.
+RASTER_SOURCE_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png"}
+#: Качество WebP: на 88 текст и формулы читаются как в оригинале, а файл
+#: остаётся вдвое легче PNG.
+PAGE_IMAGE_QUALITY = 88
+#: Сколько документов держим открытыми. Просмотр — это один документ, изредка
+#: два рядом; больше нужно только чтобы соседний не выбрасывал текущий.
+OPEN_DOCUMENT_LIMIT = 3
+_OPEN_DOCUMENTS: "OrderedDict[str, _OpenDocument]" = OrderedDict()
+_OPEN_DOCUMENTS_GUARD = threading.Lock()
 
 
 # ── Материал и его вид ──────────────────────────────────────────────────────
@@ -144,29 +178,136 @@ def _capabilities(
     )
 
 
-def _recognized_outline(session: Session, material: Material) -> list[OutlineItem]:
+_CODE_HEADING_RE = re.compile(r"[{}]|\b(?:while|for|if)\s*\(|^[A-Za-z_]\w*(?:\s+\w+)+\s*=")
+_FIGURE_HEADING_RE = re.compile(
+    r"^(?:рис\.|рисунок|табл\.|таблица|fig\.|figure)\s*\d+", re.IGNORECASE
+)
+_NUMBERED_HEADING_RE = re.compile(r"^\d+(?:\.\d+)*[.)]?\s+\S")
+_REVIEW_HEADING_RE = re.compile(
+    r"^(?:вопросы для повторения|контрольные вопросы|review questions)\b", re.IGNORECASE
+)
+_BARE_LEVEL_WORD_RE = re.compile(
+    r"^(?:часть|раздел|тема|лекция|глава|part|section|topic|lecture|chapter)\b",
+    re.IGNORECASE,
+)
+
+
+def _recognized_candidate(title: str, element_kind: str) -> bool:
+    """Отличить заголовок тела книги от ошибок верстального анализатора."""
+    if _CODE_HEADING_RE.search(title) or _FIGURE_HEADING_RE.match(title) or "=" in title:
+        return False
+    if (
+        GENERAL_TITLE_RE.match(title)
+        or TOPIC_TITLE_RE.match(title)
+        or _REVIEW_HEADING_RE.match(title)
+    ):
+        return True
+    if _BARE_LEVEL_WORD_RE.match(title):
+        return False
+    letters = "".join(character for character in title if character.isalpha())
+    if _NUMBERED_HEADING_RE.match(title) and letters and letters == letters.upper():
+        return True
+    return element_kind == "heading" and not title.endswith(".")
+
+
+def _normalize_recognized_outline(items: list[OutlineItem]) -> list[OutlineItem]:
+    """Убирает обложку и явный код из заголовков подготовленного текста.
+
+    Лекции и главы задают корневые темы. Если над ними есть часть или раздел,
+    она остаётся общим контейнером, темы получают второй уровень, а остальные
+    заголовки — третий. Это не подменяет источник печатным оглавлением:
+    формулировки и страницы по-прежнему берутся из заголовков основного текста.
+    """
+    clean = [item for item in items if not _CODE_HEADING_RE.search(item.title)]
+    first_anchor = next(
+        (
+            index
+            for index, item in enumerate(clean)
+            if GENERAL_TITLE_RE.match(item.title) or TOPIC_TITLE_RE.match(item.title)
+        ),
+        None,
+    )
+    if first_anchor is None:
+        return clean
+    normalized: list[OutlineItem] = []
+    has_general_parent = False
+    inside_topic = False
+    for item in clean[first_anchor:]:
+        if GENERAL_TITLE_RE.match(item.title):
+            level = 1
+            has_general_parent = True
+            inside_topic = False
+        elif TOPIC_TITLE_RE.match(item.title):
+            level = 2 if has_general_parent else 1
+            inside_topic = True
+        elif inside_topic:
+            level = 3 if has_general_parent else 2
+        else:
+            level = max(2, item.level)
+        normalized.append(item.model_copy(update={"level": level}))
+    return normalized
+
+
+def _recognized_outline(
+    session: Session, material: Material, excluded_pages: set[int] | None = None
+) -> list[OutlineItem]:
+    """Собрать заголовки тела книги, включая ошибочно размеченные абзацами."""
     if material.active_parse_revision == 0:
         return []
     rows = session.execute(
-        select(MaterialFragment.text, MaterialFragment.structure_level, MaterialPage.page_number)
+        select(
+            MaterialFragment.text,
+            MaterialFragment.structure_level,
+            MaterialPage.page_number,
+            MaterialFragment.element_kind,
+        )
         .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
         .where(
             MaterialFragment.material_id == material.id,
             MaterialPage.revision == material.active_parse_revision,
-            MaterialFragment.element_kind == "heading",
         )
         .order_by(MaterialPage.page_number, MaterialFragment.sort_order)
-        .limit(RECOGNIZED_OUTLINE_LIMIT)
+        .limit(RECOGNIZED_SCAN_LIMIT)
     ).all()
+    ignored = excluded_pages or set()
+    items: list[OutlineItem] = []
+    seen: set[tuple[int, str]] = set()
+    seen_named: set[tuple[str, str]] = set()
+    general_context = ""
+    for raw_title, level, page_number, element_kind in rows:
+        title = raw_title.strip()
+        key = (page_number, title.casefold())
+        if (
+            not title
+            or page_number in ignored
+            or key in seen
+            or not _recognized_candidate(title, element_kind)
+        ):
+            continue
+        general_match = GENERAL_TITLE_RE.match(title)
+        topic_match = TOPIC_TITLE_RE.match(title)
+        if general_match:
+            general_context = general_match.group(0).casefold()
+            named_key = ("general", general_context)
+        elif topic_match:
+            named_key = (general_context, topic_match.group(0).casefold())
+        else:
+            named_key = None
+        if named_key is not None and named_key in seen_named:
+            continue
+        if named_key is not None:
+            seen_named.add(named_key)
+        seen.add(key)
+        items.append(
+            OutlineItem(level=max(1, min(4, level or 1)), title=title, page=page_number)
+        )
+        if len(items) >= RECOGNIZED_OUTLINE_LIMIT:
+            break
+    return _normalize_recognized_outline(items)
+
+
+def _embedded_outline(material: Material) -> list[OutlineItem]:
     return [
-        OutlineItem(level=max(1, min(4, level or 1)), title=title.strip(), page=page_number)
-        for title, level, page_number in rows
-        if title.strip()
-    ]
-
-
-def _outline(session: Session, material: Material) -> tuple[list[OutlineItem], OutlineSource]:
-    embedded = [
         OutlineItem(
             level=int(item.get("level", 1) or 1),
             title=str(item.get("title", "")).strip(),
@@ -175,12 +316,90 @@ def _outline(session: Session, material: Material) -> tuple[list[OutlineItem], O
         for item in material.outline or []
         if str(item.get("title", "")).strip()
     ]
+
+
+# Порядок проверки источников — от гарантированного офлайнового к дорогому;
+# "model" сюда не входит: она не определяется автоматически, а вызывается
+# явной кнопкой пользователя (materials.outline_ai.extract_with_model).
+OUTLINE_AUTO_PRIORITY: tuple[OutlineSource, ...] = ("embedded", "printed", "recognized")
+
+
+def _printed_outline(material: Material) -> tuple[list[OutlineItem], list[int]] | None:
+    """Печатный источник из кэша неизменного PDF."""
+    if not material.page_count:
+        return None
+    printed = find_printed_outline(material_path(material.storage_path), material.page_count)
+    if printed is None:
+        return None
+    items, source_pages = printed
+    return ([
+        OutlineItem(level=int(item["level"]), title=str(item["title"]), page=int(item["page"]))
+        for item in items
+    ], source_pages)
+
+
+def outline_sources(
+    session: Session, material: Material
+) -> dict[OutlineSource, tuple[list[OutlineItem], list[int]]]:
+    """Все источники оглавления, у которых реально нашлись данные (без модели)."""
+    found: dict[OutlineSource, tuple[list[OutlineItem], list[int]]] = {}
+    embedded = _embedded_outline(material)
+    if embedded:
+        found["embedded"] = (embedded, [])
+    printed = _printed_outline(material)
+    if printed:
+        found["printed"] = printed
+    printed_pages = set(found["printed"][1]) if "printed" in found else set()
+    recognized = _recognized_outline(session, material, printed_pages)
+    if recognized:
+        found["recognized"] = (recognized, [])
+    return found
+
+
+def _outline(session: Session, material: Material) -> tuple[list[OutlineItem], OutlineSource]:
+    """Первый источник по приоритету; остальные нужны лишь мастеру оглавления."""
+    embedded = _embedded_outline(material)
     if embedded:
         return embedded, "embedded"
+    printed = _printed_outline(material)
+    if printed:
+        return printed[0], "printed"
     recognized = _recognized_outline(session, material)
-    if recognized:
-        return recognized, "recognized"
-    return [], "none"
+    return (recognized, "recognized") if recognized else ([], "none")
+
+
+def resolve_outline(session: Session, material: Material, requested: str) -> OutlineDetailRead:
+    """`GET /outline` мастера учебника: `requested="auto"` идёт по приоритету,
+    конкретный источник — только он, если для него что-то нашлось.
+
+    Страница для просмотрщика (`review_pages`) выбирается отдельно от того,
+    откуда взяты сами пункты: печатная страница «Оглавление» — самый надёжный
+    ориентир для проверки глазами, даже если победили закладки PDF (у них
+    самих привязки к странице нет)."""
+    found = outline_sources(session, material)
+    available = [source for source in OUTLINE_AUTO_PRIORITY if source in found]
+    printed_pages = found["printed"][1] if "printed" in found else []
+    order = OUTLINE_AUTO_PRIORITY if requested == "auto" else (requested,)
+    for source in order:
+        if source in found:
+            items, source_pages = found[source]
+            review_pages = printed_pages or source_pages
+            return OutlineDetailRead(
+                items=items,
+                source=source,
+                source_pages=source_pages,
+                available_sources=available,
+                review_pages=review_pages,
+                review_needs_check=not review_pages and source != "embedded",
+            )
+    return OutlineDetailRead(
+        items=[],
+        source="none",
+        source_pages=[],
+        available_sources=available,
+        review_pages=[],
+        review_needs_check=True,
+    )
 
 
 # ── Задачи ──────────────────────────────────────────────────────────────────
@@ -206,7 +425,23 @@ def latest_task(session: Session, material_id: UUID) -> BackgroundJob | None:
 
 
 def task_read(task: BackgroundJob | None) -> ProcessingTaskRead | None:
-    return ProcessingTaskRead.model_validate(task) if task else None
+    """Показать параметры снимка запуска, независимо от текущих настроек OCR."""
+    if task is None:
+        return None
+    options = task.checkpoint.get("options") or {}
+    model = options.get("page_model") or {}
+    return ProcessingTaskRead.model_validate(task).model_copy(update={
+        "model_id": model.get("model_id") if task.parser_mode == ParserMode.CLOUD
+        else options.get("fast_model_id"),
+        "cloud_strategy": options.get("cloud_strategy"),
+        "image_mode": options.get("image_mode"),
+    })
+
+
+def read_processing_task(session: Session, material_id: UUID) -> ProcessingTaskRead | None:
+    """Опрос прогресса без чтения PDF, страниц, изображений и истории версий."""
+    material_or_404(session, material_id)
+    return task_read(latest_task(session, material_id))
 
 
 def latest_tasks_by_material(
@@ -236,19 +471,44 @@ class LibraryAggregate:
     quality_counts: dict[PageQuality, int]
     block_count: int
     fragment_count: int
+    has_headings: bool
     usage: list[tuple[ProjectMaterial, Project]]
 
 
 EMPTY_LIBRARY_AGGREGATE = LibraryAggregate(
-    quality_counts={}, block_count=0, fragment_count=0, usage=[]
+    quality_counts={}, block_count=0, fragment_count=0, has_headings=False, usage=[]
 )
 
 
 def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID, LibraryAggregate]:
-    """Четыре запроса на всю библиотеку разом вместо четырёх на каждый материал (Р7, аудит N+1)."""
+    """Текущие ревизии дают готовые счётчики; качество страниц остаётся живым."""
     material_ids = [material.id for material in materials]
     if not material_ids:
         return {}
+
+    revision_summaries = {
+        material_id: summary
+        for material_id, summary in session.execute(
+            select(MaterialRevision.material_id, MaterialRevision.summary)
+            .join(Material, Material.id == MaterialRevision.material_id)
+            .where(
+                MaterialRevision.material_id.in_(material_ids),
+                MaterialRevision.revision == Material.active_parse_revision,
+            )
+        )
+    }
+    cached = {
+        material_id: summary
+        for material_id, summary in revision_summaries.items()
+        if isinstance(summary, dict)
+        and type(summary.get("block_count")) is int
+        and type(summary.get("fragment_count")) is int
+        and type(summary.get("has_headings")) is bool
+    }
+    fallback_ids = [
+        material.id for material in materials
+        if material.active_parse_revision > 0 and material.id not in cached
+    ]
 
     quality_counts: dict[UUID, dict[PageQuality, int]] = defaultdict(dict)
     for material_id, quality, reviewed_at, count in session.execute(
@@ -279,7 +539,7 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
             select(MaterialBlock.material_id, func.count())
             .join(Material, Material.id == MaterialBlock.material_id)
             .where(
-                MaterialBlock.material_id.in_(material_ids),
+                MaterialBlock.material_id.in_(fallback_ids),
                 MaterialBlock.revision == Material.active_parse_revision,
             )
             .group_by(MaterialBlock.material_id)
@@ -292,12 +552,30 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
             .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
             .join(Material, Material.id == MaterialFragment.material_id)
             .where(
-                MaterialFragment.material_id.in_(material_ids),
+                MaterialFragment.material_id.in_(fallback_ids),
                 MaterialPage.revision == Material.active_parse_revision,
             )
             .group_by(MaterialFragment.material_id)
         ).all()
     )
+
+    # Библиотеке нужен факт «заголовки есть», а не их число: подсчёт не-NULL заставлял
+    # SQLite читать все 88 тысяч строк фрагментов вместо частичного индекса заголовков
+    # (`ix_material_fragments_headings`) и стоил семи секунд на открытие экрана.
+    materials_with_headings: set[UUID] = {
+        material_id
+        for (material_id,) in session.execute(
+            select(MaterialFragment.material_id)
+            .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+            .join(Material, Material.id == MaterialFragment.material_id)
+            .where(
+                MaterialFragment.material_id.in_(fallback_ids),
+                MaterialPage.revision == Material.active_parse_revision,
+                MaterialFragment.structure_level.is_not(None),
+            )
+            .distinct()
+        ).all()
+    }
 
     usage_by_material: dict[UUID, list[tuple[ProjectMaterial, Project]]] = defaultdict(list)
     for link, project in session.execute(
@@ -311,8 +589,18 @@ def library_aggregates(session: Session, materials: list[Material]) -> dict[UUID
     return {
         material.id: LibraryAggregate(
             quality_counts=quality_counts.get(material.id, {}),
-            block_count=block_counts.get(material.id, 0),
-            fragment_count=fragment_counts.get(material.id, 0),
+            block_count=(
+                cached[material.id]["block_count"]
+                if material.id in cached else block_counts.get(material.id, 0)
+            ),
+            fragment_count=(
+                cached[material.id]["fragment_count"]
+                if material.id in cached else fragment_counts.get(material.id, 0)
+            ),
+            has_headings=(
+                cached[material.id]["has_headings"]
+                if material.id in cached else material.id in materials_with_headings
+            ),
             usage=usage_by_material.get(material.id, []),
         )
         for material in materials
@@ -325,7 +613,7 @@ def _usage_read(material: Material, aggregate: LibraryAggregate) -> list[Library
             project_id=project.id,
             project_name=project.name or "Без названия",
             project_status=project.status.value,
-            display_name=link.display_name or material.original_name,
+            display_name=project_material_display_name(material, link),
             source_role=link.source_role,
             purposes=[MaterialPurpose(value) for value in link.purposes if value in PURPOSE_VALUES],
             exam_slot=link.exam_slot,
@@ -338,6 +626,8 @@ def library_read(material: Material, aggregate: LibraryAggregate) -> LibraryMate
     return LibraryMaterialRead(
         id=material.id,
         original_name=material.original_name,
+        display_name=material_display_name(material),
+        subject=material.subject,
         media_type=material.media_type,
         source_kind=material.source_kind,
         source_url=material.source_url,
@@ -350,6 +640,7 @@ def library_read(material: Material, aggregate: LibraryAggregate) -> LibraryMate
         ocr_low_page_count=aggregate.quality_counts.get(PageQuality.OCR_LOW, 0),
         block_count=aggregate.block_count,
         fragment_count=aggregate.fragment_count,
+        has_outline=bool(material.outline) or aggregate.has_headings,
         sha256=material.sha256,
         created_at=material.created_at,
         usage=_usage_read(material, aggregate),
@@ -363,6 +654,16 @@ def list_library_materials(session: Session) -> list[LibraryMaterialRead]:
         library_read(material, aggregates.get(material.id, EMPTY_LIBRARY_AGGREGATE))
         for material in materials
     ]
+
+
+def list_library_subjects(session: Session) -> list[str]:
+    """Короткий список существующих предметов без чтения карточек и страниц."""
+    return list(session.scalars(
+        select(Material.subject)
+        .where(Material.subject.is_not(None))
+        .distinct()
+        .order_by(Material.subject)
+    ))
 
 
 def read_library_material(session: Session, material_id: UUID) -> LibraryMaterialDetailRead:
@@ -413,8 +714,8 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
         outline_source=outline_source,
         page_states=[
             PageStateRead.model_validate(page)
-            for page in session.scalars(
-                select(MaterialPage)
+            for page in session.execute(
+                select(MaterialPage.page_number, MaterialPage.quality, MaterialPage.reviewed_at)
                 .where(
                     MaterialPage.material_id == material.id,
                     MaterialPage.revision == material.active_parse_revision,
@@ -431,7 +732,30 @@ def read_library_material(session: Session, material_id: UUID) -> LibraryMateria
         retrieved_at=material.retrieved_at,
         updated_at=material.updated_at,
         storage_path=f"data/storage/{material.storage_path}",
+        raster_token=raster_token(session, material_id),
         typst=typst,
+        images=image_counts(session, material),
+    )
+
+
+def update_library_material_metadata(
+    session: Session, material_id: UUID, command: LibraryMaterialMetadataUpdate
+) -> LibraryMaterialMetadataRead:
+    """Изменить пользовательские метаданные, не трогая исходный файл и его имя."""
+    with session.begin():
+        material = material_or_404(session, material_id)
+        values = command.model_dump(exclude_unset=True)
+        if "display_name" in values and values["display_name"] is not None:
+            material.display_name = values["display_name"]
+        if "subject" in values:
+            material.subject = values["subject"]
+        material.updated_at = utc_now()
+        session.flush()
+    return LibraryMaterialMetadataRead(
+        id=material.id,
+        display_name=material_display_name(material),
+        subject=material.subject,
+        updated_at=material.updated_at,
     )
 
 
@@ -581,30 +905,141 @@ def library_fragment_asset_path(session: Session, material_id: UUID, fragment_id
     return material_path(fragment.asset_path)
 
 
-def library_page_image_path(session: Session, material_id: UUID, page_number: int) -> Path:
+def raster_source(session: Session, material_id: UUID) -> Path | None:
+    """Файл, из которого берётся растр страницы, либо None, если растра нет.
+
+    У Typst-проекта исходник — ZIP, а страницу человек видит в собранном PDF.
+    Подмена источника здесь даёт просмотрщику ровно то же, что у обычного PDF:
+    растр страницы, масштаб, области фрагментов и переходы по оглавлению.
+
+    None — это и формат без страниц (текст, веб, аудио), и ещё не собранный
+    Typst-проект. Отсутствие сборки — обычное состояние только что загруженного
+    материала, и карточка обязана читаться: метка растра спрашивается при каждом
+    опросе карточки, в том числе пока сборка идёт.
+    """
     material = material_or_404(session, material_id)
-    # У Typst-проекта исходник — ZIP, а страницу человек видит в собранном PDF.
-    # Подмена источника здесь даёт просмотрщику ровно то же, что у обычного PDF:
-    # растр страницы, масштаб, области фрагментов и переходы по оглавлению.
-    source = (
-        typst_rendered_source(session, material_id).path
-        if material.source_kind == MaterialSourceKind.TYPST
-        else material_path(material.storage_path)
-    )
-    if source.suffix.lower() in {".jpg", ".jpeg", ".png"}:
-        return source
-    if source.suffix.lower() != ".pdf":
+    if material.source_kind == MaterialSourceKind.TYPST:
+        try:
+            return typst_rendered_source(session, material_id).path
+        except ProjectDomainError:
+            return None
+    source = material_path(material.storage_path)
+    return source if source.suffix.lower() in RASTER_SOURCE_SUFFIXES else None
+
+
+def raster_token(session: Session, material_id: UUID) -> str:
+    """Метка растра для адреса картинки: меняется ровно тогда, когда меняется файл.
+
+    Имя обычного исходника содержит хеш содержимого, поэтому при неизменном файле
+    метка постоянна и браузер не перезапрашивает уже полученные страницы. У Typst
+    путь указывает на конкретную сборку, и пересборка меняет метку сама.
+    """
+    source = raster_source(session, material_id)
+    if source is None:
+        return "none"
+    return hashlib.sha256(str(source).encode("utf-8")).hexdigest()[:12]
+
+
+def page_image_cache_headers(requested_token: str | None, actual: str) -> dict[str, str]:
+    """Год кэша адресу с актуальной меткой растра, минута — адресу без неё.
+
+    Просмотрщик листает страницы вперёд-назад, и каждый повторный заход за уже
+    полученной картинкой — лишний круг до сервера. С меткой в адресе повторов
+    нет вовсе: сменился файл — сменился адрес.
+    """
+    if requested_token is not None and requested_token == actual:
+        return {"Cache-Control": "private, max-age=31536000, immutable"}
+    return {"Cache-Control": "private, max-age=60"}
+
+
+def library_page_image_path(session: Session, material_id: UUID, page_number: int) -> Path:
+    source = raster_source(session, material_id)
+    if source is None:
         raise ProjectDomainError(
             "У этого формата нет исходной страницы", status=422, code="page_image_unavailable"
         )
-    cache = settings.storage_dir / "pages" / str(material_id) / f"{page_number}.png"
-    if not cache.exists():
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        document = fitz.open(source)
-        if page_number < 1 or page_number > len(document):
+    if source.suffix.lower() != ".pdf":
+        return source
+    return _rendered_pdf_page(source, material_id, page_number)
+
+
+def _rendered_pdf_page(source: Path, material_id: UUID, page_number: int) -> Path:
+    """Растр страницы PDF из кэша на диске; отсутствующий — рисуется и сохраняется.
+
+    WebP вместо PNG: при том же исходном пикселе он вдвое легче и кодируется
+    быстрее, а на тысячестраничном учебнике разница в кэше — сотни мегабайт.
+    Ранее нарисованные PNG остаются годными и не перерисовываются.
+    """
+    directory = settings.storage_dir / "pages" / str(material_id)
+    cache = directory / f"{page_number}.webp"
+    legacy = directory / f"{page_number}.png"
+    if cache.exists():
+        return cache
+    if legacy.exists():
+        return legacy
+
+    entry = _open_document(source)
+    # Документ MuPDF нельзя дёргать из двух потоков сразу, а соседние страницы
+    # предзагружаются — запросы приходят пачкой. Замок документа и решает обе
+    # задачи: рисует по одной странице и не даёт нарисовать одну дважды.
+    with entry.lock:
+        if cache.exists():
+            return cache
+        if page_number < 1 or page_number > len(entry.document):
             raise ProjectNotFoundError("Страница не найдена", code="material_page_not_found")
-        document[page_number - 1].get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False).save(cache)
+        pixmap = entry.document[page_number - 1].get_pixmap(
+            matrix=fitz.Matrix(1.5, 1.5), alpha=False
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+        # Пишем через временный файл: параллельный запрос иначе успевает отдать
+        # недописанную картинку, и страница приходит в браузер обрезанной.
+        staging = directory / f"{page_number}.{os.getpid()}.{threading.get_ident()}.part"
+        pixmap.pil_save(staging, format="WEBP", quality=PAGE_IMAGE_QUALITY, method=0)
+        os.replace(staging, cache)
     return cache
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenDocument:
+    document: fitz.Document
+    #: Путь, размер и время правки: по ним видно, что файл под кэшем подменили.
+    signature: tuple[str, int, float]
+    lock: threading.Lock
+
+
+def _open_document(source: Path) -> _OpenDocument:
+    """Открытый PDF из небольшого кэша процесса.
+
+    Разбор оглавления файла — самая дорогая часть показа страницы: у учебника
+    на тысячу страниц `open()` занимает около секунды, а сама отрисовка — десятые
+    доли. Открывая файл на каждый запрос, мы платили эту секунду за каждое
+    перелистывание.
+    """
+    stat = source.stat()
+    signature = (str(source), stat.st_size, stat.st_mtime)
+    key = str(source)
+    with _OPEN_DOCUMENTS_GUARD:
+        entry = _OPEN_DOCUMENTS.get(key)
+        if entry is not None and entry.signature == signature:
+            _OPEN_DOCUMENTS.move_to_end(key)
+            return entry
+        entry = _OpenDocument(fitz.open(source), signature, threading.Lock())
+        _OPEN_DOCUMENTS[key] = entry
+        _OPEN_DOCUMENTS.move_to_end(key)
+        while len(_OPEN_DOCUMENTS) > OPEN_DOCUMENT_LIMIT:
+            # Выброшенный документ закроется сам, когда его отпустит последний
+            # рисующий поток: явный close() здесь уронил бы чужую отрисовку.
+            _OPEN_DOCUMENTS.popitem(last=False)
+        return entry
+
+
+def drop_page_images(material_id: UUID) -> None:
+    """Забыть нарисованные страницы: исходный PDF материала стал другим.
+
+    Открытые документы отдельно сбрасывать не нужно: пересборка кладёт PDF по
+    новому пути, а подмену файла по прежнему пути ловит его сигнатура.
+    """
+    shutil.rmtree(settings.storage_dir / "pages" / str(material_id), ignore_errors=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -781,8 +1216,6 @@ def _inspect_file(path: Path) -> tuple[int, int, int, list[str]]:
         return inspect(path)
     except PermissionError as error:
         raise ProjectDomainError(str(error), status=422, code="material_encrypted") from error
-    except OverflowError as error:
-        raise ProjectDomainError(str(error), status=422, code="material_too_many_pages") from error
     except (ValueError, OSError) as error:
         raise ProjectDomainError(str(error), status=422, code="material_corrupt") from error
 
@@ -792,6 +1225,8 @@ def _existing_or_new(
     *,
     sha256: str,
     original_name: str,
+    subject: str | None = None,
+    display_name: str | None = None,
     storage_path: str,
     media_type: str,
     source_kind: MaterialSourceKind,
@@ -802,15 +1237,24 @@ def _existing_or_new(
     diagnostics: list[str] | None = None,
     source_url: str | None = None,
     retrieved_at: Any = None,
+    outline: list[dict[str, object]] | None = None,
 ) -> Material:
     """Дедупликация по содержимому: один файл в установке хранится один раз."""
+    normalized_subject = subject.strip() if subject and subject.strip() else None
+    normalized_display_name = (
+        display_name.strip() if display_name and display_name.strip() else None
+    )
     material = session.scalar(select(Material).where(Material.sha256 == sha256))
     if material is not None:
+        if material.subject is None and normalized_subject:
+            material.subject = normalized_subject
         return material
     now = utc_now()
     material = Material(
         sha256=sha256,
         original_name=original_name,
+        display_name=normalized_display_name or original_name,
+        subject=normalized_subject,
         storage_path=storage_path,
         media_type=media_type,
         source_kind=source_kind,
@@ -824,6 +1268,10 @@ def _existing_or_new(
         ocr_low_page_count=0,
         estimated_seconds=estimated_seconds,
         diagnostics=diagnostics or [],
+        # Закладки PDF читаются сразу при загрузке (inspect() уже открывает
+        # файл), а не в момент старта разбора — оглавление доступно и до
+        # всякой подготовки текста (Работа 4 плана мастера учебника).
+        outline=outline or [],
         created_at=now,
         updated_at=now,
     )
@@ -843,13 +1291,15 @@ class UploadedFile:
     scan_page_count: int
     estimated_seconds: int
     diagnostics: list[str]
+    outline: list[dict[str, object]]
 
 
 async def store_uploaded_file(upload: UploadFile) -> UploadedFile:
     """Записать файл и осмотреть его. Транзакции здесь нет и быть не должно:
     держать её открытой на время загрузки стомегабайтного PDF нельзя."""
     sha256, storage_path, size, original_name, media_type = await store_upload(upload)
-    page_count, scan_pages, estimate, diagnostics = _inspect_file(material_path(storage_path))
+    path = material_path(storage_path)
+    page_count, scan_pages, estimate, diagnostics = _inspect_file(path)
     return UploadedFile(
         sha256=sha256,
         storage_path=storage_path,
@@ -860,15 +1310,23 @@ async def store_uploaded_file(upload: UploadFile) -> UploadedFile:
         scan_page_count=scan_pages,
         estimated_seconds=estimate,
         diagnostics=diagnostics,
+        outline=extract_outline(path),
     )
 
 
-def register_uploaded_material(session: Session, uploaded: UploadedFile) -> Material:
+def register_uploaded_material(
+    session: Session,
+    uploaded: UploadedFile,
+    *,
+    subject: str | None = None,
+    display_name: str | None = None,
+) -> Material:
     """Строка материала для уже сохранённого файла. Транзакцией управляет вызывающий."""
     return _existing_or_new(
         session,
         sha256=uploaded.sha256,
         original_name=uploaded.original_name,
+        subject=subject,
         storage_path=uploaded.storage_path,
         media_type=uploaded.media_type,
         source_kind=(
@@ -881,21 +1339,36 @@ def register_uploaded_material(session: Session, uploaded: UploadedFile) -> Mate
         scan_page_count=uploaded.scan_page_count,
         estimated_seconds=uploaded.estimated_seconds,
         diagnostics=uploaded.diagnostics,
+        outline=uploaded.outline,
+        display_name=display_name,
     )
 
 
-async def create_library_upload(session: Session, upload: UploadFile) -> LibraryMaterialDetailRead:
+async def create_library_upload(
+    session: Session,
+    upload: UploadFile,
+    *,
+    subject: str | None = None,
+    display_name: str | None = None,
+) -> LibraryMaterialDetailRead:
     """Файл в Библиотеку без всякого проекта."""
     uploaded = await store_uploaded_file(upload)
     session.rollback()
     with session.begin():
-        material = register_uploaded_material(session, uploaded)
+        material = register_uploaded_material(
+            session, uploaded, subject=subject, display_name=display_name
+        )
         material_id = material.id
     return read_library_material(session, material_id)
 
 
 def create_typst_material(
-    session: Session, bundle: Bundle, input_kind: str, display_name: str | None = None
+    session: Session,
+    bundle: Bundle,
+    input_kind: str,
+    display_name: str | None = None,
+    subject: str | None = None,
+    library_display_name: str | None = None,
 ) -> tuple[LibraryMaterialDetailRead, BackgroundJob]:
     """Регистрирует bundle и ставит единственную автоматическую сборку Typst.
 
@@ -913,12 +1386,14 @@ def create_typst_material(
                 display_name
                 or (Path(bundle.entrypoint).name if bundle.entrypoint else "Typst-проект.zip")
             ),
+            subject=subject,
             storage_path=storage_path,
             media_type="application/zip",
             source_kind=MaterialSourceKind.TYPST,
             size_bytes=bundle.size_bytes,
             page_count=None,
             estimated_seconds=1,
+            display_name=library_display_name,
         )
         typst = session.get(TypstMaterial, material.id)
         if typst is None:
@@ -1047,7 +1522,9 @@ def create_library_external(
     fetched = fetch_external(command)
     session.rollback()
     with session.begin():
-        material_id = create_external_material_row(session, *fetched).id
+        material_id = create_external_material_row(
+            session, *fetched, subject=command.subject, display_name=command.display_name
+        ).id
     return read_library_material(session, material_id)
 
 
@@ -1057,12 +1534,14 @@ def create_text_material_row(session: Session, command: LibraryTextMaterialCreat
         session,
         sha256=sha256,
         original_name=original_name,
+        subject=command.subject,
         storage_path=storage_path,
         media_type=media_type,
         source_kind=MaterialSourceKind.TEXT,
         size_bytes=size,
         page_count=1,
         estimated_seconds=1,
+        display_name=command.display_name,
     )
 
 
@@ -1084,12 +1563,15 @@ def create_external_material_row(
     source_url: str,
     retrieved_at: Any,
     source_kind: MaterialSourceKind,
+    subject: str | None = None,
+    display_name: str | None = None,
 ) -> Material:
     sha256, storage_path, size, original_name, media_type = store_text(name, text)
     return _existing_or_new(
         session,
         sha256=sha256,
         original_name=original_name,
+        subject=subject,
         storage_path=storage_path,
         media_type=media_type,
         source_kind=source_kind,
@@ -1098,6 +1580,7 @@ def create_external_material_row(
         estimated_seconds=1,
         source_url=source_url,
         retrieved_at=retrieved_at,
+        display_name=display_name,
     )
 
 
@@ -1142,7 +1625,11 @@ def guard_single_answers_file(
     if existing is None or existing.material_id == material_id:
         return
     material = session.get(Material, existing.material_id)
-    name = existing.display_name or (material.original_name if material else "")
+    name = (
+        project_material_display_name(material, existing)
+        if material is not None
+        else ""
+    )
     raise ProjectConflictError(
         f"Для этого входа уже выбран материал: «{name}». Сначала уберите его",
         code="exam_slot_already_set" if exam_slot else "reference_answers_already_set",
@@ -1156,7 +1643,7 @@ def attach_material_to_project(
     """Подключение — это только новая связь. Файл не копируется, разбор не запускается."""
     session.rollback()
     with session.begin():
-        material_or_404(session, material_id)
+        material = material_or_404(session, material_id)
         project = session.get(Project, command.project_id)
         if project is None:
             raise ProjectNotFoundError()
@@ -1170,6 +1657,9 @@ def attach_material_to_project(
             raise ProjectConflictError(
                 "Этот материал уже подключён к проекту", code="material_already_attached"
             )
+        passport = session.get(GoalPassport, command.project_id)
+        if material.subject is None and passport is not None and passport.subject:
+            material.subject = passport.subject
         purposes = list(dict.fromkeys(command.purposes)) or [MaterialPurpose.STUDY_SOURCE]
         guard_single_answers_file(
             session, command.project_id, purposes, material_id, command.exam_slot
@@ -1282,12 +1772,29 @@ def start_processing_core(
     task = latest_task(session, material_id)
     if task and task.state in ACTIVE_TASK_STATES:
         raise ProjectConflictError("Разбор уже запущен", code="material_processing_active")
+    if session.scalar(
+        select(BackgroundJob.id).where(
+            BackgroundJob.material_id == material_id,
+            BackgroundJob.kind == BackgroundJobKind.IMAGE_DESCRIPTIONS,
+            BackgroundJob.state.in_(ACTIVE_TASK_STATES),
+        )
+    ):
+        # Новая ревизия разбора сделала бы ответы описаний конфликтом: пусть
+        # сначала закончится или будет отменена начатая задача.
+        raise ProjectConflictError(
+            "Идёт описание изображений этого материала", code="material_processing_active"
+        )
     if task and task.state == BackgroundJobState.FAILED:
         _discard_failed_task(session, material, task)
     # Готовность движка спрашиваем у реестра распознавания, а не у сервиса
     # напрямую: там же считается статус на экране настроек, и разъехаться они
     # не могут. Для «Быстро» это в том числе проверка, что модели скачаны.
-    ready, reason = ocr_settings.engine_ready(session, command.parser_mode.value)
+    # У записи свои два способа — Whisper и модель речи, — и готовность спрашивается
+    # у них: облачный режим страниц может быть готов, а модели речи не быть вовсе.
+    if material.source_kind == MaterialSourceKind.AUDIO:
+        ready, reason = speech.engine_ready(session, command.parser_mode)
+    else:
+        ready, reason = ocr_settings.engine_ready(session, command.parser_mode.value)
     if not ready:
         raise ProjectConflictError(
             reason or "Этот режим распознавания сейчас недоступен",
@@ -1295,6 +1802,15 @@ def start_processing_core(
             context={"parser_mode": command.parser_mode.value},
         )
     pages = _selected_pages(session, material, command)
+    options = processing_plan.run_options(session, material, command)
+    budget = None
+    if command.parser_mode == ParserMode.CLOUD and material.source_kind != MaterialSourceKind.AUDIO:
+        # Постановка не ждёт диагностики PDF. Цена проверяется по каталогу,
+        # а отдельная оценка продолжает считаться в фоне.
+        image_mode = processing_plan.params_from_options(
+            options, ocr_settings.runtime_params(session)
+        ).images_for(command.parser_mode.value)
+        budget = processing_plan.run_budget(session, command, len(pages), image_mode)
     revision = revision_registry.max_revision(session, material_id) + 1
     scope: dict[str, Any] = {"kind": command.scope}
     if command.scope == "range":
@@ -1315,6 +1831,8 @@ def start_processing_core(
             "selected_pages": pages,
             "next_index": 0,
             "scope": scope,
+            "options": options,
+            **({"budget": budget} if budget is not None else {}),
         },
         diagnostics=[],
         pause_requested=False,
@@ -1375,11 +1893,20 @@ def control_task_core(session: Session, material_id: UUID, action: str) -> Backg
     return task
 
 
+def processing_estimate(
+    session: Session, material_id: UUID, command: ProcessingStart
+) -> ProcessingEstimateRead:
+    """Read-only оценка запуска с теми же областью и выбором, что у старта."""
+    material = material_or_404(session, material_id)
+    pages = _selected_pages(session, material, command)
+    return processing_plan.estimate(session, material, command, pages)
+
+
 def start_library_processing(
     session: Session, material_id: UUID, command: ProcessingStart
 ) -> LibraryMaterialDetailRead:
     session.rollback()
-    with session.begin():
+    with job_write_transaction(session):
         start_processing_core(session, material_id, command)
     return read_library_material(session, material_id)
 
@@ -1388,7 +1915,7 @@ def control_library_task(
     session: Session, material_id: UUID, action: str
 ) -> LibraryMaterialDetailRead:
     session.rollback()
-    with session.begin():
+    with job_write_transaction(session):
         control_task_core(session, material_id, action)
     return read_library_material(session, material_id)
 
@@ -1397,7 +1924,7 @@ def control_library_task(
 
 
 def element_to_parsed(item: dict[str, Any]) -> ParsedElement:
-    return ParsedElement(
+    element = ParsedElement(
         item["kind"],
         item["text"],
         tuple(item["bbox"]),
@@ -1407,11 +1934,18 @@ def element_to_parsed(item: dict[str, Any]) -> ParsedElement:
         item.get("time_to"),
         item.get("asset_path"),
         item.get("recognition_source", "native"),
+        bool(item.get("bbox_reliable", True)),
+        meta_from_json(item["image"]) if item.get("image") else None,
     )
+    if element.kind == "image" and element.image is None:
+        # Страница разобрана до явных осей состояния: выводим их один раз здесь,
+        # а не угадываем по префиксу текста в каждом потребителе.
+        return replace(element, image=element_meta(element))
+    return element
 
 
 def element_to_json(element: ParsedElement) -> dict[str, Any]:
-    return {
+    data: dict[str, Any] = {
         "kind": element.kind,
         "text": element.text,
         "bbox": list(element.bbox),
@@ -1422,6 +1956,45 @@ def element_to_json(element: ParsedElement) -> dict[str, Any]:
         "asset_path": element.asset_path,
         "recognition_source": element.recognition_source,
     }
+    if not element.bbox_reliable:
+        data["bbox_reliable"] = False
+    meta = element_meta(element)
+    if meta is not None:
+        data["image"] = meta_to_json(meta)
+    return data
+
+
+def image_counts_of(metas: Sequence[ImageMeta]) -> ImageCountsRead:
+    """Счётчики изображений по их состоянию: всего, без описания, описано…"""
+    return ImageCountsRead(
+        total=len(metas),
+        describable=sum(needs_description(meta) for meta in metas),
+        described=sum(meta.processing == "described" for meta in metas),
+        needs_review=sum(meta.review == "needs_review" for meta in metas),
+        service=sum(meta.role in {"service", "decorative"} for meta in metas),
+    )
+
+
+def image_counts(session: Session, material: Material) -> ImageCountsRead:
+    """Счётчики карточки материала по фрагментам активной ревизии."""
+    if material.active_parse_revision <= 0:
+        return ImageCountsRead()
+    rows = session.scalars(
+        select(MaterialFragment.visual)
+        .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+        .where(
+            MaterialFragment.material_id == material.id,
+            MaterialPage.revision == material.active_parse_revision,
+            MaterialFragment.element_kind == "image",
+        )
+    ).all()
+    return image_counts_of([meta_from_json(row) if row else ImageMeta() for row in rows])
+
+
+def fragment_visual(element: ParsedElement) -> dict[str, Any] | None:
+    """Состояние изображения для строки фрагмента; у текста — None."""
+    meta = element_meta(element)
+    return meta_to_json(meta) if meta is not None else None
 
 
 def page_to_parsed(page: MaterialPage) -> ParsedPage:
@@ -1519,17 +2092,36 @@ def rebuild_structure(
             MaterialBlock.revision == revision,
         )
     )
-    parsed_pages = [page_to_parsed(page) for page in pages]
+    new_fragments = _insert_structure(session, material_id, revision, pages)
+    session.flush()
+    return new_fragments
+
+
+def _insert_structure(
+    session: Session,
+    material_id: UUID,
+    revision: int,
+    pages: list[MaterialPage],
+    *,
+    specs: list[BlockSpec] | None = None,
+    start_order: int = 0,
+    page_orders: dict[int, int] | None = None,
+    fragments: dict[int, list[MaterialFragment]] | None = None,
+) -> dict[int, list[MaterialFragment]]:
+    """Записать готовые блоки; UUID задаются до flush для пакетной вставки."""
+    if specs is None:
+        specs = build_blocks([page_to_parsed(page) for page in pages])
     page_by_number = {page.page_number: page for page in pages}
     has_heading = {
         page.page_number: any(item.get("kind") == "heading" for item in page.elements)
         for page in pages
     }
-    new_fragments: dict[int, list[MaterialFragment]] = defaultdict(list)
-    page_orders: dict[int, int] = {}
-    for block_order, spec in enumerate(build_blocks(parsed_pages)):
+    orders = page_orders if page_orders is not None else {}
+    result = fragments if fragments is not None else defaultdict(list)
+    for block_order, spec in enumerate(specs, start=start_order):
         page_numbers = [number for number, _ in spec.elements] or [1]
         block = MaterialBlock(
+            id=uuid4(),
             material_id=material_id,
             revision=revision,
             sort_order=block_order,
@@ -1540,11 +2132,11 @@ def rebuild_structure(
             page_to=max(page_numbers),
         )
         session.add(block)
-        session.flush()
         for page_number, element in spec.elements:
             page = page_by_number[page_number]
-            order = page_orders.get(page_number, 0)
+            order = orders.get(page_number, 0)
             fragment = MaterialFragment(
+                id=uuid4(),
                 material_id=material_id,
                 page_id=page.id,
                 block_id=block.id,
@@ -1558,14 +2150,51 @@ def rebuild_structure(
                 confidence=element.confidence,
                 time_from=element.time_from,
                 time_to=element.time_to,
+                visual=fragment_visual(element),
                 degraded_structure=not has_heading.get(page_number, False),
                 quality=page.quality,
             )
             session.add(fragment)
-            new_fragments[page_number].append(fragment)
-            page_orders[page_number] = order + 1
-    session.flush()
-    return new_fragments
+            result[page_number].append(fragment)
+            orders[page_number] = order + 1
+    return result
+
+
+def rebuild_structure_staged(
+    session: Session, job_id: UUID, material_id: UUID, revision: int
+) -> dict[int, list[MaterialFragment]]:
+    """Собрать ещё не опубликованную ревизию короткими write-транзакциями.
+
+    Checkpoint уже сохранил страницы. После прерывания повторный запуск удалит
+    частичную структуру и соберёт её заново; активная ревизия не затрагивается.
+    """
+    pages = list(session.scalars(
+        select(MaterialPage)
+        .where(MaterialPage.material_id == material_id, MaterialPage.revision == revision)
+        .order_by(MaterialPage.page_number)
+    ))
+    specs = build_blocks([page_to_parsed(page) for page in pages])
+    block_ids = list(session.scalars(
+        select(MaterialBlock.id).where(
+            MaterialBlock.material_id == material_id, MaterialBlock.revision == revision
+        )
+    ))
+    session.commit()
+    for page in pages:
+        with job_write_transaction(session, job_id):
+            session.execute(delete(MaterialFragment).where(MaterialFragment.page_id == page.id))
+    for block_id in block_ids:
+        with job_write_transaction(session, job_id):
+            session.execute(delete(MaterialBlock).where(MaterialBlock.id == block_id))
+    page_orders: dict[int, int] = {}
+    fragments: dict[int, list[MaterialFragment]] = defaultdict(list)
+    for order, spec in enumerate(specs):
+        with job_write_transaction(session, job_id):
+            _insert_structure(
+                session, material_id, revision, pages, specs=[spec], start_order=order,
+                page_orders=page_orders, fragments=fragments,
+            )
+    return fragments
 
 
 def discard_building_revision(session: Session, material_id: UUID, revision: int) -> None:
@@ -1652,6 +2281,7 @@ def rebuild_checkpoint_page(session: Session, page: MaterialPage) -> None:
                 asset_path=element.asset_path,
                 time_from=element.time_from,
                 time_to=element.time_to,
+                visual=fragment_visual(element),
             )
         )
 
@@ -1928,7 +2558,10 @@ def refresh_source(session: Session, material_id: UUID) -> SourceRefreshResult:
             material.size_bytes = size
             material.source_url = source_url
             material.retrieved_at = retrieved_at
+            previous_original_name = material.original_name
             material.original_name = name
+            if material.display_name == previous_original_name:
+                material.display_name = name
             material.page_count = 1
             material.status = MaterialState.READY
             material.active_parse_revision = target

@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.chat_tools.registry import ToolContext, get_tool_spec
+from app.db import project_write_transaction
 from app.exam import chat as chat_service
 from app.models import ChatMessageRole, ChatPayloadKind, ChatToolRun, ChatToolRunState, utc_now
 from app.projects.errors import ProjectDomainError
@@ -42,7 +43,7 @@ def run_tool(
             code="chat_tool_unavailable",
             context={"reason": spec.unavailable_reason},
         )
-    with session.begin():
+    with project_write_transaction(session, project_id):
         chat_service._require_exam_project(session, project_id)
         chat = chat_service._require_session(session, project_id, session_id)
         if chat.mode.value not in spec.modes:

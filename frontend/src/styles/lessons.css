@@ -1,75 +1,2551 @@
-.lessons-screen { min-height: 100dvh; display: grid; grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(250px, 300px); background: var(--canvas); color: var(--ink); }
-.lessons-tree { min-width: 260px; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; border-right: 1px solid var(--line); background: var(--paper); }
-.lessons-tree > header { display: flex; align-items: center; gap: var(--space-3); min-height: 60px; padding: 0 var(--space-4); border-bottom: 1px solid var(--line); }
-.lessons-tree > header a { color: var(--muted); }
-.lessons-search { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-3); padding: 0 var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper-strong); color: var(--muted); }
-.lessons-search input { width: 100%; height: 34px; border: 0; background: transparent; box-shadow: none; }
-.lessons-tree nav { overflow: auto; padding: 0 var(--space-2) var(--space-4); }
-.lessons-tree-row { min-height: 38px; display: grid; grid-template-columns: 22px 22px minmax(0, 1fr) auto; align-items: center; gap: var(--space-1); border-radius: var(--radius-xs); }
-.lessons-tree-row.is-selected { background: var(--accent-wash); }
-.lessons-tree-row > button:not(.lessons-tree-chevron) { min-width: 0; padding: var(--space-1); border: 0; background: transparent; color: var(--ink-soft); cursor: pointer; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-.lessons-tree-row > button:not(.lessons-tree-chevron):hover { color: var(--accent); }
-.lessons-tree-row small { padding-right: var(--space-1); color: var(--muted); font-size: var(--text-xs); white-space: nowrap; }
-.lessons-tree-chevron { width: 22px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--muted); cursor: pointer; }
-.lessons-tree-children { padding-left: var(--space-4); }
-.lessons-tree footer { display: grid; padding: var(--space-2); border-top: 1px solid var(--line); }
-.lessons-tree footer > * { display: flex; align-items: center; justify-content: space-between; min-height: 34px; padding: 0 var(--space-2); border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-sm); text-align: left; }
-.lessons-tree footer .is-active { background: var(--accent-wash); color: var(--accent); font-weight: var(--weight-semibold); }
-.lessons-main { min-width: 0; overflow: auto; padding: clamp(var(--space-5), 5vw, var(--space-10)); }
-.lessons-message { width: min(900px, 100%); margin: 0 auto var(--space-4); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink-soft); }
-.lessons-overview, .lessons-single, .lessons-batch { width: min(1040px, 100%); margin: 0 auto; }
-.lessons-overview { padding: clamp(var(--space-6), 8vw, var(--space-16)); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); }
-.lessons-overview > p:first-child, .lessons-batch header p, .lessons-editor-head p { margin: 0; color: var(--muted); font-size: var(--text-sm); }
-.lessons-overview h1, .lessons-batch h1 { margin: var(--space-2) 0 var(--space-4); font-size: var(--text-2xl); }
-.lessons-overview > div, .empty-state > div { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-6); }
-.lessons-editor-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: var(--space-4); margin-bottom: var(--space-4); }
-.lessons-editor-head > div:last-child { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); color: var(--muted); font-size: var(--text-xs); }
-.lessons-editor-head select { width: min(360px, 100%); margin-top: var(--space-2); }
-.lessons-editor-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: var(--space-3); margin-bottom: var(--space-3); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); }
-.lessons-block-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: var(--space-3) 0; }
-.lessons-document { display: grid; gap: var(--space-8); }
-.lessons-document-section { display: grid; gap: var(--space-4); }
-.lessons-document-section > header h2 { margin: 0; font-size: var(--text-xl); }
-.lessons-document-section > header p { margin: var(--space-1) 0 0; color: var(--muted); }
-.lessons-row { display: grid; gap: var(--space-4); }
-.lessons-row.is-media-left { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
-.lessons-row.is-media-right { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
-.lessons-row.is-two-equal { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.lessons-block { position: relative; padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); }
-.lessons-document.is-editor .lessons-block { cursor: pointer; }
-.lessons-document.is-editor .lessons-block.is-selected { border-color: var(--accent); box-shadow: var(--focus-ring); }
-.lessons-block-select { position: absolute; top: var(--space-2); right: var(--space-2); display: flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-2); border: 0; border-radius: var(--radius-xs); background: var(--surface-sunken); color: var(--muted); cursor: pointer; font-size: var(--text-xs); }
-.lessons-block-select[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
-.lessons-block p { color: var(--ink-soft); font-family: var(--font-serif); line-height: var(--leading-relaxed); }
-.lessons-block p:first-child { margin-top: 0; }
-.lessons-block p:last-child { margin-bottom: 0; }
-.lessons-block-sources { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); padding-top: var(--space-3); border-top: 1px solid var(--line); color: var(--muted); font-size: var(--text-xs); }
-.lessons-block-source { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); }
-.lessons-callout { padding: var(--space-4); border-left: 3px solid var(--tone-info); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--surface-sunken); }
-.lessons-callout.is-warning { border-left-color: var(--tone-warning); }
-.lessons-callout p { margin: var(--space-2) 0 0; }
-.lessons-image-placeholder { display: grid; gap: var(--space-3); margin: 0; }
-.lessons-image-placeholder > div { min-height: 160px; display: grid; place-content: center; justify-items: center; gap: var(--space-2); padding: var(--space-4); border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--muted); text-align: center; }
-.lessons-image-placeholder figcaption, .lessons-diagram figcaption { color: var(--muted); font-size: var(--text-xs); }
-.lessons-diagram > div { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--space-2); min-height: 90px; margin-top: var(--space-3); padding: var(--space-4); border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--accent); }
-.lessons-diagram > div span { padding: var(--space-2); border: 1px solid var(--accent-edge); border-radius: var(--radius-xs); background: var(--paper); color: var(--ink-soft); font-size: var(--text-sm); }
-.lessons-sql { display: grid; gap: var(--space-3); }
-.lessons-sql textarea { min-height: 96px; resize: vertical; font-family: var(--font-mono); }
-.lessons-sql > div:last-child { display: flex; gap: var(--space-2); }
-.lessons-inspector { display: grid; align-content: start; gap: var(--space-3); padding: var(--space-5); border-left: 1px solid var(--line); background: var(--paper); overflow: auto; }
-.lessons-inspector h2 { margin: var(--space-3) 0 0; font-size: var(--text-lg); }
-.lessons-inspector p { margin: 0; color: var(--ink-soft); font-size: var(--text-sm); }
-.lessons-inspector label { display: grid; gap: var(--space-1); color: var(--muted); font-size: var(--text-xs); }
-.lessons-open-inspector { position: fixed; right: var(--space-4); bottom: var(--space-4); display: flex; align-items: center; gap: var(--space-1); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink-soft); }
-.lessons-batch header { display: flex; align-items: end; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-4); }
-.lessons-batch-table { display: grid; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); overflow: hidden; }
-.lessons-batch-table > div { display: grid; grid-template-columns: 28px minmax(180px, 1fr) minmax(130px, .7fr) 110px 74px; align-items: center; gap: var(--space-3); padding: var(--space-3); border-bottom: 1px solid var(--line); }
-.lessons-batch-table > div:last-child { border-bottom: 0; }
-.lessons-batch-table small { color: var(--muted); }
-.lessons-ai-form, .lessons-storyboard { display: grid; gap: var(--space-3); }
-.lessons-ai-form p, .lessons-storyboard p { margin: 0; color: var(--ink-soft); }
-.lessons-workspace { width: min(900px, 100%); margin: 0 auto; padding: var(--space-6); }
-.lessons-workspace-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-5); }
-.lessons-workspace-head select { min-width: min(300px, 100%); }
-@media (max-width: 1120px) { .lessons-screen { grid-template-columns: minmax(260px, 280px) minmax(0, 1fr); } .lessons-inspector, .lessons-open-inspector { display: none; } }
-@media (max-width: 760px) { .lessons-screen { grid-template-columns: minmax(260px, 38vw) minmax(0, 1fr); } .lessons-main { padding: var(--space-4); } .lessons-row.is-media-left, .lessons-row.is-media-right, .lessons-row.is-two-equal, .lessons-editor-fields, .lessons-batch-table > div { grid-template-columns: minmax(0, 1fr); } .lessons-tree-row { grid-template-columns: 18px 20px minmax(0, 1fr); } .lessons-tree-row small { display: none; } .lessons-editor-head > div:last-child { justify-content: flex-start; } }
+/* Раздел «Уроки» и вкладка «Урок» Рабочей области. Только токены из tokens.css. */
+
+.lessons-screen {
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
+  display: grid;
+  overflow: hidden;
+  background: var(--canvas);
+}
+
+.lessons-tree-panel {
+  min-width: 240px;
+  border-right: 1px solid var(--line);
+}
+
+.lessons-tree .workspace-question-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 46px;
+}
+
+.lessons-tree-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  padding-left: var(--space-3);
+}
+
+.lessons-tree .lessons-tree-row .workspace-question-row {
+  padding-left: var(--space-2);
+}
+
+.lessons-tree-row.depth-1 { padding-left: calc(var(--space-3) + var(--space-4)); }
+.lessons-tree-row.depth-2 { padding-left: calc(var(--space-3) + var(--space-8)); }
+.lessons-tree-row.depth-3 { padding-left: calc(var(--space-3) + var(--space-10)); }
+
+.lessons-tree .checkbox-row {
+  margin: 0;
+}
+
+/* В дереве подпись флажка дублирует строку: она нужна только экранному чтецу. */
+.lessons-tree .checkbox-row label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.workspace-section-row.has-leading {
+  grid-template-columns: auto 30px minmax(0, 1fr) auto;
+  padding-left: var(--space-3);
+}
+
+.lessons-selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--accent-wash);
+  color: var(--ink);
+  font-size: var(--text-xs);
+}
+
+.lessons-state-mark {
+  min-width: 28px;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.lessons-state-mark.is-draft { color: var(--accent); }
+.lessons-state-mark.is-ready { color: var(--tone-success); }
+.lessons-state-mark.is-review { color: var(--tone-warning); }
+
+.lessons-section-sum {
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.lessons-center {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.lessons-center-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4) 0;
+}
+
+.lessons-center-bar .inline-error {
+  flex: 1;
+  margin: 0;
+}
+
+.lessons-center-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--space-8) var(--space-10);
+}
+
+.lessons-center-head {
+  width: min(820px, 100%);
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  margin: 0 auto var(--space-5);
+}
+
+.lessons-center-head h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.lessons-topic-title-row {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.lessons-topic-meta-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
+.lessons-topic-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lessons-topic-meta-row .lessons-topic-summary {
+  grid-column: 2;
+}
+
+.lessons-topic-title-row > .button {
+  margin-left: auto;
+}
+
+.lessons-center-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.lessons-eyebrow {
+  color: var(--faint);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.lessons-topic-list,
+.lessons-lesson-list {
+  max-width: 820px;
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 auto var(--space-5);
+  padding: 0;
+  list-style: none;
+}
+
+.lessons-topic-list li {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  font-size: var(--text-sm);
+}
+
+.lessons-topic-number,
+.lessons-topic-count {
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.lessons-lesson-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.lessons-lesson-list button:not(.icon-button) {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--ink-soft);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--ease-fast), background-color var(--ease-fast);
+}
+
+.lessons-lesson-list button:not(.icon-button):hover {
+  background: var(--surface-hover);
+}
+
+.lessons-lesson-list button.is-active {
+  border-color: var(--accent-edge);
+  background: var(--accent-wash);
+  color: var(--ink);
+}
+
+.lessons-lesson-list button:not(.icon-button) > span:last-child {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* Удаление урока — рядом со строкой, а не внутри неё: одна строка, одно действие. */
+.lessons-lesson-remove {
+  flex: none;
+}
+
+.lessons-lesson-remove:hover:not(:disabled) {
+  color: var(--tone-danger);
+}
+
+.lessons-lesson {
+  max-width: 820px;
+  margin: 0 auto;
+}
+
+.lessons-lesson-head {
+  container-type: inline-size;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--canvas);
+}
+
+.lessons-lesson-toolbar,
+.lessons-block-toolbar,
+.lessons-topic-actions,
+.lessons-outline-actions,
+.lesson-tab-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.lessons-lesson-toolbar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.lessons-lesson-toolbar > * { flex: none; }
+
+/* Свёртка панели остаётся видимой; при нехватке ширины прокручивается только
+   набор инструментов урока. */
+.lessons-lesson-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.lessons-lesson-toolbar-row > .lessons-lesson-toolbar {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lessons-block-toolbar {
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--line);
+}
+
+/* Инструменты урока и блока компактнее общего размера, чтобы ряд не переносился. */
+.lessons-lesson-toolbar :is(.primary-button, .secondary-button, .text-button),
+.lessons-block-toolbar :is(.primary-button, .secondary-button, .text-button) {
+  gap: var(--space-1);
+  min-width: var(--space-8);
+  min-height: var(--space-8);
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+}
+
+/* Обёртка кнопки тулбара нужна подсказке над выключенной кнопкой и не должна
+   ломать ряд: она ведёт себя как сама кнопка. */
+.lessons-tool {
+  display: inline-flex;
+}
+
+.lessons-tool-destructive:hover:not(:disabled) {
+  color: var(--tone-danger);
+}
+
+/* Кнопка свёртки правой панели встроена в тулбар, а не висит отдельной строкой сверху.
+   В заголовке темы (нет открытого урока) она — единственный элемент своего ряда,
+   margin-left:auto прижимает её к правому краю. В тулбаре урока это уже готовый
+   сосед `.lessons-lesson-toolbar` в `.lessons-lesson-toolbar-row`, доп. отступ не нужен. */
+.lessons-toolbar-end {
+  display: inline-flex;
+  flex: none;
+}
+
+.lessons-topic-title-row > .lessons-toolbar-end {
+  margin-left: auto;
+}
+
+/* Порог подобран по фактической ширине ряда с подписями (см. проверку в браузере):
+   узкое место — ссылка «Открыть в Рабочей области» (самая длинная подпись ряда,
+   ряду нужно ~693px), она одна уходит в иконку при 715px, остальные подписи ряда
+   держатся до 545px. Текст уходит в aria-label, доступное имя не теряется. */
+@container (max-width: 715px) {
+  .lessons-lesson-toolbar .toolbar-label-link {
+    display: none;
+  }
+}
+
+@container (max-width: 545px) {
+  .lessons-lesson-toolbar .toolbar-label {
+    display: none;
+  }
+}
+
+.lessons-lesson-toolbar .toolbar-label-link { display: none; }
+
+@container (max-width: 820px) {
+  .lessons-lesson-toolbar .toolbar-label { display: none; }
+}
+
+@container (max-width: 600px) {
+  .lessons-lesson-toolbar .lesson-mode-tabs .segmented-tab-label-full { display: none; }
+  .lessons-lesson-toolbar .lesson-mode-tabs .segmented-tab-label-short { display: inline; }
+  .lessons-lesson-toolbar .lesson-mode-tabs button { padding: 0 var(--space-2); }
+}
+
+/* Инструменты блока с подписями занимают ~960px — больше, чем редактор получает
+   даже на максимуме (820px), так что подписи здесь не показываются ни при какой
+   ширине: это не «свернулось», это единственный вариант, который умещается в
+   один ряд. Текст остаётся в aria-label. */
+.lessons-block-toolbar .toolbar-label {
+  display: none;
+}
+
+.lessons-resize {
+  min-height: 0;
+}
+
+.lessons-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.lessons-material-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.lesson-suggested { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: var(--space-3); height: 100%; min-height: 0; align-items: start; }
+.lesson-suggested-list { display: grid; align-content: start; gap: var(--space-2); min-height: 0; max-height: 100%; overflow-y: auto; padding-right: var(--space-1); }
+.lesson-suggested > .evidence-inspector { max-height: 100%; overflow-y: auto; }
+
+@container (max-width: 440px) {
+  .lesson-suggested { display: flex; flex-direction: column-reverse; align-items: stretch; }
+  .lesson-suggested-list { flex: 1; }
+  .lesson-suggested > .evidence-inspector { flex: none; max-height: 45%; }
+}
+
+.lessons-panel-head {
+  flex: none;
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.lessons-panel-head h2 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+/* Вкладки занимают всю ширину панели и делят её поровну: раньше они висели
+   слева ровно по своим подписям, и при расширенной панели справа от
+   «Оглавления» оставалась пустая полоса трека. `max-content` в минимуме не даёт
+   подписи сжаться на узкой панели — вместо этого ряд прокручивается. */
+.lessons-panel-tabs {
+  width: 100%;
+  grid-auto-columns: minmax(max-content, 1fr);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.lessons-panel-tabs::-webkit-scrollbar { display: none; }
+
+/* Четыре подписи в ряд помещаются только мельче общего размера вкладок: при
+   минимальной ширине панели (300px) на них остаётся 276px. */
+.lessons-panel-tabs button {
+  padding: 0 var(--space-1);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+/* Место вставки — видимый выбор, а не «куда-нибудь после выбранного блока». */
+.lessons-insert-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lessons-panel-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-3);
+  container-type: inline-size;
+}
+
+.lessons-panel-body:has(.lesson-suggested) { overflow: hidden; }
+
+.lessons-panel-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.lessons-outline-list,
+.lessons-search-results,
+.lessons-source-choice {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lessons-outline-list li,
+.lessons-search-results li {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper-strong);
+  font-size: var(--text-sm);
+}
+
+.lessons-outline-list p,
+.lessons-search-results p {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.lessons-outline-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.lessons-outline-title span,
+.lessons-search-results span {
+  color: var(--tone-info);
+  font-size: var(--text-xs);
+}
+
+.lessons-search-result-copy {
+  min-width: 0;
+}
+
+.lessons-search-result-copy p {
+  overflow-wrap: anywhere;
+}
+
+.lessons-search-result-copy small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* Чип качества и кнопка переносятся отдельной строкой — раньше делили одну
+   грид-колонку и при узкой панели чип наезжал на кнопку. */
+.lessons-search-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.lessons-search-results mark {
+  border-radius: var(--radius-xs);
+  background: var(--accent-wash);
+  color: var(--ink);
+}
+
+.lessons-source-choice li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.lessons-source-choice li > span {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.lessons-pages-tab,
+.lessons-search-tab {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.lessons-pages-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lessons-pages-image {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-strong);
+}
+
+.lessons-search-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+}
+
+/* Строка выдачи — кнопка: щелчок открывает её страницу целиком, как в экзамене. */
+.lessons-search-result {
+  display: grid;
+  gap: var(--space-1);
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lessons-search-result p {
+  margin: 0;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.lessons-search-result small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lessons-search-result:hover p { color: var(--ink); }
+
+.lessons-search-result:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-xs);
+}
+
+.lessons-pages-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.lessons-pages-marks:empty { display: none; }
+
+/* Оглавление источника: отступ по уровню, свой фильтр — учебник даёт сотни строк. */
+.lessons-outline-drop .disclosure-inner {
+  padding: var(--space-2) 0 0;
+}
+
+.lessons-outline-nav {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.lessons-outline-rows {
+  display: grid;
+  gap: 1px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lessons-outline-rows li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.lessons-outline-rows button:not(.icon-button) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--motion-ease);
+}
+
+.lessons-outline-rows button:not(.icon-button):hover { background: var(--surface-hover); }
+
+.lessons-outline-rows button.is-active {
+  background: var(--accent-wash);
+  color: var(--ink);
+  font-weight: var(--weight-medium);
+}
+
+.lessons-outline-rows button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lessons-outline-rows button > small { color: var(--faint); }
+
+.lessons-outline-tab {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.lessons-outline-tab h3 {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.lessons-outline-source {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.lessons-bulk-scroll {
+  max-width: 980px;
+  margin: 0 auto;
+  overflow-x: auto;
+}
+
+.lessons-bulk-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.lessons-bulk-table th,
+.lessons-bulk-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.lessons-bulk-table th {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.lessons-bulk-action-head { display: flex; align-items: center; gap: var(--space-2); }
+.lessons-bulk-action-head .select-trigger { min-width: 8rem; }
+
+.lessons-bulk-footer {
+  max-width: 980px;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin: var(--space-4) auto 0;
+}
+
+/* Документ урока — общий для раздела и вкладки «Урок». */
+
+.lesson-document {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.lesson-document-empty {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.lesson-note-heading {
+  margin: 0;
+  color: var(--ink);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.lesson-note-heading.is-level-2 { font-size: var(--text-xl); }
+.lesson-note-heading.is-level-3 { font-size: var(--text-lg); }
+.lesson-note-heading.is-level-4 { font-size: var(--text-md); }
+
+.lesson-note {
+  --note-tone: var(--tone-info);
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--note-tone);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--note-tone) 6%, var(--surface-sunken));
+}
+
+.lesson-note.is-text { --note-tone: var(--line-strong); }
+.lesson-note.is-important,
+.lesson-note.is-warning { --note-tone: var(--tone-warning); }
+.lesson-note.is-example { --note-tone: var(--tone-success); }
+.lesson-note.is-definition { --note-tone: var(--accent); }
+
+.lesson-note.is-empty {
+  color: var(--faint);
+  font-size: var(--text-sm);
+}
+
+.lesson-markdown > :first-child { margin-top: 0; }
+.lesson-markdown > :last-child { margin-bottom: 0; }
+
+.lesson-markdown p,
+.lesson-markdown ul,
+.lesson-markdown ol,
+.lesson-markdown blockquote,
+.lesson-markdown pre {
+  margin: 0 0 var(--space-2);
+}
+
+.lesson-markdown blockquote {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+}
+
+.lesson-markdown pre {
+  overflow-x: auto;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+}
+
+.lesson-source-head .lesson-source-topic {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  color: var(--accent);
+}
+
+.lesson-source-head .lesson-source-shifted {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-color: color-mix(in srgb, var(--tone-warning) 45%, var(--line));
+  color: var(--tone-warning);
+}
+
+.lesson-split-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-1) 0;
+  padding: 2px var(--space-2);
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-pill);
+  background: var(--paper-strong);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.lesson-split-marker:hover,
+.lesson-split-marker:focus-visible {
+  background: var(--accent-wash);
+}
+
+.structured-fragment.is-splittable {
+  position: relative;
+  padding-bottom: var(--space-5);
+}
+
+.lesson-split-marker.is-inline {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  margin: 0;
+}
+
+.lesson-media-image {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.lesson-media-image img {
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.lesson-media-image figcaption {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.lesson-media-link {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper-strong);
+  color: var(--ink);
+  text-decoration: none;
+  transition: border-color var(--ease-fast);
+}
+
+.lesson-media-link:hover { border-color: var(--accent); }
+
+.lesson-media-link > svg { flex: none; margin-top: 2px; color: var(--accent); }
+
+.lesson-media-link span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.lesson-media-link small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lesson-media-caption,
+.lessons-link-form label {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lesson-media-caption input,
+.lessons-link-form input {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-strong);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.lessons-link-form {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.lessons-lesson-topics,
+.lessons-block-settings,
+.lessons-review-notice,
+.lessons-unbind-offer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.lessons-lesson-topics > span:first-child {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lessons-topic-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: var(--radius-pill);
+  color: var(--ink);
+  font-size: var(--text-xs);
+}
+
+.lessons-topic-chip.is-warning {
+  border-color: color-mix(in srgb, var(--tone-warning) 50%, var(--line));
+}
+
+.lessons-topic-chip button {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.lessons-topic-chip button:hover { color: var(--tone-danger); }
+
+.lessons-topic-add { min-width: 160px; }
+
+.lessons-review-notice,
+.lessons-unbind-offer {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+}
+
+.lessons-review-notice {
+  border: 1px solid color-mix(in srgb, var(--tone-warning) 40%, var(--line));
+  background: color-mix(in srgb, var(--tone-warning) 8%, transparent);
+  color: var(--ink);
+}
+
+.lessons-review-notice > svg { color: var(--tone-warning); }
+
+.lessons-unbind-offer {
+  border: 1px solid color-mix(in srgb, var(--tone-info) 40%, var(--line));
+  background: color-mix(in srgb, var(--tone-info) 8%, transparent);
+}
+
+.lessons-inline-check,
+.lessons-inline-select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lesson-source {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* Подпись источника — служебная строка над содержанием, а не заголовок: мельче
+   самого текста и приглушённее его. */
+.lesson-source-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  color: color-mix(in srgb, var(--tone-info) 70%, var(--muted));
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+}
+
+.lesson-source-head small {
+  padding: 0 var(--space-1);
+  border: 1px solid color-mix(in srgb, var(--tone-info) 24%, var(--line));
+  border-radius: var(--radius-pill);
+  color: var(--faint);
+  font-size: inherit;
+  font-weight: var(--weight-normal);
+}
+
+.lesson-source.is-unavailable .lesson-source-head {
+  color: var(--tone-warning);
+}
+
+.lesson-source-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.lesson-source-notice.is-warning {
+  color: var(--tone-warning);
+}
+
+.lesson-page {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.lesson-page figcaption {
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.lesson-page img {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.lesson-text-page {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.lesson-tab {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  container-type: inline-size;
+}
+
+.lesson-tab.is-empty {
+  justify-content: center;
+}
+
+.lesson-tab-head {
+  flex: none;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.lesson-tab-head::-webkit-scrollbar { display: none; }
+.lesson-tab-head > * { flex: none; }
+.lesson-tab-head .select-trigger { max-width: calc(var(--space-10) * 4); }
+.lesson-tab-action { white-space: nowrap; }
+.lesson-page-zoom { display: flex; align-items: center; gap: var(--space-1); }
+.lesson-page-zoom :is(.text-button, .secondary-button) { min-width: var(--space-8); min-height: var(--space-8); padding: 0 var(--space-1); }
+.lesson-page-zoom-value { min-width: var(--space-12); padding: 0; border: 0; background: transparent; color: var(--muted); font-size: var(--text-xs); cursor: pointer; }
+.segmented-tab-label-short { display: none; }
+
+@container (max-width: 1000px) {
+  .lesson-tab-head .lesson-tab-action span { display: none; }
+  .lesson-tab-head .lesson-tab-action { min-width: var(--space-8); min-height: var(--space-8); padding: 0 var(--space-2); }
+  .lesson-tab-head .lesson-duration,
+  .lesson-tab-head .status-badge { display: none; }
+  .lesson-tab-head .lesson-mode-tabs .segmented-tab-label-full { display: none; }
+  .lesson-tab-head .lesson-mode-tabs .segmented-tab-label-short { display: inline; }
+  .lesson-tab-head .lesson-mode-tabs button { padding: 0 var(--space-2); }
+}
+
+@container (max-width: 650px) {
+  .lesson-tab-head .select-trigger { max-width: calc(var(--space-10) * 3); }
+  .lesson-page-zoom-value { min-width: var(--space-10); }
+}
+
+.lesson-duration {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lesson-tab-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: var(--space-4) var(--space-5) var(--space-8);
+}
+
+.lesson-tab-body .lesson-page { justify-items: safe center; }
+.lesson-tab-body .lesson-page img { width: var(--lesson-page-width); max-width: none; }
+
+@media (max-width: 900px) {
+  .lessons-center-scroll {
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
+  }
+
+  .lessons-topic-list li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+.lesson-edit-block {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+/* Выбор блока — клик по любому его месту, отдельной кнопки выбора нет. Рамка
+   при наведении показывает границы того, что выберется. */
+.lesson-edit-block.is-pickable {
+  padding: var(--space-2);
+  transition: border-color var(--ease-fast), background-color var(--ease-fast);
+}
+
+.lesson-edit-block.is-pickable:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+
+.lesson-edit-block.is-selected,
+.lesson-edit-block.is-pickable.is-selected:hover {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+/* Пустое место под уроком: сюда правая кнопка мыши вставляет блок в конец. */
+.lesson-document-tail {
+  min-height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
+  color: var(--faint);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.lesson-document-tail:hover {
+  border-color: var(--line-strong);
+  color: var(--muted);
+}
+
+.lesson-note-editor {
+  min-height: 120px;
+  padding: var(--space-3);
+}
+
+/* Строки урока под тулбаром: выбор темы и настройки куска не растягиваются на всю ширину. */
+.lessons-lesson-topics .select-trigger,
+.lessons-inline-select .select-trigger {
+  width: auto;
+  min-width: 150px;
+  min-height: 30px;
+  font-size: var(--text-xs);
+}
+
+.lessons-inline-select {
+  white-space: nowrap;
+}
+
+/* Кнопки будущих этапов недоступны — их подписи уходят первыми, подсказка остаётся. */
+@container (max-width: 1000px) {
+  .lessons-block-toolbar .toolbar-label-stage {
+    display: none;
+  }
+}
+
+.lesson-save-state {
+  margin: var(--space-1) 0 0;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+.lesson-save-state.is-saved { color: var(--tone-success); }
+.lesson-save-state.is-failed { color: var(--tone-danger); }
+
+/* Вырез страницы в уроке: картинка сдвинута внутри коробки с пропорциями области. */
+.page-region {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  min-height: 2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.page-region img {
+  position: absolute;
+  max-width: none;
+}
+
+.lessons-bulk-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-strong);
+  color: var(--ink);
+}
+
+/* «История» темы учебника: пока её ведут только отметки «Урок пройден». */
+.lesson-history {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  overflow-y: auto;
+}
+
+.lesson-history-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lesson-history-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-strong);
+}
+
+.lesson-history-list time {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.lesson-history-list span {
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+/* --- Диалог выбора материала для урока -------------------------------------
+   Та же раскладка, что у «Предпросмотра найденного места» экзамена: рельс
+   слева, лист посередине, действия справа. Вместо привязки к вопросу —
+   вставка в урок, поэтому классы свои, а не общие с `source-preview`. */
+
+.dialog.lesson-picker-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: min(1280px, calc(100vw - var(--space-8)));
+  max-height: min(900px, calc(100vh - var(--space-10)));
+  padding: var(--space-5);
+}
+
+.lesson-picker-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.lesson-picker-source {
+  min-width: 0;
+  max-width: 420px;
+}
+
+.lesson-picker {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 320px;
+  gap: var(--space-4);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.lesson-picker-page,
+.lesson-picker-actions {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Рельс не общая прокрутка: список найденного и оглавление листаются порознь.
+   Иначе оглавление, показывая текущий пункт, увозило вверх весь рельс вместе с
+   найденными местами. */
+.lesson-picker-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  overflow: hidden;
+  padding-right: var(--space-2);
+  border-right: 1px solid var(--line);
+}
+
+/* Найденное не ужимается до одной строки ради оглавления: с чем пришли, то и
+   видно, а оглавление занимает остаток рельса. */
+.lesson-picker-found {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: 38vh;
+  overflow-y: auto;
+}
+
+.lesson-picker-found h3,
+.lesson-picker-picks h3 {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.lesson-picker-found h4 {
+  margin: var(--space-2) 0 var(--space-1);
+  color: var(--faint);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+  overflow-wrap: anywhere;
+}
+
+.lesson-picker-found ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lesson-picker-found button {
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--motion-ease);
+}
+
+.lesson-picker-found button:hover { background: var(--surface-hover); }
+
+.lesson-picker-found button.is-active {
+  background: var(--accent-wash);
+  color: var(--ink);
+  font-weight: var(--weight-medium);
+}
+
+.lesson-picker-found small { color: var(--faint); }
+
+/* Просмотрщик оглавления внутри рельса: без своей рамки и отступов. */
+.lesson-picker-rail .viewer-outline {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.lesson-picker-page {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+}
+
+.lesson-picker-sheet {
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+}
+
+.lesson-picker-sheet img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.lesson-picker-sheet-mark {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--paper-strong) 88%, transparent);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  pointer-events: none;
+}
+
+.lesson-picker-regions,
+.lesson-picker-draw {
+  position: absolute;
+  inset: 0;
+}
+
+.lesson-picker-draw {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.lesson-picker-box {
+  position: absolute;
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  pointer-events: none;
+}
+
+/* Три состояния области: найдено поиском — заливка, выбрано — контур, обычное — рамка. */
+.lesson-picker-regions button {
+  position: absolute;
+  padding: 0;
+  border: 1px solid var(--accent-edge);
+  border-radius: 2px;
+  background: none;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--motion-ease);
+}
+
+.lesson-picker-regions button:hover { background: var(--accent-wash); }
+
+.lesson-picker-regions button.is-found {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.lesson-picker-regions button.is-picked {
+  background: var(--accent-wash-strong);
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.lesson-picker-regions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.lesson-picker-page .structured-page { max-width: none; }
+
+.lesson-picker-page .structured-fragment {
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.lesson-picker-page .structured-fragment.is-found { background: var(--accent-wash); }
+
+.lesson-picker-page .structured-fragment.is-picked {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lesson-picker-actions {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--line);
+}
+
+.lesson-picker-where {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lesson-picker-add { width: 100%; }
+
+.lesson-picker-region {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--line);
+}
+
+.lesson-picker-notice {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.lesson-picker-notice.is-danger { color: var(--tone-danger); }
+
+.lesson-picker-picks {
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--line);
+}
+
+.lesson-picker-picks-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.lesson-picker-picks ul {
+  display: grid;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lesson-picker-picks label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.lesson-picker-picks label:hover { background: var(--surface-hover); }
+
+.lesson-picker-picks li.is-found label { color: var(--ink); }
+
+/* Колонтитул и номер страницы уроку ничего не дают — видно, что это не текст темы. */
+.lesson-picker-picks li.is-service label { color: var(--faint); }
+
+.lesson-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 1180px) {
+  .lesson-picker { grid-template-columns: 200px minmax(0, 1fr) 280px; }
+}
+
+/* Картинка внутри пояснения: своя ширина колонки урока, а не исходный размер. */
+.lesson-markdown-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+}
+
+.lesson-markdown-missing {
+  color: var(--tone-warning);
+  font-size: var(--text-sm);
+}
+
+/* «Урок из найденного»: отмеченные страницы превращаются в урок одной кнопкой. */
+.lessons-search-selection {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: var(--radius-md);
+  background: var(--paper-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.lessons-search-selection span { color: var(--ink-soft); font-size: var(--text-sm); }
+
+/* «Собрать урок с ИИ»: форма выбора и прогресс фоновой сборки. */
+.dialog.lesson-build-dialog {
+  width: min(52rem, calc(100vw - var(--space-8)));
+}
+
+.lesson-build-form,
+.lesson-build-progress {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/* Четыре шаблона — сеткой 2×2, три уровня глубины — в один ряд. */
+.lesson-build-form .lesson-build-templates.is-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.lesson-build-form .lesson-build-levels.is-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+@media (max-width: 900px) {
+  .lesson-build-form .lesson-build-templates.is-grid,
+  .lesson-build-form .lesson-build-levels.is-grid { grid-template-columns: 1fr; }
+}
+
+.lesson-build-materials {
+  display: grid;
+  gap: var(--space-1);
+}
+
+/* Куски, выбранные в «Источнике» или «Предложено»: список с кнопкой «снять». */
+.lesson-build-pinned {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lesson-build-pinned li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+
+.lesson-build-pinned li > span {
+  display: grid;
+  min-width: 0;
+}
+
+.lesson-build-pinned strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lesson-build-pinned small {
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+}
+
+.lesson-build-note {
+  margin: 0;
+  color: var(--tone-warning);
+  font-size: var(--text-xs);
+}
+
+.lesson-build-cost {
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.lesson-build-row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 9rem) minmax(0, 1fr) minmax(7rem, 9rem);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.lesson-build-model {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+}
+
+.lesson-build-brief {
+  max-height: 22rem;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+  .lesson-build-row { grid-template-columns: 1fr; }
+}
+
+/* Откуда пояснение модели: по материалам или из её знаний (FR-L5). */
+.lesson-note-origin {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+}
+
+.lesson-note-origin.is-model .machine-mark {
+  color: var(--tone-warning);
+}
+
+/* Кусок учебника, свёрнутый под пояснением: «▸ В учебнике: Олифер, стр. 150–153». */
+.lesson-source-collapsed {
+  margin: var(--space-1) 0 var(--space-3);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+}
+
+.lesson-source-collapsed.is-open {
+  border-style: solid;
+}
+
+.lesson-source-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.lesson-source-toggle:hover { background: var(--surface-hover); }
+.lesson-source-toggle small { margin-left: auto; color: var(--accent); }
+.lesson-source-collapsed.is-open > .lesson-source { padding: 0 var(--space-3) var(--space-3); }
+
+/* Окно опоры `[S3]` в пояснении: лист страницы и переход к нему. */
+.lesson-citation-preview { display: grid; gap: var(--space-2); }
+.lesson-citation-preview header { display: flex; align-items: flex-start; gap: var(--space-2); }
+.lesson-citation-preview header > div { display: grid; gap: 2px; min-width: 0; }
+.lesson-citation-preview header small { color: var(--muted); }
+
+.lesson-citation-page {
+  display: block;
+  width: 100%;
+  max-height: 18rem;
+  object-fit: cover;
+  object-position: top;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+/* Редактор плана урока: шаги строками, опоры чипами, цена сборки внизу. */
+.lesson-storyboard { display: grid; gap: var(--space-3); }
+.lesson-storyboard-head h3 { margin: 0; font-size: var(--text-md); }
+.lesson-storyboard-head p { margin: var(--space-1) 0 0; color: var(--ink-soft); font-size: var(--text-sm); }
+.lesson-storyboard-concepts { color: var(--accent); }
+
+.lesson-storyboard-steps {
+  display: grid;
+  gap: var(--space-2);
+  max-height: min(52vh, 34rem);
+  margin: 0;
+  overflow: auto;
+  padding: 0;
+  list-style: none;
+}
+
+.lesson-storyboard-step {
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: start;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+
+.lesson-storyboard-number {
+  display: grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.lesson-storyboard-body { display: grid; gap: var(--space-1); min-width: 0; }
+.lesson-storyboard-line { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: var(--space-2); }
+.lesson-storyboard-title { font-weight: 600; }
+.lesson-storyboard-intent { resize: vertical; color: var(--ink-soft); font-size: var(--text-sm); }
+
+.lesson-storyboard-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.lesson-storyboard-sources small { color: var(--muted); font-size: var(--text-xs); }
+
+.lesson-storyboard-source {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--space-1);
+  padding-left: var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--tone-info) 35%, var(--line));
+  border-radius: var(--radius-pill);
+  color: var(--tone-info);
+  font-size: var(--text-xs);
+}
+
+.lesson-storyboard-source > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lesson-storyboard-source button,
+.lesson-storyboard-add-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-1);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.lesson-storyboard-source button:hover,
+.lesson-storyboard-add-source:hover { color: var(--accent); }
+
+.lesson-storyboard-tools { display: flex; gap: 2px; }
+
+.lesson-storyboard-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.lesson-storyboard-cost {
+  margin-left: auto;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.lesson-storyboard-limit {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.lesson-storyboard-limit input { width: 7rem; }
+
+@media (max-width: 900px) {
+  .lesson-storyboard-line { grid-template-columns: 1fr; }
+}
+
+/* «Дополнить с ИИ»: быстрые просьбы чипами и двухколоночный ряд модели и цены. */
+.dialog.lesson-enrich-dialog {
+  width: min(46rem, calc(100vw - var(--space-8)));
+}
+
+.lesson-build-row.is-two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+
+.lesson-enrich-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.lesson-enrich-chip {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.lesson-enrich-chip:hover,
+.lesson-enrich-chip.is-active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .lesson-build-row.is-two { grid-template-columns: 1fr; }
+}
+
+/* Шапка предложения модели: сколько изменений, основа, цена и два решения. */
+.lesson-proposal-bar {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: var(--radius-md);
+  background: var(--accent-wash);
+}
+
+.lesson-proposal-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--accent);
+  font-size: var(--text-sm);
+}
+
+.lesson-proposal-bar-row strong { color: var(--ink); }
+.lesson-proposal-bar-row > span:not(.lesson-proposal-bar-actions) { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.lesson-proposal-bar-actions { display: inline-flex; gap: var(--space-2); margin-left: auto; }
+
+.lesson-proposal-summary {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.lesson-proposal-dropped {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lesson-proposal-note {
+  margin: var(--space-2) 0 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+/* Изменение предложения на своём месте в уроке — «призрачный» блок с флажком. */
+.lesson-proposal-card {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-wash) 45%, var(--paper));
+  opacity: .72;
+  transition: opacity 120ms ease, border-color 120ms ease;
+}
+
+.lesson-proposal-card.is-chosen {
+  border-style: solid;
+  opacity: 1;
+}
+
+.lesson-proposal-card header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.lesson-proposal-card header .machine-mark { font-size: var(--text-xs); font-weight: 400; }
+.lesson-proposal-card .lesson-note { margin: 0; }
+
+.lesson-proposal-cut {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lesson-proposal-reason {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-style: italic;
+}
+
+/* Ссылка [S2] в ещё не принятом тексте: опора видна, окна страницы пока нет. */
+.chat-citation.is-static { cursor: default; }
+.chat-citation.is-static:hover { background: var(--accent-wash); }
+
+/* Задание урока: условие, ввод по форме, итог проверки и разбор. */
+.lesson-task {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+
+.lesson-task.is-passed { border-left-color: var(--tone-success); }
+.lesson-task.is-partial { border-left-color: var(--tone-warning); }
+.lesson-task.is-failed { border-left-color: var(--tone-danger); }
+
+.lesson-task-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  font-size: var(--text-xs);
+}
+
+.lesson-task-label {
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+
+.lesson-task-meta { color: var(--muted); }
+.lesson-task-last { margin-left: auto; color: var(--muted); }
+.lesson-task-last.is-passed { color: var(--tone-success); }
+.lesson-task-last.is-partial,
+.lesson-task-last.is-failed { color: var(--tone-warning); }
+
+.lesson-task-prompt { margin: 0; font-weight: 500; }
+.lesson-task-prompt > :first-child { margin-top: 0; }
+.lesson-task-prompt > :last-child { margin-bottom: 0; }
+.lesson-task-inline { line-height: 2.1; }
+
+.lesson-task-options { display: grid; gap: var(--space-1); }
+
+.lesson-task-option {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.lesson-task-option:hover { border-color: var(--line-strong); }
+.lesson-task-option.is-chosen { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.lesson-task-option.is-right { border-color: var(--tone-success); background: color-mix(in srgb, var(--tone-success) 8%, transparent); }
+.lesson-task-option.is-wrong { border-color: var(--tone-danger); background: color-mix(in srgb, var(--tone-danger) 8%, transparent); }
+.lesson-task-option.is-key { border-style: dashed; border-color: var(--tone-success); }
+.lesson-task-option .checkbox-row { width: 100%; }
+.lesson-task-option-text { min-width: 0; }
+.lesson-task-option-text > :first-child,
+.lesson-task-option-text > :last-child,
+.lesson-task-order-text > :first-child,
+.lesson-task-order-text > :last-child,
+.lesson-task-match-left > :first-child,
+.lesson-task-match-left > :last-child { margin: 0; }
+
+.lesson-task-radio {
+  display: grid;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--paper);
+  cursor: pointer;
+}
+
+.lesson-task-radio[data-state="checked"] { border-color: var(--accent); }
+.lesson-task-radio:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lesson-task-radio-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+
+.lesson-task-blank { display: inline-flex; flex-direction: column; vertical-align: baseline; }
+
+.lesson-task-blank-input,
+.lesson-task-number {
+  min-width: 6rem;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  font: inherit;
+}
+
+.lesson-task-blank-input.is-right,
+.lesson-task-number.is-right { border-color: var(--tone-success); }
+.lesson-task-blank-input.is-wrong,
+.lesson-task-number.is-wrong { border-color: var(--tone-danger); }
+.lesson-task-blank-list { display: grid; gap: var(--space-1); }
+.lesson-task-blank-row { display: flex; gap: var(--space-2); align-items: baseline; }
+
+.lesson-task-accepted {
+  color: var(--tone-success);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.lesson-task-numeric { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; }
+.lesson-task-unit { color: var(--ink-soft); }
+
+.lesson-task-order {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lesson-task-order-item {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.lesson-task-order-item.is-right { border-color: var(--tone-success); }
+.lesson-task-order-item.is-wrong { border-color: var(--tone-danger); }
+.lesson-task-order-number { color: var(--muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; text-align: center; }
+.lesson-task-order-tools { display: inline-flex; gap: 2px; }
+
+.lesson-task-order-tools button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.lesson-task-order-tools button:hover:not(:disabled) { background: var(--surface-hover); color: var(--accent); }
+.lesson-task-order-tools button:disabled { opacity: .35; cursor: default; }
+
+.lesson-task-key-list {
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--tone-success);
+  font-size: var(--text-sm);
+}
+
+.lesson-task-matching { display: grid; gap: var(--space-2); }
+
+.lesson-task-match {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: var(--space-1) var(--space-3);
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.lesson-task-match.is-right { border-color: var(--tone-success); }
+.lesson-task-match.is-wrong { border-color: var(--tone-danger); }
+.lesson-task-match-left { font-weight: 500; }
+.lesson-task-match .lesson-task-accepted { grid-column: 2; display: inline-flex; gap: var(--space-1); align-items: center; }
+
+.lesson-task-open {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  font: inherit;
+  resize: vertical;
+}
+
+.lesson-task-hint {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.lesson-task-outcome {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.lesson-task-outcome.is-passed { color: var(--tone-success); }
+.lesson-task-outcome.is-partial { color: var(--tone-warning); }
+.lesson-task-outcome.is-failed { color: var(--tone-danger); }
+.lesson-task-outcome.is-pending { color: var(--ink-soft); }
+.lesson-task-outcome span { color: var(--ink-soft); }
+
+.lesson-task-points {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.lesson-task-points ul { margin: var(--space-1) 0 0; padding-left: var(--space-4); }
+.lesson-task-points .is-right strong { color: var(--tone-success); }
+.lesson-task-points .is-missed strong { color: var(--tone-warning); }
+.lesson-task-points .is-wrong strong { color: var(--tone-danger); }
+
+.lesson-task-explain {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-size: var(--text-sm);
+}
+
+.lesson-task-explanation > :first-child,
+.lesson-task-reference > :first-child { margin-top: 0; }
+.lesson-task-explanation > :last-child,
+.lesson-task-reference > :last-child { margin-bottom: 0; }
+.lesson-task-key-points { margin: 0; padding-left: var(--space-4); }
+.lesson-task-source { margin: 0; color: var(--muted); font-size: var(--text-xs); }
+
+.lesson-task-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+/* Задание в предложении — предпросмотр с открытым ключом. */
+.lesson-proposal-card .lesson-task { margin: 0; border-left-width: 1px; }
+
+/* «Пройти задания»: одно задание за раз и сводка в конце. */
+.dialog.lesson-practice-run { width: min(44rem, calc(100vw - var(--space-8))); }
+.lesson-practice-run .lesson-task { margin-bottom: 0; }
+.lesson-practice-summary { display: grid; gap: var(--space-2); padding: var(--space-4) 0; text-align: center; }
+.lesson-practice-summary strong { font-size: var(--text-lg); }
+.lesson-practice-summary p { margin: 0; color: var(--ink-soft); }
+
+@media (max-width: 900px) {
+  .lesson-task-match { grid-template-columns: 1fr; }
+  .lesson-task-match .lesson-task-accepted { grid-column: 1; }
+}
+
+/* «с ИИ» в массовой подготовке: общие настройки, оценка и ход фоновой сборки. */
+.lessons-bulk-ai {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-wash) 50%, var(--paper));
+}
+
+.lessons-bulk-ai-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: baseline;
+  color: var(--accent);
+  font-size: var(--text-sm);
+}
+
+.lessons-bulk-ai-head strong { color: var(--ink); }
+.lessons-bulk-ai-head span { color: var(--ink-soft); font-size: var(--text-xs); }
+
+.lessons-bulk-ai-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.lessons-bulk-ai-row .select-trigger { flex: 0 0 auto; width: auto; min-width: 13rem; }
+
+.lessons-bulk-ai-cost {
+  margin-left: auto;
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.lessons-bulk-found { display: block; color: var(--accent); font-size: var(--text-xs); }
+.lessons-bulk-found.is-empty { color: var(--tone-warning); }
+
+.lessons-bulk-skipped {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+}
+
+/* --- Экспорт и импорт уроков --- */
+
+/* Кнопка меню переноса занимает третью колонку шапки дерева. */
+.workspace-tree-title.is-textbook.has-actions {
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+}
+
+.dialog.lesson-export-dialog,
+.dialog.lesson-import-dialog {
+  width: min(56rem, calc(100vw - var(--space-8)));
+}
+
+.lesson-export-dialog .dialog-actions,
+.lesson-import-dialog .dialog-actions {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.lesson-export-dialog .dialog-actions .inline-error,
+.lesson-import-dialog .dialog-actions .inline-error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.lesson-export-count {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.lesson-export-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.lesson-export-options {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.lesson-export-pick { display: grid; gap: var(--space-3); min-width: 0; }
+
+.lesson-export-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.lesson-export-tools .workspace-tree-search { flex: 1; }
+
+.lesson-export-list {
+  height: min(31rem, calc(100vh - 18rem));
+  min-height: 16rem;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.lesson-export-group + .lesson-export-group { margin-top: var(--space-3); }
+
+.lesson-export-topic {
+  margin: 0 0 var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.lesson-export-topic span {
+  color: color-mix(in srgb, var(--accent) 70%, var(--muted));
+  font-variant-numeric: tabular-nums;
+}
+
+.lesson-export-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 30px;
+}
+
+.lesson-export-row .checkbox-row { min-width: 0; }
+
+.lesson-export-status {
+  flex: none;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.lesson-export-status.is-ready { color: var(--tone-success); }
+
+.lesson-export-status.is-archived { color: var(--muted); }
+
+.lesson-export-empty {
+  margin: var(--space-2) 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.lesson-export-formats.is-rows { gap: var(--space-2); }
+
+.lesson-export-settings {
+  display: grid;
+  gap: var(--space-3);
+  transition: opacity var(--ease-fast);
+}
+
+.lesson-export-settings.is-disabled { opacity: 0.5; }
+
+.lesson-export-field {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.lesson-export-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.lesson-import-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.lesson-import-preview {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.lesson-import-heading {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.lesson-import-lessons {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.lesson-import-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 18rem);
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.lesson-import-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lesson-import-title small {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lesson-import-title strong {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lesson-import-topic { width: 100%; }
+
+.lesson-import-result {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.lesson-import-result ul {
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+/* Кусок из файла уроков без своего учебника: снимок текста в рамке «чужого». */
+.lesson-source.is-snapshot .lesson-source-head { color: var(--tone-warning); }
+
+.lesson-source-snapshot {
+  padding-left: var(--space-3);
+  border-left: 2px dashed color-mix(in srgb, var(--tone-warning) 45%, var(--line));
+}
+
+.lessons-review-notice.is-snapshot {
+  border-color: color-mix(in srgb, var(--tone-info) 40%, var(--line));
+  background: color-mix(in srgb, var(--tone-info) 8%, transparent);
+}
+
+.lessons-review-notice.is-snapshot > svg { color: var(--tone-info); }
+
+@media (max-width: 900px) {
+  .lesson-export-body,
+  .lesson-import-row { grid-template-columns: 1fr; }
+}

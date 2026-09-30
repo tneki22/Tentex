@@ -19,15 +19,18 @@
 `snippet()` не умеет подсвечивать колонку, по которой не было совпадения.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import select, text
 from sqlalchemy.engine import Connection
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.materials.lexicon import (
+    fold,
     index_text,
     lemmatize,
     norm_text,
@@ -35,11 +38,31 @@ from app.materials.lexicon import (
     query_terms,
     tokenize_with_positions,
 )
+from app.materials.naming import material_display_name
 from app.materials.presentation import MaterialPresentationKind, presentation_kind
 from app.models import Material, MaterialBlock, MaterialFragment, MaterialPage, PageQuality
 
 RESULT_LIMIT = 50
 _RAW_HIT_MULTIPLIER = 4
+
+#: Выдача BM25 одного HTTP-запроса. Поиск кандидатов в проекте сначала строит
+#: выдачу по словам, затем гибридный поиск повторяет MATCH по материалам своей
+#: области. Когда набор материалов совпадает (поиск без темы), второй MATCH не
+#: нужен: в пределах одного снимка базы результат одинаковый. У темы экзамена
+#: область шире (ещё файл ответов), и ключ честно не совпадает.
+_REQUEST_OUTCOMES: ContextVar[dict[tuple, "SearchOutcome"] | None] = ContextVar(
+    "fragment_search_outcomes", default=None
+)
+
+
+@contextmanager
+def reuse_fragment_search() -> Iterator[None]:
+    """Не повторять одинаковый BM25-поиск внутри одного запроса."""
+    token = _REQUEST_OUTCOMES.set({})
+    try:
+        yield
+    finally:
+        _REQUEST_OUTCOMES.reset(token)
 
 #: Длинная формулировка не улучшает выдачу, но раздувает выражение MATCH.
 _MAX_QUERY_TERMS = 12
@@ -82,8 +105,41 @@ def reindex_material(session: Session, material_id: UUID) -> int:
             MaterialPage.revision == material.active_parse_revision,
         )
     ).all()
-    for fragment_id, fragment_text in rows:
-        _insert_fragment(session, fragment_id, material_id, fragment_text)
+    # Транскрипт YouTube может содержать сотни коротких фрагментов. Два INSERT
+    # и SELECT last_insert_rowid() на каждый из них оставляли задачу на 1/1
+    # после появления текста. SQLite допускает явные rowid в FTS5; текущая
+    # write-транзакция гарантирует, что другой писатель не займёт эти номера.
+    first_rowid = session.execute(
+        text("SELECT COALESCE(MAX(rowid), 0) FROM fragment_search")
+    ).scalar_one() + 1
+    indexed = [
+        {
+            "rowid": first_rowid + position,
+            "norm": norm_text(fragment_text),
+            "lemmas": index_text(fragment_text),
+            "fragment_id": fragment_id.hex,
+            "material_id": material_id.hex,
+        }
+        for position, (fragment_id, fragment_text) in enumerate(rows)
+    ]
+    if indexed:
+        session.execute(
+            text(
+                "INSERT INTO fragment_search(rowid, norm, lemmas, fragment_id, material_id) "
+                "VALUES (:rowid, :norm, :lemmas, :fragment_id, :material_id)"
+            ),
+            indexed,
+        )
+        session.execute(
+            text(
+                "INSERT INTO fragment_search_map(fragment_id, material_id, rowid) "
+                "VALUES (:fragment_id, :material_id, :rowid)"
+            ),
+            indexed,
+        )
+    from app.retrieval.indexing import queue_incremental_reindex
+
+    queue_incremental_reindex(session, material_id)
     return len(rows)
 
 
@@ -231,28 +287,92 @@ def matches_query(fragment_text: str, terms: set[str], prefix: str | None) -> bo
     )
 
 
+def mentions_term(session: Session, material_ids: Sequence[UUID], term: str) -> bool:
+    """Встречается ли слово хоть в одном фрагменте материалов.
+
+    Лемма незнакомого слова у pymorphy3 зависит от формы («Херфиндаля» →
+    «херфиндалить»), поэтому длинное слово ищется и по основе без окончания —
+    так «Оукена» из вопроса находит «Оукен» в тексте.
+    """
+    if not material_ids:
+        return False
+    token = fold(term)
+    stem = token[: max(4, len(token) - 3)] if len(token) > 5 else None
+    # Строка в кавычках: имя через дефис (`IS-LM`) без них — синтаксис FTS5.
+    expression = f'lemmas:"{lemmatize([token])[0]}" OR ' + (
+        f'norm:"{stem}"*' if stem else f'norm:"{token}"'
+    )
+    placeholders = ", ".join(f":m{index}" for index in range(len(material_ids)))
+    params: dict[str, object] = {
+        f"m{index}": material_id.hex for index, material_id in enumerate(material_ids)
+    }
+    params["q"] = expression
+    return session.execute(
+        text(
+            "SELECT 1 FROM fragment_search WHERE fragment_search MATCH :q "
+            f"AND material_id IN ({placeholders}) LIMIT 1"
+        ),
+        params,
+    ).first() is not None
+
+
 def search_fragments(
     session: Session,
     material_ids: Sequence[UUID],
     query: str,
     *,
     limit: int = RESULT_LIMIT,
+    block_ids: Sequence[UUID] | None = None,
 ) -> SearchOutcome:
-    """Топ-N кандидатов по формулировке, сгруппированных по блоку материала (Р5)."""
+    """Топ-N кандидатов по формулировке, сгруппированных по блоку материала (Р5).
+
+    `block_ids` ограничивает поиск блоками прямо в SQL, до лимита: фильтр после
+    лимита оставлял теме пустую выдачу, когда совпадения вне её блоков занимали
+    все места.
+    """
     terms = query_terms(query)[:_MAX_QUERY_TERMS]
     prefix = prefix_term(query)
     empty = SearchOutcome(terms=terms, prefix=prefix, hits=[])
-    if not (terms or prefix) or not material_ids:
+    if not (terms or prefix) or not material_ids or (block_ids is not None and not block_ids):
         return empty
     material_hex = [material_id.hex for material_id in material_ids]
+    outcomes = _REQUEST_OUTCOMES.get()
+    block_hex = sorted(block_id.hex for block_id in block_ids) if block_ids is not None else None
+    key = (tuple(sorted(material_hex)), query, limit, tuple(block_hex) if block_hex else None)
+    if outcomes is not None and key in outcomes:
+        return outcomes[key]
+    outcome = _search_fragments(session, material_hex, terms, prefix, limit, block_hex)
+    if outcomes is not None:
+        outcomes[key] = outcome
+    return outcome
+
+
+def _search_fragments(
+    session: Session,
+    material_hex: list[str],
+    terms: list[str],
+    prefix: str | None,
+    limit: int,
+    block_hex: list[str] | None = None,
+) -> SearchOutcome:
+    """MATCH по материалам и группировка найденных фрагментов по блокам."""
+    empty = SearchOutcome(terms=terms, prefix=prefix, hits=[])
     placeholders = ", ".join(f":m{index}" for index in range(len(material_hex)))
     params: dict[str, object] = {f"m{index}": value for index, value in enumerate(material_hex)}
+    block_clause = ""
+    if block_hex is not None:
+        block_placeholders = ", ".join(f":b{index}" for index in range(len(block_hex)))
+        params.update({f"b{index}": value for index, value in enumerate(block_hex)})
+        block_clause = (
+            " AND fragment_id IN (SELECT id FROM material_fragments "
+            f"WHERE block_id IN ({block_placeholders}))"
+        )
     params["q"] = _match_expression(terms, prefix)
     params["raw_limit"] = limit * _RAW_HIT_MULTIPLIER
     rows = session.execute(
         text(
             "SELECT fragment_id, bm25(fragment_search, 1.0, 2.0) AS rank FROM fragment_search "
-            f"WHERE fragment_search MATCH :q AND material_id IN ({placeholders}) "
+            f"WHERE fragment_search MATCH :q AND material_id IN ({placeholders}){block_clause} "
             "ORDER BY rank LIMIT :raw_limit"
         ),
         params,
@@ -267,12 +387,17 @@ def search_fragments(
         rank_by_fragment_id[fragment_id] = rank
         ranked_order.append(fragment_id)
 
+    # От страницы нужен только номер: её text, markdown и elements в разы
+    # тяжелее фрагмента и на bind mount удваивали время выдачи. Оглавление
+    # материала (у учебника ~120 КБ JSON) иначе читалось и разбиралось заново
+    # в каждой из сотен строк выдачи.
     fragment_rows = session.execute(
-        select(MaterialFragment, MaterialPage, MaterialBlock, Material)
+        select(MaterialFragment, MaterialPage.page_number, MaterialBlock, Material)
         .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
         .join(MaterialBlock, MaterialBlock.id == MaterialFragment.block_id)
         .join(Material, Material.id == MaterialFragment.material_id)
         .where(MaterialFragment.id.in_(ranked_order))
+        .options(defer(Material.outline), defer(Material.diagnostics))
     ).all()
     by_fragment_id = {row[0].id: row for row in fragment_rows}
 
@@ -283,7 +408,7 @@ def search_fragments(
         row = by_fragment_id.get(fragment_id)
         if row is None:
             continue
-        fragment, page, block, material = row
+        fragment, page_number, block, material = row
         rank = rank_by_fragment_id[fragment_id]
         group = groups.get(block.id)
         if group is None:
@@ -299,13 +424,13 @@ def search_fragments(
             groups[block.id] = group
             group_order.append(block.id)
         group["fragment_ids"].append(fragment_id)
-        group["page_numbers"].append(page.page_number)
+        group["page_numbers"].append(page_number)
         if rank < group["best_rank"]:
             group["best_rank"] = rank
             group["best_fragment"] = fragment
-        by_page = group["pages"].get(page.page_number)
+        by_page = group["pages"].get(page_number)
         if by_page is None:
-            group["pages"][page.page_number] = {
+            group["pages"][page_number] = {
                 "fragment_ids": [fragment_id],
                 "best_rank": rank,
                 "best_fragment": fragment,
@@ -328,7 +453,7 @@ def search_fragments(
             SearchHit(
                 fragment_ids=group["fragment_ids"],
                 material_id=material.id,
-                material_name=material.original_name,
+                material_name=material_display_name(material),
                 presentation_kind=presentation_kind(material),
                 block_id=block.id,
                 block_title=block.title,
@@ -344,9 +469,7 @@ def search_fragments(
     return SearchOutcome(terms=terms, prefix=prefix, hits=hits)
 
 
-def _hit_pages(
-    pages: dict[int, dict], terms: set[str], prefix: str | None
-) -> list[SearchHitPage]:
+def _hit_pages(pages: dict[int, dict], terms: set[str], prefix: str | None) -> list[SearchHitPage]:
     """Разложить попадание по страницам в порядке чтения документа."""
     result: list[SearchHitPage] = []
     for page_number in sorted(pages):

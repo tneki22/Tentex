@@ -1,5 +1,5 @@
-import katex from "katex";
 import type { CSSProperties, ReactNode } from "react";
+import { renderTex } from "../../components/domain/markdown/MarkdownView";
 import {
   canonicalImageMedia,
   legacyBoundImages,
@@ -29,28 +29,22 @@ function mediaNode(media: ReferenceAnswerMedia, key: string): ReactNode {
 }
 
 function mathNode(source: string, displayMode: boolean, key: string): ReactNode {
-  try {
-    const html = katex.renderToString(source, {
-      displayMode,
-      throwOnError: true,
-      strict: "ignore",
-      trust: false,
-    });
-    const Tag = displayMode ? "div" : "span";
-    return (
-      <Tag
-        className={displayMode ? "structured-formula" : "structured-inline-math"}
-        dangerouslySetInnerHTML={{ __html: html }}
-        key={key}
-      />
-    );
-  } catch {
+  const html = renderTex(source, displayMode);
+  if (html === null) {
     return (
       <code className={displayMode ? "workspace-reference-formula-fallback" : "workspace-reference-inline-fallback"} key={key}>
         {displayMode ? `$$${source}$$` : `$${source}$`}
       </code>
     );
   }
+  const Tag = displayMode ? "div" : "span";
+  return (
+    <Tag
+      className={displayMode ? "structured-formula" : "structured-inline-math"}
+      dangerouslySetInnerHTML={{ __html: html }}
+      key={key}
+    />
+  );
 }
 
 function textNodes(text: string, keyPrefix: string): ReactNode[] {

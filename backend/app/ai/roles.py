@@ -12,6 +12,10 @@ from app.projects.errors import ProjectDomainError
 # новое значение здесь требует и столбца в настройках.
 AiModality = Literal["text", "speech", "vision"]
 CachePolicy = Literal["none", "exact", "content_hash"]
+# «off» — явное «думать не надо»: у части моделей рассуждение включено по
+# умолчанию, и отличить его от «параметр не задан» можно только отдельным
+# значением. Разворачивает его транспорт, по-своему для каждого профиля.
+ReasoningEffort = Literal["off", "low", "medium", "high"]
 
 
 class TextRoleParameters(BaseModel):
@@ -19,6 +23,7 @@ class TextRoleParameters(BaseModel):
 
     max_output_tokens: int = Field(ge=64, le=32_000)
     temperature: float | None = Field(default=None, ge=0, le=2)
+    reasoning_effort: ReasoningEffort | None = None
 
 
 class ModelTestParameters(BaseModel):
@@ -48,11 +53,36 @@ class AiRoleSpec:
     allow_request_model_override: bool = False
     parameter_model: type[BaseModel] = TextRoleParameters
     visible: bool = True
+    requires_explicit_model: bool = False
 
 
 ROLE_SPECS = {
     spec.key: spec
     for spec in (
+        AiRoleSpec(
+            "coverage_overview",
+            "Обзор материала",
+            "Полный учёт блоков прохода 2.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "verified-07",
+            {"max_output_tokens": 8000},
+            allow_request_model_override=True,
+            requires_explicit_model=True,
+        ),
+        AiRoleSpec(
+            "coverage_research",
+            "Исследование материала",
+            "Уточнение решений прохода 2.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "verified-07",
+            {"max_output_tokens": 8000},
+            allow_request_model_override=True,
+            requires_explicit_model=True,
+        ),
         AiRoleSpec(
             "material_text_cleanup",
             "Уборка текста материала",
@@ -103,7 +133,7 @@ ROLE_SPECS = {
             "text",
             frozenset({"structured_output"}),
             "exact",
-            "preparation-estimate-v1",
+            "preparation-estimate-v2",
             {"max_output_tokens": 700},
         ),
         AiRoleSpec(
@@ -143,7 +173,7 @@ ROLE_SPECS = {
             "text",
             frozenset({"streaming"}),
             "none",
-            "chat-reply-v2",
+            "chat-reply-v4",
             {"max_output_tokens": 3000},
             True,
         ),
@@ -154,9 +184,19 @@ ROLE_SPECS = {
             "text",
             frozenset({"structured_output"}),
             "exact",
-            "answer-judge-v1",
+            "answer-judge-v2",
             {"max_output_tokens": 4000},
             True,
+        ),
+        AiRoleSpec(
+            "exam_card_generation",
+            "Генерация карточек",
+            "Предлагает карточки по ответу и привязанным материалам экзамена.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "exam-card-generation-v1",
+            {"max_output_tokens": 3500, "temperature": 0.35},
         ),
         AiRoleSpec(
             "exam_chat_memory",
@@ -169,6 +209,16 @@ ROLE_SPECS = {
             {"max_output_tokens": 1000},
         ),
         AiRoleSpec(
+            "retrieval_exhaustive",
+            "Обзор всех источников",
+            "Последовательно читает зафиксированный корпус и собирает проверяемый отчёт.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "exhaustive-v1",
+            {"max_output_tokens": 5000, "temperature": 0},
+        ),
+        AiRoleSpec(
             "material_page_recognition",
             "Распознавание страницы",
             "Читает страницу или вырез из неё картинкой и возвращает текст с формулами "
@@ -178,8 +228,25 @@ ROLE_SPECS = {
             # Один и тот же вырез страницы не должен стоить дважды: повторный
             # разбор материала и переразбор отдельных страниц попадают в кэш.
             "content_hash",
-            "page-recognition-v1",
+            "page-recognition-v2",
             {"max_output_tokens": 8000, "temperature": 0},
+            # Модель фиксируется в задаче при запуске: пауза и смена общих
+            # настроек не должны менять ход уже начатого разбора.
+            allow_request_model_override=True,
+        ),
+        AiRoleSpec(
+            "material_image_description",
+            "Описание изображений",
+            "Описывает вырезанные из материала схемы, графики и фотографии: название, "
+            "суть, дословные надписи, таблицу или формулу. Работает при обработке "
+            "«Облако» и в действии «Описать изображения» готового материала.",
+            "vision",
+            frozenset({"image_input", "structured_output"}),
+            # Тот же вырез с той же подписью не оплачивается повторно.
+            "content_hash",
+            "image-description-v1",
+            {"max_output_tokens": 3000, "temperature": 0},
+            allow_request_model_override=True,
         ),
         AiRoleSpec(
             "speech_transcription",
@@ -193,6 +260,93 @@ ROLE_SPECS = {
             parameter_model=SpeechRoleParameters,
         ),
         AiRoleSpec(
+            "material_audio_transcription",
+            "Расшифровка аудиоматериала",
+            "Превращает запись лекции или голосовое сообщение в текст с временными метками. "
+            "Работает в режиме расшифровки «Облако»; модель берётся из «Для речи».",
+            "speech",
+            frozenset({"audio_transcription"}),
+            "none",
+            "audio-material-v1",
+            {"language": "ru"},
+            parameter_model=SpeechRoleParameters,
+        ),
+        AiRoleSpec(
+            "study_outline_extract",
+            "Оглавление учебника",
+            "Восстанавливает структуру учебника, когда закладок и печатного оглавления нет.",
+            "text",
+            frozenset({"structured_output"}),
+            "content_hash",
+            "outline-v1",
+            {"max_output_tokens": 6000, "temperature": 0},
+        ),
+        AiRoleSpec(
+            "study_program_assistant",
+            "Помощник по программе учебника",
+            "Строит и правит дерево программы учебника в чате: резюме, плюсы, "
+            "минусы и операции над узлами одним структурированным ответом.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "study-program-v1",
+            {"max_output_tokens": 8000},
+            # Модель выбирается прямо в композере чата наравне с экзаменационным:
+            # прежний запрет override снят, когда выбор переехал из Параметров в чат.
+            True,
+        ),
+        AiRoleSpec(
+            "source_web_search",
+            "Поиск материалов в интернете",
+            "Чат в Материалах: составляет запросы к локальному поисковику SearXNG "
+            "по программе и цели проекта и отбирает из выдачи учебные источники.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "source-search-chat-v1",
+            {"max_output_tokens": 6000},
+            # Модель выбирается в композере чата, как у остальных чатов.
+            True,
+        ),
+        # Три роли Уроков: одна модель на всю сборку выбирается в диалоге запуска,
+        # поэтому override разрешён. Кэша нет: пересборка урока — это просьба о
+        # новом тексте, а не повтор прежнего ответа. Этап вызова сборки (черновик,
+        # план, шаг, рецензент) пишется в `context_manifest`, prompt_version одна.
+        AiRoleSpec(
+            "lesson_builder",
+            "Сборка урока",
+            "Составляет урок по теме из материалов проекта и знаний модели: план, "
+            "объяснение по шагам и рецензию черновика.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "lesson-builder-v1",
+            {"max_output_tokens": 8000},
+            True,
+        ),
+        AiRoleSpec(
+            "lesson_enrich",
+            "Дополнение урока",
+            "Предлагает пояснения, примеры и определения между блоками готового урока.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "lesson-enrich-v1",
+            {"max_output_tokens": 6000},
+            True,
+        ),
+        AiRoleSpec(
+            "lesson_practice",
+            "Задания урока",
+            "Составляет задания для самопроверки по материалу урока и упражнениям учебника.",
+            "text",
+            frozenset({"structured_output"}),
+            "none",
+            "lesson-practice-v1",
+            {"max_output_tokens": 6000},
+            True,
+        ),
+        AiRoleSpec(
             "settings_model_test",
             "Проверка модели",
             "Проверяет, отвечает ли явно выбранная модель.",
@@ -202,6 +356,21 @@ ROLE_SPECS = {
             default_parameters={"max_output_tokens": 1500},
             allow_request_model_override=True,
             parameter_model=ModelTestParameters,
+            visible=False,
+        ),
+        # Отдельная роль, а не `speech_transcription`: та может быть выключена в
+        # Параметрах, а проверка явно выбранной модели от этого зависеть не должна.
+        AiRoleSpec(
+            "settings_speech_model_test",
+            "Проверка модели распознавания речи",
+            "Проверяет, принимает ли явно выбранная модель аудио.",
+            "speech",
+            frozenset({"audio_transcription"}),
+            cache_policy="none",
+            prompt_version="settings-speech-model-test-v1",
+            default_parameters={"language": "ru"},
+            allow_request_model_override=True,
+            parameter_model=SpeechRoleParameters,
             visible=False,
         ),
     )

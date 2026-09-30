@@ -1,6 +1,7 @@
 import { ProjectApiError, request, type ProgramChangeResult } from "./projects";
 import type { AiPreflight, AiUsage } from "./ai";
 import type { BackgroundJobStartRead } from "./backgroundJobs";
+import type { OcrCloudStrategy, OcrImageMode } from "./ocr";
 
 export type MaterialPurpose = "exam_structure" | "reference_answers" | "study_source";
 export type ExamMaterialSlot =
@@ -32,6 +33,9 @@ export interface ProcessingTaskRead {
   state: "queued" | "running" | "paused" | "failed" | "completed";
   stage: "queued" | "extract" | "segment" | "complete";
   parser_mode: ParserMode | null;
+  model_id: string | null;
+  cloud_strategy: OcrCloudStrategy | null;
+  image_mode: OcrImageMode | null;
   done: number;
   total: number;
   diagnostics: string[];
@@ -40,12 +44,38 @@ export interface ProcessingTaskRead {
   updated_at: string;
 }
 
+/** Короткий опрос идущего разбора без страницы, оглавления и истории. */
+export function getLibraryProcessing(
+  materialId: string, signal?: AbortSignal,
+): Promise<ProcessingTaskRead | null> {
+  return request(`${libraryPath(materialId)}/processing`, { signal });
+}
+
+/** Чем и какие страницы прочитал последний разбор активной версии. */
+export interface MaterialParseRead {
+  revision: number;
+  parser_mode: ParserMode | null;
+  /** Модель страниц облачного запуска; у «Быстро» — null. */
+  model_id: string | null;
+  scope: "all" | "range" | "needs_review" | string;
+  page_from: number | null;
+  page_to: number | null;
+  /** Сколько страниц прочитал этот запуск; остальные пришли из прошлой версии. */
+  parsed_pages: number | null;
+}
+
 export interface MaterialRead {
   id: string;
   original_name: string;
+  /** Эффективное имя: псевдоним проекта, иначе название из Библиотеки. */
   display_name: string;
+  library_display_name: string;
+  /** Собственный псевдоним проекта; `null` — проект использует имя Библиотеки. */
+  project_display_name: string | null;
   media_type: string;
   source_kind: MaterialSourceKind;
+  /** Вид источника от сервера: по нему видно, есть ли у страниц растр. */
+  presentation_kind: MaterialPresentationKind;
   source_url: string | null;
   retrieved_at: string | null;
   size_bytes: number;
@@ -61,18 +91,23 @@ export interface MaterialRead {
   scan_page_count: number;
   ocr_low_page_count: number;
   estimated_seconds: number | null;
-  outline: Array<{ level: number; title: string; page: number }>;
+  /** Оглавление источника, как его сохранил разбор: закладки PDF или печатная страница. */
+  outline: OutlineItem[];
   diagnostics: string[];
   error: string | null;
   task: ProcessingTaskRead | null;
+  last_parse: MaterialParseRead | null;
+  /** Сколько тем текущей программы опирается на источник. */
+  used_by_topics: number;
   attached_at: string;
   created_at: string;
   updated_at: string;
 }
 
 export type MaterialUpdateCommand = Partial<
-  Pick<MaterialRead, "display_name" | "source_role" | "priority" | "instruction" | "purposes" | "exam_slot">
+  Pick<MaterialRead, "source_role" | "priority" | "instruction" | "purposes" | "exam_slot">
 > & {
+  display_name?: string | null;
   replace_reference_answers?: boolean;
 };
 
@@ -92,6 +127,69 @@ export interface MaterialFragmentRead {
   /** Границы сегмента у расшифровки аудио и субтитров; у остальных — null. */
   time_from: number | null;
   time_to: number | null;
+  /** Состояние изображения: роль, обработка, проверка и описание модели. */
+  visual?: ImageVisualRead | null;
+}
+
+/** Метка, с которой начинается текст описанного изображения: цитата сама говорит,
+ *  что это описание модели, а не текст книги. Держать в синхроне с бэкендом. */
+export const MODEL_DESCRIPTION_MARK = "[Описание изображения, сделано моделью]";
+
+export type ImageRole = "content" | "service" | "decorative" | "unknown";
+export type ImageProcessing =
+  | "unprocessed"
+  | "text_only"
+  | "described"
+  | "legacy"
+  | "skipped"
+  | "error";
+export type ImageReview = "unreviewed" | "needs_review" | "verified" | "manual";
+
+export interface ImageDescriptionRead {
+  kind: string;
+  title: string;
+  summary: string;
+  objects: string[];
+  relations: string[];
+  labels: string[];
+  unreadable: string[];
+  details: string[];
+  table_markdown: string;
+  latex: string;
+  context_note: string;
+  confidence: number | null;
+}
+
+/** Три явные оси изображения вместо догадки по тексту фрагмента. */
+export interface ImageVisualRead {
+  role: ImageRole;
+  processing: ImageProcessing;
+  review: ImageReview;
+  reasons: string[];
+  signals: string[];
+  detection: string;
+  crop_hash: string | null;
+  pixel_size: [number, number] | null;
+  caption: string | null;
+  description: ImageDescriptionRead | null;
+  provenance: {
+    source: string;
+    model_id: string | null;
+    provider_id: string | null;
+    prompt_version: string | null;
+    run_id: string | null;
+    job_id: string | null;
+  } | null;
+}
+
+/** Счётчики изображений активной версии для карточки материала. */
+export interface ImageCountsRead {
+  total: number;
+  /** Без проверяемого текста и не исключены — число N у «Описать изображения». */
+  describable: number;
+  described: number;
+  needs_review: number;
+  service: number;
 }
 
 export interface MaterialBlockRead {
@@ -142,6 +240,8 @@ export interface LibraryUsageRead {
 export interface LibraryMaterialRead {
   id: string;
   original_name: string;
+  display_name: string;
+  subject: string | null;
   media_type: string;
   source_kind: MaterialSourceKind;
   source_url: string | null;
@@ -154,9 +254,17 @@ export interface LibraryMaterialRead {
   ocr_low_page_count: number;
   block_count: number;
   fragment_count: number;
+  has_outline: boolean;
   sha256: string;
   created_at: string;
   usage: LibraryUsageRead[];
+}
+
+export interface LibraryMaterialMetadataRead {
+  id: string;
+  display_name: string;
+  subject: string | null;
+  updated_at: string;
 }
 
 /* ── Глобальная Библиотека. Общий материал не знает про проект: роли,
@@ -172,7 +280,7 @@ export type MaterialPresentationKind =
   | "audio"
   | "typst";
 
-export type OutlineSource = "embedded" | "recognized" | "none";
+export type OutlineSource = "embedded" | "printed" | "recognized" | "model" | "none";
 
 export type RevisionOrigin =
   | "imported"
@@ -180,7 +288,8 @@ export type RevisionOrigin =
   | "manual_edit"
   | "ai_cleanup"
   | "source_refresh"
-  | "restore";
+  | "restore"
+  | "image_descriptions";
 
 export type ProcessingScope = "all" | "needs_review" | "range";
 
@@ -198,6 +307,26 @@ export interface OutlineItem {
   level: number;
   title: string;
   page: number;
+}
+
+export interface OutlineDetailRead {
+  items: OutlineItem[];
+  source: OutlineSource;
+  source_pages: number[];
+  available_sources: OutlineSource[];
+  /** Страница для просмотрщика по умолчанию — печатная страница оглавления,
+   *  если нашлась, даже когда сами пункты взяты из закладок PDF. */
+  review_pages: number[];
+  review_needs_check: boolean;
+}
+
+export interface OutlineModelRunRead {
+  run_id: string;
+  items: OutlineItem[];
+  usage: AiUsage;
+  requested_model_id: string;
+  actual_model_id: string;
+  cached: boolean;
 }
 
 export interface PageStateRead {
@@ -233,7 +362,10 @@ export interface LibraryMaterialDetailRead extends LibraryMaterialRead {
   retrieved_at: string | null;
   updated_at: string;
   storage_path: string;
+  /** Метка растра страниц: меняется только вместе с самим файлом материала. */
+  raster_token: string;
   typst: TypstMaterialRead | null;
+  images: ImageCountsRead;
 }
 
 export interface TypstIssueRead {
@@ -313,6 +445,36 @@ export interface PageCorrectionRead {
   orphaned_binding_ids: string[];
 }
 
+export type HeaderFooterKind = "header" | "footer" | "page_number";
+
+export interface HeaderFooterCandidateRead {
+  id: string;
+  kind: HeaderFooterKind;
+  text: string | null;
+  element_type: "text" | "image";
+  bbox: number[];
+  pages: number[];
+  representative_page: number;
+  occurrences: Array<{ page: number; bbox: number[] }>;
+  fragment_count: number;
+  binding_count: number;
+}
+
+export interface HeaderFooterPreviewRead {
+  material_id: string;
+  revision: number;
+  page_count: number;
+  candidates: HeaderFooterCandidateRead[];
+}
+
+export interface HeaderFooterApplyRead {
+  revision: number;
+  removed_occurrences: number;
+  removed_fragments: number;
+  transferred_bindings: number;
+  orphaned_binding_ids: string[];
+}
+
 export interface CleanupSuggestion {
   markdown: string;
   changes: string[];
@@ -369,26 +531,6 @@ const projectMaterialsPath = (projectId: string): string =>
 const materialPath = (projectId: string, materialId: string): string =>
   `${projectMaterialsPath(projectId)}/${encodeURIComponent(materialId)}`;
 
-async function uploadResponse(response: Response): Promise<MaterialRead> {
-  const payload: unknown = await response.json().catch(() => null);
-  if (!response.ok) {
-    const record = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
-    const detail = typeof record.detail === "string"
-      ? record.detail
-      : `Загрузка завершилась с ошибкой ${response.status}`;
-    const context = record.context && typeof record.context === "object"
-      ? record.context as Record<string, unknown>
-      : {};
-    throw new ProjectApiError(
-      response.status,
-      detail,
-      typeof record.code === "string" ? record.code : null,
-      context,
-    );
-  }
-  return payload as MaterialRead;
-}
-
 /** POST через XHR вместо fetch: только у него есть событие прогресса отправки —
  *  для стомегабайтных файлов индикатор нужен, иначе окно выглядит зависшим. */
 function uploadFormWithProgress<T>(
@@ -440,17 +582,14 @@ export async function uploadMaterial(
   sourceRole: SourceRole,
   purposes: MaterialPurpose[],
   examSlot?: ExamMaterialSlot | null,
+  onProgress?: (percent: number) => void,
 ): Promise<MaterialRead> {
   const form = new FormData();
   form.set("file", file);
   form.set("source_role", sourceRole);
   form.set("purposes", purposes.join(","));
   if (examSlot) form.set("exam_slot", examSlot);
-  return uploadResponse(await fetch(projectMaterialsPath(projectId), {
-    method: "POST",
-    headers: { Accept: "application/json" },
-    body: form,
-  }));
+  return uploadFormWithProgress<MaterialRead>(projectMaterialsPath(projectId), form, onProgress);
 }
 
 export const createTextMaterial = (
@@ -489,6 +628,13 @@ export const updateMaterial = (
   method: "PATCH",
   body: JSON.stringify(command),
 });
+
+/** Порядок строк сверху вниз становится приоритетом источников. */
+export const reorderMaterials = (projectId: string, materialIds: string[]): Promise<MaterialRead[]> =>
+  request(`${projectMaterialsPath(projectId)}/order`, {
+    method: "PUT",
+    body: JSON.stringify({ material_ids: materialIds }),
+  });
 
 export const detachMaterial = (projectId: string, materialId: string): Promise<void> =>
   request(materialPath(projectId, materialId), { method: "DELETE" });
@@ -587,7 +733,45 @@ export const materialPageImageUrl = (
   projectId: string,
   materialId: string,
   page: number,
-): string => `${materialPath(projectId, materialId)}/pages/${page}/image`;
+  rasterToken?: string | null,
+): string =>
+  `${materialPath(projectId, materialId)}/pages/${page}/image${rasterVersion(rasterToken)}`;
+
+export const getMaterialOutline = (
+  projectId: string,
+  materialId: string,
+  source: "auto" | Exclude<OutlineSource, "model"> = "auto",
+  signal?: AbortSignal,
+): Promise<OutlineDetailRead> => request(
+  `${materialPath(projectId, materialId)}/outline?source=${source}`,
+  { signal },
+);
+
+export const runMaterialOutlineModel = (
+  projectId: string,
+  materialId: string,
+): Promise<OutlineModelRunRead> => request(
+  `${materialPath(projectId, materialId)}/outline/model`,
+  { method: "POST" },
+);
+
+export const previewMaterialHeaderFooter = (
+  projectId: string,
+  materialId: string,
+  signal?: AbortSignal,
+): Promise<HeaderFooterPreviewRead> => request(
+  `${materialPath(projectId, materialId)}/header-footer/preview`,
+  { method: "POST", signal },
+);
+
+export const applyMaterialHeaderFooter = (
+  projectId: string,
+  materialId: string,
+  command: { expected_revision: number; candidate_ids: string[] },
+): Promise<HeaderFooterApplyRead> => request(
+  `${materialPath(projectId, materialId)}/header-footer/apply`,
+  { method: "POST", body: JSON.stringify(command) },
+);
 
 /** Картинка, вынутая из PDF или DOCX: показывается на своём месте в тексте. */
 export const materialFragmentAssetUrl = (
@@ -647,9 +831,13 @@ export const getLibraryMaterial = (
 export function uploadLibraryMaterial(
   file: File,
   onProgress?: (percent: number) => void,
+  subject?: string,
+  displayName?: string,
 ): Promise<LibraryMaterialDetailRead> {
   const form = new FormData();
   form.set("file", file);
+  if (subject?.trim()) form.set("subject", subject.trim());
+  if (displayName?.trim()) form.set("display_name", displayName.trim());
   return uploadFormWithProgress<LibraryMaterialDetailRead>("/api/materials/upload", form, onProgress);
 }
 
@@ -658,10 +846,14 @@ export async function uploadTypstMaterial(
   files: File[],
   paths: string[],
   entrypoint?: string,
+  subject?: string,
+  displayName?: string,
 ): Promise<LibraryMaterialDetailRead> {
   const form = new FormData();
   form.set("input_kind", inputKind);
   if (entrypoint) form.set("entrypoint", entrypoint);
+  if (subject?.trim()) form.set("subject", subject.trim());
+  if (displayName?.trim()) form.set("display_name", displayName.trim());
   if (inputKind === "zip") form.set("file", files[0]);
   else files.forEach((file, index) => {
     form.append("files", file);
@@ -694,14 +886,14 @@ export const buildTypstMaterial = (
 });
 
 export const createLibraryTextMaterial = (
-  command: { name: string; text: string },
+  command: { name: string; text: string; subject?: string | null; display_name?: string | null },
 ): Promise<LibraryMaterialDetailRead> => request("/api/materials/text", {
   method: "POST",
   body: JSON.stringify(command),
 });
 
 export const createLibraryExternalMaterial = (
-  command: { kind: "url" | "youtube"; url: string },
+  command: { kind: "url" | "youtube"; url: string; subject?: string | null; display_name?: string | null },
 ): Promise<LibraryMaterialDetailRead> => request("/api/materials/external", {
   method: "POST",
   body: JSON.stringify(command),
@@ -733,8 +925,46 @@ export const getLibraryPage = (
   return request(`${libraryPath(materialId)}/pages/${page}${suffix}`, { signal: options.signal });
 };
 
-export const libraryPageImageUrl = (materialId: string, page: number): string =>
-  `${libraryPath(materialId)}/pages/${page}/image`;
+export const updateLibraryMaterialMetadata = (
+  materialId: string,
+  command: { display_name?: string; subject?: string | null },
+): Promise<LibraryMaterialMetadataRead> => request(libraryPath(materialId), {
+  method: "PATCH",
+  body: JSON.stringify(command),
+});
+
+export const listLibrarySubjects = (signal?: AbortSignal): Promise<string[]> =>
+  request("/api/materials/subjects", { signal });
+
+/**
+ * Метка растра в адресе: пока файл материала не менялся, метка та же, и браузер
+ * отдаёт уже просмотренную страницу из своего кэша, не спрашивая сервер. Без
+ * метки сервер разрешает кэшировать всего минуту — листание опять идёт по сети.
+ */
+const rasterVersion = (rasterToken?: string | null): string =>
+  rasterToken ? `?v=${encodeURIComponent(rasterToken)}` : "";
+
+export const libraryPageImageUrl = (
+  materialId: string,
+  page: number,
+  rasterToken?: string | null,
+): string => `${libraryPath(materialId)}/pages/${page}/image${rasterVersion(rasterToken)}`;
+
+export const previewLibraryHeaderFooter = (
+  materialId: string,
+  signal?: AbortSignal,
+): Promise<HeaderFooterPreviewRead> => request(
+  `${libraryPath(materialId)}/header-footer/preview`,
+  { method: "POST", signal },
+);
+
+export const applyLibraryHeaderFooter = (
+  materialId: string,
+  command: { expected_revision: number; candidate_ids: string[] },
+): Promise<HeaderFooterApplyRead> => request(
+  `${libraryPath(materialId)}/header-footer/apply`,
+  { method: "POST", body: JSON.stringify(command) },
+);
 
 export const libraryFragmentAssetUrl = (materialId: string, fragmentId: string): string =>
   `${libraryPath(materialId)}/fragments/${encodeURIComponent(fragmentId)}/asset`;
@@ -776,18 +1006,146 @@ export const restoreMaterialRevision = (
   { method: "POST" },
 );
 
+export interface LibraryProcessingCommand {
+  parser_mode: ParserMode;
+  scope: ProcessingScope;
+  page_from?: number | null;
+  page_to?: number | null;
+  /** Выбор на этот запуск; без поля — значения из «Распознавания». */
+  cloud_strategy?: OcrCloudStrategy | null;
+  image_mode?: OcrImageMode | null;
+  description_provider_id?: string | null;
+  description_model_id?: string | null;
+  /** Потолок суммы запуска; без него сервер применяет быстрый лимит. */
+  max_cost_usd?: string | null;
+  confirm_unknown_price?: boolean;
+}
+
+/** Оценка облачного запуска до старта: страницы, запросы и верхняя цена. */
+export interface ProcessingEstimateRead {
+  parser_mode: ParserMode;
+  cloud_strategy: OcrCloudStrategy;
+  image_mode: OcrImageMode;
+  pages: number;
+  whole_pages: number;
+  text_pages: number;
+  suspicious_pages: number;
+  image_candidates: number;
+  requests_upper: number;
+  page_model_id: string | null;
+  description_model_id: string | null;
+  price_known: boolean;
+  cost_typical_usd: string | null;
+  cost_upper_usd: string | null;
+  /** Оценка по выборке страниц, а не по каждой. */
+  sampled: boolean;
+  notes: string[];
+}
+
 export const startLibraryProcessing = (
   materialId: string,
-  command: {
-    parser_mode: ParserMode;
-    scope: ProcessingScope;
-    page_from?: number | null;
-    page_to?: number | null;
-  },
+  command: LibraryProcessingCommand,
 ): Promise<LibraryMaterialDetailRead> => request(`${libraryPath(materialId)}/processing`, {
   method: "POST",
   body: JSON.stringify(command),
 });
+
+export const estimateLibraryProcessing = (
+  materialId: string,
+  command: LibraryProcessingCommand,
+  signal?: AbortSignal,
+): Promise<ProcessingEstimateRead> => request(`${libraryPath(materialId)}/processing-estimate`, {
+  method: "POST",
+  body: JSON.stringify(command),
+  signal,
+});
+
+export interface ImageCandidateRead {
+  /** «страница:индекс элемента» — так цель называется в запросах. */
+  id: string;
+  page_number: number;
+  element_index: number;
+  fragment_id: string | null;
+  bbox: number[];
+  has_asset: boolean;
+  role: ImageRole;
+  processing: ImageProcessing;
+  review: ImageReview;
+  reasons: string[];
+  signals: string[];
+  caption: string | null;
+  crop_hash: string | null;
+  text: string;
+  selectable: boolean;
+}
+
+/** Изображения активной версии: уйдут по умолчанию, сомнительные и исключённые. */
+export interface ImageInventoryRead {
+  material_id: string;
+  revision: number;
+  targets: ImageCandidateRead[];
+  doubtful: ImageCandidateRead[];
+  excluded: ImageCandidateRead[];
+  model_id: string | null;
+  provider_id: string | null;
+  provider_label: string;
+  price_known: boolean;
+  cost_per_image_typical_usd: string | null;
+  cost_per_image_upper_usd: string | null;
+  active_job_id: string | null;
+  vector_index_stale: boolean;
+}
+
+export interface ImageDescriptionEstimateRead {
+  target_count: number;
+  requests: number;
+  reused_by_hash: number;
+  model_id: string | null;
+  price_known: boolean;
+  cost_typical_usd: string | null;
+  cost_upper_usd: string | null;
+}
+
+export interface ImageDescriptionCommand {
+  target_ids: string[];
+  provider_id?: string | null;
+  model_id?: string | null;
+}
+
+export const getImageInventory = (
+  materialId: string,
+  model?: { provider_id: string; model_id: string } | null,
+  signal?: AbortSignal,
+): Promise<ImageInventoryRead> => {
+  const params = new URLSearchParams();
+  if (model) {
+    params.set("provider_id", model.provider_id);
+    params.set("model_id", model.model_id);
+  }
+  const query = params.size ? `?${params.toString()}` : "";
+  return request(`${libraryPath(materialId)}/image-descriptions${query}`, { signal });
+};
+
+export const estimateImageDescriptions = (
+  materialId: string,
+  command: ImageDescriptionCommand,
+  signal?: AbortSignal,
+): Promise<ImageDescriptionEstimateRead> => request(
+  `${libraryPath(materialId)}/image-descriptions/estimate`,
+  { method: "POST", body: JSON.stringify(command), signal },
+);
+
+export const startImageDescriptions = (
+  materialId: string,
+  command: ImageDescriptionCommand & {
+    expected_revision: number;
+    max_cost_usd?: string | null;
+    confirm_unknown_price?: boolean;
+  },
+): Promise<{ job_id: string; requests: number }> => request(
+  `${libraryPath(materialId)}/image-descriptions`,
+  { method: "POST", body: JSON.stringify(command) },
+);
 
 export const controlLibraryProcessing = (
   materialId: string,

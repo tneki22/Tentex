@@ -1,5 +1,4 @@
-"""Диспетчер фоновых задач-ролей ИИ: одна очередь, один воркер, общий словарь
-состояний (Ш2 плана, этап 3).
+"""Диспетчер фоновых задач-ролей ИИ в общей очереди и выделенной AI-полосе.
 
 Каждая роль (`program_ai`, `import_repair`, `preparation_ai`, `ai_cleanup`)
 уже умеет и оценить стоимость (`preflight`), и выполнить сам вызов (`run`) —
@@ -25,9 +24,10 @@ from sqlalchemy.orm import Session
 
 from app.ai.gateway import ModelGateway
 from app.bindings import answers_ai
+from app.db import job_write_transaction
 from app.materials import ai_cleanup
-from app.models import BackgroundJob, BackgroundJobKind, BackgroundJobState, utc_now
-from app.projects import import_repair, preparation_ai, program_ai
+from app.models import AiRun, BackgroundJob, BackgroundJobKind, BackgroundJobState, utc_now
+from app.projects import import_repair, preparation_ai, program_ai, program_chat
 from app.projects.errors import ProjectDomainError
 
 log = logging.getLogger("tentex.worker")
@@ -39,9 +39,22 @@ DEADLINE_SECONDS: dict[BackgroundJobKind, int] = {
     BackgroundJobKind.AI_GROUPING: 600,
     BackgroundJobKind.AI_IMPORT_REPAIR: 900,
     BackgroundJobKind.AI_PREPARATION: 300,
-    BackgroundJobKind.AI_CLEANUP: 300,
+    BackgroundJobKind.AI_CLEANUP: 120,
     BackgroundJobKind.AI_ANSWER_SECTIONS: 900,
+    # Может делать до двух пакетных вызовов + один объединяющий — запас как у
+    # починки списка вопросов.
+    BackgroundJobKind.AI_PROGRAM_BUILD: 900,
+    # Живой вызов с поиском в сети идёт до полутора-двух минут; запас — на один
+    # повтор, если ответ не прошёл схему.
+    # Сборка урока «Подробный» — до 16 вызовов подряд, каждый с повтором схемы.
+    BackgroundJobKind.AI_LESSON: 1800,
+    # До шести карточек на вопрос; пакет идёт последовательно и может быть длинным.
+    BackgroundJobKind.AI_CARDS: 1800,
 }
+
+# Один вопрос делает один вызов модели; общий срок пакета растёт вместе с числом
+# вопросов, иначе «Выбрать все» падало бы по фиксированному пределу задачи.
+CARD_BATCH_SECONDS_PER_UNIT = 180
 
 
 async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway) -> BaseModel:
@@ -101,6 +114,20 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
             answers_ai.AnswersAiRunWrite.model_validate(command),
             job_id=job.id,
         )
+    elif job.kind == BackgroundJobKind.AI_PROGRAM_BUILD:
+        assert job.project_id is not None
+        # Без Pydantic-команды из checkpoint["command"]: run_build читает и
+        # дописывает checkpoint сам по пакетам (см. app/projects/program_chat.py).
+        return await program_chat.run_build(session, gateway, job.project_id, job.id)
+    elif job.kind == BackgroundJobKind.AI_LESSON:
+        from app.lessons import ai_jobs
+
+        # Команда, паспорт урока и кандидаты заморожены в checkpoint при постановке.
+        return await ai_jobs.run(session, gateway, job.id)
+    elif job.kind == BackgroundJobKind.AI_CARDS:
+        from app.cards.generate import run_card_generation
+
+        return await run_card_generation(session, gateway, job.id)
     elif job.kind == BackgroundJobKind.AI_CLEANUP:
         assert job.material_id is not None
         page_number = int(job.checkpoint["page_number"])
@@ -120,8 +147,15 @@ async def _dispatch(session: Session, job: BackgroundJob, gateway: ModelGateway)
 async def _run_with_deadline(
     session: Session, job: BackgroundJob, gateway: ModelGateway, deadline: int
 ) -> BaseModel:
+    # У cleanup один повтор (две попытки всего), чтобы пустой ответ не съедал
+    # пять минут. Другие роли сохраняют общий профиль повтора шлюза.
+    role_gateway = (
+        ModelGateway(session, transport=gateway.transport, retry_backoff=(2.0,))
+        if job.kind == BackgroundJobKind.AI_CLEANUP
+        else gateway
+    )
     async with asyncio.timeout(deadline):
-        return await _dispatch(session, job, gateway)
+        return await _dispatch(session, job, role_gateway)
 
 
 def _mark_finished(session: Session, job_id: UUID, result: BaseModel) -> None:
@@ -137,7 +171,7 @@ def _mark_finished(session: Session, job_id: UUID, result: BaseModel) -> None:
     `_wire_to_suggestion`. Хранить здесь результат уже после этой сборки — то,
     что позволяет экрану вернуться к готовому предложению, не повторяя разбор.
     """
-    with session.begin():
+    with job_write_transaction(session, job_id):
         job = session.get(BackgroundJob, job_id)
         if job is None:
             return
@@ -155,9 +189,11 @@ def _mark_finished(session: Session, job_id: UUID, result: BaseModel) -> None:
         job.updated_at = utc_now()
 
 
-def _mark_failed(session: Session, job_id: UUID, message: str) -> None:
+def _mark_failed(
+    session: Session, job_id: UUID, message: str, *, error_code: str | None = None
+) -> None:
     session.rollback()
-    with session.begin():
+    with job_write_transaction(session, job_id):
         job = session.get(BackgroundJob, job_id)
         if job is None:
             return
@@ -166,6 +202,14 @@ def _mark_failed(session: Session, job_id: UUID, message: str) -> None:
         job.lease_owner = None
         job.lease_expires_at = None
         job.updated_at = utc_now()
+        if error_code:
+            run = session.query(AiRun).filter(
+                AiRun.job_id == job_id, AiRun.status == "running"
+            ).one_or_none()
+            if run is not None:
+                run.status = "failed"
+                run.error_code = error_code
+                run.completed_at = utc_now()
 
 
 def process_ai_job(
@@ -180,13 +224,20 @@ def process_ai_job(
     """
     job_id = job.id
     deadline = DEADLINE_SECONDS.get(job.kind, 600)
+    if job.kind == BackgroundJobKind.AI_CARDS:
+        deadline = max(deadline, job.total * CARD_BATCH_SECONDS_PER_UNIT)
     gateway = gateway or ModelGateway(session)
     try:
         result = asyncio.run(_run_with_deadline(session, job, gateway, deadline))
         _mark_finished(session, job_id, result)
     except TimeoutError:
         _mark_failed(
-            session, job_id, f"Задача не уложилась в отведённые {deadline} с и была прервана"
+            session,
+            job_id,
+            "Модель не ответила за 120 секунд. Попробуйте другую модель или повторите."
+            if job.kind == BackgroundJobKind.AI_CLEANUP
+            else f"Задача не уложилась в отведённые {deadline} с и была прервана",
+            error_code="ai_timeout",
         )
     except ProjectDomainError as error:
         _mark_failed(session, job_id, error.detail)

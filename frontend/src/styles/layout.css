@@ -198,43 +198,6 @@
   text-align: start;
 }
 
-.sidebar-recent .disclosure-trigger {
-  margin: 0;
-  padding: 0 var(--space-2);
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-}
-
-.sidebar-coverage-list,
-.sidebar-recent-list {
-  display: grid;
-  gap: 2px;
-}
-
-.sidebar-coverage-row,
-.sidebar-recent-row {
-  display: grid;
-  gap: 2px;
-  padding: var(--space-2);
-  border-radius: var(--radius-sm);
-  color: var(--ink-soft);
-  font-size: var(--text-sm);
-  transition: background-color var(--ease-fast), color var(--ease-fast);
-}
-
-.sidebar-coverage-row:hover,
-.sidebar-recent-row:hover {
-  background: var(--surface-hover);
-  color: var(--ink);
-}
-
-.sidebar-coverage-row small,
-.sidebar-recent-row small {
-  color: var(--faint);
-  font-size: var(--text-xs);
-}
-
 .sidebar-empty {
   margin: 0;
   padding: var(--space-2);
@@ -245,10 +208,46 @@
 
 .sidebar-recent .disclosure-trigger {
   width: 100%;
+  margin: 0;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
 }
 
-.sidebar-recent .disclosure-content {
-  padding-top: var(--space-1);
+.sidebar-recent .disclosure-content { padding-top: var(--space-1); }
+.sidebar-recent-list { display: grid; gap: 2px; }
+
+.sidebar-recent-row {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  transition: background-color var(--ease-fast), color var(--ease-fast);
+}
+
+.sidebar-recent-row:hover { background: var(--surface-hover); color: var(--ink); }
+.sidebar-recent-row small { color: var(--faint); font-size: var(--text-xs); }
+.sidebar-recent-row b {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-project-type {
+  display: inline-block;
+  margin-right: var(--space-1);
+  padding: 1px 3px;
+  border-radius: var(--radius-xs);
+  color: var(--accent);
+  background: var(--accent-wash);
+  font-family: var(--font-mono);
+  font-weight: var(--weight-semibold);
 }
 
 /* --- Приборный блок: три строки состояния установки --- */
@@ -443,20 +442,31 @@
   border-bottom-color: var(--line);
 }
 
-/* Три колонки: заголовок экрана, поиск по центру, действие экрана справа */
+/* Заголовок, выбор вида, поиск и действия экрана. */
 .app-topbar-inner {
   height: 100%;
   width: 100%;
   padding: 0 var(--space-10);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 460px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto minmax(220px, 460px) minmax(0, 1fr);
   align-items: center;
   gap: var(--space-4);
+}
+
+.app-topbar-inner:not(:has(.project-view-switch)) {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 460px) minmax(0, 1fr);
+}
+
+.app-topbar-inner:has(.project-view-switch) {
+  grid-template-columns: auto minmax(108px, 1fr) minmax(220px, 460px) auto;
 }
 
 .topbar-lead {
   min-width: 0;
 }
+
+.topbar-view { justify-self: center; }
+.topbar-view:empty { display: none; }
 
 .topbar-title {
   margin: 0;
@@ -617,21 +627,6 @@
   text-align: center;
 }
 
-.palette-static-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  color: var(--muted);
-  font-size: var(--text-sm);
-  line-height: var(--leading-snug);
-}
-
-.palette-static-row svg {
-  flex: none;
-  color: var(--faint);
-}
-
 @keyframes palette-in {
   from {
     opacity: 0;
@@ -683,6 +678,7 @@
 .page-head-actions {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -705,13 +701,198 @@
   animation: surface-in var(--motion-slow) var(--motion-ease-out) both;
 }
 
+/* Полноэкранные ошибки должны оставаться в центре доступной области приложения. */
+.screen.screen-error-state {
+  min-height: calc(100dvh - 64px - var(--space-6) - var(--space-16));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  text-align: center;
+}
+
+.screen-error-state > .error-state {
+  width: min(100%, 42rem);
+}
+
 /* --- Дашборд «Проекты» --- */
 
+/* Крупные карточки держатся до трёх в ряд: минимальная ширина колонки
+   растёт вместе с окном, поэтому широкий монитор не протискивает четвёртую. */
 .dash-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(max(min(100%, 320px), calc((100% - 2 * var(--space-4)) / 3)), 1fr));
   gap: var(--space-4);
 }
+
+.dash-grid.is-compact {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dash-grid.is-compact .dash-card { padding: var(--space-4); gap: var(--space-3); }
+.dash-grid.is-compact .b-days { font-size: var(--text-2xl); }
+.dash-grid.is-compact .dash-card-foot { flex-wrap: wrap; }
+.dash-grid.is-compact .dash-card-foot .primary-button { margin-left: auto; }
+.dash-grid.is-compact .dash-card-id .dash-drag-handle { top: var(--space-4); right: var(--space-4); }
+.dash-grid.is-compact .dash-card-last,
+.dash-grid.is-compact .dash-card-later { display: none; }
+.dash-grid.is-compact .b-swap { flex: 0 0 auto; }
+.dash-grid.is-compact .b-extra { opacity: 1; pointer-events: auto; }
+
+.projects-topbar-actions,
+.project-type-filter {
+  display: flex;
+  align-items: center;
+}
+
+.projects-topbar-actions { gap: var(--space-2); }
+
+.project-view-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+
+.project-view-switch button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--ease-fast), background-color var(--ease-fast), transform var(--ease-fast);
+}
+
+.project-view-switch button:hover { color: var(--ink); background: var(--surface-hover); }
+.project-view-switch button:active { transform: scale(.96); }
+.project-view-switch button.is-active { color: var(--accent); background: var(--accent-wash-strong); }
+.project-view-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.project-map { display: grid; gap: var(--space-6); }
+.project-map-intro, .project-map-note { margin: 0; color: var(--muted); font-size: var(--text-sm); }
+.project-map-group {
+  --map-group: var(--accent);
+  display: grid;
+  grid-template-columns: minmax(190px, 230px) minmax(0, 1fr);
+  gap: var(--space-6);
+  padding: var(--space-5);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--map-group);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+}
+.project-map-group.is-textbook { --map-group: var(--project-color-3); }
+.project-map-group.is-free { --map-group: var(--project-color-6); }
+.project-map-heading { display: flex; align-items: start; gap: var(--space-3); }
+.project-map-heading h2 { margin: 0; font-size: var(--text-md); }
+.project-map-heading p { margin: var(--space-1) 0 0; color: var(--muted); font-size: var(--text-xs); }
+.project-map-exam { display: grid; justify-items: start; gap: var(--space-1); margin-top: var(--space-3); }
+.project-map-exam-label { color: var(--ink-soft); font-size: var(--text-xs); }
+.project-map-exam-days { font-size: var(--text-md); line-height: 1.2; font-variant-numeric: tabular-nums; }
+.project-map-exam-days.is-danger { color: var(--tone-danger); }
+.project-map-exam-days.is-warning { color: var(--tone-warning); }
+.project-map-exam-days.is-success { color: var(--tone-success); }
+.project-map-exam small, .project-map-node-activity { color: var(--muted); font-size: var(--text-xs); }
+.project-map-index { color: var(--map-group); font-family: var(--font-mono); font-size: var(--text-sm); }
+.project-map-count { margin-left: auto; color: var(--faint); font-family: var(--font-mono); }
+.project-map-nodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); gap: var(--space-3); }
+.project-map-node {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--proj) 25%, var(--line));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--proj) 8%, var(--paper));
+}
+.project-map-node-top { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.project-map-node-top a { overflow: hidden; color: var(--ink); font-weight: var(--weight-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.project-map-node-top a:hover { color: var(--accent); }
+.project-map-node-meta { color: var(--muted); font-size: var(--text-xs); }
+.project-map-node-activity { margin: 0; }
+.project-map-links { display: grid; gap: var(--space-1); padding-top: var(--space-2); border-top: 1px solid var(--line); }
+.project-map-links a { display: grid; overflow: hidden; color: var(--accent); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.project-map-links a:hover { text-decoration: underline; }
+.project-map-links small { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.project-map-links span { color: var(--muted); font-size: var(--text-xs); }
+
+@media (max-width: 1350px) {
+  .dash-grid.is-compact { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .app-topbar-inner:has(.project-view-switch) {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-areas: "title view actions" "search search search";
+    height: auto;
+    padding-block: var(--space-3);
+  }
+  .app-topbar:has(.project-view-switch) { height: auto; }
+  .app-topbar-inner:has(.project-view-switch) .topbar-lead { grid-area: title; }
+  .app-topbar-inner:has(.project-view-switch) .topbar-view { grid-area: view; }
+  .app-topbar-inner:has(.project-view-switch) .topbar-search { grid-area: search; }
+  .app-topbar-inner:has(.project-view-switch) .topbar-actions { grid-area: actions; }
+}
+
+@media (max-width: 1100px) and (min-width: 901px) {
+  .dash-grid.is-compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .app-topbar-inner:has(.project-view-switch) {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "title actions" "view search";
+  }
+  .app-topbar-inner:has(.project-view-switch) .topbar-actions { justify-self: end; }
+}
+
+@media (max-width: 900px) {
+  .project-map-group { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+}
+
+@media (max-width: 760px) {
+  .dash-grid.is-compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 520px) {
+  .dash-grid.is-compact { grid-template-columns: minmax(0, 1fr); }
+}
+
+.project-type-filter {
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+
+.project-type-filter button,
+.dash-project-type {
+  border: 0;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  letter-spacing: .02em;
+}
+
+.project-type-filter button {
+  min-width: 28px;
+  padding: var(--space-2);
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  transition: color var(--ease-fast), background-color var(--ease-fast), transform var(--ease-fast);
+}
+
+.project-type-filter button:hover { color: var(--ink); background: var(--surface-hover); }
+.project-type-filter button:active { transform: scale(.96); }
+.project-type-filter button.is-active { color: var(--accent); background: var(--accent-wash-strong); }
 
 .dash-card {
   position: relative;
@@ -747,10 +928,21 @@
   min-width: 0;
 }
 
+.dash-project-type {
+  flex: none;
+  padding: var(--space-2);
+  color: color-mix(in srgb, var(--proj) 78%, var(--ink));
+  background: color-mix(in srgb, var(--proj) 16%, transparent);
+  transition: transform var(--ease-fast), opacity var(--ease-fast), background-color var(--ease-fast);
+}
+
 .dash-card-name {
   flex: 1;
   margin: 0;
   min-width: 0;
+  /* Запас справа равен сдвигу типа при наведении (--space-8 + --space-1):
+     длинное название обрезается чуть раньше, а не прячется под значком. */
+  padding-right: calc(var(--space-8) + var(--space-1));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -944,14 +1136,39 @@
 
 /* Ручка перетаскивания живёт в шапке и проявляется вместе с действиями */
 .dash-card-id .dash-drag-handle {
-  flex: none;
+  position: absolute;
+  top: var(--space-5);
+  right: var(--space-5);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
   opacity: 0;
-  transition: opacity var(--ease-fast);
+  transform: scale(.25);
+  filter: blur(4px);
+  transition: opacity var(--ease-fast), transform var(--ease-fast), filter var(--ease-fast);
 }
 
 .dash-card:hover .dash-drag-handle,
 .dash-card:focus-within .dash-drag-handle {
   opacity: 1;
+  transform: scale(1);
+  filter: blur(0);
+}
+
+.dash-card:hover .dash-project-type,
+.dash-card:focus-within .dash-project-type {
+  transform: translateX(calc(-1 * (var(--space-8) + var(--space-1))));
+}
+
+.dash-filter-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: var(--space-8);
+  color: var(--muted);
+  text-align: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-lg);
 }
 
 .dash-templates {
@@ -1253,6 +1470,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-5);
+  min-width: 0;
 }
 
 .ai-global-row .switch-row {
@@ -2136,6 +2354,41 @@
 
 .ai-role-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Категория функций: заголовок, первая функция всегда видна, остальные раскрываются. */
+.ai-role-category {
+  padding: var(--space-6) 0 var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.ai-role-category:first-of-type {
+  padding-top: var(--space-2);
+  border-top: 0;
+}
+
+.ai-role-category-head h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.ai-role-category-head p {
+  max-width: 62ch;
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+/* Общее правило `.ai-role-card:first-child` снимает черту и у первой карточки раскрывающейся
+   части, потому что она первая в своём контейнере, — возвращаем разделитель. */
+.ai-role-category .disclosure-content > .ai-role-card:first-child {
+  border-top: 1px solid var(--line);
+}
+
+.ai-role-category-toggle {
+  margin-top: var(--space-1);
 }
 
 .ai-role-row {
@@ -2220,24 +2473,28 @@
 }
 
 .app-models-summary > p {
-  margin: 0 0 var(--space-3);
+  margin: 0 0 var(--space-2);
   color: var(--ink-soft);
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
 }
+
+.app-models-summary > p.is-ready { color: var(--tone-success); }
+.app-models-summary > p.is-offline { color: var(--tone-warning); }
 
 .app-models-summary dl,
 .app-models-summary dl div {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 .app-models-summary dl {
-  margin: 0 0 var(--space-3);
+  margin: 0 0 var(--space-2);
 }
 
 .app-models-summary dl div {
   grid-template-columns: 52px minmax(0, 1fr);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
 }
 
 .app-models-summary dt {
@@ -2250,6 +2507,22 @@
   color: var(--ink-soft);
 }
 
+.app-models-summary select {
+  width: 100%;
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.app-models-links {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.app-models-open { width: 100%; justify-content: center; }
+
 @media (max-width: 1120px) {
   .ai-catalog-row {
     grid-template-columns: minmax(180px, 0.65fr) minmax(260px, 1.35fr);
@@ -2259,6 +2532,23 @@
   .ai-catalog-row > .text-button {
     grid-column: 1 / -1;
     justify-self: end;
+  }
+}
+
+/* Контент раздела «Параметры» уже сужен боковой навигацией `.setup-nav`, поэтому
+   он упирается в минимумы этих колонок раньше, чем весь `.setup-layout` успевает
+   перестроиться в один столбец на 760px. */
+@media (max-width: 1230px) {
+  .ai-role-card,
+  .ai-role-row,
+  .provider-model-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-role-card .disclosure,
+  .ai-role-card .ai-save-state,
+  .provider-model-picker > small {
+    grid-column: 1;
   }
 }
 
@@ -2385,12 +2675,172 @@
   gap: var(--space-5);
 }
 
+.header-footer-flow {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.dialog.header-footer-dialog {
+  width: min(54rem, calc(100vw - var(--space-8)));
+}
+
+.header-footer-unchanged,
+.header-footer-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+}
+
+.header-footer-unchanged {
+  color: var(--muted);
+  background: var(--surface-sunken);
+}
+
+.header-footer-warning {
+  color: var(--tone-warning);
+  background: color-mix(in srgb, var(--tone-warning) 8%, transparent);
+}
+
+.header-footer-group {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.header-footer-group h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.header-footer-candidate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.7fr);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+}
+
+.header-footer-crop {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  min-height: 76px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background-repeat: no-repeat;
+  background-color: var(--surface-sunken);
+}
+
+.header-footer-meta,
+.header-footer-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.header-footer-candidate .disclosure {
+  align-self: start;
+}
+
+@media (max-width: 680px) {
+  .header-footer-candidate {
+    grid-template-columns: 1fr;
+  }
+
+  .header-footer-crop {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+
+/* «Описать изображения»: вырез рядом с причинами, чтобы решать глазами. */
+.dialog.image-descriptions-dialog {
+  width: min(54rem, calc(100vw - var(--space-8)));
+}
+
+.image-descriptions-flow {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.image-candidate-group {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.image-candidate-group h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.image-candidate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+
+.image-candidate-title {
+  margin: 0;
+}
+
+.image-candidate-crop {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: 100%;
+  max-height: 120px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.image-candidate-crop-missing {
+  display: grid;
+  place-items: center;
+  min-height: 64px;
+  color: var(--muted);
+}
+
+.image-candidate-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 680px) {
+  .image-candidate {
+    grid-template-columns: 1fr;
+  }
+
+  .image-candidate-crop {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+
 .ai-cleanup-source,
 .ai-cleanup-preview,
 .ai-cleanup-original {
   display: grid;
+  grid-template-rows: var(--space-5) minmax(20rem, 52vh);
   gap: var(--space-2);
   min-width: 0;
+}
+
+.ai-cleanup-source {
+  grid-template-rows: var(--space-5) minmax(18rem, 45vh);
 }
 
 .ai-cleanup-source header,
@@ -2426,7 +2876,9 @@
 }
 
 .ai-cleanup-source pre {
-  max-height: 10rem;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
   padding: var(--space-4);
 }
 
@@ -2538,6 +2990,9 @@
 .ai-cleanup-original pre {
   min-height: 20rem;
   max-height: 52vh;
+  height: 100%;
+  box-sizing: border-box;
+  align-self: stretch;
 }
 
 .ai-cleanup-preview textarea {
@@ -2871,6 +3326,13 @@
 .ai-repair-subpoint-list input {
   flex: 1;
 }
+.ai-repair-subpoint-number {
+  flex: none;
+  min-width: var(--space-7);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
 
 .ai-repair-ticket-list {
   display: grid;
@@ -3049,6 +3511,11 @@
 .settings-section h2 svg {
   color: var(--muted);
 }
+.settings-module-toggle { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); cursor: pointer; }
+.settings-module-toggle > span { display: grid; gap: var(--space-2); }
+.settings-module-toggle strong { font-weight: var(--weight-semibold); }
+.settings-module-toggle small { color: var(--muted); font-size: var(--text-sm); line-height: var(--leading-snug); }
+.settings-module-toggle input { width: var(--space-5); height: var(--space-5); accent-color: var(--accent); cursor: pointer; }
 
 .settings-section-lead {
   max-width: 72ch;
@@ -3267,6 +3734,13 @@
   gap: var(--space-3);
 }
 
+.kit-grid-two {
+  display: grid;
+  grid-template-columns: minmax(14rem, 20rem) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-4);
+}
+
 .kit-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -3383,6 +3857,8 @@
     border-bottom: 1px solid var(--line);
   }
 
+  .sidebar-recent { display: none; }
+
   .app-nav-group {
     grid-auto-flow: column;
     gap: var(--space-1);
@@ -3433,6 +3909,10 @@
     gap: var(--space-3);
   }
 
+  .app-topbar-inner:not(:has(.project-view-switch)) {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
   .topbar-lead {
     grid-area: title;
   }
@@ -3444,6 +3924,13 @@
   .topbar-actions {
     grid-area: actions;
   }
+
+  .app-topbar-inner:has(.project-view-switch) {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "title actions" "view search";
+  }
+
+  .app-topbar-inner:has(.project-view-switch) .topbar-view { grid-area: view; }
 
   .app-main {
     padding-bottom: var(--space-12);
@@ -3460,6 +3947,15 @@
   }
 }
 
+@media (max-width: 700px) {
+  .app-topbar-inner:has(.project-view-switch) {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title view" "actions actions" "search search";
+  }
+  .app-topbar-inner:has(.project-view-switch) .topbar-actions { justify-self: stretch; }
+  .projects-topbar-actions { width: 100%; justify-content: space-between; }
+}
+
 /* --- Вопросы экзамена и План подготовки --- */
 
 /* Левая панель проекта — общая для Программы, Ответов, Моей подготовки,
@@ -3471,7 +3967,7 @@
   min-height: 100dvh;
   display: grid;
   grid-template-columns: minmax(17rem, 18rem) minmax(0, 1fr);
-  background: var(--canvas);
+  background: transparent;
 }
 
 .project-side-panel {
@@ -3593,6 +4089,40 @@
 .project-recent-item.is-active {
   background: var(--accent-wash);
   color: var(--accent);
+}
+
+/* Убранная правкой ветка: в дереве её уже нет, поэтому строка не кликается. */
+.project-recent-item.is-removed,
+.project-recent-item.is-removed:hover {
+  color: var(--tone-danger);
+  background: transparent;
+  cursor: default;
+}
+.project-recent-item.is-removed > span:first-child { text-decoration: line-through; }
+
+.program-latest-action {
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.program-recent-node {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2);
+}
+
+.program-recent-node > span,
+.program-recent-node > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.program-recent-node > small {
+  color: var(--muted);
+  font-size: var(--text-2xs);
 }
 
 .workspace-project-nav a {
@@ -4653,6 +5183,17 @@
     var(--canvas);
 }
 
+/* Выбранный в Параметрах фон лежит фиксированным слоем под всей оболочкой,
+   поэтому Мастеру нужно снять свою заливку — иначе он закрывает фон целиком,
+   и на начальном экране выбора типа проекта тоже. */
+[data-background="custom"] .project-wizard {
+  background: radial-gradient(circle at 50% 0%, var(--accent-wash), transparent 32rem);
+}
+
+[data-background="custom"] .wizard-topbar {
+  background: color-mix(in srgb, var(--canvas) 45%, transparent);
+}
+
 .wizard-topbar {
   position: relative;
   z-index: var(--z-topbar);
@@ -4712,20 +5253,24 @@ button.wizard-back-projects {
 .wizard-topbar-actions { justify-self: end; display: inline-flex; align-items: center; gap: var(--space-3); }
 .wizard-discard { color: var(--tone-danger); }
 
+/* --wizard-steps приходит из WizardChrome: у ветки «Свободное изучение» три
+   шага, у остальных пять. Ширина и колонки считаются от этого числа, а полоса
+   идёт ровно от центра первого кружка до центра последнего. */
 .wizard-progress {
+  --wizard-steps: 5;
   position: relative;
-  width: min(720px, calc(100% - var(--space-8)));
+  width: min(720px, calc(var(--wizard-steps) * 160px), calc(100% - var(--space-8)));
   margin: var(--space-6) auto 0;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(var(--wizard-steps), 1fr);
 }
 
 .wizard-progress-line {
   position: absolute;
   z-index: 0;
   top: 15px;
-  left: 10%;
-  right: 10%;
+  left: calc(50% / var(--wizard-steps));
+  right: calc(50% / var(--wizard-steps));
   height: 2px;
   overflow: hidden;
   background: var(--line);
@@ -4778,20 +5323,20 @@ button.wizard-back-projects {
   padding: var(--space-10) var(--space-8) var(--space-16);
 }
 
-.wizard-main.is-landing { padding-top: var(--space-16); }
+.wizard-main.is-landing { padding-top: var(--space-6); }
 .wizard-step { animation: surface-in var(--motion-slow) var(--motion-ease-out) both; }
 
 .wizard-hero {
   width: min(850px, 100%);
-  margin: 0 auto var(--space-10);
+  margin: 0 auto var(--space-6);
   text-align: center;
 }
 
 .wizard-hero h1 {
-  margin-bottom: var(--space-5);
-  font-size: clamp(var(--text-3xl), 6vw, calc(var(--text-3xl) * 1.9));
-  line-height: 1.02;
-  letter-spacing: -0.055em;
+  margin-bottom: var(--space-3);
+  font-size: clamp(var(--text-3xl), 4vw, calc(var(--text-3xl) * 1.3));
+  line-height: 1.05;
+  letter-spacing: -0.045em;
 }
 
 .wizard-hero p {
@@ -4811,7 +5356,7 @@ button.wizard-back-projects {
 
 .wizard-track-card {
   position: relative;
-  min-height: 440px;
+  min-height: 380px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -5395,6 +5940,10 @@ button.wizard-back-projects {
 
 .wizard-review-list,
 .wizard-review-list ol { margin: 0; padding: 0; list-style: none; }
+.wizard-review-list ol {
+  margin-left: var(--space-5);
+  border-left: 1px solid var(--line);
+}
 
 .wizard-review-row {
   display: flex;
@@ -5406,13 +5955,15 @@ button.wizard-back-projects {
 }
 
 .wizard-review-list > li:first-child > .wizard-review-row { border-top: 0; }
-.wizard-review-number { flex: none; width: var(--space-5); color: var(--faint); font-size: var(--text-xs); }
+.wizard-review-number { flex: none; min-width: var(--space-7); color: var(--accent); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .wizard-review-list > .is-ticket > .wizard-review-row { background: var(--paper-strong); font-weight: var(--weight-semibold); }
-.wizard-review-list ol { padding-left: var(--space-8); background: var(--surface-sunken); }
-.wizard-review-list ol .wizard-review-row { padding-left: var(--space-4); }
+.wizard-review-list ol .wizard-review-row { padding-left: var(--space-3); }
+.wizard-review-list .is-subpoint > .wizard-review-row { background: var(--surface-sunken); }
+.wizard-review-list .is-subpoint .wizard-review-text > span { color: var(--ink-soft); }
 
 .wizard-review-kind {
   flex: none;
+  min-width: var(--space-8);
   color: var(--muted);
   font-size: var(--text-xs);
 }
@@ -5558,6 +6109,7 @@ button.wizard-back-projects {
 /* --- Мастер проекта по учебнику --- */
 
 .wizard-flow { width: min(920px, 100%); margin: 0 auto; }
+.wizard-flow.is-program-editor { width: min(1480px, 100%); }
 .wizard-flow .wizard-step { display: grid; gap: var(--space-5); }
 
 /* Меньше пустоты под шапкой шага: ритм держит сетка, а собственный отступ
@@ -5569,6 +6121,41 @@ button.wizard-back-projects {
   color: var(--ink-soft);
   font-size: var(--text-md);
   line-height: var(--leading-normal);
+}
+
+.free-study-step { display: grid; gap: var(--space-5); }
+/* Ритм шага держит grid-gap: собственный отступ панели кнопок оставлял под
+   кнопками материалов пустую полосу. */
+.free-study-step > .wizard-actions { margin-top: var(--space-2); }
+.free-study-intro { display: grid; gap: var(--space-2); margin: var(--space-3) 0 var(--space-2); }
+.free-study-intro p { margin: 0; }
+/* Шаг «Цель» — одна узкая колонка: заголовок, поля и кнопка выровнены по
+   одной ширине и центрированы на странице. */
+.wizard-flow.is-goal { width: min(720px, 100%); }
+.free-study-form { display: grid; gap: var(--space-5); width: min(720px, 100%); margin-inline: auto; }
+.wizard-actions.is-single { width: min(720px, 100%); margin-inline: auto; }
+.wizard-actions.is-single .primary-button { width: 100%; justify-content: center; }
+.free-study-form textarea { resize: vertical; }
+.free-study-material-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.free-study-link-card { display: flex; align-items: end; gap: var(--space-3); }
+.free-study-link-card .field { flex: 1; }
+.free-study-source { border-color: var(--line); transition: border-color var(--ease-fast), box-shadow var(--ease-fast); }
+.free-study-source.is-basis { border-color: var(--accent-edge); box-shadow: 0 0 0 1px var(--accent-edge); }
+.free-study-material-note,
+.free-study-outline-lead { margin: 0; color: var(--ink-soft); }
+.free-study-section-title { margin: 0; font-size: var(--text-md); }
+/* Подбор под цель стоит первым на шаге материалов: это ответ на вопрос
+   «что у меня уже есть», до кнопок загрузки нового. */
+.free-study-suggestions { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper-strong); }
+.free-study-suggestions h2 { margin: 0; font-size: var(--text-md); }
+.free-study-suggestions-note { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; color: var(--ink-soft); font-size: var(--text-sm); }
+.free-study-suggestions-note.is-error { color: var(--tone-danger); }
+.free-study-material-plan p { margin: 0; color: var(--ink-soft); }
+.library-picker-reason { color: var(--accent); }
+.inspector-metadata-form { display: grid; gap: var(--space-3); margin-bottom: var(--space-5); }
+
+@media (max-width: 720px) {
+  .free-study-link-card { align-items: stretch; flex-direction: column; }
 }
 .wizard-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 .wizard-resume { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: var(--space-3); margin: var(--space-8) 0 0; }
@@ -6353,7 +6940,35 @@ button.wizard-back-projects {
   padding: var(--space-8);
 }
 
+.textbook-source-panel { display: flex; flex-direction: column; gap: var(--space-3); height: 100%; min-height: 0; }
+.textbook-source-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.textbook-source-head > div:last-child { display: flex; align-items: center; gap: var(--space-2); }
+.textbook-source-reading { display: grid; flex: 1; grid-template-columns: minmax(13rem, 18rem) minmax(0, 1fr); gap: var(--space-3); min-height: 0; }
+.textbook-source-evidence-list, .textbook-source-reader { min-height: 0; overflow: auto; }
+.textbook-source-evidence-list { display: grid; align-content: start; gap: var(--space-2); padding-right: var(--space-1); }
+.textbook-source-reader { padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper-strong); }
+.textbook-source-reader > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); }
+.textbook-source-reader > header h2 { margin: var(--space-1) 0 0; font-size: var(--text-lg); }
+.textbook-source-reader > header small { color: var(--muted); }
+.textbook-source-reader > header > div:last-child, .textbook-source-reader > footer { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+.textbook-source-reader > footer { position: sticky; bottom: 0; padding-top: var(--space-3); background: linear-gradient(to bottom, transparent, var(--paper-strong) var(--space-3)); }
+.textbook-source-search { display: grid; flex: 1; align-content: start; gap: var(--space-3); }
+.textbook-source-search form { display: flex; gap: var(--space-2); }
+.textbook-source-search form label { display: flex; align-items: center; gap: var(--space-2); flex: 1; padding: 0 var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); }
+.textbook-source-search form input { width: 100%; border: 0; outline: 0; color: var(--ink); background: transparent; }
+.textbook-source-search ul { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.textbook-source-search li { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); }
+.textbook-source-search li p { margin: var(--space-1) 0 0; color: var(--muted); }
+
+@media (max-width: 1100px) {
+  .textbook-source-reading { grid-template-columns: minmax(11rem, 15rem) minmax(0, 1fr); }
+}
+
 .workspace-source-tab-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
   margin: 0;
   color: var(--muted);
   font-size: var(--text-xs);
@@ -7106,6 +7721,10 @@ button.wizard-back-projects {
 .textbook-dropzone > svg { flex: none; color: var(--accent); }
 .textbook-dropzone > span { flex: 1; display: grid; gap: var(--space-1); }
 .textbook-dropzone small { color: var(--muted); font-size: var(--text-xs); }
+.textbook-dropzone.is-uploading { border-color: var(--accent-edge); background: var(--accent-wash); }
+.textbook-step > .project-file-upload-status,
+.free-study-step > .project-file-upload-status,
+.wizard-upload-panel > .project-file-upload-status { margin-top: var(--space-3); }
 .textbook-source-list { display: grid; gap: var(--space-3); margin-top: var(--space-4); }
 .textbook-empty-source { padding: var(--space-6); color: var(--muted); text-align: center; }
 .textbook-source-card { padding: 0; overflow: hidden; }
@@ -7171,7 +7790,7 @@ button.wizard-back-projects {
 .textbook-profile-card header p { margin: 2px 0 0; color: var(--muted); font-size: var(--text-xs); }
 .textbook-profile-fields { display: grid; gap: var(--space-5); padding: var(--space-5); }
 .textbook-profile-fields textarea { resize: vertical; }
-.textbook-number-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.textbook-number-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .textbook-profile-fields .disclosure-inner { display: grid; gap: var(--space-3); }
 
 .textbook-source-summary { display: grid; gap: var(--space-2); padding: var(--space-4); border-radius: var(--radius-lg); background: var(--surface-sunken); }
@@ -7202,14 +7821,155 @@ button.wizard-back-projects {
 .textbook-preflight-warning { display: flex; gap: var(--space-2); margin: 0; padding: var(--space-4) var(--space-5); border-top: 1px solid var(--line); color: var(--ink-soft); font-size: var(--text-xs); }
 .textbook-preflight-warning svg { flex: none; color: var(--tone-warning); }
 
+/* ── Шаг 3: проверка оглавления ─────────────────────────────────────────── */
+
+.textbook-outline-review { display: grid; gap: var(--space-3); }
+.textbook-outline-review-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+.textbook-outline-review-head h2 { margin: 0; font-size: var(--text-lg); }
+.textbook-outline-review-head .field { margin: 0; min-width: 240px; }
+.textbook-outline-source-note { margin: 0; color: var(--muted); font-size: var(--text-xs); }
+.textbook-outline-source-note.is-warning { color: var(--tone-warning); }
+.textbook-outline-review .viewer-stage { height: 60vh; min-height: 420px; border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; background: var(--paper); }
+.textbook-outline-page-toolbar { flex: none; display: flex; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-block-end: 1px solid var(--line); background: var(--paper); }
+.textbook-outline-page-scroll { display: flex; justify-content: center; flex: 1; min-height: 0; }
+.textbook-outline-page-image { display: block; max-width: 100%; height: auto; box-shadow: var(--shadow-sm); }
+.textbook-outline-tree { display: flex; flex-direction: column; gap: var(--space-1); }
+.textbook-outline-tree-actions { display: flex; justify-content: space-between; margin-bottom: var(--space-2); }
+.textbook-outline-row { display: flex; align-items: center; gap: var(--space-2); padding: 2px 0; border-radius: var(--radius-sm); }
+.textbook-outline-row-page { flex: none; min-width: 34px; padding: 2px 6px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--muted); font-size: var(--text-xs); line-height: 1.4; cursor: pointer; }
+.textbook-outline-row-page:hover { color: var(--ink); border-color: var(--accent); }
+.textbook-outline-row-title { flex: 1; min-width: 60px; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 4px 6px; background: transparent; color: var(--ink); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; }
+.textbook-outline-row-title:hover,
+.textbook-outline-row-title:focus { border-color: var(--line); background: var(--surface-sunken); outline: none; }
+/* Кнопки строки всегда на виду: спрятанные до наведения занимали место молча
+   (шесть кнопок по 36px), из-за чего формулировка обрезалась до пары слов. */
+.textbook-outline-row-actions { flex: none; display: flex; gap: 2px; }
+.textbook-outline-row-actions .icon-button { width: 26px; height: 26px; }
+.textbook-outline-empty { display: grid; gap: var(--space-3); padding: var(--space-6) var(--space-5); border: 1px dashed var(--line); border-radius: var(--radius-lg); background: var(--surface-sunken); text-align: center; color: var(--ink-soft); }
+.textbook-outline-empty .material-entry-actions { justify-content: center; }
+
 .wizard-main.is-textbook-editor { padding: var(--space-4); }
 .textbook-builder { width: 100%; height: calc(100vh - 158px); min-height: 680px; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--paper); box-shadow: var(--shadow-md); }
-.textbook-builder-head { min-height: 62px; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3); border-bottom: 1px solid var(--line); background: var(--paper-strong); }
-.textbook-builder-head > span:nth-child(2) { flex: 1; min-width: 180px; display: grid; }
-.textbook-builder-head > span b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
-.textbook-builder-head > span small { color: var(--muted); font-size: var(--text-xs); }
-.textbook-builder-grid { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 2fr) minmax(330px, 1fr); }
-.textbook-program-panel { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; border-right: 1px solid var(--line); }
+.textbook-builder-head { min-height: 62px; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-3); border-bottom: 1px solid var(--line); background: var(--paper-strong); }
+.textbook-builder-head .segmented-tabs,
+.page-head-actions .segmented-tabs { width: 180px; }
+.textbook-builder-confirm { margin-inline-start: auto; }
+.textbook-program-editor { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto auto auto minmax(0, 1fr); overflow: hidden; background: var(--paper); }
+.textbook-builder > .textbook-program-editor { grid-row: 1 / -1; }
+.program-main > .textbook-program-editor { height: calc(100vh - var(--space-8) * 2); border: 1px solid var(--line); border-radius: var(--radius-xl); }
+.program-main > .textbook-program-editor > .page-head { margin-bottom: var(--space-4); }
+
+/* Режим «С ИИ»: тулбар общий (renderHeader), контентная область — чат + предпросмотр
+ * вместо Дерево/Текст/Вопросы. grid-row занимает всё, что осталось после header/error-slot,
+ * независимо от того, что в режиме «Вручную» там же три отдельных ряда. */
+.textbook-program-ai-content { grid-row: 3 / -1; min-height: 0; display: flex; }
+.textbook-program-ai-layout { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 3fr) minmax(420px, 2fr); }
+.textbook-program-ai-layout > .program-chat-workspace { min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
+.textbook-program-ai-layout > .program-tree-preview { min-width: 0; min-height: 0; overflow-y: auto; padding: var(--space-4) var(--space-5); background: var(--paper-strong); }
+
+@media (max-width: 1120px) {
+  .textbook-program-ai-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(220px, 320px); }
+  .textbook-program-ai-layout > .program-chat-workspace { border-right: none; border-bottom: 1px solid var(--line); }
+}
+
+.program-tree-preview-root,
+.program-tree-preview-children {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.program-tree-preview-children { flex-basis: 100%; }
+
+.program-tree-preview-head {
+  position: sticky;
+  z-index: 1;
+  top: calc(var(--space-4) * -1);
+  display: grid;
+  gap: var(--space-2);
+  margin: calc(var(--space-4) * -1) calc(var(--space-5) * -1) var(--space-3);
+  padding: var(--space-4) var(--space-5) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-strong);
+}
+
+.program-tree-preview-head h2,
+.program-tree-preview-head p { margin: 0; }
+.program-tree-preview-head h2 { font-size: var(--text-base); }
+.program-tree-preview-head p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.program-tree-preview-head p span {
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--ink-soft);
+}
+.program-tree-preview-head p span.is-new { background: var(--tone-success); }
+.program-tree-preview-head p span.is-removed { background: var(--tone-danger); }
+.program-tree-preview-head p span.is-moved { background: var(--tone-warning); }
+
+.program-tree-preview-row {
+  /* Место под липкую шапку, когда к строке прокручивают из кода. */
+  scroll-margin-top: calc(var(--space-16) + var(--space-4));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 2px 0;
+  font-size: var(--text-sm);
+}
+
+.program-tree-preview-row.is-new,
+.program-tree-preview-title.is-new,
+.program-tree-preview-type.is-new {
+  color: var(--tone-success);
+}
+
+.program-tree-preview-row.is-removed,
+.program-tree-preview-title.is-removed,
+.program-tree-preview-type.is-removed {
+  color: var(--tone-danger);
+  text-decoration: line-through;
+}
+
+/* Перенос: оранжевый — у заголовка и пометки самой строки; потомки едут вместе
+ * и остаются обычными. Слово-тип красит основание, как точки в ручном просмотре. */
+.program-tree-preview-row.is-moved > .program-tree-preview-title,
+.program-tree-preview-row.is-moved > .program-tree-preview-note {
+  color: var(--tone-warning);
+}
+
+.program-tree-preview-type.is-basis-outline { color: var(--tone-info); }
+.program-tree-preview-type.is-basis-custom { color: var(--accent); }
+
+/* Пустое место, откуда узел уедет. */
+.program-tree-preview-row.is-ghost {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.program-tree-preview-note {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.program-tree-preview-type {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.textbook-program-error-slot:empty { min-height: 0; }
+.textbook-program-panel { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; }
 
 .textbook-generation-banner { display: grid; gap: var(--space-3); padding: var(--space-4); border-bottom: 1px solid var(--line); background: var(--accent-wash); }
 .textbook-generation-banner > span { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 2px var(--space-2); }
@@ -7256,6 +8016,22 @@ button.wizard-back-projects {
 .textbook-program-source small { max-width: 100%; overflow: hidden; color: var(--muted); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
 .textbook-program-source b { color: var(--ink-soft); font-size: var(--text-xs); }
 .textbook-program-source .text-button { min-height: 0; padding: 0; font-size: var(--text-xs); }
+/* «Материалы к темам» свободного проекта: список тем без материала с подбором внутри. */
+.dialog.topic-materials-dialog { width: min(760px, calc(100vw - var(--space-8))); }
+.topic-materials-list { display: grid; gap: var(--space-1); margin-block: var(--space-4); }
+.topic-materials-row { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); }
+.topic-materials-row .disclosure-trigger { width: 100%; padding: var(--space-3) var(--space-4); color: var(--ink-soft); text-align: left; }
+.topic-materials-row .disclosure-inner { padding: 0 var(--space-4) var(--space-4); }
+.program-materials-chip { font-variant-numeric: tabular-nums; }
+/* Свободный проект: под поиском в «Источнике» — где ещё взять материал темы. */
+.workspace-source-finder { display: grid; gap: var(--space-3); margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--line); }
+.workspace-source-finder h3 { margin: 0; font-size: var(--text-md); }
+.textbook-program-basis { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-soft); font-size: var(--text-xs); }
+.textbook-program-basis i { width: var(--space-2); height: var(--space-2); flex: none; border-radius: var(--radius-pill); background: var(--muted); box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 16%, transparent); }
+.textbook-program-basis.is-outline i { background: var(--tone-info); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone-info) 18%, transparent); }
+.textbook-program-basis.is-custom i { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+/* Тема из знаний модели не подтверждена источником — тот же тон, что у «источника нет». */
+.textbook-program-basis.is-model i { background: var(--tone-warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone-warning) 18%, transparent); }
 .textbook-editor-empty { min-height: 100%; display: grid; place-content: center; justify-items: center; gap: var(--space-3); padding: var(--space-8); color: var(--muted); text-align: center; }
 .textbook-editor-empty > svg { color: var(--accent); }
 .textbook-editor-empty h2 { margin: 0; color: var(--ink); font-size: var(--text-lg); }
@@ -7272,16 +8048,24 @@ button.wizard-back-projects {
 .textbook-question-view li { padding: var(--space-4); border-bottom: 1px solid var(--line); color: var(--ink-soft); }
 .textbook-question-view small { display: block; margin: var(--space-1) 0 0 var(--space-6); color: var(--tone-warning); }
 
-.textbook-assistant { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--paper-strong); }
-.textbook-assistant > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3); border-bottom: 1px solid var(--line); }
-.textbook-assistant > header > span { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
-.textbook-assistant > header > span svg { color: var(--accent); }
-.textbook-assistant > header label { width: 150px; min-width: 120px; max-width: 240px; display: grid; gap: 2px; overflow: auto; resize: horizontal; color: var(--muted); font-size: 10px; }
-.textbook-assistant > header select { width: 100%; min-width: 0; height: 34px; padding-block: 0; font-size: var(--text-xs); line-height: var(--leading-normal); }
-.textbook-chat-body { min-height: 0; overflow: auto; padding: var(--space-4); }
-.textbook-chat-locked { height: 100%; display: grid; place-content: center; justify-items: center; gap: var(--space-2); color: var(--muted); text-align: center; }
-.textbook-chat-locked svg { color: var(--faint); }
-.textbook-chat-locked p { max-width: 34ch; margin: 0; font-size: var(--text-xs); }
+.textbook-import-note { margin: 0; color: var(--muted); font-size: var(--text-sm); }
+.textbook-import-depth { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-sunken); color: var(--ink-soft); font-size: var(--text-sm); }
+.textbook-import-depth select { width: 160px; }
+.textbook-import-sources { max-height: 52vh; display: grid; gap: var(--space-3); overflow: auto; padding-inline-end: var(--space-1); }
+.textbook-import-source { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.textbook-import-source-head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); background: var(--surface-sunken); cursor: pointer; }
+.textbook-import-source-head > span { display: grid; gap: 2px; }
+.textbook-import-source-head small { color: var(--muted); font-size: var(--text-xs); }
+.textbook-import-source-choice { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line); color: var(--muted); font-size: var(--text-xs); }
+.textbook-import-source-choice .select-trigger { min-width: 190px; }
+.textbook-import-tree { display: grid; }
+.textbook-import-tree > label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--space-3); min-height: 46px; padding: var(--space-2) var(--space-3); padding-inline-start: calc(var(--space-3) + var(--outline-depth) * var(--space-5)); border-top: 1px solid var(--line); cursor: pointer; }
+.textbook-import-tree > label:hover { background: var(--surface-hover); }
+.textbook-import-tree > label > span { min-width: 0; display: grid; gap: 2px; }
+.textbook-import-tree b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
+.textbook-import-tree small { color: var(--muted); font-size: var(--text-xs); }
+.textbook-import-warning { margin: 0; padding: var(--space-3); border: 1px solid color-mix(in srgb, var(--tone-warning) 40%, var(--line)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--tone-warning) 8%, var(--paper)); color: var(--ink-soft); font-size: var(--text-sm); }
+
 .textbook-chat-message { width: fit-content; max-width: 92%; margin-bottom: var(--space-3); padding: var(--space-3); border-radius: var(--radius-lg); background: var(--paper); color: var(--ink-soft); font-size: var(--text-sm); line-height: var(--leading-normal); }
 .textbook-chat-message.is-user { margin-left: auto; background: var(--accent-wash); }
 .textbook-diff-card { padding: 0; overflow: hidden; }
@@ -7293,19 +8077,7 @@ button.wizard-back-projects {
 .textbook-diff-card .checkbox-row { padding: var(--space-3); border-bottom: 1px solid var(--line); font-size: var(--text-xs); }
 .textbook-diff-card > p { margin: 0; padding: var(--space-3); color: var(--muted); font-size: var(--text-xs); }
 .textbook-diff-card > div { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-3) var(--space-3); }
-.textbook-assistant > footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); padding: var(--space-3); border-top: 1px solid var(--line); }
-.textbook-assistant > footer textarea { min-width: 0; min-height: 76px; max-width: 100%; resize: vertical; font-size: var(--text-sm); }
-.textbook-assistant > footer .primary-button { align-self: end; }
-.textbook-assistant > footer small { grid-column: 1 / -1; color: var(--muted); font-size: 10px; }
 
-.textbook-summary { max-width: 860px; }
-.textbook-summary-story { padding: var(--space-6); border-color: var(--accent-edge); background: linear-gradient(135deg, var(--paper), var(--accent-wash)); text-align: center; }
-.textbook-summary-story h2 { margin-bottom: var(--space-3); font-size: var(--text-xl); }
-.textbook-summary-story p { max-width: 70ch; margin: var(--space-2) auto 0; color: var(--ink-soft); line-height: var(--leading-relaxed); }
-.textbook-summary-profile { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; max-width: 720px; margin: var(--space-4) auto 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--line); text-align: left; }
-.textbook-summary-profile > div { display: grid; gap: var(--space-1); padding: var(--space-3) var(--space-4); background: var(--paper); }
-.textbook-summary-profile dt { color: var(--muted); font-size: var(--text-xs); }
-.textbook-summary-profile dd { margin: 0; color: var(--ink); font-size: var(--text-sm); line-height: var(--leading-relaxed); }
 .textbook-summary-card { margin-top: var(--space-4); padding: 0; overflow: hidden; }
 .textbook-summary-card h3 { margin: 0; padding: var(--space-5); border-bottom: 1px solid var(--line); font-size: var(--text-lg); }
 .textbook-summary-card > p { margin: 0; padding: var(--space-5); color: var(--ink-soft); line-height: var(--leading-relaxed); }
@@ -7315,7 +8087,7 @@ button.wizard-back-projects {
 .textbook-summary-card > div > b { font-size: var(--text-sm); }
 .textbook-summary-card > div > small { color: var(--muted); font-size: var(--text-xs); }
 .textbook-summary-card > div.is-missing small { color: var(--tone-warning); }
-.textbook-summary-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); margin: 0; padding: var(--space-5); border-bottom: 1px solid var(--line); }
+.textbook-summary-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-3); margin: 0; padding: var(--space-5); border-bottom: 1px solid var(--line); }
 .textbook-summary-metrics > div { display: grid; gap: var(--space-2); padding: var(--space-4); border-radius: var(--radius-md); }
 .textbook-summary-metrics dt { color: var(--ink-soft); font-size: var(--text-xs); }
 .textbook-summary-metrics dd { margin: 0; color: var(--ink); font-size: var(--text-xl); font-weight: var(--weight-semibold); }
@@ -7323,6 +8095,10 @@ button.wizard-back-projects {
 .textbook-summary-metrics .is-topics { background: color-mix(in srgb, var(--tone-info) 12%, transparent); }
 .textbook-summary-metrics .is-missing { background: color-mix(in srgb, var(--tone-warning) 13%, transparent); }
 .textbook-summary-metrics .is-outside { background: var(--surface-sunken); }
+/* Программа на проверке — дерево: отступ по глубине, раздел читается заголовком группы. */
+.textbook-summary-card > .program-review-row { padding-left: calc(var(--space-5) + var(--depth, 0) * var(--space-6)); }
+.textbook-summary-card > .program-review-row.is-section { background: var(--surface-sunken); }
+.textbook-summary-card > .program-review-row:not(.is-section) > b { font-weight: var(--weight-normal); }
 
 .textbook-active-program { height: 100vh; min-width: 760px; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: var(--canvas); }
 .textbook-active-head { min-height: 64px; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); background: var(--paper); }
@@ -7357,9 +8133,7 @@ button.wizard-back-projects {
   .textbook-source-actions { grid-column: 3; grid-row: 2; }
   .textbook-profile-grid { grid-template-columns: minmax(0, 1fr); }
   .textbook-builder { height: auto; min-height: 760px; }
-  .textbook-builder-grid { grid-template-columns: minmax(0, 1fr); }
-  .textbook-program-panel { min-height: 680px; border-right: 0; }
-  .textbook-assistant { min-height: 620px; border-top: 1px solid var(--line); }
+  .textbook-program-panel { min-height: 680px; }
   .textbook-builder-head { flex-wrap: wrap; }
   .textbook-active-grid { grid-template-columns: minmax(0, 1fr) 340px; }
 }
@@ -7376,11 +8150,9 @@ button.wizard-back-projects {
   .textbook-preflight-list,
   .textbook-number-grid { grid-template-columns: minmax(0, 1fr); }
   .textbook-analysis-table { display: block; overflow-x: auto; white-space: nowrap; }
-  .textbook-summary-profile { grid-template-columns: minmax(0, 1fr); }
   .textbook-preflight-list section { border-right: 0; border-bottom: 1px solid var(--line); }
   .wizard-main.is-textbook-editor { padding: var(--space-2); }
   .textbook-builder { border-radius: var(--radius-lg); }
-  .textbook-builder-head > span:nth-child(2) { order: -1; flex-basis: 100%; }
   .textbook-program-toolbar { align-items: stretch; flex-direction: column; }
   .textbook-program-toolbar { display: flex; }
   .textbook-program-toolbar .segmented-tabs { width: 100%; }
@@ -7890,7 +8662,7 @@ button.wizard-back-projects {
     var(--materials-inspector-handle, 10px)
     var(--materials-inspector-width, 356px);
   overflow: hidden;
-  background: var(--canvas);
+  background: transparent;
 }
 
 /* Полный экран: остаются только тулбар и лист. Выход — той же кнопкой, F или Esc. */
@@ -8131,6 +8903,12 @@ button.wizard-back-projects {
   background: var(--canvas);
 }
 
+/* Обзор материалов остаётся частью экрана проекта; сплошная подложка нужна
+   только открытому документу. */
+.project-materials:not(.has-material-inspector) .materials-document-area {
+  background: transparent;
+}
+
 .materials-document-toolbar {
   position: relative;
   z-index: var(--z-topbar);
@@ -8294,55 +9072,43 @@ button.wizard-back-projects {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 0;
+  grid-template-columns: minmax(0, 1fr);
   overflow: hidden;
 }
 
-/* Зоны листания по краям: попасть мышью в поля листа проще, чем в кнопку тулбара. */
-.materials-page-zone {
+.materials-document-stage.has-outline {
+  grid-template-columns: var(--materials-outline-width) minmax(0, 1fr);
+}
+
+.materials-document-stage > .viewer-stage {
+  min-width: 0;
+  min-height: 0;
+}
+
+.materials-document-stage > .viewer-outline {
+  min-width: 0;
+  background: var(--paper);
+}
+
+.materials-document-stage.has-overlay-outline > .viewer-outline {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  z-index: 2;
-  /* Уже, чем поля листа: зона не должна перехватывать клики по тексту,
-     которыми ставят привязки. */
-  width: clamp(32px, 5%, 64px);
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
+  z-index: 3;
+  inset: 0 auto 0 0;
+  width: min(var(--materials-outline-width), calc(100% - var(--space-12)));
+  box-shadow: var(--shadow-lg);
+}
+
+/* Обзор материалов — без тулбара, единственный ребёнок .materials-document-area:
+   без явного grid-row он попадает в auto-строку тулбара, а не в 1fr-строку сцены
+   (см. тот же случай у .materials-conspect-summary в conspects.css). Сама сцена
+   остаётся прозрачной — карточка таблицы уже непрозрачна сама по себе
+   (.materials-overview-table), а пустая часть сцены должна показывать общий фон. */
+.materials-document-stage.is-standalone {
+  grid-row: 1 / -1;
+}
+
+.materials-document-stage.is-standalone .materials-document-scroll {
   background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity var(--motion-fast) var(--motion-ease-out);
-}
-
-.materials-page-zone.is-prev { left: 0; --page-zone-fade: right; }
-/* Отступ справа оставляет полосу прокрутки доступной мыши. */
-.materials-page-zone.is-next { right: 14px; --page-zone-fade: left; }
-
-.materials-page-zone > svg {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  padding: 6px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  background: var(--paper-strong);
-  box-shadow: var(--shadow-md);
-}
-
-.materials-page-zone:hover,
-.materials-page-zone:focus-visible {
-  opacity: 1;
-  background: linear-gradient(to var(--page-zone-fade), var(--surface-sunken), transparent);
-}
-
-.materials-page-zone:disabled {
-  cursor: default;
-  pointer-events: none;
 }
 
 .materials-document-center {
@@ -8357,6 +9123,7 @@ button.wizard-back-projects {
 }
 
 .materials-document-scroll {
+  flex: 1;
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -9582,6 +10349,24 @@ button.wizard-back-projects {
   font-size: var(--text-xs);
 }
 
+/* Назначение без выбора: в экзамене и свободном изучении файл всегда учебный источник. */
+.materials-purpose-static {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.materials-purpose-static > span {
+  color: var(--muted);
+}
+
+.materials-purpose-static > strong {
+  color: var(--ink);
+  font-weight: var(--weight-semibold);
+}
+
 .materials-file-details {
   display: grid;
   gap: 0;
@@ -9659,6 +10444,15 @@ button.wizard-back-projects {
   margin-bottom: var(--space-8);
 }
 
+/* Текст шапки уступает место кнопкам: три действия всегда в одну строку. */
+.materials-overview > header > div:first-child { flex: 1 1 320px; min-width: 0; }
+.materials-overview > header > .material-entry-actions { flex: none; flex-wrap: nowrap; }
+
+@media (max-width: 900px) {
+  .materials-overview > header { flex-direction: column; }
+  .materials-overview > header > .material-entry-actions { flex-wrap: wrap; justify-content: flex-start; }
+}
+
 .materials-kicker {
   margin: 0 0 var(--space-1);
   color: var(--accent);
@@ -9679,7 +10473,11 @@ button.wizard-back-projects {
   font-size: var(--text-sm);
 }
 
+/* Колонки задаёт таблица, строки берут их через subgrid: иначе у каждой строки
+   своя ширина «auto»-колонок и значения съезжают относительно шапки. */
 .materials-overview-table {
+  display: grid;
+  grid-template-columns: minmax(200px, 2fr) minmax(110px, 1fr) minmax(64px, auto) minmax(120px, 1.2fr) minmax(88px, auto) minmax(110px, auto) minmax(150px, auto);
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
@@ -9687,10 +10485,10 @@ button.wizard-back-projects {
 }
 
 .materials-overview-row {
-  width: 100%;
+  grid-column: 1 / -1;
   min-height: 56px;
   display: grid;
-  grid-template-columns: minmax(180px, 1.6fr) minmax(130px, 1fr) 90px 90px minmax(110px, 0.8fr);
+  grid-template-columns: subgrid;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
@@ -9698,7 +10496,7 @@ button.wizard-back-projects {
   border-bottom: 1px solid var(--line);
   background: transparent;
   color: var(--ink-soft);
-  cursor: pointer;
+  cursor: default;
   font-size: var(--text-xs);
   text-align: left;
 }
@@ -9706,6 +10504,33 @@ button.wizard-back-projects {
 .materials-overview-row:last-child { border-bottom: 0; }
 .materials-overview-row:not(.is-head):hover { background: var(--surface-hover); }
 .materials-overview-row.is-head { min-height: 38px; color: var(--faint); cursor: default; }
+.materials-overview-link { min-width: 0; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; font: inherit; text-align: left; }
+.materials-overview-link strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.materials-overview-link:hover { color: var(--accent); }
+.materials-overview-row > .status-badge { justify-self: start; font-variant-numeric: tabular-nums; }
+/* Под «Исследовать» — исследован ли файл: «Файл разобран» ещё не значит «содержание прочитано». */
+.materials-research-cell { display: grid; justify-items: start; gap: 2px; min-width: 0; }
+.materials-research-state { --research-dot: var(--faint); display: block; max-width: 15rem; padding-left: var(--space-3); color: var(--muted); font-size: var(--text-xs); line-height: 1.35; }
+.materials-research-state::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: var(--space-1); border-radius: 50%; background: var(--research-dot); vertical-align: 1px; }
+.materials-research-state.is-success { --research-dot: var(--tone-success); color: var(--ink-soft); }
+.materials-research-state.is-warning { --research-dot: var(--tone-warning); color: var(--ink-soft); }
+.materials-research-state.is-info { --research-dot: var(--tone-info); color: var(--ink-soft); }
+.materials-research-state span { color: var(--muted); }
+.materials-overview-name { display: flex; align-items: center; gap: var(--space-1); min-width: 0; margin-left: calc(-1 * var(--space-3)); }
+.materials-drag-handle { display: grid; flex: none; place-items: center; width: 20px; height: 28px; border-radius: var(--radius-sm); color: var(--faint); cursor: grab; opacity: 0; transition: opacity var(--ease-fast), color var(--ease-fast); }
+.materials-drag-handle:hover { color: var(--ink-soft); }
+.materials-drag-handle:active { cursor: grabbing; }
+.materials-overview-row:hover .materials-drag-handle { opacity: 1; }
+.materials-overview-row.is-dragging { opacity: 0.5; }
+/* Линия у строки показывает, куда встанет перетаскиваемый источник: снизу вверх —
+   над целью, сверху вниз — под ней. */
+.materials-overview-row.is-drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.materials-overview-row.is-drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+.materials-overview-row[data-state="open"] { background: var(--surface-hover); }
+.materials-overview-cell { display: grid; gap: 2px; min-width: 0; }
+.materials-overview-cell > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.materials-overview-cell > small { color: var(--faint); font-size: var(--text-xs); }
+.materials-overview-cell > small.is-warning { color: var(--tone-warning); }
 
 .materials-summary-document {
   width: min(820px, calc(100% - var(--space-10)));
@@ -9792,6 +10617,45 @@ button.wizard-back-projects {
 }
 .materials-upload-progress small { font-size: var(--text-xs); }
 .materials-upload-progress .progress { grid-column: 1 / -1; }
+
+.project-file-upload-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--accent-edge);
+  border-radius: var(--radius-lg);
+  background: var(--accent-wash);
+  box-shadow: var(--shadow-sm);
+  color: var(--ink);
+}
+.project-file-upload-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--accent);
+  animation: project-upload-breathe 1.8s ease-in-out infinite;
+}
+.project-file-upload-copy { display: grid; gap: var(--space-1); min-width: 0; }
+.project-file-upload-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
+.project-file-upload-copy small { color: var(--muted); font-size: var(--text-xs); }
+.project-file-upload-percent { color: var(--accent); font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.project-file-upload-status .progress { grid-column: 1 / -1; background: var(--paper); }
+.project-file-upload-status .progress-fill { background: var(--accent); }
+.project-file-upload-status.is-finishing .project-file-upload-icon { animation: none; }
+.project-file-upload-status.is-finishing .progress-fill {
+  animation: project-upload-glow 1.6s ease-in-out infinite;
+}
+@keyframes project-upload-breathe { 50% { transform: translateY(-2px); box-shadow: var(--shadow-accent); } }
+@keyframes project-upload-glow { 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) {
+  .project-file-upload-icon, .project-file-upload-status.is-finishing .progress-fill { animation: none; }
+}
 
 .materials-manual-answer {
   width: 100%;
@@ -9903,37 +10767,6 @@ button.wizard-back-projects {
   line-height: var(--leading-relaxed);
 }
 
-.materials-original-page {
-  width: fit-content;
-  max-width: calc(100% - var(--space-8));
-  min-height: calc(100% - var(--space-8));
-  display: grid;
-  place-items: center;
-  margin: var(--space-4) auto;
-  padding: var(--space-4);
-}
-
-/* Высота листа считается от той же условной страницы в 900px, что и в режиме
-   «Текст», — иначе «вписать в окно» показывало бы разный масштаб в двух режимах. */
-.materials-original-page img {
-  display: block;
-  width: auto;
-  max-width: 100%;
-  height: calc(900px * var(--materials-zoom, 1));
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--paper);
-  box-shadow: var(--shadow-md);
-}
-
-.materials-original-canvas { position: relative; width: fit-content; max-width: 100%; }
-.materials-bbox-layer { position: absolute; inset: 0; pointer-events: none; }
-.materials-bbox-layer span {
-  position: absolute;
-  border: 1px solid color-mix(in srgb, var(--accent) 58%, transparent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
 .materials-page-editor { display: grid; gap: var(--space-2); font-weight: 650; }
 .materials-page-editor textarea {
   min-height: 420px;
@@ -10005,6 +10838,7 @@ button.wizard-back-projects {
   grid-column: 3;
   min-width: 0;
   min-height: 0;
+  container: workspace-main / inline-size;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
@@ -10196,6 +11030,7 @@ button.wizard-back-projects {
 }
 
 .workspace-section-overview {
+  grid-row: 1 / -1;
   min-width: 0;
   min-height: 0;
   display: grid;
@@ -10204,6 +11039,42 @@ button.wizard-back-projects {
   overflow: auto;
   padding: clamp(var(--space-6), 5vw, var(--space-12));
   background: var(--paper);
+}
+
+.workspace-section-overview.is-empty {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace-section-overview.is-empty .empty-state {
+  min-width: 0;
+  align-content: center;
+  gap: var(--space-4);
+}
+
+.workspace-section-overview.is-empty .empty-state h3 {
+  font-size: var(--text-xl);
+}
+
+.workspace-section-overview.is-empty .empty-state p {
+  max-width: none;
+  font-size: var(--text-lg);
+}
+
+.workspace-outline-ranges {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font-size: var(--text-sm);
+}
+
+.workspace-outline-ranges p {
+  margin: 0 0 var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
 }
 
 .workspace-section-overview-intro {
@@ -10891,4 +11762,189 @@ button.wizard-back-projects {
     min-width: 0;
     padding: var(--space-6) var(--space-5);
   }
+}
+
+/* Управление пространством Рабочей области одинаково для экзамена и учебника. */
+.project-workspace {
+  grid-template-columns: var(--workspace-tree-width, 320px) var(--workspace-tree-handle-width, 10px) minmax(0, 1fr);
+  transition: grid-template-columns var(--motion-slow) var(--motion-ease-out);
+}
+.project-workspace.is-tree-collapsed { --workspace-tree-handle-width: 0px; }
+.workspace-tree-title { grid-template-columns: 30px minmax(0, 1fr) auto 30px; }
+.workspace-tree-title > .icon-button { grid-column: 4; }
+.workspace-tree-title strong { min-width: 0; }
+.is-tree-collapsed .workspace-tree-head { padding: var(--space-2); }
+.is-tree-collapsed .workspace-tree-title { display: flex; flex-direction: column; gap: var(--space-2); }
+.is-tree-collapsed .workspace-tree-title strong,
+.is-tree-collapsed .workspace-project-deadline,
+.is-tree-collapsed .workspace-tree-tools,
+.is-tree-collapsed .workspace-question-tree { display: none; }
+.is-tree-collapsed .workspace-project-nav {
+  flex: 1;
+  align-content: start;
+  padding: var(--space-2) var(--space-1);
+}
+.is-tree-collapsed .workspace-project-nav .workspace-project-link,
+.is-tree-collapsed .workspace-project-nav button { display: flex; justify-content: center; min-height: 40px; padding: var(--space-1); }
+.is-tree-collapsed .workspace-project-nav .workspace-project-link > span,
+.is-tree-collapsed .workspace-project-nav .workspace-project-link > small,
+.is-tree-collapsed .workspace-project-nav button > span,
+.is-tree-collapsed .workspace-project-nav button > small { display: none; }
+.workspace-main:has(.workspace-heading-resize) {
+  grid-template-rows: var(--workspace-heading-height, 72px) 10px auto minmax(0, 1fr);
+  transition: grid-template-rows var(--motion-base) var(--motion-ease-out);
+}
+.is-heading-dragging .workspace-main:has(.workspace-heading-resize) { transition: none; }
+.workspace-main:has(.workspace-heading-resize) .workspace-save-status { grid-row: 3; }
+.workspace-main:has(.workspace-heading-resize) .workspace-editor-grid { grid-row: 4; }
+.workspace-main:has(.workspace-heading-resize) .workspace-question-bar {
+  min-height: 0;
+  height: 100%;
+  box-sizing: border-box;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  overflow: hidden;
+}
+.is-heading-collapsed .workspace-question-bar { padding: 0; border: 0; visibility: hidden; }
+.workspace-main:has(.workspace-heading-resize) .workspace-question-heading h1 { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-main:has(.workspace-heading-resize) .workspace-question-actions { min-width: 0; max-width: 60vw; justify-content: flex-end; overflow-x: auto; white-space: nowrap; }
+.workspace-main:has(.workspace-heading-resize) .workspace-question-actions > * { flex: none; }
+.workspace-heading-resize {
+  grid-row: 2;
+  position: relative;
+  z-index: 2;
+  height: 10px;
+  cursor: row-resize;
+  touch-action: none;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+.workspace-heading-resize > span {
+  position: absolute;
+  top: 4px;
+  left: calc(50% - 22px);
+  width: 44px;
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--line-strong);
+  transition: background-color var(--ease-fast), width var(--ease-fast);
+}
+.workspace-heading-resize:hover > span,
+.workspace-heading-resize:focus-visible > span { width: 52px; background: var(--accent); }
+.workspace-heading-resize:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.workspace-main:has(.workspace-heading-resize) .workspace-question-bar,
+.workspace-main:has(.workspace-heading-resize) .workspace-heading-resize {
+  transition: height var(--motion-base) var(--motion-ease-out);
+}
+@media (max-width: 900px) {
+  .project-workspace { grid-template-columns: var(--workspace-tree-width, 320px) var(--workspace-tree-handle-width, 0px) minmax(0, 1fr); }
+  .project-workspace.is-tree-collapsed { --workspace-tree-width: 56px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .project-workspace,
+  .workspace-main:has(.workspace-heading-resize),
+  .workspace-main:has(.workspace-heading-resize) .workspace-question-bar,
+  .workspace-main:has(.workspace-heading-resize) .workspace-heading-resize { transition: none; }
+}
+
+/* Короткое имя оставляет в верхней панели место для состояния выбранной темы. */
+.workspace-main:has(.workspace-heading-resize) .workspace-question-bar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: var(--space-2) var(--space-3);
+}
+.workspace-question-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.workspace-main:has(.workspace-heading-resize) .workspace-question-heading h1 {
+  flex: 0 1 15ch;
+  max-width: 15ch;
+  font-size: var(--text-base);
+  text-overflow: ellipsis;
+}
+.workspace-status-chips {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  overflow: hidden;
+}
+.workspace-status-chip {
+  min-height: 26px;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+.workspace-status-chip::before {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--faint);
+  content: "";
+}
+.workspace-status-chip.is-success { color: var(--tone-success); background: color-mix(in srgb, var(--tone-success) 8%, var(--paper)); border-color: color-mix(in srgb, var(--tone-success) 22%, var(--line)); }
+.workspace-status-chip.is-success::before { background: var(--tone-success); }
+.workspace-status-chip.is-warning { color: var(--tone-warning); background: color-mix(in srgb, var(--tone-warning) 8%, var(--paper)); border-color: color-mix(in srgb, var(--tone-warning) 22%, var(--line)); }
+.workspace-status-chip.is-warning::before { background: var(--tone-warning); }
+.workspace-status-chip.is-info { color: var(--tone-info); background: color-mix(in srgb, var(--tone-info) 8%, var(--paper)); border-color: color-mix(in srgb, var(--tone-info) 22%, var(--line)); }
+.workspace-status-chip.is-info::before { background: var(--tone-info); }
+.workspace-main:has(.workspace-heading-resize) .workspace-question-actions {
+  max-width: min(650px, calc(100cqw - 64px));
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.workspace-question-actions::-webkit-scrollbar { display: none; }
+.workspace-question-actions > .icon-button { flex: none; }
+.workspace-detached-back {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  transition: color var(--ease-fast), background-color var(--ease-fast);
+}
+.workspace-detached-back:hover { color: var(--accent); background: var(--accent-wash); }
+.project-workspace.is-detached {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+.project-workspace.is-detached .workspace-main { grid-column: 1; }
+.project-workspace.is-pane-detached .workspace-editor-group {
+  animation: workspace-pane-arrive var(--motion-slow) var(--motion-ease-out) both;
+}
+@keyframes workspace-pane-arrive {
+  from { opacity: .86; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (max-width: 1180px) {
+  .workspace-main:has(.workspace-heading-resize) .workspace-question-actions {
+    justify-content: flex-end;
+    padding-bottom: 0;
+  }
+}
+@container workspace-main (max-width: 1249px) {
+  .workspace-status-chip:nth-child(n + 3) { display: none; }
+}
+@container workspace-main (max-width: 999px) {
+  .workspace-status-chip:nth-child(n + 2) { display: none; }
+}
+@container workspace-main (max-width: 849px) {
+  .workspace-status-chips { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .project-workspace.is-pane-detached .workspace-editor-group { animation: none; }
 }

@@ -4,14 +4,15 @@ import {
   buildTypstMaterial,
   controlLibraryProcessing,
   getLibraryMaterial,
+  getLibraryProcessing,
   getLibraryPage,
   listMaterialRevisions,
   startLibraryProcessing,
+  updateLibraryMaterialMetadata,
   type LibraryMaterialDetailRead,
   type MaterialPageRead,
   type MaterialRevisionRead,
-  type ParserMode,
-  type ProcessingScope,
+  type LibraryProcessingCommand,
 } from "../api/materials";
 
 const POLL_MS = 1200;
@@ -77,11 +78,33 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
     const task = detail?.task;
     const active = task && (task.state === "queued" || task.state === "running");
     if (!active) return;
-    const timer = window.setInterval(() => {
-      void refreshDetail();
-    }, POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [detail?.task?.state, detail?.task?.done, refreshDetail]);
+    const controller = new AbortController();
+    let timer: number;
+    // Следующий опрос только после ответа: медленный запрос не создаёт очередь.
+    const poll = async () => {
+      try {
+        const next = await getLibraryProcessing(materialId, controller.signal);
+        if (controller.signal.aborted) return;
+        if (!next || (next.state !== "queued" && next.state !== "running")) {
+          const updated = await refreshDetail(controller.signal);
+          if (updated && updated.task?.state !== "queued" && updated.task?.state !== "running") return;
+        } else {
+          setDetail((current) => current ? {
+            ...current, task: next, status: next.state === "running" ? "processing" : "queued",
+          } : current);
+        }
+      } catch {
+        // Временный сбой опроса не скрывает уже открытую страницу.
+        if (controller.signal.aborted) return;
+      }
+      if (!controller.signal.aborted) timer = window.setTimeout(poll, POLL_MS);
+    };
+    timer = window.setTimeout(poll, POLL_MS);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [materialId, detail?.task?.state, refreshDetail]);
 
   const activeTaskId = detail?.task
     && (detail.task.state === "running" || detail.task.state === "queued" || detail.task.state === "paused")
@@ -155,12 +178,26 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
     }
   }, [refreshDetail]);
 
-  const startProcessing = useCallback((command: {
-    parser_mode: ParserMode;
-    scope: ProcessingScope;
-    page_from?: number | null;
-    page_to?: number | null;
-  }) => run(() => startLibraryProcessing(materialId, command)), [materialId, run]);
+  const updateMetadata = useCallback(async (command: { display_name?: string; subject?: string | null }): Promise<boolean> => {
+    const previous = detail;
+    if (!previous) return false;
+    setBusy(true);
+    setError(null);
+    setDetail((current) => current ? { ...current, ...command } : current);
+    try {
+      const saved = await updateLibraryMaterialMetadata(materialId, command);
+      setDetail((current) => current ? { ...current, ...saved } : current);
+      return true;
+    } catch (caught) {
+      setDetail(previous);
+      setError(caught instanceof Error ? caught.message : "Не удалось сохранить метаданные");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [detail, materialId]);
+
+  const startProcessing = useCallback((command: LibraryProcessingCommand) => run(() => startLibraryProcessing(materialId, command)), [materialId, run]);
 
   const controlProcessing = useCallback((action: "pause" | "resume" | "retry" | "cancel") =>
     run(() => controlLibraryProcessing(materialId, action)), [materialId, run]);
@@ -192,5 +229,6 @@ export function useLibraryMaterial(materialId: string, { page, revision }: LoadO
     buildTypst,
     addTypstFile,
     run,
+    updateMetadata,
   };
 }

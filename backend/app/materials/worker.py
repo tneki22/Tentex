@@ -6,20 +6,26 @@ import shutil
 import socket
 import tempfile
 import time
-from datetime import timedelta
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Event, Thread, get_native_id
+from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.ai.job_budget import JobBudget
 from app.ai.jobs import process_ai_job
 from app.bindings.answers_link import link_answers_material
 from app.bindings.search import reindex_material
 from app.bindings.service import transfer_bindings_on_revision
-from app.db import SessionLocal, upgrade_database
+from app.config import settings
+from app.db import SessionLocal, job_write_transaction, retry_on_locked, upgrade_database
 from app.logging_config import configure_logging
-from app.materials import library
+from app.materials import audio_job, image_descriptions, library, processing_plan
 from app.materials import revisions as revision_registry
 from app.materials.parsers.base import ParsedPage
 from app.materials.parsers.cloud_vlm import CloudRecognizer
@@ -41,6 +47,7 @@ from app.models import (
     Material,
     MaterialPage,
     MaterialRevisionOrigin,
+    MaterialSourceKind,
     MaterialState,
     PageQuality,
     ParserMode,
@@ -52,34 +59,117 @@ from app.models import (
 )
 from app.ocr import settings as ocr_settings
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
+from app.storage import maintenance as storage_maintenance
+from app.system import diagnostics
 
 log = logging.getLogger("tentex.worker")
 
 LEASE_SECONDS = 60
+HEARTBEAT_SECONDS = 20
+POLL_SECONDS = 0.75
+#: Как часто воркер отмечается в `data/diagnostics/worker.json`. Сводка
+#: «Состояние» считает его молчащим после нескольких пропущенных отметок.
+WORKER_PULSE_SECONDS = 15
+
+type WorkerLane = Literal["local", "cloud", "ai"]
+
+WORKER_LANES: tuple[WorkerLane, ...] = ("local", "cloud", "ai")
+AI_JOB_KINDS = frozenset(
+    {
+        BackgroundJobKind.AI_GROUPING,
+        BackgroundJobKind.AI_IMPORT_REPAIR,
+        BackgroundJobKind.AI_PREPARATION,
+        BackgroundJobKind.AI_CLEANUP,
+        BackgroundJobKind.AI_ANSWER_SECTIONS,
+        BackgroundJobKind.AI_PROGRAM_BUILD,
+        BackgroundJobKind.COVERAGE_RESEARCH,
+        BackgroundJobKind.RETRIEVAL_INDEX,
+        BackgroundJobKind.RETRIEVAL_EXHAUSTIVE,
+        BackgroundJobKind.IMAGE_DESCRIPTIONS,
+        BackgroundJobKind.AI_LESSON,
+        BackgroundJobKind.AI_CARDS,
+    }
+)
+LOCAL_JOB_KINDS = frozenset(
+    {
+        BackgroundJobKind.TYPST_COMPILE,
+        BackgroundJobKind.LINK_ANSWERS,
+        BackgroundJobKind.RETRIEVAL_MODEL_INSTALL,
+        BackgroundJobKind.BACKUP_CREATE,
+        BackgroundJobKind.PROJECT_EXPORT,
+        BackgroundJobKind.PROJECT_IMPORT,
+        BackgroundJobKind.STORAGE_VERIFY,
+        BackgroundJobKind.STORAGE_CLEANUP,
+    }
+)
 
 
 def _worker_id() -> str:
-    return f"{socket.gethostname()}:{os.getpid()}"
+    return f"{socket.gethostname()}:{os.getpid()}:{get_native_id()}"
 
 
 def _selected(task: BackgroundJob) -> list[int]:
     return [int(value) for value in task.checkpoint.get("selected_pages") or []]
 
 
-def claim_job(session: Session, worker_id: str) -> BackgroundJob | None:
-    """Взять самую старую задачу в очереди — независимо от её вида (`kind`).
+def _lane_condition(lane: WorkerLane):
+    """SQL-условие одной ресурсной полосы без отдельного поля в таблице."""
+    if lane == "ai":
+        return BackgroundJob.kind.in_(AI_JOB_KINDS)
+    if lane == "cloud":
+        return and_(
+            BackgroundJob.kind == BackgroundJobKind.PARSE,
+            BackgroundJob.parser_mode == ParserMode.CLOUD,
+        )
+    return or_(
+        BackgroundJob.kind.in_(LOCAL_JOB_KINDS),
+        and_(
+            BackgroundJob.kind == BackgroundJobKind.PARSE,
+            or_(
+                BackgroundJob.parser_mode.is_(None),
+                BackgroundJob.parser_mode != ParserMode.CLOUD,
+            ),
+        ),
+    )
 
-    ВНИМАНИЕ (известное ограничение, не чинится в этом заходе): выбор читает
-    строку и пишет в неё в одной транзакции. Два воркера (`--scale worker=2`)
-    могут прочитать одну и ту же `queued`-строку до того, как первый успеет
-    выставить `state=running`, и оба возьмутся за одну задачу. Для одного
-    пользователя на одной машине это не заходит — лиз (`LEASE_SECONDS`)
-    защищает только от мёртвого воркера. Безопасный второй воркер потребует
-    условного взятия: `UPDATE ... WHERE id=? AND state='queued'` с проверкой
-    `rowcount == 1` вместо read-then-write.
+
+def _has_claimable(session: Session, lane: WorkerLane | None, now: datetime) -> bool:
+    """Есть ли что брать, по одному чтению без резервирования writer.
+
+    Простаивающий воркер опрашивает полосы несколько раз в секунду; каждая
+    попытка под `job_write_transaction` держала writer SQLite ~30 мс, и запись
+    API в это время ждала. Чтение ничего не решает: сам захват ниже по-прежнему
+    перепроверяет строку под writer, а пропущенная задача берётся следующим опросом.
     """
+    queued = BackgroundJob.state == BackgroundJobState.QUEUED
+    if lane is not None:
+        queued = and_(queued, _lane_condition(lane))
+    expired = and_(
+        BackgroundJob.state == BackgroundJobState.RUNNING,
+        BackgroundJob.lease_expires_at < now,
+    )
+    found = session.scalar(select(BackgroundJob.id).where(or_(queued, expired)).limit(1))
+    # Закрыть снимок чтения так же, как `job_write_transaction`: commit, а не
+    # rollback, чтобы не потерять несохранённое вызывающей стороны.
+    session.commit()
+    return found is not None
+
+
+def claim_job(
+    session: Session, worker_id: str, lane: WorkerLane | None = None
+) -> BackgroundJob | None:
+    """Атомарно взять старейшую задачу выбранной ресурсной полосы.
+
+    `job_write_transaction` резервирует единственный SQLite-writer до чтения,
+    поэтому параллельные потоки и процессы не могут забрать одну строку дважды.
+    `lane=None` сохраняет поведение одноразовых проверочных запусков.
+    """
+    if storage_maintenance.active():
+        return None
     now = utc_now()
-    with session.begin():
+    if not _has_claimable(session, lane, now):
+        return None
+    with job_write_transaction(session):
         expired = list(
             session.scalars(
                 select(BackgroundJob).where(
@@ -92,12 +182,10 @@ def claim_job(session: Session, worker_id: str) -> BackgroundJob | None:
             expired_job.state = BackgroundJobState.QUEUED
             expired_job.lease_owner = None
             expired_job.lease_expires_at = None
-        job = session.scalar(
-            select(BackgroundJob)
-            .where(BackgroundJob.state == BackgroundJobState.QUEUED)
-            .order_by(BackgroundJob.created_at)
-            .limit(1)
-        )
+        statement = select(BackgroundJob).where(BackgroundJob.state == BackgroundJobState.QUEUED)
+        if lane is not None:
+            statement = statement.where(_lane_condition(lane))
+        job = session.scalar(statement.order_by(BackgroundJob.created_at).limit(1))
         if job is None:
             return None
         job.state = BackgroundJobState.RUNNING
@@ -105,15 +193,15 @@ def claim_job(session: Session, worker_id: str) -> BackgroundJob | None:
         job.heartbeat_at = now
         job.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
         job.updated_at = now
+        if job.kind == BackgroundJobKind.COVERAGE_RESEARCH:
+            from app.coverage.lifecycle import claim_generation
+
+            claim_generation(session, job)
         # Стадии extract/segment и статус материала осмысленны только у
-        # разбора: у ролей ИИ и у link_answers material_id пустой.
-        if job.kind == BackgroundJobKind.PARSE:
-            job.stage = ProcessingStage.EXTRACT
-            material = session.get(Material, job.material_id)
-            if material:
-                material.status = MaterialState.PROCESSING
-                material.outline = extract_outline(material_path(material.storage_path))
-        elif job.kind == BackgroundJobKind.TYPST_COMPILE:
+        # разбора: у ролей ИИ и у link_answers material_id пустой. Закладки
+        # PDF уже прочитаны при загрузке (library.store_uploaded_file) —
+        # здесь их незачем извлекать заново.
+        if job.kind in (BackgroundJobKind.PARSE, BackgroundJobKind.TYPST_COMPILE):
             job.stage = ProcessingStage.EXTRACT
             material = session.get(Material, job.material_id)
             if material:
@@ -130,7 +218,7 @@ def _prepare_revision(session: Session, task_id: UUID) -> None:
     Частичный запуск обязан дать полную версию: иначе прежние страницы исчезли
     бы из активного разбора, а привязки к ним осиротели бы без всякой причины.
     """
-    with session.begin():
+    with job_write_transaction(session, task_id):
         task = session.get(BackgroundJob, task_id)
         if task is None:
             return
@@ -166,7 +254,7 @@ def _prepare_revision(session: Session, task_id: UUID) -> None:
 
 
 def _save_page(session: Session, task_id: UUID, parsed: ParsedPage) -> bool:
-    with session.begin():
+    with job_write_transaction(session, task_id):
         task = session.get(BackgroundJob, task_id)
         if task is None:
             return False
@@ -210,6 +298,10 @@ def _save_page(session: Session, task_id: UUID, parsed: ParsedPage) -> bool:
         )
         task.checkpoint = checkpoint
         task.done = min(task.total, int(checkpoint["next_index"]))
+        if task.done == task.total:
+            # Страница уже доступна по task_id; до публикации ревизии остаётся
+            # сборка общей структуры. Не показываем этот этап как «1 из 1».
+            task.stage = ProcessingStage.SEGMENT
         task.heartbeat_at = utc_now()
         task.lease_expires_at = utc_now() + timedelta(seconds=LEASE_SECONDS)
         task.updated_at = utc_now()
@@ -224,7 +316,7 @@ def _save_page(session: Session, task_id: UUID, parsed: ParsedPage) -> bool:
         return True
 
 
-def _link_answers_projects(session: Session, material_id: UUID) -> None:
+def link_answers_projects(session: Session, material_id: UUID) -> None:
     """Файл ответов после разбора сам ложится на вопросы и заполняет эталоны.
 
     Осечка автопривязки не должна ронять разбор: файл уже разобран и полезен,
@@ -256,12 +348,26 @@ def _link_answers_projects(session: Session, material_id: UUID) -> None:
 
 
 def _finish(session: Session, task_id: UUID) -> None:
-    with session.begin():
+    started = time.perf_counter()
+    task = session.get(BackgroundJob, task_id)
+    if task is None:
+        return
+    material_id = task.material_id
+    revision = int(task.checkpoint["revision"])
+    session.commit()
+    # Строящаяся ревизия ещё невидима читателям. Готовим её короткими записями,
+    # чтобы единственный SQLite-writer не удерживался на весь документ.
+    with job_write_transaction(session, task_id):
         task = session.get(BackgroundJob, task_id)
         if task is None:
             return
-        revision = int(task.checkpoint["revision"])
         task.stage = ProcessingStage.SEGMENT
+        image_descriptions.refresh_image_roles(session, material_id, revision)
+    new_fragments = library.rebuild_structure_staged(session, task_id, material_id, revision)
+    with job_write_transaction(session, task_id):
+        task = session.get(BackgroundJob, task_id)
+        if task is None:
+            return
         material = session.get(Material, task.material_id)
         if material is None:
             return
@@ -270,7 +376,6 @@ def _finish(session: Session, task_id: UUID) -> None:
         # фрагменты прошлой ревизии остаются, чтобы её можно было открыть и
         # восстановить, а привязки переносятся на новые фрагменты (Р6).
         old_fragments = library.fragments_by_page(session, task.material_id, previous_revision)
-        new_fragments = library.rebuild_structure(session, task.material_id, revision)
 
         material.active_parse_revision = revision
         material.status = MaterialState.READY
@@ -285,6 +390,9 @@ def _finish(session: Session, task_id: UUID) -> None:
         )
         summary = revision_registry.revision_summary(session, task.material_id, revision)
         summary["changed_pages"] = len(_selected(task))
+        summary |= image_descriptions.revision_image_summary(session, task.material_id, revision)
+        if task.checkpoint.get("budget"):
+            summary["budget"] = task.checkpoint["budget"]
         revision_registry.record_revision(
             session,
             task.material_id,
@@ -299,10 +407,11 @@ def _finish(session: Session, task_id: UUID) -> None:
             task_id=task.id,
             source_storage_path=storage_path,
             source_hash=source_hash,
-            scope=dict(task.checkpoint.get("scope") or {"kind": "all"}),
+            scope=dict(task.checkpoint.get("scope") or {"kind": "all"})
+            | ({"options": task.checkpoint["options"]} if task.checkpoint.get("options") else {}),
             summary=summary,
         )
-        _link_answers_projects(session, task.material_id)
+        link_answers_projects(session, task.material_id)
 
         task.state = BackgroundJobState.COMPLETED
         task.stage = ProcessingStage.COMPLETE
@@ -311,6 +420,16 @@ def _finish(session: Session, task_id: UUID) -> None:
         task.lease_expires_at = None
         task.completed_at = utc_now()
         task.updated_at = utc_now()
+    # Единственная заведомо длинная запись конвейера (пересборка структуры,
+    # перенос привязок и FTS всей ревизии в одной транзакции) — замер решает,
+    # нужно ли выносить `reindex_material`/`transfer_bindings_on_revision`
+    # в отдельные короткие транзакции (docs/architecture/stage-5-material-pipeline.md).
+    log.info(
+        "_finish material=%s revision=%s %.1fms",
+        task.material_id,
+        revision,
+        (time.perf_counter() - started) * 1000,
+    )
 
 
 def process_parse_job(session: Session, task: BackgroundJob) -> None:
@@ -330,38 +449,79 @@ def process_parse_job(session: Session, task: BackgroundJob) -> None:
             return
         source_path = material_path(material.storage_path)
         parser_mode = task.parser_mode
+        is_audio = material.source_kind == MaterialSourceKind.AUDIO
         selected = _selected(task)
         next_index = int(task.checkpoint.get("next_index", 0))
         # SQLAlchemy starts a read transaction for session.get(); page checkpoints
         # need their own short transactions so a stopped worker never loses a page.
         session.rollback()
-        params = ocr_settings.runtime_params(session)
+        # Снимок настроек запуска, а не текущие настройки: пауза и смена общих
+        # параметров не меняют ход уже начатого разбора.
+        options = dict(task.checkpoint.get("options") or {})
+        has_budget = "budget" in task.checkpoint
+        params = processing_plan.params_from_options(
+            options, ocr_settings.runtime_params(session)
+        )
         session.rollback()
         # Порт внешней модели заводится только для облачного разбора: локальные
         # режимы не должны и не могут дотянуться до шлюза.
         recognizer = (
-            CloudRecognizer(session, params.quality_threshold)
-            if parser_mode == ParserMode.CLOUD
+            CloudRecognizer(
+                session,
+                params.quality_threshold,
+                page_model=processing_plan.selection_from_options(options, "page_model"),
+                description_model=processing_plan.selection_from_options(
+                    options, "description_model"
+                ),
+                budget=JobBudget(session, task_id) if has_budget else None,
+            )
+            if parser_mode == ParserMode.CLOUD and not is_audio
             else None
         )
         _prepare_revision(session, task_id)
         if next_index < len(selected):
             remaining_pages = selected[next_index:]
-            for page in iter_pages(
-                source_path,
-                parser_mode,
-                remaining_pages[0],
-                params=params,
-                page_numbers=remaining_pages,
-                recognizer=recognizer,
-            ):
-                if not _save_page(session, task_id, page):
+            # У записи страница одна, а расшифровка идёт минутами: ход и
+            # чекпоинт по кускам ведёт `audio_job`, а не постраничный разбор.
+            pages = (
+                audio_job.transcribe_pages(session, task_id, source_path, parser_mode)
+                if is_audio
+                else iter_pages(
+                    source_path,
+                    parser_mode,
+                    remaining_pages[0],
+                    params=params,
+                    page_numbers=remaining_pages,
+                    recognizer=recognizer,
+                )
+            )
+            for page in pages:
+                if not retry_on_locked(lambda page=page: _save_page(session, task_id, page)):
                     return
-        _finish(session, task_id)
+        retry_on_locked(lambda: _finish(session, task_id))
     except Exception as error:
         session.rollback()
+        message = str(error).lower()
+        if isinstance(error, OperationalError) and (
+            "database is locked" in message or "database is busy" in message
+        ):
+            # Ретраи в retry_on_locked исчерпаны, а не отсутствовали: снимок
+            # SQLite так и не стал текущим за ~3.7с бэкоффа. Это не поломка
+            # разбора — checkpoint (готовые страницы) уже сохранён, задача
+            # просто возвращается в очередь и воркер подберёт её сам.
+            log.warning(
+                "task material=%s requeued after exhausted sqlite lock: %s", material_id, error
+            )
+            with job_write_transaction(session, task_id):
+                requeued = session.get(BackgroundJob, task_id)
+                if requeued:
+                    requeued.state = BackgroundJobState.QUEUED
+                    requeued.lease_owner = None
+                    requeued.lease_expires_at = None
+                    requeued.updated_at = utc_now()
+            return
         log.exception("task failed material=%s: %s", material_id, error)
-        with session.begin():
+        with job_write_transaction(session, task_id):
             failed = session.get(BackgroundJob, task_id)
             material = session.get(Material, material_id)
             if failed:
@@ -387,7 +547,7 @@ def _mark_typst_input_needed(
     session: Session, task_id: UUID, issues: list[dict[str, object]]
 ) -> None:
     """Проблема, разрешимая пользователем, не считается падением сборки."""
-    with session.begin():
+    with job_write_transaction(session, task_id):
         task = session.get(BackgroundJob, task_id)
         if task is None:
             return
@@ -408,14 +568,20 @@ def _mark_typst_input_needed(
 
 
 def _save_typst_chunks(
-    session: Session, material_id: UUID, revision: int, bundle: Path, entrypoint: str, pages: int
+    session: Session,
+    task_id: UUID,
+    material_id: UUID,
+    revision: int,
+    bundle: Path,
+    entrypoint: str,
+    pages: int,
 ) -> None:
     """Сохраняет exact-code отдельной таблицей: FTS-представление к нему не подмешивается."""
     with tempfile.TemporaryDirectory(prefix="tentex-typst-source-") as raw:
         root = Path(raw)
         extract_bundle(bundle, root)
         chunks = source_chunks(root, entrypoint, pages)
-    with session.begin():
+    with job_write_transaction(session, task_id):
         for order, chunk in enumerate(chunks):
             session.add(
                 TypstSourceChunk(
@@ -440,7 +606,7 @@ def _mark_typst_failed(
     Активная ревизия не трогается: неудачная сборка не должна отбирать у
     пользователя тот PDF, который уже был собран.
     """
-    with session.begin():
+    with job_write_transaction(session, task_id):
         failed = session.get(BackgroundJob, task_id)
         material = session.get(Material, material_id)
         row = session.get(TypstMaterial, material_id)
@@ -459,6 +625,7 @@ def _mark_typst_failed(
 
 def _register_typst_build(
     session: Session,
+    task_id: UUID,
     material_id: UUID,
     revision: int,
     result: CompileResult,
@@ -466,7 +633,7 @@ def _register_typst_build(
     pages: int,
 ) -> None:
     """Отмечает уже активированную ревизию как собранную: PDF, версия, проблемы."""
-    with session.begin():
+    with job_write_transaction(session, task_id):
         material = session.get(Material, material_id)
         row = session.get(TypstMaterial, material_id)
         revision_registry.require_revision(
@@ -483,6 +650,9 @@ def _register_typst_build(
             row.compiler_version = result.compiler_version
             row.build_hash = hashlib.sha256(material_path(render_path).read_bytes()).hexdigest()
             row.issues = result.diagnostics
+    # Пересобранный проект — другие страницы. Нарисованные по прошлой сборке
+    # растры иначе переживают её и показываются вместо нового документа.
+    library.drop_page_images(material_id)
 
 
 def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:
@@ -511,7 +681,7 @@ def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:
 
         revision = revision_registry.max_revision(session, material_id) + 1
         session.rollback()
-        with session.begin():
+        with job_write_transaction(session, task_id):
             current = session.get(BackgroundJob, task_id)
             assert current is not None
             current.checkpoint = {**current.checkpoint, "revision": revision, "selected_pages": []}
@@ -535,7 +705,7 @@ def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:
         # оставляла материал без заголовков, а без них не работают ни блоки, ни
         # автопривязка ответов. Владелец вырезов — хеш bundle, как у файлов.
         pages = list(text_layer_pages(result.pdf_path, Path(storage_path).stem))
-        with session.begin():
+        with job_write_transaction(session, task_id):
             material = session.get(Material, material_id)
             assert material is not None
             material.outline = extract_outline(result.pdf_path)
@@ -558,9 +728,11 @@ def process_typst_compile_job(session: Session, task: BackgroundJob) -> None:
         # а у Typst каждая сборка даёт новый PDF — без сброса просмотрщик показывал
         # бы страницы прошлой версии.
         shutil.rmtree(material_path(f"pages/{material_id}"), ignore_errors=True)
-        _save_typst_chunks(session, material_id, revision, bundle, entrypoint, len(pages))
+        _save_typst_chunks(session, task_id, material_id, revision, bundle, entrypoint, len(pages))
         _finish(session, task_id)
-        _register_typst_build(session, material_id, revision, result, render_path, len(pages))
+        _register_typst_build(
+            session, task_id, material_id, revision, result, render_path, len(pages)
+        )
     except Exception as error:
         session.rollback()
         log.exception("typst compile failed material=%s: %s", material_id, error)
@@ -582,7 +754,7 @@ def process_link_answers_job(session: Session, job: BackgroundJob) -> None:
     material_id = job.material_id
     try:
         assert project_id is not None and material_id is not None
-        with session.begin():
+        with job_write_transaction(session, job_id):
             link_answers_material(session, project_id, material_id)
             finished = session.get(BackgroundJob, job_id)
             if finished:
@@ -602,7 +774,7 @@ def process_link_answers_job(session: Session, job: BackgroundJob) -> None:
     except Exception as error:
         session.rollback()
         log.exception("link_answers job failed job=%s: %s", job_id, error)
-        with session.begin():
+        with job_write_transaction(session, job_id):
             failed = session.get(BackgroundJob, job_id)
             if failed:
                 failed.state = BackgroundJobState.FAILED
@@ -612,44 +784,207 @@ def process_link_answers_job(session: Session, job: BackgroundJob) -> None:
                 failed.updated_at = utc_now()
 
 
-def run_once() -> bool:
-    with SessionLocal() as session:
-        worker_id = _worker_id()
-        job = claim_job(session, worker_id)
-        if job is None:
+def _renew_lease(session: Session, job_id: UUID, worker_id: str) -> bool:
+    """Продлить лиз своей running-задачи; чужую или завершённую не трогать."""
+    with job_write_transaction(session, job_id):
+        job = session.get(BackgroundJob, job_id)
+        if job is None or job.state != BackgroundJobState.RUNNING or job.lease_owner != worker_id:
             return False
-        started = time.perf_counter()
-        # Одна очередь, один диспетчер: вид задачи решает, какой обработчик
-        # её доводит до конца, а состояние (`state`) остаётся общим для всех.
-        if job.kind == BackgroundJobKind.PARSE:
-            process_parse_job(session, job)
-        elif job.kind == BackgroundJobKind.TYPST_COMPILE:
-            process_typst_compile_job(session, job)
-        elif job.kind == BackgroundJobKind.LINK_ANSWERS:
-            process_link_answers_job(session, job)
-        else:
-            process_ai_job(session, job)
-        log.info(
-            "processed job=%s kind=%s %.1fms",
-            job.id,
-            job.kind,
-            (time.perf_counter() - started) * 1000,
-        )
+        now = utc_now()
+        job.heartbeat_at = now
+        job.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
+        job.updated_at = now
         return True
+
+
+def _heartbeat(job_id: UUID, worker_id: str, stopped: Event) -> None:
+    """Не дать параллельному claim повторно взять долгий сетевой вызов."""
+    while not stopped.wait(HEARTBEAT_SECONDS):
+        try:
+            with SessionLocal() as session:
+                if not _renew_lease(session, job_id, worker_id):
+                    return
+        except OperationalError as error:
+            diagnostics.record_error(error, kind="exhausted")
+            log.warning("heartbeat delayed job=%s: %s", job_id, error)
+
+
+def _process_claimed_job(job: BackgroundJob) -> None:
+    """Выполнить уже взятую задачу в собственной SQLAlchemy-сессии."""
+    assert job.lease_owner is not None
+    stopped = Event()
+    heartbeat = Thread(
+        target=_heartbeat,
+        args=(job.id, job.lease_owner, stopped),
+        daemon=True,
+        name=f"lease-{job.id}",
+    )
+    heartbeat.start()
+    with SessionLocal() as session:
+        try:
+            started = time.perf_counter()
+            if job.kind == BackgroundJobKind.PARSE:
+                process_parse_job(session, job)
+            elif job.kind == BackgroundJobKind.TYPST_COMPILE:
+                process_typst_compile_job(session, job)
+            elif job.kind == BackgroundJobKind.LINK_ANSWERS:
+                process_link_answers_job(session, job)
+            elif job.kind == BackgroundJobKind.IMAGE_DESCRIPTIONS:
+                image_descriptions.process_job(session, job)
+            elif job.kind == BackgroundJobKind.COVERAGE_RESEARCH:
+                from app.coverage.research import process_coverage_job
+
+                process_coverage_job(session, job)
+            elif job.kind == BackgroundJobKind.RETRIEVAL_INDEX:
+                from app.retrieval.indexing import process_index_job
+
+                process_index_job(session, job)
+            elif job.kind == BackgroundJobKind.RETRIEVAL_MODEL_INSTALL:
+                from app.retrieval.local_models import process_install_job
+
+                process_install_job(session, job)
+            elif job.kind == BackgroundJobKind.RETRIEVAL_EXHAUSTIVE:
+                from app.retrieval.exhaustive import process_exhaustive_job
+
+                process_exhaustive_job(session, job)
+            elif job.kind == BackgroundJobKind.BACKUP_CREATE:
+                from app.storage.service import process_backup_job
+
+                process_backup_job(session, job)
+            elif job.kind == BackgroundJobKind.PROJECT_EXPORT:
+                from app.storage.project_transfer import process_project_export
+
+                process_project_export(session, job)
+            elif job.kind == BackgroundJobKind.PROJECT_IMPORT:
+                from app.storage.project_transfer import process_project_import
+
+                process_project_import(session, job)
+            elif job.kind in {
+                BackgroundJobKind.STORAGE_VERIFY,
+                BackgroundJobKind.STORAGE_CLEANUP,
+            }:
+                from app.storage.service import process_storage_maintenance
+
+                process_storage_maintenance(session, job)
+            else:
+                process_ai_job(session, job)
+            log.info(
+                "processed job=%s kind=%s %.1fms",
+                job.id,
+                job.kind,
+                (time.perf_counter() - started) * 1000,
+            )
+        finally:
+            stopped.set()
+            heartbeat.join()
+
+
+def _claim_one(lane: WorkerLane | None = None) -> BackgroundJob | None:
+    with SessionLocal() as session:
+        return claim_job(session, _worker_id(), lane)
+
+
+def run_once() -> bool:
+    """Синхронно выполнить старейшую задачу; используется smoke-скриптами."""
+    job = _claim_one()
+    if job is None:
+        return False
+    _process_claimed_job(job)
+    return True
+
+
+def _reap_finished(active: dict[WorkerLane, set[Future[None]]]) -> None:
+    """Освободить слоты; неожиданный сбой виден в логе и переживается лизом."""
+    for futures in active.values():
+        for future in tuple(item for item in futures if item.done()):
+            futures.remove(future)
+            try:
+                future.result()
+            except Exception:  # noqa: BLE001 — задача вернётся после истечения лиза
+                log.exception("worker slot crashed; leased job will be retried")
+
+
+def _fill_slots(
+    pool: ThreadPoolExecutor,
+    active: dict[WorkerLane, set[Future[None]]],
+    capacities: dict[WorkerLane, int],
+) -> bool:
+    """Взять задачи только для свободных слотов каждой полосы."""
+    claimed = False
+    for lane in WORKER_LANES:
+        while len(active[lane]) < capacities[lane]:
+            job = _claim_one(lane)
+            if job is None:
+                break
+            active[lane].add(pool.submit(_process_claimed_job, job))
+            claimed = True
+    return claimed
+
+
+def run_pool(capacities: dict[WorkerLane, int]) -> None:
+    """Постоянно заполнять независимые слоты локальных, облачных и AI-задач."""
+    active: dict[WorkerLane, set[Future[None]]] = {lane: set() for lane in WORKER_LANES}
+    next_schedule_check = 0.0
+    next_pulse = 0.0
+    next_oral_cleanup = 0.0
+    with ThreadPoolExecutor(max_workers=sum(capacities.values()), thread_name_prefix="job") as pool:
+        while True:
+            now = time.monotonic()
+            if now >= next_pulse:
+                diagnostics.touch_worker_heartbeat()
+                if storage_maintenance.active():
+                    from app.storage.service import recover_interrupted_backup
+
+                    try:
+                        retry_on_locked(recover_interrupted_backup)
+                    except OperationalError as error:
+                        log.warning("backup recovery delayed: %s", error)
+                next_pulse = now + WORKER_PULSE_SECONDS
+            if now >= next_schedule_check and not storage_maintenance.active():
+                from app.storage.service import enqueue_due_automatic_backup
+
+                try:
+                    enqueue_due_automatic_backup()
+                except OperationalError as error:
+                    diagnostics.record_error(error, kind="exhausted")
+                    log.warning("automatic backup schedule check delayed: %s", error)
+                next_schedule_check = now + 60
+            if now >= next_oral_cleanup and not storage_maintenance.active():
+                from app.exam.oral import cleanup_expired
+
+                try:
+                    with SessionLocal() as session:
+                        cleanup_expired(session)
+                except OperationalError as error:
+                    log.warning("oral audio cleanup delayed: %s", error)
+                next_oral_cleanup = now + 3600
+            _reap_finished(active)
+            if _fill_slots(pool, active, capacities):
+                continue
+            pending = set().union(*active.values())
+            if pending:
+                wait(pending, timeout=POLL_SECONDS, return_when=FIRST_COMPLETED)
+            else:
+                time.sleep(POLL_SECONDS)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
+    diagnostics.set_source("worker")
     upgrade_database()
     configure_logging()
     if args.once:
         run_once()
         return
-    while True:
-        if not run_once():
-            time.sleep(0.75)
+    run_pool(
+        {
+            "local": settings.worker_local_concurrency,
+            "cloud": settings.worker_cloud_concurrency,
+            "ai": settings.worker_ai_concurrency,
+        }
+    )
 
 
 if __name__ == "__main__":

@@ -1,16 +1,21 @@
-# Этап 0: два сервиса, оба в режиме разработки с перезагрузкой по изменению файлов.
+# API, worker, model service retrieval, SearXNG и Vite работают отдельными процессами.
 # Данные (SQLite и файловое хранилище) лежат в ./data на хосте — контейнер их не уносит.
 
 services:
   api:
     build: ./backend
     ports:
-      - "8000:8000"
+      - "${TENTEX_API_PORT:-8000}:8000"
     volumes:
       - ./backend:/app
       - ./data:/data
     environment:
       TENTEX_DATA_DIR: /data
+      TENTEX_RETRIEVAL_MODEL_URL: http://retrieval-model:8010
+      TENTEX_SEARXNG_URL: http://searxng:8080
+      # Постоянные соединения держат кэш страниц: чтение базы с bind mount
+      # медленное. У воркера пула нет — см. `sqlite_pool_size` в config.py.
+      TENTEX_SQLITE_POOL_SIZE: "8"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
       interval: 10s
@@ -27,6 +32,7 @@ services:
       - ./data/models:/root/.paddlex
     environment:
       TENTEX_DATA_DIR: /data
+      TENTEX_RETRIEVAL_MODEL_URL: http://retrieval-model:8010
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
     # Упавший воркер ничем себя не выдаёт: задачи просто остаются в очереди, и
     # в интерфейсе это выглядит как бесконечная обработка. Перезапуск возвращает
@@ -35,11 +41,40 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      retrieval-model:
+        condition: service_healthy
+
+  retrieval-model:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.retrieval
+    volumes:
+      - ./backend:/app
+      - ./data:/data
+    environment:
+      TENTEX_DATA_DIR: /data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Метапоиск для чата «Поиск в интернете». От него api не зависит при старте:
+  # без поиска приложение работает, а чат прямо пишет, что сервис не отвечает.
+  # Порт открыт только на localhost — для `npm run dev` с бэкендом на хосте.
+  searxng:
+    image: searxng/searxng:2026.9.23-3cd69d30e
+    ports:
+      - "127.0.0.1:${TENTEX_SEARXNG_PORT:-8888}:8080"
+    volumes:
+      - ./searxng:/etc/searxng
+    restart: unless-stopped
 
   web:
     build: ./frontend
     ports:
-      - "5173:5173"
+      - "${TENTEX_WEB_PORT:-5173}:5173"
     volumes:
       - ./frontend:/app
       # node_modules берём из образа: на хосте лежат бинарники под Windows.

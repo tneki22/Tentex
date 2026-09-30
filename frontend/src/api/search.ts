@@ -36,6 +36,9 @@ export interface SearchResultRead {
   matched_forms: string[];
   already_bound: boolean;
   pages: SearchResultPageRead[];
+  retrieval_score?: number | null;
+  signals?: Array<"lexical" | "semantic">;
+  warning?: string | null;
 }
 
 export interface SearchResponse {
@@ -43,6 +46,10 @@ export interface SearchResponse {
   terms: string[];
   prefix: string | null;
   results: SearchResultRead[];
+  strategy?: "lexical" | "semantic" | "hybrid";
+  index_id?: string | null;
+  degraded?: boolean;
+  degradation_reasons?: string[];
 }
 
 export interface ReindexResult {
@@ -55,13 +62,21 @@ const projectPath = (projectId: string): string => `/api/projects/${encodeURICom
 export const searchProjectMaterials = (
   projectId: string,
   query: string,
-  options: { materialId?: string; nodeId?: string; limit?: number } = {},
+  options: {
+    materialId?: string;
+    nodeId?: string;
+    limit?: number;
+    strategy?: "lexical" | "semantic" | "hybrid";
+    scope?: "linked_topic" | "topic_project" | "project";
+  } = {},
   signal?: AbortSignal,
 ): Promise<SearchResponse> => {
   const params = new URLSearchParams({ q: query });
   if (options.materialId) params.set("material_id", options.materialId);
   if (options.nodeId) params.set("node_id", options.nodeId);
   if (options.limit) params.set("limit", String(options.limit));
+  params.set("strategy", options.strategy ?? "hybrid");
+  if (options.scope) params.set("scope", options.scope);
   return request(`${projectPath(projectId)}/search?${params.toString()}`, { signal });
 };
 

@@ -5,8 +5,10 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import math
 import time
+import wave
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -16,16 +18,20 @@ from io import BytesIO
 from typing import Any
 from uuid import UUID
 
+from openai.lib._pydantic import to_strict_json_schema
 from PIL import Image
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.budget import BudgetContext
 from app.ai.catalog import production_transport
 from app.ai.provider import (
     OpenAICompatibleTransport,
     ProviderError,
     ProviderUsage,
+    TimedSegment,
+    TimedWord,
 )
 from app.ai.schemas import (
     AiImagePart,
@@ -39,9 +45,11 @@ from app.ai.settings import (
     AiGatewayError,
     ResolvedModel,
     credential,
+    is_transcription_model,
     model_capabilities,
     resolve_model,
 )
+from app.db import job_write_transaction
 from app.models import (
     AiCacheEntry,
     AiModelCatalogEntry,
@@ -49,6 +57,9 @@ from app.models import (
     AiSettings,
     utc_now,
 )
+from app.projects.errors import ProjectDomainError
+
+log = logging.getLogger("tentex.ai")
 
 ZERO = Decimal("0")
 
@@ -62,7 +73,7 @@ ZERO = Decimal("0")
 # вызовов подряд, и без повтора один чужой всплеск ронял всю обработку.
 # `ai_invalid_credentials` и лимиты стоимости не повторяются никогда: ключ и
 # кошелёк от ожидания не чинятся.
-_RETRYABLE_PROVIDER_CODES = {
+RETRYABLE_PROVIDER_CODES = {
     "ai_provider_unavailable",
     "ai_empty_response",
     "ai_rate_limited",
@@ -90,6 +101,10 @@ _CAPABILITY_LABELS = {
 # провайдеров они отличаются, но порядок тот же — числа нужны, чтобы
 # предупредить о стоимости заранее, а не чтобы вести бухгалтерию. Фактический
 # расход всё равно приходит в `usage` от провайдера.
+# Потолок одной записи: у Groq и OpenAI лимит файла 25 МБ, запас — на заголовки.
+# Реплика в чат весит килобайты; больше — это уже не диктовка.
+MAX_AUDIO_BYTES = 20 * 1024 * 1024
+
 IMAGE_TILE_PX = 768
 IMAGE_SMALL_PX = 384
 IMAGE_TILE_TOKENS = 258
@@ -141,6 +156,7 @@ class AiTextRequest[T: BaseModel]:
     # (`app.ai.jobs.process_ai_job`) — прямые вызовы (например, экзаменационный
     # чат) его не передают, и `AiRun.job_id` остаётся пустым.
     job_id: UUID | None = None
+    budget_context: BudgetContext | None = None
 
 
 @dataclass(frozen=True)
@@ -159,6 +175,29 @@ class AiStreamEvent:
     delta: str = ""
     run_id: UUID | None = None
     usage: AiUsage | None = None
+
+
+@dataclass(frozen=True)
+class AiTranscription:
+    text: str
+    run_id: UUID
+    duration_ms: int
+    actual_model_id: str
+    usage: AiUsage
+    # Время фраз, если провайдер его отдал; иначе пусто (см. `TimedSegment`).
+    segments: tuple[TimedSegment, ...] = ()
+    words: tuple[TimedWord, ...] = ()
+
+
+def _silent_wav() -> bytes:
+    """Секунда тишины: провайдеру нужен настоящий аудиофайл, а слов для проверки не нужно."""
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as file:
+        file.setnchannels(1)
+        file.setsampwidth(2)
+        file.setframerate(16_000)
+        file.writeframes(bytes(2 * 16_000))
+    return buffer.getvalue()
 
 
 def _error_status(code: str) -> int:
@@ -287,7 +326,8 @@ class ModelGateway:
         run = self._start_run(request, resolved, preflight)
         started = time.monotonic()
         messages = [item.model_dump() for item in request.messages]
-        response_schema = request.response_model.model_json_schema()
+        response_schema = self._response_schema(request)
+        assert response_schema is not None
         parameters = self._parameters(resolved, {
             **request.parameters,
             "max_output_tokens": preflight.estimated_output_tokens,
@@ -300,6 +340,21 @@ class ModelGateway:
         attempts = len(self.retry_backoff) + 1
         for attempt in range(attempts):
             last_attempt = attempt == attempts - 1
+            budget_receipt = None
+            if request.budget_context is not None:
+                input_tokens = self._estimate_input(
+                    [AiMessage.model_validate(m) for m in messages], response_schema,
+                )
+                estimate = self._estimated_cost(
+                    self._catalog_model(resolved), input_tokens, preflight.estimated_output_tokens,
+                )
+                try:
+                    budget_receipt = request.budget_context.reserve(
+                        input_tokens + preflight.estimated_output_tokens, estimate,
+                    )
+                except ProjectDomainError as error:
+                    self._fail_run(run.id, error.code, started, status="cancelled")
+                    raise
             try:
                 result = await transport.complete(
                     model=resolved.model_id,
@@ -309,15 +364,23 @@ class ModelGateway:
                     parameters=parameters,
                 )
             except ProviderError as error:
-                if not last_attempt and error.code in _RETRYABLE_PROVIDER_CODES:
+                if budget_receipt is not None:
+                    request.budget_context.settle(budget_receipt, None)
+                if not last_attempt and error.code in RETRYABLE_PROVIDER_CODES:
                     await asyncio.sleep(self.retry_backoff[attempt])
                     continue
                 self._fail_run(run.id, error.code, started)
                 raise _gateway_error(error.code, error.detail) from error
+            if budget_receipt is not None:
+                request.budget_context.settle(budget_receipt, result.usage)
             combined_usage = _sum_usage(combined_usage, result.usage)
             try:
                 value = request.response_model.model_validate_json(result.content)
             except (ValidationError, ValueError, json.JSONDecodeError) as error:
+                log.warning(
+                    "structured output rejected role=%s attempt=%d: %s",
+                    request.role, attempt + 1, str(error)[:500],
+                )
                 if not last_attempt:
                     messages = [
                         *messages,
@@ -399,6 +462,9 @@ class ModelGateway:
         yield AiStreamEvent(kind="completed", run_id=run.id, usage=usage)
 
     async def test_model(self, selection: AiModelSelection) -> AiModelTestRead:
+        entry = self.session.get(AiModelCatalogEntry, (selection.provider_id, selection.model_id))
+        if entry is not None and is_transcription_model(entry):
+            return await self._test_transcription_model(selection)
         request = AiTextRequest(
             role="settings_model_test",
             messages=[AiMessage(role="user", content="Ответь одним словом: работает")],
@@ -433,6 +499,7 @@ class ModelGateway:
             started,
             cache=False,
         )
+        self._record_tested_modalities(selection, "text")
         return AiModelTestRead(
             status="answered",
             run_id=run.id,
@@ -443,11 +510,111 @@ class ModelGateway:
             output_tokens=result.usage.output_tokens,
         )
 
-    async def transcribe(self, _request: object) -> None:
-        raise AiGatewayError(
-            "Распознавание речи появится вместе с диктовкой",
-            code="ai_capability_unsupported",
+    async def transcribe(
+        self,
+        audio: bytes,
+        audio_format: str,
+        *,
+        role: str = "speech_transcription",
+        request_model_override: AiModelSelection | None = None,
+        project_id: UUID | None = None,
+        timestamps: bool = False,
+    ) -> AiTranscription:
+        """Превращает запись в текст моделью речи; расход идёт в общий журнал запусков.
+
+        Подтверждение стоимости здесь не спрашивается: это явное нажатие на
+        микрофон, а короткая реплика стоит копейки, и «цена неизвестна» у
+        Whisper была бы на каждой диктовке. Лимиты — дневной и на вызов — при
+        этом действуют как обычно. Текст записи в журнал не попадает.
+        """
+        if not audio:
+            raise AiGatewayError("Запись пустая", code="ai_audio_empty")
+        if len(audio) > MAX_AUDIO_BYTES:
+            raise AiGatewayError(
+                "Запись слишком большая: сократите реплику или продиктуйте по частям",
+                code="ai_audio_too_large",
+                status=413,
+                context={"limit_bytes": MAX_AUDIO_BYTES},
+            )
+        fingerprint = hashlib.sha256(audio).hexdigest()
+        request = AiTextRequest(
+            role=role,
+            messages=[AiMessage(
+                role="user",
+                content=f"[аудио {audio_format}, {len(audio)} байт, sha256:{fingerprint}]",
+            )],
+            request_model_override=request_model_override,
+            project_id=project_id,
         )
+        preflight = await self.preflight(request)
+        resolved = resolve_model(self.session, role, request_model_override)
+        transport = self.transport or production_transport(self.session, resolved.provider.id)
+        run = self._start_run(request, resolved, preflight)
+        started = time.monotonic()
+        try:
+            result = await transport.transcribe(
+                model=resolved.model_id,
+                audio=audio,
+                audio_format=audio_format,
+                language=str(resolved.parameters.get("language", "ru")),
+                via_chat=not is_transcription_model(resolved.model),
+                timestamps=timestamps,
+            )
+        except asyncio.CancelledError:
+            self._fail_run(run.id, "ai_cancelled", started, status="cancelled")
+            raise
+        except ProviderError as error:
+            self._fail_run(run.id, error.code, started)
+            raise _gateway_error(error.code, error.detail) from error
+        usage = self._finish_run(
+            run.id, {}, result.actual_model_id, result.request_id, result.usage, started,
+            cache=False,
+        )
+        return AiTranscription(
+            text=result.text.strip(),
+            run_id=run.id,
+            duration_ms=round((time.monotonic() - started) * 1000),
+            actual_model_id=result.actual_model_id,
+            usage=usage,
+            segments=result.segments,
+            words=result.words,
+        )
+
+    async def _test_transcription_model(self, selection: AiModelSelection) -> AiModelTestRead:
+        transcription = await self.transcribe(
+            _silent_wav(),
+            "wav",
+            role="settings_speech_model_test",
+            request_model_override=selection,
+        )
+        self._record_tested_modalities(selection, "audio")
+        return AiModelTestRead(
+            status="answered",
+            kind="speech",
+            run_id=transcription.run_id,
+            duration_ms=transcription.duration_ms,
+            answer=transcription.text[:400],
+            actual_model_id=transcription.actual_model_id,
+            input_tokens=transcription.usage.input_tokens,
+            output_tokens=transcription.usage.output_tokens,
+        )
+
+    def _record_tested_modalities(self, selection: AiModelSelection, input_modality: str) -> None:
+        """Успешный тест подтверждает только использованный вход и текстовый ответ."""
+        self.session.commit()
+        with job_write_transaction(self.session):
+            row = self.session.get(
+                AiModelCatalogEntry, (selection.provider_id, selection.model_id)
+            )
+            assert row is not None
+            row.input_modalities = list(dict.fromkeys([*row.input_modalities, input_modality]))
+            row.output_modalities = list(dict.fromkeys([*row.output_modalities, "text"]))
+            if "input_modalities" in row.manual_overrides:
+                row.manual_overrides = {
+                    **row.manual_overrides,
+                    "input_modalities": row.input_modalities,
+                    "output_modalities": row.output_modalities,
+                }
 
     def _catalog_model(self, resolved: ResolvedModel) -> AiModelCatalogEntry:
         row = resolved.model
@@ -477,7 +644,7 @@ class ModelGateway:
 
     @staticmethod
     def _response_schema(request: AiTextRequest[Any]) -> dict[str, Any] | None:
-        return request.response_model.model_json_schema() if request.response_model else None
+        return to_strict_json_schema(request.response_model) if request.response_model else None
 
     @staticmethod
     def _estimate_input(messages: list[AiMessage], response_schema: dict[str, Any] | None) -> int:
@@ -555,11 +722,18 @@ class ModelGateway:
                 AiRun.status == "succeeded", AiRun.created_at >= start
             )
         )
-        if estimate is not None and Decimal(spent or 0) + estimate > settings.daily_limit_usd:
+        reserved = self.session.scalar(
+            select(func.coalesce(func.sum(AiRun.estimated_cost_usd), 0)).where(
+                AiRun.status == "running", AiRun.created_at >= start
+            )
+        )
+        committed = Decimal(spent or 0)
+        pending = Decimal(reserved or 0)
+        if estimate is not None and committed + pending + estimate > settings.daily_limit_usd:
             raise AiGatewayError(
                 "Дневной лимит внешних моделей исчерпан",
                 code="ai_daily_limit",
-                context={"spent_usd": str(spent or 0)},
+                context={"spent_usd": str(committed), "reserved_usd": str(pending)},
             )
 
     @staticmethod
@@ -592,11 +766,14 @@ class ModelGateway:
     def _start_run(
         self, request: AiTextRequest[Any], resolved: ResolvedModel, preflight: AiPreflight
     ) -> AiRun:
-        settings = self.session.get(AiSettings, 1)
-        model = self.session.get(AiModelCatalogEntry, (resolved.provider.id, resolved.model_id))
-        assert settings is not None and model is not None
         self.session.commit()
-        with self.session.begin():
+        with job_write_transaction(self.session, request.job_id):
+            settings = self.session.get(AiSettings, 1)
+            model = self.session.get(AiModelCatalogEntry, (resolved.provider.id, resolved.model_id))
+            assert settings is not None and model is not None
+            # Preflight остаётся быстрым предпросмотром, но окончательная
+            # проверка и резерв стоимости атомарны с созданием running-записи.
+            self._check_limits(settings, preflight.estimated_cost_usd)
             run = AiRun(
                 project_id=request.project_id,
                 job_id=request.job_id,
@@ -630,7 +807,7 @@ class ModelGateway:
         assert request.response_model is not None
         value = request.response_model.model_validate(cache.response_payload)
         self.session.commit()
-        with self.session.begin():
+        with job_write_transaction(self.session, request.job_id):
             cache.hit_count += 1
             cache.last_used_at = utc_now()
             run = AiRun(
@@ -679,7 +856,7 @@ class ModelGateway:
         cache: bool,
     ) -> AiUsage:
         self.session.commit()
-        with self.session.begin():
+        with job_write_transaction(self.session):
             run = self.session.get(AiRun, run_id)
             assert run is not None
             actual_usd = provider_usage.cost_usd
@@ -721,7 +898,7 @@ class ModelGateway:
 
     def _fail_run(self, run_id: UUID, code: str, started: float, status: str = "failed") -> None:
         self.session.rollback()
-        with self.session.begin():
+        with job_write_transaction(self.session):
             run = self.session.get(AiRun, run_id)
             assert run is not None
             run.status = status

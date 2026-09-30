@@ -1,88 +1,56 @@
-import { FileQuestion, History, ListChecks, MessageSquareText, ScrollText } from "lucide-react";
-import { useState } from "react";
-import type { ChatContextFlags, ChatContextPreview } from "../../../api/chat";
+import type { LucideIcon } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { Disclosure, Popover, Switch } from "../../../components/ui";
 
 const CONTEXT_OPEN_KEY = "tentex:chat-context-open";
+// Приближение по длине текста совпадает с оценкой входа в AI gateway.
+const ESTIMATED_CHARS_PER_TOKEN = 3;
 
-function bytesLabel(bytes: number): string {
-  return bytes < 1024 ? `${bytes} Б` : `${(bytes / 1024).toFixed(1)} КБ`;
-}
+const numberFormat = new Intl.NumberFormat("ru-RU");
 
-interface ChipDef {
+/** Один чип состава контекста. Список строит вызывающий экран (exam и
+ * program-чат показывают разный набор источников контекста) — сам компонент
+ * только рендерит уже готовые данные. */
+export interface ChipDef {
   key: string;
-  icon: typeof FileQuestion;
+  icon: LucideIcon;
   title: string;
-  flagKey: keyof ChatContextFlags | null;
+  flagKey: string | null;
   included: boolean;
-  bytes: number;
+  chars: number;
   count: number | null;
   reason: string | null;
   futureNote?: string;
+  description?: string;
+  preview?: string[];
 }
 
-const REASON_LABELS: Record<string, string> = {
+export const CONTEXT_REASON_LABELS: Record<string, string> = {
   excluded_by_user: "Исключено вручную",
   profile_empty: "В профиле проекта эти поля не заполнены",
   reference_missing: "У темы ещё нет ответа",
   not_implemented: "Пока не реализовано",
+  context_budget_exceeded: "Не поместилось в бюджет контекста",
+  deadline_missing: "Дата экзамена не указана",
 };
 
 interface ContextChipsProps {
-  preview: ChatContextPreview | null;
-  contextFlags: ChatContextFlags;
-  onToggleFlag: (key: keyof ChatContextFlags, value: boolean) => void;
+  chips: ChipDef[] | null;
+  contextFlags: Record<string, boolean>;
+  onToggleFlag: (key: string, value: boolean) => void;
+  controls?: ReactNode;
+  label?: string;
 }
 
 /** Тихая строка чипов над композером — заменяет прежнюю текстовую «В запрос уходит: ...». */
-export function ContextChips({ preview, contextFlags, onToggleFlag }: ContextChipsProps) {
+export function ContextChips({ chips, contextFlags, onToggleFlag, controls, label = "Контекст" }: ContextChipsProps) {
   const [open, setOpen] = useState(() => window.localStorage.getItem(CONTEXT_OPEN_KEY) === "1");
-  if (!preview) return null;
-  const byKind = new Map(preview.manifest.map((entry) => [entry.kind, entry]));
-  const fragmentEntries = preview.manifest.filter((entry) => entry.kind === "fragment");
-  const fragmentCount = fragmentEntries.filter((entry) => entry.included).length;
-  const node = byKind.get("program_node");
-  const profile = byKind.get("profile");
-  const reference = byKind.get("reference_answer");
-  const attempts = byKind.get("attempts_digest");
-  const sectionMemory = byKind.get("section_memory");
-
-  const chips: ChipDef[] = [
-    {
-      key: "question", icon: FileQuestion, title: "Вопрос", flagKey: null,
-      included: true, bytes: node?.bytes ?? 0, count: null, reason: null,
-    },
-    {
-      key: "profile", icon: MessageSquareText, title: "Профиль", flagKey: "profile",
-      included: Boolean(profile?.included), bytes: profile?.bytes ?? 0, count: null,
-      reason: profile?.reason ?? null,
-    },
-    {
-      key: "reference", icon: ScrollText, title: "Ответ", flagKey: "reference",
-      included: Boolean(reference?.included), bytes: reference?.bytes ?? 0, count: null,
-      reason: reference?.reason ?? null,
-    },
-    {
-      key: "fragments", icon: ListChecks, title: `Материал · ${fragmentCount}`, flagKey: "fragments",
-      included: fragmentCount > 0, bytes: fragmentEntries.reduce((sum, e) => sum + e.bytes, 0),
-      count: fragmentCount, reason: fragmentEntries.length === 0 ? null : (fragmentEntries[0]?.reason ?? null),
-    },
-    {
-      key: "attempts", icon: History, title: "Попытки", flagKey: "attempts",
-      included: false, bytes: 0, count: null, reason: attempts?.reason ?? "not_implemented",
-      futureNote: "Появится вместе с историей попыток раздела",
-    },
-    {
-      key: "section_memory", icon: History, title: "История раздела", flagKey: "section_memory",
-      included: false, bytes: 0, count: null, reason: sectionMemory?.reason ?? "not_implemented",
-      futureNote: "Появится вместе со сжатой памятью раздела",
-    },
-  ];
+  if (!chips) return null;
   const includedCount = chips.filter((chip) => chip.included).length;
 
   return (
     <Disclosure
-      summary={`Контекст · ${includedCount}`}
+      summary={`${label} · ${includedCount}`}
       className="chat-context-disclosure"
       open={open}
       onOpenChange={(next) => {
@@ -90,6 +58,7 @@ export function ContextChips({ preview, contextFlags, onToggleFlag }: ContextChi
         window.localStorage.setItem(CONTEXT_OPEN_KEY, next ? "1" : "0");
       }}
     >
+      {controls}
       <div className="chat-context-chips" role="list" aria-label="Состав запроса">
         {chips.map((chip) => (
           <Popover
@@ -110,17 +79,29 @@ export function ContextChips({ preview, contextFlags, onToggleFlag }: ContextChi
           >
             <div className="chat-context-chip-detail">
               {chip.included ? (
-                <p>Включено · {bytesLabel(chip.bytes)}</p>
+                chip.chars > 0 ? (
+                  <div>
+                    <p>Включено · символов: {numberFormat.format(chip.chars)}</p>
+                    <p>Оценка: ≈ {numberFormat.format(Math.ceil(chip.chars / ESTIMATED_CHARS_PER_TOKEN))} токенов</p>
+                  </div>
+                ) : <p>Включено · объём определится при отправке</p>
               ) : (
                 <p className="chat-context-chip-reason">
-                  Не включено{chip.reason ? ` — ${REASON_LABELS[chip.reason] ?? chip.reason}` : ""}
+                  Не включено{chip.reason ? ` — ${CONTEXT_REASON_LABELS[chip.reason] ?? chip.reason}` : ""}
                 </p>
               )}
               {chip.futureNote && <p className="chat-context-chip-future">{chip.futureNote}</p>}
+              {chip.description && <p>{chip.description}</p>}
+              {chip.included && chip.preview && chip.preview.length > 0 && (
+                <details className="chat-context-preview">
+                  <summary>Что войдёт в запрос · {chip.preview.length}</summary>
+                  <ul>{chip.preview.map((line, index) => <li key={`${chip.key}-${index}`}>{line}</li>)}</ul>
+                </details>
+              )}
               {chip.flagKey && !chip.futureNote && (
                 <Switch
-                  checked={contextFlags[chip.flagKey]}
-                  onCheckedChange={(checked) => onToggleFlag(chip.flagKey as keyof ChatContextFlags, checked)}
+                  checked={contextFlags[chip.flagKey] ?? false}
+                  onCheckedChange={(checked) => onToggleFlag(chip.flagKey as string, checked)}
                   label={contextFlags[chip.flagKey] ? "Включено в запрос" : "Исключено из запроса"}
                 />
               )}

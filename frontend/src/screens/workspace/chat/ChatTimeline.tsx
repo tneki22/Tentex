@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
 import type { AttemptOutcome, ChatMessageRead } from "../../../api/chat";
 import { OfflineNotice } from "../../../components/domain";
@@ -14,33 +14,60 @@ export interface StreamFailure {
 
 const OFFLINE_CODES = new Set(["ai_disabled", "ai_role_disabled", "ai_model_not_configured", "ai_credentials_missing"]);
 const UNREACHABLE_CODES = new Set(["ai_provider_unavailable", "ai_timeout", "ai_rate_limited"]);
+const WAIT_TIME_LABEL_DELAY_SECONDS = 15;
+const SLOW_REPLY_SECONDS = 30;
+const WAIT_TIME_TICK_MS = 1000;
 
 interface ChatTimelineProps {
   projectId: string;
   messages: ChatMessageRead[];
   streamingMessageId: string | null;
   preparing: boolean;
-  onAnswerAgain: () => void;
-  onCheckAgain: (attemptId: string) => Promise<void>;
-  onSelfAssessment: (
+  onAnswerAgain?: () => void;
+  onCheckAgain?: (attemptId: string) => Promise<void>;
+  onSelfAssessment?: (
     attemptId: string,
     outcome: Exclude<AttemptOutcome, "unscored">,
   ) => Promise<void>;
+  onApplyProposal?: (messageId: string, selected: number[]) => Promise<void>;
+  onRejectProposal?: (messageId: string) => Promise<void>;
+  proposalBusy?: boolean;
+  nodeTitles?: Record<string, string>;
+  onFollowUp?: (text: string) => void;
+  /** Строка ожидания ответа: поиск в интернете идёт дольше обычного ответа. */
+  preparingLabel?: string;
+  /** Вместо строки ожидания — живые этапы хода (поиск в интернете). */
+  preparingContent?: ReactNode;
   onRetry: () => void;
   failure: StreamFailure | null;
+  /** Действие рядом с ошибкой — например, «Искать по теме» при пустой области. */
+  failureAction?: ReactNode;
 }
 
 export function ChatTimeline({
   projectId, messages, streamingMessageId, preparing,
-  onAnswerAgain, onCheckAgain, onSelfAssessment, onRetry, failure,
+  onAnswerAgain, onCheckAgain, onSelfAssessment,
+  onApplyProposal, onRejectProposal, proposalBusy, nodeTitles, onFollowUp,
+  preparingLabel = "Готовлю ответ", preparingContent, onRetry, failure, failureAction,
 }: ChatTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
   const headingRefs = useRef(new Map<string, HTMLHeadingElement>());
   const previousAtomicIds = useRef<Set<string> | null>(null);
+  const previousLength = useRef(messages.length);
   const wasStreaming = useRef(false);
   const [showJump, setShowJump] = useState(false);
   const [streamAnnouncement, setStreamAnnouncement] = useState("");
+  const [waitingSeconds, setWaitingSeconds] = useState(0);
+  useEffect(() => {
+    if (!preparing) {
+      setWaitingSeconds(0);
+      return;
+    }
+    const started = Date.now();
+    const timer = window.setInterval(() => setWaitingSeconds(Math.floor((Date.now() - started) / WAIT_TIME_TICK_MS)), WAIT_TIME_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [preparing]);
   const verdictAttemptIds = new Set(
     messages.flatMap((message) => message.grade_attempt_id ? [message.grade_attempt_id] : []),
   );
@@ -62,6 +89,11 @@ export function ChatTimeline({
   useLayoutEffect(() => {
     const node = scrollRef.current;
     if (!node) return;
+    // Своё только что отправленное сообщение видно всегда, даже если ленту
+    // перед этим прокрутили вверх.
+    const grew = messages.length > previousLength.current;
+    previousLength.current = messages.length;
+    if (grew && messages.at(-1)?.role === "user") followTailRef.current = true;
     if (followTailRef.current) {
       node.scrollTop = node.scrollHeight;
       setShowJump(false);
@@ -69,7 +101,21 @@ export function ChatTimeline({
       setShowJump(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, messages.at(-1)?.text]);
+  }, [messages.length, messages.at(-1)?.text, preparing, preparingContent]);
+
+  // Высота ленты меняется и без новых сообщений: поле ввода растёт и схлопывается
+  // после отправки, раскрывается диф. Пока читатель внизу, держим его внизу.
+  useEffect(() => {
+    const node = scrollRef.current;
+    const rail = node?.firstElementChild;
+    if (!node || !rail || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(() => {
+      if (followTailRef.current) node.scrollTop = node.scrollHeight;
+    });
+    observer.observe(node);
+    observer.observe(rail);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const current = new Set(
@@ -116,7 +162,9 @@ export function ChatTimeline({
               {failure.retryText && <Button variant="secondary" onClick={onRetry}>Повторить</Button>}
             </div>
           )
-        : <p className="inline-error" role="alert">{failure.detail}</p>
+        : failureAction
+          ? <div className="chat-offline-action"><p className="inline-error" role="alert">{failure.detail}</p>{failureAction}</div>
+          : <p className="inline-error" role="alert">{failure.detail}</p>
   );
 
   return (
@@ -127,7 +175,7 @@ export function ChatTimeline({
       <div className="chat-timeline" ref={scrollRef} onScroll={handleScroll}>
         <div className="chat-timeline-rail">
           {messages.map((message) => (
-            <div className="chat-timeline-item" key={message.id}>
+            <div className={`chat-timeline-item ${message.id.startsWith("pending-user-") ? "is-sending" : ""}`} key={message.id}>
               <TypedMessage
                 projectId={projectId}
                 message={message}
@@ -141,6 +189,11 @@ export function ChatTimeline({
                 onAnswerAgain={onAnswerAgain}
                 onCheckAgain={onCheckAgain}
                 onSelfAssessment={onSelfAssessment}
+                onApplyProposal={onApplyProposal}
+                onRejectProposal={onRejectProposal}
+                proposalBusy={proposalBusy}
+                nodeTitles={nodeTitles}
+                onFollowUp={onFollowUp}
                 headingRef={(heading) => {
                   if (heading) headingRefs.current.set(message.id, heading);
                   else headingRefs.current.delete(message.id);
@@ -148,9 +201,17 @@ export function ChatTimeline({
               />
             </div>
           ))}
-          {preparing && (
+          {preparing && preparingContent && <div className="chat-timeline-item">{preparingContent}</div>}
+          {preparing && !preparingContent && (
             <div className="chat-timeline-item">
-              <p className="chat-status-line" role="status">Готовлю ответ…</p>
+              <p className="chat-status-line" role="status">
+                {waitingSeconds >= SLOW_REPLY_SECONDS
+                  ? `Ответ задерживается · ${waitingSeconds} с`
+                  : waitingSeconds >= WAIT_TIME_LABEL_DELAY_SECONDS
+                    ? `${preparingLabel} · ${waitingSeconds} с`
+                    : preparingLabel}
+                <span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span>
+              </p>
             </div>
           )}
           {failureView && <div className="chat-timeline-item">{failureView}</div>}

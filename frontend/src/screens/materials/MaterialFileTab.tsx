@@ -1,25 +1,18 @@
 import { ExternalLink, Save, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type {
-  MaterialPurpose,
-  MaterialRead,
-  MaterialSourceKind,
-  MaterialUpdateCommand,
-  SourceRole,
+import {
+  type MaterialPurpose,
+  type MaterialRead,
+  type MaterialSourceKind,
+  type MaterialUpdateCommand,
+  type SourceRole,
 } from "../../api/materials";
 import { Button, Checkbox, ConfirmDialog, Field, Select, StatusBadge } from "../../components/ui";
+import { PURPOSE_LABEL, SOURCE_ROLE_OPTIONS, parseModeLabel } from "./materialLabels";
 
-const PURPOSE_OPTIONS: Array<{ value: MaterialPurpose; label: string }> = [
-  { value: "study_source", label: "Учебный источник" },
-  { value: "exam_structure", label: "Список вопросов" },
-  { value: "reference_answers", label: "Ответы" },
-];
-
-const ROLE_OPTIONS = [
-  { value: "main", label: "Основной", description: "Главный источник для изучения" },
-  { value: "additional", label: "Дополнительный", description: "Расширяет основной материал" },
-  { value: "reference", label: "Справочный", description: "Для ответов и пояснений" },
-];
+const PURPOSE_OPTIONS: Array<{ value: MaterialPurpose; label: string }> = (
+  ["study_source", "exam_structure", "reference_answers"] as const
+).map((value) => ({ value, label: PURPOSE_LABEL[value] }));
 
 const SOURCE_LABEL: Record<MaterialSourceKind, string> = {
   file: "Загруженный файл",
@@ -57,7 +50,6 @@ interface MaterialDraft {
   displayName: string;
   purposes: MaterialPurpose[];
   sourceRole: SourceRole;
-  priority: string;
   instruction: string;
 }
 
@@ -66,7 +58,6 @@ function draftFrom(material: MaterialRead): MaterialDraft {
     displayName: material.display_name,
     purposes: [...material.purposes],
     sourceRole: material.source_role,
-    priority: String(material.priority),
     instruction: material.instruction ?? "",
   };
 }
@@ -78,7 +69,6 @@ function normalizedPurposes(purposes: MaterialPurpose[]): MaterialPurpose[] {
 function sameDraft(left: MaterialDraft, right: MaterialDraft): boolean {
   return left.displayName === right.displayName
     && left.sourceRole === right.sourceRole
-    && left.priority === right.priority
     && left.instruction === right.instruction
     && normalizedPurposes(left.purposes).join("|") === normalizedPurposes(right.purposes).join("|");
 }
@@ -103,6 +93,11 @@ interface MaterialFileTabProps {
   material: MaterialRead;
   answersMaterial: MaterialRead | null;
   busy: boolean;
+  /** Место файла в списке материалов проекта: порядок задаётся перетаскиванием там. */
+  order: { position: number; total: number } | null;
+  /** Список вопросов и ответы бывают только в учебниковом проекте; в экзамене и
+   *  свободном изучении файл всегда учебный источник, выбирать нечего. */
+  allowPurposeChoice: boolean;
   onSave: (command: MaterialUpdateCommand) => Promise<MaterialRead | null>;
   onRemove: () => void;
 }
@@ -111,6 +106,8 @@ export function MaterialFileTab({
   material,
   answersMaterial,
   busy,
+  order,
+  allowPurposeChoice,
   onSave,
   onRemove,
 }: MaterialFileTabProps) {
@@ -125,14 +122,10 @@ export function MaterialFileTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [material.id]);
 
-  const priority = Number(draft.priority);
   const nameError = draft.displayName.trim() ? undefined : "Введите название";
-  const priorityError = !draft.priority.trim() || !Number.isInteger(priority) || priority < 0
-    ? "Укажите целое число от 0"
-    : undefined;
   const purposesError = draft.purposes.length ? undefined : "Выберите хотя бы одно назначение";
   const dirty = !sameDraft(draft, initial);
-  const valid = !nameError && !priorityError && !purposesError;
+  const valid = !nameError && !purposesError;
 
   function togglePurpose(purpose: MaterialPurpose, checked: boolean) {
     setDraft((current) => ({
@@ -148,7 +141,6 @@ export function MaterialFileTab({
       display_name: draft.displayName.trim(),
       purposes: normalizedPurposes(draft.purposes),
       source_role: draft.sourceRole,
-      priority,
       instruction: draft.instruction.trim() || null,
       replace_reference_answers: replaceReferenceAnswers || undefined,
     };
@@ -192,7 +184,7 @@ export function MaterialFileTab({
             />
           </Field>
 
-          <fieldset className={`materials-purpose-field ${purposesError ? "is-invalid" : ""}`}>
+          {allowPurposeChoice ? <fieldset className={`materials-purpose-field ${purposesError ? "is-invalid" : ""}`}>
             <legend>Используется как</legend>
             <div className="materials-purpose-options">
               {PURPOSE_OPTIONS.map((option) => (
@@ -206,12 +198,17 @@ export function MaterialFileTab({
               ))}
             </div>
             {purposesError && <small role="alert">{purposesError}</small>}
-          </fieldset>
+          </fieldset> : (
+            <div className="materials-purpose-static">
+              <span>Используется как</span>
+              <strong>{material.purposes.map((purpose) => PURPOSE_LABEL[purpose]).join(", ")}</strong>
+            </div>
+          )}
 
           <Field label="Роль источника" hint="Роль влияет на построение программы и порядок источников.">
             <Select
               value={draft.sourceRole}
-              options={ROLE_OPTIONS}
+              options={SOURCE_ROLE_OPTIONS}
               ariaLabel="Роль источника"
               disabled={busy}
               onValueChange={(value) => {
@@ -220,19 +217,12 @@ export function MaterialFileTab({
             />
           </Field>
 
-          <Field label="Приоритет" hint="0 — раньше остальных источников той же роли." error={priorityError}>
-            <input
-              type="number"
-              min="0"
-              step="1"
-              value={draft.priority}
-              disabled={busy}
-              onChange={(event) => setDraft((current) => ({
-                ...current,
-                priority: event.target.value,
-              }))}
-            />
-          </Field>
+          {order && (
+            <div className="materials-purpose-static">
+              <span>Порядок среди источников</span>
+              <strong>{order.position} из {order.total}</strong>
+            </div>
+          )}
 
           <Field label="Пояснение" hint="Например: брать отсюда теорию, а таблицы считать приложениями.">
             <textarea
@@ -269,7 +259,7 @@ export function MaterialFileTab({
           <div><dt>Страницы</dt><dd>{material.page_count ?? "—"}</dd></div>
           <div><dt>Сканы</dt><dd>{material.scan_page_count}</dd></div>
           {material.parser_mode !== "fast" && <div><dt>Низкое качество</dt><dd>{material.ocr_low_page_count || "нет"}</dd></div>}
-          <div><dt>Режим разбора</dt><dd>{material.parser_mode === "fast" ? "Быстро" : "Не запускался"}</dd></div>
+          <div><dt>{material.source_kind === "audio" ? "Расшифровка" : "Режим разбора"}</dt><dd>{parseModeLabel(material)}</dd></div>
           <div><dt>Добавлен в проект</dt><dd>{dateLabel(material.attached_at)}</dd></div>
           <div><dt>Загружен</dt><dd>{dateLabel(material.created_at)}</dd></div>
           <div><dt>Изменён</dt><dd>{dateLabel(material.updated_at)}</dd></div>

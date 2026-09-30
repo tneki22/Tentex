@@ -22,6 +22,8 @@ export interface SourcePlace {
   highlights: SearchHighlightRead[];
   quality: PageQuality;
   alreadyBound: boolean;
+  signals: Array<"lexical" | "semantic">;
+  warning: string | null;
 }
 
 export const placeKey = (materialId: string, pageNumber: number): string =>
@@ -52,6 +54,8 @@ export function toSourcePlaces(results: SearchResultRead[]): SourcePlace[] {
           highlights: page.highlights,
           quality: page.quality,
           alreadyBound: page.already_bound,
+          signals: result.signals ?? ["lexical"],
+          warning: result.warning ?? null,
         });
         continue;
       }
@@ -59,6 +63,8 @@ export function toSourcePlaces(results: SearchResultRead[]): SourcePlace[] {
         if (!existing.fragmentIds.includes(fragmentId)) existing.fragmentIds.push(fragmentId);
       }
       existing.alreadyBound = existing.alreadyBound || page.already_bound;
+      existing.signals = [...new Set([...existing.signals, ...(result.signals ?? ["lexical"])])];
+      existing.warning ??= result.warning ?? null;
     }
   }
   return [...places.values()];

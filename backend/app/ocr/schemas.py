@@ -8,7 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import ParserMode
-from app.ocr.engines import RASTER_SCALE_OPTIONS, CloudStrategy
+from app.ocr.engines import RASTER_SCALE_OPTIONS, CloudStrategy, ImageMode, OcrCpuProfile
 
 RasterScale = Literal[*RASTER_SCALE_OPTIONS]
 EngineRuntime = Literal["worker", "gpu_service", "cloud"]
@@ -35,6 +35,7 @@ class OcrGlobalSettingsWrite(ApiModel):
     default_mode: ParserMode
     quality_threshold: float = Field(ge=0, le=1)
     raster_scale: RasterScale
+    cpu_profile: OcrCpuProfile = "balanced"
 
 
 class OcrEngineWrite(ApiModel):
@@ -113,6 +114,14 @@ class OcrCloudStrategyRead(ApiModel):
     hint: str
 
 
+class OcrImageModeRead(ApiModel):
+    """Что делать с изображениями на запуске: описывать, только текст или ничего."""
+
+    value: ImageMode
+    title: str
+    hint: str
+
+
 class OcrCloudModelRead(ApiModel):
     """Кандидат в распознаватели страниц из локального каталога моделей."""
 
@@ -139,11 +148,35 @@ class OcrCloudRead(ApiModel):
     strategy: CloudStrategy
     strategies: list[OcrCloudStrategyRead]
     price_per_page_usd: Decimal | None
+    # Оценка одного описания выреза той же моделью: плитка картинки, инструкция,
+    # подпись с контекстом и потолок структурного ответа.
+    price_per_image_usd: Decimal | None = None
+
+
+class SpeechEngineRead(ApiModel):
+    """Один способ расшифровки аудио: локальный Whisper или внешняя модель речи."""
+
+    # `fast` — Whisper на процессоре, `cloud` — модель речи через шлюз.
+    mode: ParserMode
+    title: str
+    description: str
+    available: bool
+    # Почему недоступно и что сделать; для доступного способа пусто.
+    status_detail: str
+    # Какая модель будет читать: «Whisper small» или ID модели провайдера.
+    model_label: str
+    provider_label: str
 
 
 class OcrSettingsRead(ApiModel):
     default_mode: ParserMode
     quality_threshold: float
     raster_scale: float
+    cpu_profile: OcrCpuProfile
+    cpu_available: int
+    cpu_threads_by_profile: dict[OcrCpuProfile, int]
     engines: list[OcrEngineRead]
     cloud: OcrCloudRead
+    speech: list[SpeechEngineRead]
+    # Режимы изображений по движку (`cloud`/`fast`), первый — выбор по умолчанию.
+    image_modes: dict[str, list[OcrImageModeRead]] = {}

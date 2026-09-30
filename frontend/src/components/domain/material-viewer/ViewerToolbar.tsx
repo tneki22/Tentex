@@ -1,17 +1,24 @@
 import {
   ChevronLeft,
   ChevronRight,
+  GalleryVerticalEnd,
   Maximize2,
   Minimize2,
   Pencil,
   ScanLine,
+  Square,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { IconButton, SegmentedTabs, Tooltip } from "../../ui";
 import { DocumentSearchField } from "./DocumentSearchField";
-import type { MaterialPresentation, MaterialViewMode, ViewerZoom } from "./types";
+import type {
+  MaterialPresentation,
+  MaterialViewMode,
+  PageFlowMode,
+  ViewerZoom,
+} from "./types";
 
 export interface ViewerToolbarProps {
   presentation: MaterialPresentation;
@@ -20,6 +27,7 @@ export interface ViewerToolbarProps {
   canCompare: boolean;
   page: number;
   pageCount: number;
+  flow: PageFlowMode;
   query: string;
   zoom: ViewerZoom;
   zoomPercent: number;
@@ -33,6 +41,7 @@ export interface ViewerToolbarProps {
   panelTools?: ReactNode;
   onEditText?(): void;
   onModeChange(mode: MaterialViewMode): void;
+  onFlowChange(flow: PageFlowMode): void;
   onPageChange(page: number): void;
   onQueryChange(query: string): void;
   onQuerySubmit?(direction: 1 | -1): void;
@@ -52,6 +61,7 @@ export function ViewerToolbar({
   canCompare,
   page,
   pageCount,
+  flow,
   query,
   zoom,
   zoomPercent,
@@ -65,6 +75,7 @@ export function ViewerToolbar({
   panelTools,
   onEditText,
   onModeChange,
+  onFlowChange,
   onPageChange,
   onQueryChange,
   onQuerySubmit,
@@ -110,6 +121,22 @@ export function ViewerToolbar({
               <ChevronRight size={15} />
             </IconButton>
           </div>
+        )}
+
+        {presentation.supportsZoom && pageCount > 1 && (
+          <Tooltip label={flow === "scroll"
+            ? "Листать по одной странице"
+            : "Прокручивать страницы лентой"}
+          >
+            <IconButton
+              label={flow === "scroll" ? "Постранично" : "Лентой"}
+              aria-pressed={flow === "scroll"}
+              className="viewer-flow-toggle"
+              onClick={() => onFlowChange(flow === "scroll" ? "paged" : "scroll")}
+            >
+              {flow === "scroll" ? <Square size={15} /> : <GalleryVerticalEnd size={15} />}
+            </IconButton>
+          </Tooltip>
         )}
 
         <DocumentSearchField

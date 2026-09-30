@@ -95,6 +95,34 @@
   margin: var(--space-4) 0;
 }
 
+/* Ручка блока: плюс и точки слева от абзаца. Пакетный цвет — `--crepe-color-outline`,
+   то есть цвет линии таблицы: на бумаге такие иконки почти не видны, и их не
+   находят глазами. Здесь они того же тона, что остальные иконки интерфейса. */
+.conspect-editor .milkdown .milkdown-block-handle .operation-item svg {
+  fill: var(--muted);
+}
+
+.conspect-editor .milkdown .milkdown-block-handle .operation-item:hover svg {
+  fill: var(--accent);
+}
+
+.conspect-editor .milkdown .milkdown-block-handle .operation-item {
+  border: 1px solid transparent;
+}
+
+.conspect-editor .milkdown .milkdown-block-handle .operation-item:hover {
+  border-color: var(--line);
+}
+
+/* Правая иконка ручки тащит блок, левая открывает меню типов — курсоры разные. */
+.conspect-editor .milkdown .milkdown-block-handle .operation-item:last-child {
+  cursor: grab;
+}
+
+.conspect-editor .milkdown .milkdown-block-handle:active .operation-item:last-child {
+  cursor: grabbing;
+}
+
 /* --- Индикатор сохранения: одна и та же плашка плавно меняет тон и текст --- */
 
 .conspect-save-status {

@@ -22,6 +22,18 @@ class AiModelSelection(ApiModel):
     model_id: NonBlank
 
 
+class AiChatPreset(ApiModel):
+    """Последний выбор модели в композере — засев для каждого нового чата."""
+
+    provider_id: UUID
+    model_id: NonBlank
+    parameters: dict[str, object] = Field(default_factory=dict)
+
+
+class AiChatPresetWrite(ApiModel):
+    preset: AiChatPreset | None = None
+
+
 class AiGlobalSettingsWrite(ApiModel):
     external_models_enabled: bool
     daily_limit_usd: Decimal | None = Field(default=None, ge=0)
@@ -147,6 +159,7 @@ class AiRoleRead(ApiModel):
 
 
 class AiTodayUsage(ApiModel):
+    run_count: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
     actual_cost_usd: Decimal = Decimal("0")
@@ -164,6 +177,7 @@ class AiSettingsRead(ApiModel):
     usd_rub_rate_date: date | None
     default_text: AiModelSelection | None
     default_speech: AiModelSelection | None
+    chat_preset: AiChatPreset | None
     providers: list[AiProviderRead]
     roles: list[AiRoleRead]
     models: list[AiModelRead]
@@ -180,8 +194,16 @@ class AiModelTestWrite(ApiModel):
     model_id: NonBlank
 
 
+class AiTranscriptionRead(ApiModel):
+    text: str
+    run_id: UUID
+    duration_ms: int
+
+
 class AiModelTestRead(ApiModel):
     status: Literal["answered"]
+    # «speech» — модель распознавания речи: её проверяют записью тишины, а не вопросом.
+    kind: Literal["text", "speech"] = "text"
     run_id: UUID
     duration_ms: int
     answer: str
@@ -281,6 +303,16 @@ class AiRunRead(ApiModel):
     error_code: str | None
     created_at: datetime
     completed_at: datetime | None
+
+
+class AiRunPageRead(ApiModel):
+    """Страница журнала с общими показателями совпавших запросов."""
+
+    items: list[AiRunRead]
+    total: int
+    input_tokens: int
+    output_tokens: int
+    actual_cost_usd: Decimal
 
 
 class AiUsageGroup(ApiModel):

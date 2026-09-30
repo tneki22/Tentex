@@ -65,7 +65,7 @@ import { useRecentAnswers } from "../hooks/useRecentAnswers";
 import { useAnswerAutoMatch } from "../hooks/useAnswerAutoMatch";
 import { useAnswerFileMode, useAnswerViewMode } from "../hooks/useAnswerViewMode";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
-import { attachmentImageLabel } from "./workspace/referenceAnswerMedia";
+import { attachmentImageLabel, removeAttachmentImageMarker } from "./workspace/referenceAnswerMedia";
 import { AnswerEditor } from "./answers/AnswerEditor";
 import { AnswerFileList, type AnswerFile } from "./answers/AnswerFileList";
 import { AnswerHeadingSuggestions } from "./answers/AnswerHeadingSuggestions";
@@ -447,8 +447,14 @@ export function CoverageMap() {
     setBusy(true);
     setCommandError("");
     try {
-      await deleteAnswerAttachment(projectId, attachmentId);
+      const attachment = attachments.find((item) => item.id === attachmentId);
+      const nextSlot = await deleteAnswerAttachment(projectId, attachmentId);
+      setSlot(nextSlot);
+      if (attachment?.media_type.startsWith("image/")) {
+        setAnswerDraft((current) => removeAttachmentImageMarker(current, attachment.file_name, attachmentId));
+      }
       setAttachments((current) => current.filter((item) => item.id !== attachmentId));
+      void getCoverageMap(projectId).then(setCoverage).catch(() => undefined);
     } catch (error) {
       setCommandError(requestErrorMessage(error));
     } finally {
@@ -470,7 +476,7 @@ export function CoverageMap() {
   if (loading) return <div className="screen"><LoadingState label="Загружаем ответы" placement="page" /></div>;
   if (loadError) {
     const notFound = loadError instanceof ProjectApiError && loadError.status === 404;
-    return <div className="screen"><ErrorState title={notFound ? "Проект не найден" : undefined} message={notFound ? "Проверьте адрес или вернитесь к списку проектов." : requestErrorMessage(loadError)} /><Button onClick={() => void load()}>Повторить загрузку</Button><Link className="secondary-button" to="/projects">К проектам</Link></div>;
+    return <div className="screen screen-error-state"><ErrorState title={notFound ? "Проект не найден" : undefined} message={notFound ? "Проверьте адрес или вернитесь к списку проектов." : requestErrorMessage(loadError)} /><Button onClick={() => void load()}>Повторить загрузку</Button><Link className="secondary-button" to="/projects">К проектам</Link></div>;
   }
   if (!detail) return null;
   if (detail.project.workspace_variant !== "exam") {
@@ -714,6 +720,7 @@ export function CoverageMap() {
         projectId={projectId}
         answersMaterial={answersMaterial}
         busy={store.busy || busy || answerMatch.isRunning}
+        uploadStatus={store.uploadStatus}
         onUploadFile={(file) => void uploadAnswersFile(file)}
         onPickFromLibrary={() => { setSourceOpen(false); setLibraryOpen(true); }}
         onImportText={() => { setSourceOpen(false); setImportResult(null); setImportOpen(true); }}

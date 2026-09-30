@@ -175,7 +175,7 @@ def run() -> None:
                 "goal_passport": {
                     "subject": "Базы данных",
                     "purpose": "exam",
-                    "scope": None,
+                    "scope": "whole",
                     "starting_level": "familiar",
                     "current_knowledge": "Помню SQL, хуже понимаю нормализацию",
                     "target_outcome": "mastery",
@@ -292,7 +292,6 @@ def run() -> None:
                         "cards",
                         "plan",
                         "cards",
-                        "sql",
                         "oral_answers",
                         "repetitions",
                     ],
@@ -329,7 +328,6 @@ def run() -> None:
                 "cards",
                 "repetitions",
                 "oral_answers",
-                "sql",
             ]
             assert updated["goal_passport"]["target_outcome"] == "application"
 

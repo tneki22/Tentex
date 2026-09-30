@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
@@ -25,6 +26,7 @@ from app.models import (
     RecognitionSource,
     SourceRole,
 )
+from app.ocr.engines import CloudStrategy, ImageMode
 from app.projects.schemas import ProgramChangeResult
 
 NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -80,6 +82,8 @@ class MaterialUpdate(ApiModel):
 class LibraryTextMaterialCreate(ApiModel):
     name: NonBlank = "Вставленный текст.txt"
     text: NonBlank
+    subject: NonBlank | None = None
+    display_name: NonBlank | None = None
 
 
 class TextMaterialCreate(LibraryTextMaterialCreate):
@@ -91,6 +95,19 @@ class TextMaterialCreate(LibraryTextMaterialCreate):
 class LibraryExternalMaterialCreate(ApiModel):
     kind: Literal["url", "youtube"]
     url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8, max_length=2048)]
+    subject: NonBlank | None = None
+    display_name: NonBlank | None = None
+
+
+class LibraryMaterialMetadataUpdate(ApiModel):
+    display_name: NonBlank | None = None
+    subject: NonBlank | None = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "LibraryMaterialMetadataUpdate":
+        if not self.model_fields_set:
+            raise ValueError("Нужно передать хотя бы одно изменяемое поле")
+        return self
 
 
 class ExternalMaterialCreate(LibraryExternalMaterialCreate):
@@ -107,6 +124,16 @@ class ProcessingStart(ApiModel):
     scope: ProcessingScope = "all"
     page_from: int | None = Field(default=None, ge=1)
     page_to: int | None = Field(default=None, ge=1)
+    # Выбор на этот запуск; `None` — значение по умолчанию из «Распознавания».
+    cloud_strategy: CloudStrategy | None = None
+    image_mode: ImageMode | None = None
+    # Модель описаний изображений; по умолчанию — модель страниц.
+    description_provider_id: UUID | None = None
+    description_model_id: str | None = Field(default=None, max_length=200)
+    # Потолок суммы запуска; без него действует быстрый лимит без чтения файла.
+    max_cost_usd: Decimal | None = Field(default=None, gt=0, le=1000)
+    # Модель без цены в каталоге (локальная, автовыбор) запускается только явно.
+    confirm_unknown_price: bool = False
 
     @model_validator(mode="after")
     def range_is_complete(self) -> "ProcessingStart":
@@ -118,6 +145,113 @@ class ProcessingStart(ApiModel):
         elif self.page_from is not None or self.page_to is not None:
             raise ValueError("Диапазон задаётся только вместе с областью «Диапазон»")
         return self
+
+
+class ProcessingEstimateRead(ApiModel):
+    """Read-only оценка облачного запуска: что уйдёт наружу и во что обойдётся.
+
+    Верхняя оценка включает потолок ответа каждого вызова; «обычно» — типичный
+    ответ. Неизвестная цена — `price_known=False`, а не ноль.
+    """
+
+    parser_mode: ParserMode
+    cloud_strategy: CloudStrategy
+    image_mode: ImageMode
+    pages: int
+    whole_pages: int
+    text_pages: int
+    suspicious_pages: int
+    image_candidates: int
+    requests_upper: int
+    page_model_id: str | None
+    description_model_id: str | None
+    price_known: bool
+    cost_typical_usd: Decimal | None
+    cost_upper_usd: Decimal | None
+    sampled: bool
+    notes: list[str]
+
+
+class ImageCandidateRead(ApiModel):
+    """Одно изображение активной ревизии в инвентаре «Описать изображения»."""
+
+    id: str
+    page_number: int
+    element_index: int
+    fragment_id: UUID | None
+    bbox: list[float]
+    has_asset: bool
+    role: str
+    processing: str
+    review: str
+    reasons: list[str]
+    signals: list[str]
+    caption: str | None
+    crop_hash: str | None
+    text: str
+    selectable: bool
+
+
+class ImageInventoryRead(ApiModel):
+    """Что уйдёт на описание, что сомнительно и что исключено — до платного вызова.
+
+    `targets` отправляются по умолчанию; `doubtful` — только если человек их
+    отметит; `excluded` не отправляются (служебные, декоративные, описанные,
+    исправленные вручную).
+    """
+
+    material_id: UUID
+    revision: int
+    targets: list[ImageCandidateRead]
+    doubtful: list[ImageCandidateRead]
+    excluded: list[ImageCandidateRead]
+    model_id: str | None
+    provider_id: UUID | None
+    provider_label: str
+    price_known: bool
+    cost_per_image_typical_usd: Decimal | None
+    cost_per_image_upper_usd: Decimal | None
+    active_job_id: UUID | None
+    vector_index_stale: bool
+
+
+class ImageDescriptionEstimateWrite(ApiModel):
+    """Оценка по явному списку кандидатов и модели."""
+
+    target_ids: list[str] = Field(min_length=1, max_length=500)
+    provider_id: UUID | None = None
+    model_id: str | None = Field(default=None, max_length=200)
+
+
+class ImageDescriptionEstimateRead(ApiModel):
+    target_count: int
+    requests: int
+    reused_by_hash: int
+    model_id: str | None
+    price_known: bool
+    cost_typical_usd: Decimal | None
+    cost_upper_usd: Decimal | None
+
+
+class ImageDescriptionStart(ImageDescriptionEstimateWrite):
+    expected_revision: int = Field(ge=1)
+    max_cost_usd: Decimal | None = Field(default=None, gt=0, le=100)
+    confirm_unknown_price: bool = False
+
+
+class ImageDescriptionStartRead(ApiModel):
+    job_id: UUID
+    requests: int
+
+
+class ImageCountsRead(ApiModel):
+    """Счётчики изображений активной ревизии для карточки материала."""
+
+    total: int = 0
+    describable: int = 0
+    described: int = 0
+    needs_review: int = 0
+    service: int = 0
 
 
 class TypstBuildWrite(ApiModel):
@@ -154,10 +288,14 @@ class TypstStartRead(ApiModel):
 
 
 class ProcessingTaskRead(ApiModel):
+    """Прогресс и зафиксированные параметры запуска, без содержимого checkpoint."""
     id: UUID
     state: BackgroundJobState
     stage: ProcessingStage
     parser_mode: ParserMode | None
+    model_id: str | None = None
+    cloud_strategy: CloudStrategy | None = None
+    image_mode: ImageMode | None = None
     done: int
     total: int
     diagnostics: list[str]
@@ -166,12 +304,38 @@ class ProcessingTaskRead(ApiModel):
     updated_at: datetime
 
 
+class MaterialParseRead(ApiModel):
+    """Чем и какие страницы прочитал последний разбор активной версии.
+
+    Список материалов проекта показывает это в строке: режим с моделью и
+    диапазон, если запуск был не по всему документу.
+    """
+
+    revision: int
+    parser_mode: ParserMode | None
+    # Модель страниц облачного запуска; у «Быстро» и старых версий — `None`.
+    model_id: str | None
+    scope: str
+    page_from: int | None
+    page_to: int | None
+    # Сколько страниц прочитал этот запуск; остальные пришли из прошлой версии.
+    parsed_pages: int | None
+
+
 class MaterialRead(ApiModel):
     id: UUID
     original_name: str
+    # display_name — эффективное имя по правилу приоритета, library_display_name и
+    # project_display_name разделяют его слагаемые: интерфейсу нужно видеть, есть
+    # ли у проекта собственный псевдоним, чтобы не фиксировать его молча.
     display_name: str
+    library_display_name: str
+    project_display_name: str | None
     media_type: str
     source_kind: MaterialSourceKind
+    # Вид источника считает сервер: иначе каждый экран заново гадает по MIME,
+    # есть ли у материала растр страницы (`presentation.PAGE_IMAGE_KINDS`).
+    presentation_kind: MaterialPresentationKind
     source_url: str | None
     retrieved_at: datetime | None
     size_bytes: int
@@ -191,6 +355,10 @@ class MaterialRead(ApiModel):
     diagnostics: list[str]
     error: str | None
     task: ProcessingTaskRead | None
+    last_parse: MaterialParseRead | None = None
+    # Сколько тем программы опирается на источник: привязки его фрагментов,
+    # диапазоны страниц темы и темы, выросшие из его оглавления.
+    used_by_topics: int = 0
     attached_at: datetime
     created_at: datetime
     updated_at: datetime
@@ -213,6 +381,8 @@ class FragmentRead(ApiModel):
     # Границы сегмента у расшифровки аудио и субтитров; у остальных источников None.
     time_from: float | None = None
     time_to: float | None = None
+    # Состояние изображения: роль, обработка, проверка, описание и происхождение.
+    visual: dict[str, object] | None = None
 
 
 class BlockRead(ApiModel):
@@ -264,6 +434,8 @@ class LibraryUsageRead(ApiModel):
 class LibraryMaterialRead(ApiModel):
     id: UUID
     original_name: str
+    display_name: str
+    subject: str | None
     media_type: str
     source_kind: MaterialSourceKind
     source_url: str | None
@@ -276,12 +448,20 @@ class LibraryMaterialRead(ApiModel):
     ocr_low_page_count: int
     block_count: int
     fragment_count: int
+    has_outline: bool
     sha256: str
     created_at: datetime
     usage: list[LibraryUsageRead]
 
 
-OutlineSource = Literal["embedded", "recognized", "none"]
+class LibraryMaterialMetadataRead(ApiModel):
+    id: UUID
+    display_name: str
+    subject: str | None
+    updated_at: datetime
+
+
+OutlineSource = Literal["embedded", "printed", "recognized", "model", "none"]
 
 
 class LibraryMaterialCapabilities(ApiModel):
@@ -301,6 +481,29 @@ class OutlineItem(ApiModel):
     level: int
     title: str
     page: int
+
+
+class OutlineDetailRead(ApiModel):
+    """Ответ `GET /outline` — оглавление шага 3 мастера учебника (Работа 4 плана).
+
+    Импорт в настоящую программу (`ProgramNode`) не реализован: это только
+    извлечение и показ для проверки глазами."""
+
+    items: list[OutlineItem]
+    source: OutlineSource
+    # Номера страниц исходного документа, на которых найдено оглавление —
+    # печатное оглавление занимает конкретные листы, у остальных источников
+    # это пусто (не привязаны к конкретному месту).
+    source_pages: list[int]
+    available_sources: list[OutlineSource]
+    # Какую страницу открыть в просмотрщике по умолчанию: печатная страница
+    # оглавления, если она нашлась, — даже когда сами пункты взяты из закладок
+    # PDF. Пусто, если печатная страница не нашлась: тогда просмотрщик
+    # открывает страницу 1, а `review_needs_check` явно просит проверить её
+    # глазами (закладки PDF без печатной страницы — не повод для этой пометки:
+    # там и так открыта первая страница книги, это ожидаемо).
+    review_pages: list[int]
+    review_needs_check: bool
 
 
 class PageStateRead(ApiModel):
@@ -340,7 +543,11 @@ class LibraryMaterialDetailRead(LibraryMaterialRead):
     # Путь от корня проекта, а не абсолютный: инспектор — не про то, куда
     # установлен Tentex на этой машине, а про то, где файл лежит внутри `data/`.
     storage_path: str
+    #: Метка растра страниц для адреса картинки: пока она та же, браузер не
+    #: перезапрашивает уже показанные страницы.
+    raster_token: str
     typst: TypstMaterialRead | None = None
+    images: ImageCountsRead = ImageCountsRead()
 
 
 class LibraryMaterialAttachWrite(ApiModel):
@@ -383,6 +590,12 @@ class MaterialDeletePreview(ApiModel):
     reference_answer_count: int
     binding_count: int
     affected_projects: list[AffectedProjectPreview]
+
+
+class MaterialOrderWrite(ApiModel):
+    """Порядок материалов проекта сверху вниз; задаёт их приоритет."""
+
+    material_ids: list[UUID] = Field(min_length=1)
 
 
 class MaterialsDeleteWrite(ApiModel):

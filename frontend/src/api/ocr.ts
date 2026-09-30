@@ -68,7 +68,16 @@ export interface OcrEngineRead {
 }
 
 /** Как режим «Облако» делит работу между текстовым слоем файла и внешней моделью. */
-export type OcrCloudStrategy = "auto" | "page";
+export type OcrCloudStrategy = "economy" | "auto" | "page";
+
+/** Что запуск делает с изображениями: описывает, читает только надписи или пропускает. */
+export type OcrImageMode = "describe" | "text_only" | "skip";
+
+export interface OcrImageModeRead {
+  value: OcrImageMode;
+  title: string;
+  hint: string;
+}
 
 export interface OcrCloudStrategyRead {
   value: OcrCloudStrategy;
@@ -98,6 +107,8 @@ export interface OcrCloudRead {
   strategy: OcrCloudStrategy;
   strategies: OcrCloudStrategyRead[];
   price_per_page_usd: string | null;
+  /** Типичная цена описания одного выреза той же моделью. */
+  price_per_image_usd: string | null;
 }
 
 export interface OcrCloudSettingsWrite {
@@ -106,19 +117,42 @@ export interface OcrCloudSettingsWrite {
   strategy: OcrCloudStrategy;
 }
 
+/** Способ расшифровки аудио: `fast` — Whisper на процессоре, `cloud` — модель речи
+ *  из «Параметров ИИ». Режимы названы как у страниц: в задаче это то же `parser_mode`. */
+export interface SpeechEngineRead {
+  mode: ParserMode;
+  title: string;
+  description: string;
+  available: boolean;
+  /** Почему недоступно и что сделать; у доступного способа пусто. */
+  status_detail: string;
+  /** Какая модель будет читать: «Whisper small» или ID модели провайдера. */
+  model_label: string;
+  provider_label: string;
+}
+
 export interface OcrSettingsRead {
   default_mode: ParserMode;
   quality_threshold: number;
   raster_scale: number;
+  cpu_profile: OcrCpuProfile;
+  cpu_available: number;
+  cpu_threads_by_profile: Record<OcrCpuProfile, number>;
   engines: OcrEngineRead[];
   cloud: OcrCloudRead;
+  speech: SpeechEngineRead[];
+  /** Режимы изображений по движку (`cloud`, `fast`); первый — выбор по умолчанию. */
+  image_modes: Partial<Record<ParserMode, OcrImageModeRead[]>>;
 }
 
 export interface OcrGlobalSettingsWrite {
   default_mode: ParserMode;
   quality_threshold: number;
   raster_scale: number;
+  cpu_profile: OcrCpuProfile;
 }
+
+export type OcrCpuProfile = "gentle" | "balanced" | "maximum";
 
 export interface OcrEngineWrite {
   model_id: string | null;

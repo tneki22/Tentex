@@ -1,6 +1,6 @@
 /** История: реальные занятия лентой, а не назначения календаря. */
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, ChevronLeft, ChevronRight, Clock, FileText, PenLine, Plus, X } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, Clock, FileText, GraduationCap, PenLine, Plus, X } from "lucide-react";
 import {
   Button,
   Disclosure,
@@ -51,6 +51,7 @@ const KIND_ICON: Record<string, typeof BookOpen> = {
   chat: PenLine,
   answer: PenLine,
   manual: Clock,
+  lesson: GraduationCap,
 };
 
 /** Первое открытие и сумма времени вместо десятка одинаковых строк. */

@@ -36,7 +36,9 @@ description: Правила бэкенда Tentex — слои, доменные
 
 ## Фоновые операции
 
-Долгая работа живёт в общей модели `BackgroundJob`, а не в HTTP-запросе или старом `ProcessingTask`; виды, состояния, review/result и маршруты описаны в `docs/architecture/background-jobs.md`. В поставке один worker и одна общая очередь. Второй worker сейчас небезопасен из-за read-then-write в `materials.worker.claim_job`, поэтому не масштабируй сервис без атомарного conditional claim.
+Долгая работа живёт в общей модели `BackgroundJob`, а не в HTTP-запросе или старом `ProcessingTask`; виды, состояния, review/result и маршруты описаны в `docs/architecture/background-jobs.md`. Один worker-процесс исполняет независимые полосы `local`, `cloud` и `ai` с настраиваемым числом слотов. `claim_job` безопасен для параллельных потоков и процессов благодаря предварительной резервации SQLite-writer; отдельные процессы обычно не нужны, потому что умножают пределы всех полос.
+
+Заводишь новый `BackgroundJobKind` — читай там же раздел «Добавляя новый вид задачи»: подпись в панели («undefined · …») и текст ошибки — не мелочи на потом, а часть контракта, которую легко забыть в одном из четырёх мест (бэкенд-перечисление, `registry._subject`/`_model_label`, фронтенд-тип, `TaskRow.KIND_LABEL`).
 
 ## Логирование
 
@@ -46,9 +48,9 @@ description: Правила бэкенда Tentex — слои, доменные
 
 ## Своё к общему циклу проверки
 
-Общий порядок — в `CLAUDE.md`. Бэкенду сверх него:
+Общий порядок и выбор объёма проверок — в `AGENTS.md`. Бэкенду сверх него:
 
-- `cd backend && python -m ruff check .` — чисто (правила `E,F,I,UP,B,SIM`, line-length 100, py313).
-- Затронул домен — прогони профильную проверку из `backend/scripts/`: `check_stage2` … `check_stage5`, `check_manual_binding`, `check_ai_gateway`, `check_exam_chat`, `check_library_workspace`.
+- Из `backend/` запусти `python -m ruff check <изменённые_файлы>` (правила `E,F,I,UP,B,SIM`, line-length 100, py313).
+- Если выбранные тесты не покрывают изменённый сценарий, выбери нужную профильную проверку из `backend/scripts/`: `check_stage2` … `check_stage5`, `check_manual_binding`, `check_ai_gateway`, `check_exam_chat`, `check_library_workspace`.
 - Меняешь контракт (путь, тело, код ответа, `code` ошибки) — обнови соответствующий `docs/architecture/*.md`.
 - Новая настройка — только через `Settings` в `config.py` (префикс `TENTEX_`), не `os.environ` напрямую.

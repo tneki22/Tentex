@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Iterator
 from typing import Annotated
@@ -23,11 +24,15 @@ from app.bindings.schemas import (
     ReindexResult,
     SearchResponse,
 )
-from app.db import SessionLocal, get_session
+from app.bindings.search import reuse_fragment_search
+from app.db import SessionLocal, get_search_session, get_session
 from app.models import BindingStatus
 from app.projects.errors import ProjectDomainError
+from app.retrieval.schemas import RetrievalScope, RetrievalSearchWrite, SearchStrategy
+from app.retrieval.search import HybridRetriever
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+SearchSessionDependency = Annotated[Session, Depends(get_search_session)]
 GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["bindings"])
 
@@ -35,14 +40,70 @@ router = APIRouter(prefix="/api/projects/{project_id}", tags=["bindings"])
 @router.get("/search", response_model=SearchResponse)
 def search_materials(
     project_id: UUID,
-    session: SessionDependency,
+    session: SearchSessionDependency,
     q: str = "",
     material_id: UUID | None = None,
     node_id: UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 50,
+    strategy: SearchStrategy = SearchStrategy.HYBRID,
+    scope: RetrievalScope | None = None,
 ) -> SearchResponse:
-    return service.search_project_materials(
-        session, project_id, q, material_id=material_id, node_id=node_id, limit=limit
+    """Найти кандидатов, не занимая event loop коротких запросов проекта."""
+    with reuse_fragment_search():
+        lexical = service.search_project_materials(
+            session, project_id, q, material_id=material_id, node_id=node_id, limit=limit
+        )
+        if strategy == SearchStrategy.LEXICAL or not q.strip():
+            return lexical.model_copy(update={"strategy": SearchStrategy.LEXICAL.value})
+        retrieval_scope = scope or (
+            RetrievalScope.TOPIC_PROJECT if node_id is not None else RetrievalScope.PROJECT
+        )
+        # FTS, сборка фрагментов и часть hybrid retrieval синхронны. FastAPI
+        # исполняет обычный def в пуле потоков; отдельный event loop оставляет
+        # эти операции вне основного цикла, где ждут короткие запросы ответа/чата.
+        # asyncio.run копирует контекст, поэтому гибрид видит ту же выдачу BM25.
+        hybrid = asyncio.run(
+            HybridRetriever().search(
+                session,
+                RetrievalSearchWrite(
+                    query=q,
+                    strategy=strategy,
+                    scope=retrieval_scope,
+                    project_id=project_id,
+                    node_id=node_id,
+                    material_ids=[material_id] if material_id else [],
+                    limit=limit,
+                ),
+            )
+        )
+    by_block = {
+        hit.locator.block_id: hit for hit in hybrid.results if hit.locator.block_id is not None
+    }
+    ranked = sorted(
+        lexical.results,
+        key=lambda item: by_block.get(item.block_id).score if item.block_id in by_block else -1,
+        reverse=True,
+    )
+    annotated = [
+        item.model_copy(
+            update={
+                "retrieval_score": by_block[item.block_id].score,
+                "signals": by_block[item.block_id].signals,
+                "warning": by_block[item.block_id].warning,
+            }
+        )
+        if item.block_id in by_block
+        else item.model_copy(update={"signals": ["lexical"]})
+        for item in ranked
+    ]
+    return lexical.model_copy(
+        update={
+            "results": annotated,
+            "strategy": strategy.value,
+            "index_id": hybrid.index_id,
+            "degraded": hybrid.degraded,
+            "degradation_reasons": hybrid.degradation_reasons,
+        }
     )
 
 
@@ -83,15 +144,11 @@ def _answer_link_events(project_id: UUID, material_id: UUID) -> Iterator[str]:
                         progress = AnswersLinkProgressRead.model_validate(
                             item, from_attributes=True
                         )
-                        yield _answer_link_frame(
-                            "progress", progress.model_dump(mode="json")
-                        )
+                        yield _answer_link_frame("progress", progress.model_dump(mode="json"))
                     else:
                         final = AnswersLinkRead.model_validate(item, from_attributes=True)
         except ProjectDomainError as error:
-            yield _answer_link_frame(
-                "error", {"code": error.code, "detail": error.detail}
-            )
+            yield _answer_link_frame("error", {"code": error.code, "detail": error.detail})
             return
     if final is not None:
         yield _answer_link_frame("completed", final.model_dump(mode="json"))

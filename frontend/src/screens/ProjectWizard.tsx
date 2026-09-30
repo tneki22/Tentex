@@ -4,14 +4,17 @@ import { ArrowRight, BookOpen, GraduationCap, Sparkles, Trash2 } from "lucide-re
 import { discardWizardDraft, listWizardDrafts, type ProjectDetail, type TemplateKey, type WizardDraftSummary } from "../api/projects";
 import { useWizardDraft } from "../hooks/useWizardDraft";
 import { Button, Card, ConfirmDialog, ErrorState, IconButton, LoadingState, StatusBadge } from "../components/ui";
+import { ImportProjectButton } from "../components/domain";
 import { ExamWizard } from "./project-wizard/ExamWizard";
 import { WizardChrome } from "./project-wizard/WizardChrome";
 import { TextbookWizard } from "./TextbookWizard";
+import { FreeStudyWizard } from "./FreeStudyWizard";
 
-type Track = "exam" | "textbook";
+type Track = "exam" | "textbook" | "free";
 
 const EXAM_STEP_LABELS = ["Формат", "Материалы", "Загрузка", "Паспорт", "Проверка"];
 const TEXTBOOK_STEP_LABELS = ["Источники", "Профиль", "Проверка", "Программы", "Итог"];
+const FREE_STEP_LABELS = ["Цель", "Материалы", "Программа", "Проверка"];
 
 const TRACKS = [
   {
@@ -19,9 +22,9 @@ const TRACKS = [
     icon: GraduationCap,
     eyebrow: "До конкретной даты",
     title: "Подготовка к экзамену",
-    description: "Есть вопросы, задачи, билеты или только учебные материалы. Соберём программу и распределим работу до экзамена.",
+    description: "Есть вопросы, задачи, билеты или только учебные материалы. Сохраним структуру экзамена и распределим работу до даты.",
     need: "Список формулировок или материалы по предмету",
-    result: "Структура экзамена, программа и понятный темп подготовки",
+    result: "Вопросы, задачи или билеты и понятный темп подготовки",
     available: true,
   },
   {
@@ -42,15 +45,17 @@ const TRACKS = [
     description: "Есть цель, но нет обязательной программы или одного главного источника. Начнём с ориентира и дополним его по ходу.",
     need: "Цель и примерное представление о желаемом результате",
     result: "Гибкая программа, которую можно уточнять материалами",
-    available: false,
+    available: true,
   },
 ] as const;
 
 function draftBranch(draft: WizardDraftSummary): string {
+  if (draft.template_key === "free") return "Свободное изучение";
   return draft.template_key === "textbook" ? "Изучение по учебнику" : "Подготовка к экзамену";
 }
 
 function stepLabelsFor(templateKey: TemplateKey): readonly string[] {
+  if (templateKey === "free") return FREE_STEP_LABELS;
   return templateKey === "textbook" ? TEXTBOOK_STEP_LABELS : EXAM_STEP_LABELS;
 }
 
@@ -58,7 +63,7 @@ export function ProjectWizard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const initialTrack = searchParams.get("track");
-  const [track, setTrack] = useState<Track | null>(initialTrack === "exam" || initialTrack === "textbook" ? initialTrack : null);
+  const [track, setTrack] = useState<Track | null>(initialTrack === "exam" || initialTrack === "textbook" || initialTrack === "free" ? initialTrack : null);
   const [resumeId, setResumeId] = useState<string | null>(searchParams.get("draft"));
   const [drafts, setDrafts] = useState<WizardDraftSummary[]>([]);
   const [loadingDrafts, setLoadingDrafts] = useState(true);
@@ -69,7 +74,6 @@ export function ProjectWizard() {
   const [draftDeleteError, setDraftDeleteError] = useState("");
   const [requestedStep, setRequestedStep] = useState<number | null>(null);
   const [activatedProject, setActivatedProject] = useState<ProjectDetail | null>(null);
-  const [activationWarning, setActivationWarning] = useState("");
   const templateKey: TemplateKey = track ?? "exam";
   const controller = useWizardDraft({ templateKey, projectId: resumeId });
 
@@ -99,7 +103,7 @@ export function ProjectWizard() {
   }, [controller.detail?.project.id, track]);
 
   function resume(draft: WizardDraftSummary) {
-    const nextTrack = draft.template_key === "textbook" ? "textbook" : "exam";
+    const nextTrack = draft.template_key;
     setTrack(nextTrack);
     setResumeId(draft.project_id);
     setRequestedStep(null);
@@ -166,8 +170,8 @@ export function ProjectWizard() {
 
   const currentStep = track ? requestedStep ?? controller.detail?.draft.current_step ?? 1 : 0;
   const maxStep = track ? controller.detail?.draft.max_completed_step ?? 1 : 0;
-  const trackLabel = track === "exam" ? "Экзамен" : track === "textbook" ? "Учебник" : null;
-  const stepLabels = track === "textbook" ? TEXTBOOK_STEP_LABELS : EXAM_STEP_LABELS;
+  const trackLabel = track === "exam" ? "Экзамен" : track === "textbook" ? "Учебник" : track === "free" ? "Свободное изучение" : null;
+  const stepLabels = track === "textbook" ? TEXTBOOK_STEP_LABELS : track === "free" ? FREE_STEP_LABELS : EXAM_STEP_LABELS;
 
   if (activatedProject) {
     const textbook = activatedProject.project.workspace_variant === "textbook";
@@ -179,13 +183,11 @@ export function ProjectWizard() {
       <div className="project-wizard is-success">
         <Card className="wizard-success-card">
           <h1>Создан проект: {activatedProject.project.name || (textbook ? "Учебниковый проект" : "Экзаменационный проект")}</h1>
-          <p>{first ? "Паспорт цели и программа сохранены." : textbook ? "Паспорт цели и источники сохранены. Программу можно составить позже." : "Паспорт цели сохранён. Вопросы можно импортировать позже."}</p>
-          {activationWarning && <p className="inline-warning" role="status">{activationWarning}</p>}
-          <p className="wizard-success-next">Следующий шаг — {textbook ? "открыть Программу и добавить первую тему, когда будете готовы" : "открыть проект, проверить программу и начать готовиться"}.</p>
+          {textbook && <p>{first ? "Паспорт цели и программа сохранены." : "Паспорт цели и источники сохранены. Программу можно составить позже."}</p>}
+          <p className="wizard-success-next">{textbook ? (first ? "Следующий шаг — открыть Программу и начать заниматься по темам." : "Следующий шаг — открыть Программу и добавить первую тему, когда будете готовы.") : "Следующий шаг — открыть проект и проверить вопросы. Загруженные ответы обрабатываются и сопоставляются в фоне."}</p>
           <div className="wizard-success-actions">
             <Button onClick={() => navigate(destination)}>{textbook ? "Открыть программу" : "Открыть проект"}</Button>
-            {activationWarning && <Button variant="secondary" onClick={() => navigate(`/projects/${activatedProject.project.id}/materials`)}>Открыть Материалы</Button>}
-            <Button variant="ghost" onClick={() => { setActivatedProject(null); setActivationWarning(""); }}>Вернуться к проверке</Button>
+            <Button variant="ghost" onClick={() => setActivatedProject(null)}>Вернуться к проверке</Button>
           </div>
         </Card>
       </div>
@@ -201,10 +203,11 @@ export function ProjectWizard() {
           maxStep={0}
           stepLabels={EXAM_STEP_LABELS}
           onStepChange={setRequestedStep}
+          landingAction={<ImportProjectButton />}
         >
           <div className="wizard-hero">
             <h1>Как вы хотите<br />учиться?</h1>
-            <p>Расскажите, к чему готовитесь и что у вас уже есть. Tentex поможет собрать программу и следующий шаг.</p>
+            <p>Расскажите, к чему готовитесь и что у вас уже есть. Tentex поможет определить следующий шаг.</p>
           </div>
 
           <div className="wizard-track-grid">
@@ -220,7 +223,7 @@ export function ProjectWizard() {
                 >
                   <span className="wizard-track-top">
                     <span className="wizard-track-icon"><Icon size={24} aria-hidden="true" /></span>
-                    {!item.available && <StatusBadge>После этапа 7</StatusBadge>}
+                    {!item.available && <StatusBadge>Скоро</StatusBadge>}
                   </span>
                   <small className="wizard-track-eyebrow">{item.eyebrow}</small>
                   <h2>{item.title}</h2>
@@ -230,7 +233,7 @@ export function ProjectWizard() {
                     <span><b>Что получится</b>{item.result}</span>
                   </span>
                   <span className="wizard-track-action">
-                    {item.available ? "Выбрать этот путь" : "После этапа 7"}
+                    {item.available ? "Выбрать этот путь" : "Скоро"}
                     {item.available && <ArrowRight size={16} aria-hidden="true" />}
                   </span>
                 </button>
@@ -280,12 +283,12 @@ export function ProjectWizard() {
         onSaveAndExit={controller.detail ? () => void saveAndExit() : undefined}
         onDiscard={controller.detail ? () => setDiscardOpen(true) : undefined}
       >
-        {track === "exam"
-          ? <ExamWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={(project, warning) => { setActivationWarning(warning ?? ""); setActivatedProject(project); }} />
-          : <TextbookWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={(project) => { setActivationWarning(""); setActivatedProject(project); }} />}
+        {track === "exam" && <ExamWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} />}
+        {track === "textbook" && <TextbookWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} />}
+        {track === "free" && <FreeStudyWizard controller={controller} requestedStep={currentStep} onStepChange={setRequestedStep} onActivated={setActivatedProject} />}
       </WizardChrome>
       <ConfirmDialog open={discardOpen} onOpenChange={setDiscardOpen} title="Удалить черновик?" confirmLabel="Удалить черновик" destructive onConfirm={discard}>
-        <p>Паспорт и ручная программа этого черновика будут удалены. Общие материалы других проектов не затрагиваются.</p>
+        <p>Паспорт и данные этого черновика будут удалены. Общие материалы других проектов не затрагиваются.</p>
         {draftDeleteError && <p className="inline-error" role="alert">{draftDeleteError}</p>}
       </ConfirmDialog>
     </>

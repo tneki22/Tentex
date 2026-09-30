@@ -16,6 +16,26 @@ export type SessionDeferWrite = components["schemas"]["SessionDeferWrite"];
 export type SessionRetryWrite = components["schemas"]["SessionRetryWrite"];
 export type FragmentPrefillRead = components["schemas"]["FragmentPrefillRead"];
 
+export type CardGenerationMode = "connections" | "understanding";
+export interface GeneratedCard {
+  index: number;
+  front: string;
+  back: string;
+  hint: string | null;
+  source: NonNullable<CardCreate["source"]>;
+  evidence_quote: string;
+  status: "pending" | "accepted" | "rejected";
+}
+export interface CardGenerationGroup {
+  program_node_id: string;
+  run_id: string;
+  candidates: GeneratedCard[];
+}
+export interface CardBatchReview {
+  groups: CardGenerationGroup[];
+  errors: string[];
+}
+
 export interface CardFilters {
   query?: string;
   unitId?: string;
@@ -54,6 +74,37 @@ export const listCards = (
 export const createCard = (
   projectId: string,
   command: CardCreate,
+): Promise<CardRead> =>
+  request(`${projectPath(projectId)}/cards`, {
+    method: "POST",
+    body: JSON.stringify(command),
+  });
+
+export const generateCards = (
+  projectId: string, programNodeIds: string[], mode: CardGenerationMode,
+): Promise<{ job_id: string }> =>
+  request(`${projectPath(projectId)}/cards/generate`, {
+    method: "POST",
+    body: JSON.stringify({ program_node_ids: programNodeIds, mode }),
+  });
+
+export const getCardGenerationReview = (
+  projectId: string, jobId: string,
+): Promise<CardBatchReview> =>
+  request(`${projectPath(projectId)}/cards/generation-jobs/${encodeURIComponent(jobId)}/review`);
+
+export const updateCardProposal = (
+  projectId: string, jobId: string, unitId: string, index: number,
+  command: { front: string; back: string; hint: string | null; rejected: boolean },
+): Promise<CardBatchReview> =>
+  request(
+    `${projectPath(projectId)}/cards/generation-jobs/${encodeURIComponent(jobId)}/candidates/${encodeURIComponent(unitId)}/${index}`,
+    { method: "PATCH", body: JSON.stringify(command) },
+  );
+
+export const createGeneratedCard = (
+  projectId: string,
+  command: CardCreate & { generation_run_id: string; generation_candidate_index: number },
 ): Promise<CardRead> =>
   request(`${projectPath(projectId)}/cards`, {
     method: "POST",

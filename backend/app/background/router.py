@@ -17,8 +17,11 @@ def list_background_jobs(
     session: SessionDependency,
     active_only: bool = False,
     pending_review: bool = False,
+    failed_only: bool = False,
     project_id: UUID | None = None,
     material_id: UUID | None = None,
+    kind: str | None = None,
+    page_number: int | None = None,
 ) -> list[BackgroundJobRead]:
     """Список задач. `active_only` и `pending_review` вместе — объединение
     корзин: то, что идёт сейчас, плюс то, что досчиталось и ждёт человека."""
@@ -26,8 +29,11 @@ def list_background_jobs(
         session,
         active_only=active_only,
         pending_review=pending_review,
+        failed_only=failed_only,
         project_id=project_id,
         material_id=material_id,
+        kind=kind,
+        page_number=page_number,
     )
 
 

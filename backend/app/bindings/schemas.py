@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Self
+from typing import Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -50,6 +50,9 @@ class SearchResultRead(ApiModel):
     matched_forms: list[str] = []
     already_bound: bool = False
     pages: list[SearchResultPageRead] = []
+    retrieval_score: float | None = None
+    signals: list[Literal["lexical", "semantic"]] = []
+    warning: str | None = None
 
 
 class SearchResponse(ApiModel):
@@ -62,6 +65,10 @@ class SearchResponse(ApiModel):
     terms: list[str]
     prefix: str | None
     results: list[SearchResultRead]
+    strategy: Literal["lexical", "semantic", "hybrid"] = "lexical"
+    index_id: UUID | None = None
+    degraded: bool = False
+    degradation_reasons: list[str] = []
 
 
 class HeadingSuggestionCandidateRead(ApiModel):
@@ -178,6 +185,9 @@ class NodeBindingSummary(ApiModel):
     program_node_id: UUID
     fragment_count: int
     material_count: int
+    content_fragment_count: int
+    content_material_count: int
+    supporting_fragment_count: int
     worst_quality: PageQuality | None
 
 

@@ -1,6 +1,6 @@
 /**
- * Откуда взялся узел программы. Пять источников из FR-G23 плюс честное
- * «источника нет».
+ * Откуда взялся узел программы. Пять источников из FR-G23, тема из знаний
+ * модели (слой 4 — не проверена источником) и честное «источника нет».
  *
  * Все нейтральные, кроме последнего: различать оглавление и каталог цветом
  * незачем, значимо только отсутствие источника — там модель говорит, что
@@ -12,6 +12,7 @@ export type ProgramSource =
   | { kind: "catalog"; layer: 1 | 2 | 4 }
   | { kind: "import" }
   | { kind: "manual" }
+  | { kind: "model" }
   | { kind: "none" };
 
 function describe(source: ProgramSource): { text: string; unverified: boolean } {
@@ -26,6 +27,8 @@ function describe(source: ProgramSource): { text: string; unverified: boolean } 
       return { text: "импорт", unverified: false };
     case "manual":
       return { text: "вручную", unverified: false };
+    case "model":
+      return { text: "знания модели", unverified: true };
     case "none":
       return { text: "источника нет", unverified: true };
   }

@@ -114,7 +114,8 @@ export function DocumentStage({
       ref={frame}
       style={{ "--viewer-split": ratio } as CSSProperties}
     >
-      {edges}
+      {/* В сравнении края не листают: правая зона перекрывала бы тумблер
+          «Фото фрагментов с расшифровкой» над текстовой половиной. */}
       <section className="viewer-pane is-source" aria-label={sourceLabel}>{source}</section>
       <div
         className="viewer-split-handle"

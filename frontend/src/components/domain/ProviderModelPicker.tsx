@@ -6,24 +6,7 @@ import type {
   AiProviderRead,
 } from "../../api/ai";
 import { Select } from "../ui";
-
-function supports(
-  model: AiModelRead,
-  modality: AiModality,
-  capabilities: string[],
-): boolean {
-  if (!model.is_available) return false;
-  if (modality === "text" && model.output_modalities.length
-    && !model.output_modalities.includes("text")) return false;
-  if (modality === "speech" && !model.input_modalities.includes("audio")) return false;
-  return capabilities.every((capability) => {
-    if (capability === "structured_output") {
-      return model.supported_parameters.includes("response_format");
-    }
-    if (capability === "audio_transcription") return model.input_modalities.includes("audio");
-    return capability === "streaming";
-  });
-}
+import { byFavoriteThenName, supportsRole } from "./modelFacts";
 
 export function ProviderModelPicker({
   providers,
@@ -46,7 +29,7 @@ export function ProviderModelPicker({
 }) {
   const eligible = useMemo(
     () => models.filter((model) => (
-      supports(model, modality, capabilities)
+      supportsRole(model, modality, capabilities)
       || (model.provider_id === value?.provider_id && model.model_id === value.model_id)
     )),
     [models, modality, capabilities, value?.model_id, value?.provider_id],
@@ -57,11 +40,7 @@ export function ProviderModelPicker({
   const providerId = value?.provider_id ?? null;
   const providerModels = eligible
     .filter((model) => model.provider_id === providerId)
-    .sort((left, right) => (
-      (left.favorite_order ?? Number.MAX_SAFE_INTEGER)
-      - (right.favorite_order ?? Number.MAX_SAFE_INTEGER)
-      || left.display_name.localeCompare(right.display_name, "ru")
-    ));
+    .sort(byFavoriteThenName);
 
   return (
     <div className="provider-model-picker">
@@ -83,11 +62,7 @@ export function ProviderModelPicker({
             }
             const first = eligible
               .filter((model) => model.provider_id === nextProvider)
-              .sort((left, right) => (
-                (left.favorite_order ?? Number.MAX_SAFE_INTEGER)
-                - (right.favorite_order ?? Number.MAX_SAFE_INTEGER)
-                || left.display_name.localeCompare(right.display_name, "ru")
-              ))[0];
+              .sort(byFavoriteThenName)[0];
             onChange(first ? { provider_id: nextProvider, model_id: first.model_id } : null);
           }}
         />

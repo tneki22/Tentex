@@ -8,12 +8,16 @@ from uuid import uuid4
 
 import pytest
 from conftest import add_page_with_fragments, make_material
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.materials import library
+from app.db import get_session
+from app.main import create_app
+from app.materials import library, processing_plan
 from app.materials.parsers.base import ParsedElement
-from app.materials.worker import _prepare_revision
+from app.materials.schemas import ProcessingStart
+from app.materials.worker import _prepare_revision, _renew_lease
 from app.models import (
     BackgroundJob,
     BackgroundJobKind,
@@ -82,6 +86,69 @@ def _task(material: Material, *, state: BackgroundJobState, selected: list[int])
     )
 
 
+def test_task_read_exposes_launch_snapshot(session: Session) -> None:
+    """Подпись идущего разбора берётся из checkpoint, а не общих настроек."""
+    material = make_material(session, "facade")
+    task = _task(material, state=BackgroundJobState.RUNNING, selected=[1])
+    task.parser_mode = ParserMode.CLOUD
+    task.checkpoint["options"] = {
+        "page_model": {"model_id": "launch-model"},
+        "cloud_strategy": "page",
+        "image_mode": "skip",
+    }
+    result = library.task_read(task)
+    assert result.model_id == "launch-model"
+    assert result.cloud_strategy == "page"
+    assert result.image_mode == "skip"
+    assert "checkpoint" not in result.model_dump()
+    task.checkpoint = {}
+    legacy = library.task_read(task)
+    assert legacy.model_id is None
+    assert legacy.cloud_strategy is None
+
+
+def test_cloud_start_does_not_wait_for_estimate(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Постановка облачного разбора не открывает файл ради оценки."""
+    material = make_material(session, "c10d")
+    monkeypatch.setattr(library.ocr_settings, "engine_ready", lambda *args: (True, None))
+
+    def unexpected_estimate(*args):
+        pytest.fail("Запуск не должен ждать подробную оценку")
+
+    monkeypatch.setattr(processing_plan, "estimate", unexpected_estimate)
+    task = library.start_processing_core(
+        session, material.id,
+        ProcessingStart(parser_mode=ParserMode.CLOUD, confirm_unknown_price=True),
+    )
+    assert task.state == BackgroundJobState.QUEUED
+    assert task.checkpoint["budget"]["max_calls"] == processing_plan.QUICK_CALLS_PER_PAGE + 4
+
+
+def test_progress_endpoint_does_not_read_material_detail(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Опрос не запускает тяжёлый путь карточки; неизвестный материал даёт 404."""
+    material = make_material(session, "abac")
+    task = _task(material, state=BackgroundJobState.RUNNING, selected=[1])
+    session.add(task)
+    session.commit()
+
+    def unexpected_detail(*args):
+        pytest.fail("Опрос прогресса не должен читать полную карточку")
+
+    monkeypatch.setattr(library, "read_library_material", unexpected_detail)
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+    response = client.get(f"/api/materials/{material.id}/processing")
+    assert response.status_code == 200
+    assert response.json()["id"] == str(task.id)
+    assert response.json()["done"] == 0
+    assert client.get(f"/api/materials/{uuid4()}/processing").status_code == 404
+
+
 def test_cancel_discards_building_revision_and_frees_material(session: Session) -> None:
     material = make_material(session, "ca11")  # active_parse_revision=1, status READY
     material.page_count = 1
@@ -126,6 +193,20 @@ def test_cancel_discards_building_revision_and_frees_material(session: Session) 
         is not None
     )
     assert detail.task is None
+
+
+def test_running_job_renews_only_its_own_lease(session: Session) -> None:
+    material = make_material(session, "ca10")
+    task = _task(material, state=BackgroundJobState.RUNNING, selected=[1])
+    task.lease_owner = "worker-a"
+    session.add(task)
+    session.commit()
+
+    assert _renew_lease(session, task.id, "worker-b") is False
+    assert _renew_lease(session, task.id, "worker-a") is True
+    session.refresh(task)
+    assert task.heartbeat_at is not None
+    assert task.lease_expires_at is not None
 
 
 def test_cancel_of_first_parse_returns_material_to_ready_to_process(session: Session) -> None:

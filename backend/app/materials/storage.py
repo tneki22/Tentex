@@ -9,7 +9,7 @@ from fastapi import UploadFile
 from app.config import settings
 from app.projects.errors import ProjectDomainError
 
-MAX_FILE_BYTES = 100 * 1024 * 1024
+MAX_FILE_BYTES = 200 * 1024 * 1024
 ALLOWED_SUFFIXES = {
     ".pdf",
     ".docx",
@@ -47,7 +47,7 @@ async def store_upload(upload: UploadFile) -> tuple[str, str, int, str, str]:
                 size += len(chunk)
                 if size > MAX_FILE_BYTES:
                     raise ProjectDomainError(
-                        "Файл больше 100 МБ", status=413, code="material_too_large"
+                        "Файл больше 200 МБ", status=413, code="material_too_large"
                     )
                 digest.update(chunk)
                 target.write(chunk)

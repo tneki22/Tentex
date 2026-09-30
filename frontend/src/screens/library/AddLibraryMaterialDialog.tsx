@@ -1,44 +1,18 @@
 import { Braces, ChevronRight, FileUp, Globe, Type } from "lucide-react";
 import { useRef, useState } from "react";
-import {
-  createLibraryExternalMaterial,
-  createLibraryTextMaterial,
-  uploadTypstMaterial,
-  uploadLibraryMaterial,
-  type LibraryMaterialDetailRead,
-} from "../../api/materials";
+import { createLibraryExternalMaterial, createLibraryTextMaterial, uploadTypstMaterial, uploadLibraryMaterial, type LibraryMaterialDetailRead } from "../../api/materials";
 import { Button, Dialog, ErrorState, Field, Progress } from "../../components/ui";
 
-type Mode = "choose" | "text" | "link" | "typst";
-
+type Mode = "choose" | "file" | "text" | "link" | "typst";
+type TypstChoice = { kind: "single" | "folder" | "zip"; files: File[] };
 const ACCEPT = ".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.mp3,.wav,.m4a,.ogg,.flac";
+const isYoutube = (url: string) => /(?:^|\.)youtube\.com|youtu\.be/i.test(url);
+const fileSize = (bytes: number) => bytes < 1024 ** 2 ? `${Math.round(bytes / 1024)} КБ` : `${(bytes / 1024 ** 2).toFixed(1)} МБ`;
 
-function looksLikeYoutube(url: string): boolean {
-  return /(?:^|\.)youtube\.com|youtu\.be/i.test(url);
-}
+interface AddLibraryMaterialDialogProps { open: boolean; onOpenChange: (open: boolean) => void; onCreated: (material: LibraryMaterialDetailRead) => void; }
 
-function sizeLabel(bytes: number): string {
-  if (bytes < 1024) return `${bytes} Б`;
-  if (bytes < 1024 ** 2) return `${Math.round(bytes / 1024)} КБ`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} МБ`;
-  return `${(bytes / 1024 ** 3).toFixed(1)} ГБ`;
-}
-
-interface AddLibraryMaterialDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onCreated: (material: LibraryMaterialDetailRead) => void;
-}
-
-/**
- * Добавление общего материала. Активный проект не требуется: файл появляется в
- * Библиотеке, а подключение к проекту остаётся отдельным действием.
- */
-export function AddLibraryMaterialDialog({
-  open,
-  onOpenChange,
-  onCreated,
-}: AddLibraryMaterialDialogProps) {
+/** Сначала пользователь видит и при желании меняет имя, затем начинается загрузка. */
+export function AddLibraryMaterialDialog({ open, onOpenChange, onCreated }: AddLibraryMaterialDialogProps) {
   const fileInput = useRef<HTMLInputElement>(null);
   const typstFileInput = useRef<HTMLInputElement>(null);
   const typstFolderInput = useRef<HTMLInputElement>(null);
@@ -46,220 +20,51 @@ export function AddLibraryMaterialDialog({
   const [mode, setMode] = useState<Mode>("choose");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [name, setName] = useState("Заметка.md");
+  const [displayName, setDisplayName] = useState("");
+  const [subject, setSubject] = useState("");
   const [text, setText] = useState("");
   const [url, setUrl] = useState("");
-  const [uploadingFile, setUploadingFile] = useState<File | null>(null);
-  const [uploadPercent, setUploadPercent] = useState(0);
+  const [file, setFile] = useState<File | null>(null);
+  const [typst, setTypst] = useState<TypstChoice | null>(null);
+  const [progress, setProgress] = useState(0);
 
-  function reset() {
-    setMode("choose");
-    setError("");
-    setName("Заметка.md");
-    setText("");
-    setUrl("");
-    setUploadingFile(null);
-    setUploadPercent(0);
-  }
-
+  function reset() { setMode("choose"); setBusy(false); setError(""); setDisplayName(""); setSubject(""); setText(""); setUrl(""); setFile(null); setTypst(null); setProgress(0); }
   async function submit(action: () => Promise<LibraryMaterialDetailRead>) {
-    setBusy(true);
-    setError("");
-    try {
-      const created = await action();
-      reset();
-      onOpenChange(false);
-      onCreated(created);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Материал не добавился");
-      setUploadingFile(null);
-    } finally {
-      setBusy(false);
-    }
+    setBusy(true); setError("");
+    try { const material = await action(); reset(); onOpenChange(false); onCreated(material); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Материал не добавился"); }
+    finally { setBusy(false); }
   }
-
-  function submitFile(file: File) {
-    setUploadingFile(file);
-    setUploadPercent(0);
-    void submit(() => uploadLibraryMaterial(file, setUploadPercent));
+  function chooseFile(next: File) { setFile(next); setTypst(null); setDisplayName(next.name); setMode("file"); }
+  function chooseTypst(kind: TypstChoice["kind"], list: FileList | null) {
+    const files = list ? Array.from(list) : []; if (!files.length) return;
+    setFile(null); setTypst({ kind, files });
+    setDisplayName(kind === "folder" ? files[0].webkitRelativePath.split("/")[0] || files[0].name : files[0].name);
   }
-
-  function submitTypst(kind: "single" | "folder" | "zip", selected: FileList | null) {
-    const files = selected ? Array.from(selected) : [];
-    if (!files.length) return;
-    setUploadingFile(files[0]);
-    void submit(() => uploadTypstMaterial(
-      kind,
-      files,
-      files.map((file) => file.webkitRelativePath || file.name),
-    ));
+  const source = file ?? typst?.files[0] ?? null;
+  const sourceMode = mode === "file" || mode === "typst";
+  const canSubmit = mode === "text" ? Boolean(text.trim()) : mode === "link" ? Boolean(url.trim()) : Boolean(source);
+  const title = mode === "text" ? "Вставить текст" : mode === "link" ? "Добавить по ссылке" : mode === "typst" ? "Добавить Typst" : "Добавить материал";
+  function submitSource() {
+    if (file) void submit(() => uploadLibraryMaterial(file, setProgress, subject, displayName));
+    if (typst) void submit(() => uploadTypstMaterial(typst.kind, typst.files, typst.files.map((item) => item.webkitRelativePath || item.name), undefined, subject, displayName));
   }
-
-  const titles: Record<Mode, string> = {
-    choose: "Добавить материал",
-    text: "Вставить текст",
-    link: "Добавить по ссылке",
-    typst: "Добавить Typst",
-  };
-  const descriptions: Record<Mode, string> = {
-    choose: "Материал появится в Библиотеке. Подключить его к проекту можно позже.",
-    text: "Текст сохранится как отдельный материал установки.",
-    link: "Tentex сохранит локальный снимок: веб-страницу текстом, YouTube — субтитрами.",
-    typst: "Загрузите один автономный файл, папку проекта или ZIP. Пользователь увидит PDF, модель — исходный Typst-код.",
-  };
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) reset();
-        onOpenChange(next);
-      }}
-      title={titles[mode]}
-      description={descriptions[mode]}
-      footer={mode === "choose" ? (
-        <Button variant="ghost" onClick={() => onOpenChange(false)}>Закрыть</Button>
-      ) : mode === "text" ? (
-        <>
-          <Button variant="ghost" onClick={() => setMode("choose")}>Назад</Button>
-          <Button
-            disabled={busy || !text.trim() || !name.trim()}
-            onClick={() => void submit(() => createLibraryTextMaterial({ name, text }))}
-          >
-            Добавить текст
-          </Button>
-        </>
-      ) : mode === "typst" ? (
-        <Button variant="ghost" onClick={() => setMode("choose")}>Назад</Button>
-      ) : (
-        <>
-          <Button variant="ghost" onClick={() => setMode("choose")}>Назад</Button>
-          <Button
-            disabled={busy || !url.trim()}
-            onClick={() => void submit(() => createLibraryExternalMaterial({
-              kind: looksLikeYoutube(url) ? "youtube" : "url",
-              url: url.trim(),
-            }))}
-          >
-            Сохранить снимок
-          </Button>
-        </>
-      )}
-    >
-      <input
-        ref={fileInput}
-        className="materials-file-input"
-        type="file"
-        tabIndex={-1}
-        aria-hidden="true"
-        accept={ACCEPT}
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          event.target.value = "";
-          if (file) submitFile(file);
-        }}
-      />
-      <input ref={typstFileInput} className="materials-file-input" type="file" accept=".typ" tabIndex={-1} aria-hidden="true" onChange={(event) => { submitTypst("single", event.target.files); event.target.value = ""; }} />
-      <input ref={(node) => { typstFolderInput.current = node; node?.setAttribute("webkitdirectory", ""); }} className="materials-file-input" type="file" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => { submitTypst("folder", event.target.files); event.target.value = ""; }} />
-      <input ref={typstZipInput} className="materials-file-input" type="file" accept=".zip" tabIndex={-1} aria-hidden="true" onChange={(event) => { submitTypst("zip", event.target.files); event.target.value = ""; }} />
-
-      {error && <ErrorState message={error} />}
-
-      {mode === "choose" && uploadingFile && (
-        <div className="materials-upload-progress">
-          <FileUp size={18} />
-          <span>
-            <strong>{uploadingFile.name}</strong>
-            <small>{sizeLabel(uploadingFile.size)}</small>
-          </span>
-          <Progress value={uploadPercent} max={100} label="Загрузка файла" />
-        </div>
-      )}
-
-      {mode === "choose" && !uploadingFile && (
-        <div className="materials-add-grid">
-          <button type="button" disabled={busy} onClick={() => fileInput.current?.click()}>
-            <FileUp size={18} />
-            <span>
-              <strong>Файл</strong>
-              <small>PDF, DOCX, TXT, MD, изображение или аудиозапись</small>
-            </span>
-            <ChevronRight size={15} />
-          </button>
-          <button type="button" disabled={busy} onClick={() => setMode("text")}>
-            <Type size={18} />
-            <span>
-              <strong>Текст</strong>
-              <small>Вставить конспект или список вопросов прямо здесь</small>
-            </span>
-            <ChevronRight size={15} />
-          </button>
-          <button type="button" disabled={busy} onClick={() => setMode("link")}>
-            <Globe size={18} />
-            <span>
-              <strong>Ссылка</strong>
-              <small>Веб-страница или публичное YouTube-видео — вид определится по адресу</small>
-            </span>
-            <ChevronRight size={15} />
-          </button>
-          <button type="button" disabled={busy} onClick={() => setMode("typst")}>
-            <Braces size={18} />
-            <span>
-              <strong>Typst</strong>
-              <small>Один файл, папка проекта или ZIP — соберём PDF без OCR</small>
-            </span>
-            <ChevronRight size={15} />
-          </button>
-        </div>
-      )}
-
-      {mode === "text" && (
-        <div className="materials-text-form">
-          <Field label="Название" required>
-            <input value={name} onChange={(event) => setName(event.target.value)} />
-          </Field>
-          <Field label="Текст" required>
-            <textarea
-              autoFocus
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              placeholder={"# Заголовок\n\nТекст материала…"}
-            />
-          </Field>
-        </div>
-      )}
-
-      {mode === "link" && (
-        <div className="materials-text-form">
-          <Field
-            label="Адрес"
-            required
-            hint={looksLikeYoutube(url) ? "Похоже на YouTube — сохраним субтитры" : undefined}
-          >
-            <input
-              type="url"
-              autoFocus
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://example.org/article"
-            />
-          </Field>
-        </div>
-      )}
-
-      {mode === "typst" && (
-        <div className="materials-add-grid">
-          <button type="button" disabled={busy} onClick={() => typstFileInput.current?.click()}>
-            <FileUp size={18} /><span><strong>Один файл</strong><small>Автономный `.typ` без внешних зависимостей</small></span><ChevronRight size={15} />
-          </button>
-          <button type="button" disabled={busy} onClick={() => typstFolderInput.current?.click()}>
-            <FileUp size={18} /><span><strong>Папка проекта</strong><small>Исходники, шрифты и изображения сохранят пути</small></span><ChevronRight size={15} />
-          </button>
-          <button type="button" disabled={busy} onClick={() => typstZipInput.current?.click()}>
-            <FileUp size={18} /><span><strong>ZIP</strong><small>Безопасно нормализуем архив перед сборкой</small></span><ChevronRight size={15} />
-          </button>
-        </div>
-      )}
-    </Dialog>
-  );
+  function sourceCard(label: string, hint: string, onClick: () => void, icon = <FileUp size={18} />) {
+    return <button type="button" disabled={busy} onClick={onClick}>{icon}<span><strong>{label}</strong><small>{hint}</small></span><ChevronRight size={15}/></button>;
+  }
+  return <Dialog open={open} onOpenChange={(next) => { if (!next) reset(); onOpenChange(next); }} title={title} description="Материал появится в Библиотеке. Подключить его к проекту можно позже."
+    footer={mode === "choose" ? <Button variant="ghost" onClick={() => onOpenChange(false)}>Закрыть</Button> : <><Button variant="ghost" disabled={busy} onClick={() => { setMode("choose"); setFile(null); setTypst(null); }}>Назад</Button><Button disabled={busy || !canSubmit} onClick={() => { if (mode === "text") void submit(() => createLibraryTextMaterial({ name: "Заметка.md", text, subject: subject.trim() || null, display_name: displayName.trim() || null })); else if (mode === "link") void submit(() => createLibraryExternalMaterial({ kind: isYoutube(url) ? "youtube" : "url", url: url.trim(), subject: subject.trim() || null, display_name: displayName.trim() || null })); else submitSource(); }}>{mode === "link" ? "Сохранить снимок" : "Добавить"}</Button></>}
+  >
+    <input ref={fileInput} className="materials-file-input" type="file" accept={ACCEPT} tabIndex={-1} aria-hidden="true" onChange={(event) => { const next = event.target.files?.[0]; event.target.value = ""; if (next) chooseFile(next); }} />
+    <input ref={typstFileInput} className="materials-file-input" type="file" accept=".typ" tabIndex={-1} aria-hidden="true" onChange={(event) => { chooseTypst("single", event.target.files); event.target.value = ""; }} />
+    <input ref={(node) => { typstFolderInput.current = node; node?.setAttribute("webkitdirectory", ""); }} className="materials-file-input" type="file" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => { chooseTypst("folder", event.target.files); event.target.value = ""; }} />
+    <input ref={typstZipInput} className="materials-file-input" type="file" accept=".zip" tabIndex={-1} aria-hidden="true" onChange={(event) => { chooseTypst("zip", event.target.files); event.target.value = ""; }} />
+    {error && <ErrorState message={error} />}
+    {mode === "choose" && <div className="materials-add-grid">{sourceCard("Файл", "PDF, DOCX, TXT, MD, изображение или аудиозапись", () => fileInput.current?.click())}{sourceCard("Текст", "Вставить конспект или список вопросов прямо здесь", () => { setDisplayName("Заметка.md"); setMode("text"); }, <Type size={18} />)}{sourceCard("Ссылка", "Веб-страница или публичное YouTube-видео", () => setMode("link"), <Globe size={18} />)}{sourceCard("Typst", "Один файл, папка проекта или ZIP", () => setMode("typst"), <Braces size={18} />)}</div>}
+    {mode !== "choose" && <><Field label="Название в библиотеке" hint="Если оставить пустым, возьмём имя файла или заголовок источника."><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><Field label="Предмет" hint="Необязательно. Например, «Базы данных»"><input value={subject} onChange={(event) => setSubject(event.target.value)} /></Field></>}
+    {sourceMode && source && <div className="materials-upload-progress"><FileUp size={18}/><span><strong>{source.name}</strong><small>{fileSize(source.size)}</small></span>{busy && <Progress value={progress} max={100} label="Загрузка файла" />}</div>}
+    {mode === "text" && <Field label="Текст" required><textarea autoFocus value={text} onChange={(event) => setText(event.target.value)} placeholder={"# Заголовок\n\nТекст материала…"} /></Field>}
+    {mode === "link" && <Field label="Адрес" required hint={isYoutube(url) ? "Похоже на YouTube — сохраним субтитры" : undefined}><input type="url" autoFocus value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.org/article" /></Field>}
+    {mode === "typst" && <div className="materials-add-grid">{sourceCard("Один файл", "Автономный `.typ`", () => typstFileInput.current?.click())}{sourceCard("Папка проекта", "Исходники и изображения сохранят пути", () => typstFolderInput.current?.click())}{sourceCard("ZIP", "Безопасно нормализуем архив", () => typstZipInput.current?.click())}</div>}
+  </Dialog>;
 }

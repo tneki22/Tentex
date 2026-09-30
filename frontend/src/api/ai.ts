@@ -35,7 +35,10 @@ export type AiErrorCode =
   | "ai_role_not_found"
   | "ai_role_parameters_invalid"
   | "ai_model_override_forbidden"
-  | "ai_secret_mismatch";
+  | "ai_secret_mismatch"
+  | "ai_audio_empty"
+  | "ai_audio_too_large"
+  | "ai_audio_format_unsupported";
 
 export type AiApiError = ProjectApiError & { readonly code: AiErrorCode };
 
@@ -48,7 +51,8 @@ const AI_ERROR_CODES = new Set<AiErrorCode>([
   "ai_fx_snapshot_incomplete", "ai_model_not_in_catalog", "ai_model_modality_unsupported",
   "ai_model_in_use", "ai_provider_not_found", "ai_provider_in_use", "ai_provider_label_exists",
   "ai_role_selection_incomplete", "ai_role_not_found", "ai_role_parameters_invalid",
-  "ai_model_override_forbidden", "ai_secret_mismatch",
+  "ai_model_override_forbidden", "ai_secret_mismatch", "ai_audio_empty", "ai_audio_too_large",
+  "ai_audio_format_unsupported",
 ]);
 
 export function isAiApiError(error: unknown): error is AiApiError {
@@ -148,11 +152,18 @@ export interface AiRoleRead {
 }
 
 export interface AiTodayUsage {
+  run_count: number;
   input_tokens: number;
   output_tokens: number;
   actual_cost_usd: DecimalValue;
   actual_cost_rub: DecimalValue;
   cache_hits: number;
+}
+
+export interface AiChatPreset {
+  provider_id: string;
+  model_id: string;
+  parameters: Record<string, unknown>;
 }
 
 export interface AiSettingsRead {
@@ -165,6 +176,7 @@ export interface AiSettingsRead {
   usd_rub_rate_date: string | null;
   default_text: AiModelSelection | null;
   default_speech: AiModelSelection | null;
+  chat_preset: AiChatPreset | null;
   providers: AiProviderRead[];
   roles: AiRoleRead[];
   models: AiModelRead[];
@@ -206,8 +218,16 @@ export interface AiProviderTestRead {
   tested_at: string;
 }
 
+export interface AiTranscriptionRead {
+  text: string;
+  run_id: string;
+  duration_ms: number;
+}
+
 export interface AiModelTestRead {
   status: "answered";
+  /** «speech» — модель распознавания речи: проверяется записью тишины, а не вопросом. */
+  kind: "text" | "speech";
   run_id: string;
   duration_ms: number;
   answer: string;
@@ -248,6 +268,14 @@ export interface AiRunRead {
   error_code: string | null;
   created_at: string;
   completed_at: string | null;
+}
+
+export interface AiRunPageRead {
+  items: AiRunRead[];
+  total: number;
+  input_tokens: number;
+  output_tokens: number;
+  actual_cost_usd: DecimalValue;
 }
 
 export interface AiUsageRead {
@@ -382,6 +410,14 @@ export const testAiModel = (
   { method: "POST", body: JSON.stringify({ model_id: selection.model_id }), signal },
 );
 
+/** Расшифровка записи моделью речи из «Параметров ИИ → Для речи». */
+export function transcribeAudio(audio: Blob, signal?: AbortSignal): Promise<AiTranscriptionRead> {
+  const body = new FormData();
+  // Бэкенд определяет формат по типу содержимого; имя нужно только multipart.
+  body.append("file", audio, "dictation");
+  return request("/api/ai/transcriptions", { method: "POST", body, signal });
+}
+
 export const updateAiProviderFavorites = (
   providerIds: string[], signal?: AbortSignal,
 ): Promise<AiSettingsRead> => request(`${AI_PATH}/provider-favorites`, {
@@ -416,6 +452,8 @@ function filterQuery(filters: {
   to?: string;
   groupBy?: "role" | "provider" | "model";
   jobId?: string;
+  limit?: number;
+  offset?: number;
 }): string {
   const query = new URLSearchParams();
   if (filters.projectId) query.set("project_id", filters.projectId);
@@ -427,6 +465,8 @@ function filterQuery(filters: {
   if (filters.to) query.set("to", filters.to);
   if (filters.groupBy) query.set("group_by", filters.groupBy);
   if (filters.jobId) query.set("job_id", filters.jobId);
+  if (filters.limit) query.set("limit", String(filters.limit));
+  if (filters.offset) query.set("offset", String(filters.offset));
   const value = query.toString();
   return value ? `?${value}` : "";
 }
@@ -434,6 +474,10 @@ function filterQuery(filters: {
 export const listAiRuns = (
   filters: Parameters<typeof filterQuery>[0] = {}, signal?: AbortSignal,
 ): Promise<AiRunRead[]> => request(`${AI_PATH}/runs${filterQuery(filters)}`, { signal });
+
+export const listAiRunsPage = (
+  filters: Parameters<typeof filterQuery>[0] = {}, signal?: AbortSignal,
+): Promise<AiRunPageRead> => request(`${AI_PATH}/runs-page${filterQuery(filters)}`, { signal });
 
 export const getAiUsage = (
   filters: Parameters<typeof filterQuery>[0] = {}, signal?: AbortSignal,

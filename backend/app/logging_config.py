@@ -31,10 +31,19 @@ def configure_logging(level: str | None = None, *, json_logs: bool | None = None
                 "console": {
                     "class": "logging.StreamHandler",
                     "formatter": "default",
-                }
+                },
+                # Упавшие операции → коды сводки «Состояние» (без текста ошибки).
+                "diagnostics": {
+                    "class": "app.system.diagnostics.DiagnosticsHandler",
+                    "level": "ERROR",
+                },
             },
             "root": {"handlers": ["console"], "level": resolved_level},
             "loggers": {
+                # Журнал сбоев висит на `tentex`, а не на корне: миграции при
+                # старте API читают alembic.ini через fileConfig и заменяют
+                # обработчики корня. Уровень не задан — логгер наследует корневой.
+                "tentex": {"handlers": ["diagnostics"]},
                 # SQLAlchemy на INFO печатает каждый SQL — держим на WARNING.
                 "sqlalchemy.engine": {"level": "WARNING"},
                 "uvicorn.access": {"level": resolved_level},
@@ -43,3 +52,13 @@ def configure_logging(level: str | None = None, *, json_logs: bool | None = None
     )
     _CONFIGURED = True
     logging.getLogger("tentex").debug("logging configured at %s", resolved_level)
+
+
+def is_configured() -> bool:
+    """Уже вызывали `configure_logging()` в этом процессе.
+
+    Проверяет `migrations/env.py`: alembic `fileConfig` перетирает обработчики
+    и уровень корневого логгера, поэтому в api и worker, где своя настройка
+    логирования уже применена, `fileConfig` применять не нужно.
+    """
+    return _CONFIGURED

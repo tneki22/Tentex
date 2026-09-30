@@ -7,12 +7,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from app.chat.common import ChatMessageRead, ManifestEntryRead  # re-export: см. ниже
 from app.models import (
     AttemptOutcome,
-    ChatMessageRole,
     ChatMode,
-    ChatPayloadKind,
-    ChatStreamState,
     ChatToolRunState,
     ExaminerPersona,
     ExaminerStrictness,
@@ -27,37 +25,19 @@ class ApiModel(BaseModel):
 
 
 class ChatSessionCreateWrite(ApiModel):
-    program_node_id: UUID
+    program_node_id: UUID | None = None
 
 
 class ChatSessionSummary(ApiModel):
     id: UUID
     project_id: UUID
-    program_node_id: UUID
+    program_node_id: UUID | None
     title: str
     updated_at: datetime
     message_count: int
     # В итерации 1 разбор ответа виден только внутри чата: последний итог по
     # сессии на уровне списка чатов приезжает вместе с историей попыток (1b+).
     last_outcome: str | None = None
-
-
-class ChatMessageRead(ApiModel):
-    id: UUID
-    session_id: UUID
-    sequence: int
-    role: ChatMessageRole
-    text: str
-    stream_state: ChatStreamState
-    payload_kind: ChatPayloadKind
-    payload: dict[str, Any]
-    context_snapshot: dict[str, Any]
-    skill: str | None
-    ai_run_id: UUID | None
-    attempt_id: UUID | None
-    grade_attempt_id: UUID | None
-    created_at: datetime
-    updated_at: datetime
 
 
 class ChatModelOverrideRead(ApiModel):
@@ -68,13 +48,14 @@ class ChatModelOverrideRead(ApiModel):
 class ChatSessionDetail(ApiModel):
     id: UUID
     project_id: UUID
-    program_node_id: UUID
+    program_node_id: UUID | None
     section_scope_node_id: UUID | None
     title: str
     mode: ChatMode
     persona: ExaminerPersona
     strictness: ExaminerStrictness
     model_override: ChatModelOverrideRead | None
+    model_parameters: dict[str, object]
     context_flags: dict[str, bool]
     draft_text: str
     created_at: datetime
@@ -94,6 +75,9 @@ class ChatSettingsWrite(ApiModel):
     persona: ExaminerPersona | None = None
     strictness: ExaminerStrictness | None = None
     model_override: ChatModelOverrideWrite | None = None
+    # Параметры вызова выбранной модели. Приходят вместе с самой моделью:
+    # разъехавшись, они означали бы «уровень рассуждения от прошлой модели».
+    model_parameters: dict[str, object] | None = None
     context_flags: dict[str, bool] | None = None
 
 
@@ -101,23 +85,9 @@ class ChatDraftWrite(ApiModel):
     text: str = Field(max_length=200_000)
 
 
-class ManifestEntryRead(BaseModel):
-    # Записи манифеста несут kind-специфичные поля (revision, sha256, count) —
-    # эта схема отдаёт только то, что нужно чипу, и не падает на лишних ключах.
-    model_config = ConfigDict(extra="ignore")
-
-    kind: str
-    id: str | None = None
-    included: bool
-    truncated: bool = False
-    bytes: int = 0
-    count: int | None = None
-    reason: str | None = None
-
-
 class ChatContextPreviewRead(ApiModel):
     session_id: UUID
-    node_id: UUID
+    node_id: UUID | None
     question: str
     persona: ExaminerPersona
     strictness: ExaminerStrictness
@@ -162,8 +132,29 @@ class ChatDraftRead(ApiModel):
     updated_at: datetime
 
 
+ChatOperation = Literal[
+    "discuss", "explain", "find_evidence", "compare_sources", "find_discrepancies"
+]
+
+
 class ChatMessageWrite(ApiModel):
     text: NonBlank = Field(max_length=20_000)
+    retrieval_scope: Literal["linked_topic", "topic_project", "project", "selected_materials"] = (
+        "topic_project"
+    )
+    retrieval_material_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    knowledge_policy: Literal["sources_only", "allow_model"] = "sources_only"
+    #: Явная операция вместо префикса в тексте: слова «Сравнить источники» не
+    #: попадают в поисковый запрос и не портят выдачу.
+    operation: ChatOperation = "discuss"
+    #: ID хода от клиента: повтор с тем же ID не создаёт вторую реплику.
+    client_turn_id: str | None = Field(default=None, min_length=8, max_length=64)
+    #: `request_hash` из оценки, которую пользователь подтвердил.
+    confirmed_request_hash: str | None = Field(default=None, max_length=128)
+    #: Предел входа на этот ход (локальная оценка токенов); None — предел чата.
+    context_budget_tokens: int | None = Field(default=None, ge=1_000, le=2_000_000)
+    #: Запомнить `context_budget_tokens` как предел этого чата.
+    remember_budget: bool = False
 
 
 class ChatAnswerWrite(ApiModel):
@@ -177,6 +168,7 @@ class RubricPointRead(ApiModel):
     quote: str | None = None
     quote_start: int | None = None
     quote_end: int | None = None
+    source_quote: str | None = None
 
 
 class AttemptRead(ApiModel):
@@ -192,6 +184,20 @@ class AttemptRead(ApiModel):
     created_at: datetime
     answer_mode: Literal["memory", "supported"] | None = None
     active_seconds: int | None = None
+    answer_modality: Literal["text", "oral"] = "text"
+
+
+class OralRecordingRead(ApiModel):
+    id: UUID
+    transcript: str
+    metrics: dict[str, Any]
+    audio_available: bool
+    audio_expires_at: datetime
+
+
+class OralSubmitWrite(ApiModel):
+    text: NonBlank = Field(max_length=50_000)
+    answer_mode: Literal["memory", "supported"] | None = None
 
 
 class GradeUsageRead(ApiModel):
@@ -233,6 +239,7 @@ class AttemptSummaryRead(ApiModel):
 class AttemptDetailRead(ApiModel):
     attempt: AttemptRead
     grade: GradeRead | None
+    oral: OralRecordingRead | None = None
 
 
 class SelfAssessmentWrite(ApiModel):
@@ -242,4 +249,4 @@ class SelfAssessmentWrite(ApiModel):
 class ChatAnswerResult(ApiModel):
     messages: list[ChatMessageRead]
     attempt: AttemptRead
-    grade: GradeRead
+    grade: GradeRead | None

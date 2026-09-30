@@ -2,12 +2,22 @@ import type {
   AnswerFormPayload,
   AttemptOutcome,
   ChatMessageRead,
+  ChatRetrievalSource,
   GradeMethod,
   GradeUsageRead,
   MaterialSearchResultItem,
+  ProgramChatDiffPayload,
+  ProgramChatOperationState,
+  ProgramChatOperationView,
   RubricPointRead,
+  SourceSearchResult,
   ToolResultPayload,
   VerdictPayload,
+  WebSearchRun,
+  WebCandidateLink,
+  WebSourceItem,
+  WebSourceKind,
+  WebSourceVolume,
 } from "../../../api/chat";
 
 export type ParsedPayload =
@@ -15,6 +25,7 @@ export type ParsedPayload =
   | { kind: "answer_form"; data: AnswerFormPayload }
   | { kind: "verdict"; data: VerdictPayload }
   | { kind: "tool_result"; data: ToolResultPayload }
+  | { kind: "program_diff"; data: ProgramChatDiffPayload }
   | { kind: "unknown" };
 
 const OUTCOMES = new Set<AttemptOutcome>(["passed", "partial", "failed", "unscored"]);
@@ -44,6 +55,7 @@ function rubricPoints(value: unknown): RubricPointRead[] | null {
       quote: typeof record.quote === "string" ? record.quote : null,
       quote_start: typeof record.quote_start === "number" ? record.quote_start : null,
       quote_end: typeof record.quote_end === "number" ? record.quote_end : null,
+      source_quote: typeof record.source_quote === "string" ? record.source_quote : null,
     });
   }
   return points;
@@ -129,6 +141,71 @@ function toolQuery(value: unknown): string {
   return typeof record?.query === "string" ? record.query : "";
 }
 
+const strings = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+const count = (value: unknown): number => (typeof value === "number" ? value : 0);
+
+/** Ход чата поиска: карточка без адреса и названия — не карточка, остальное терпимо. */
+function sourceSearchResult(value: unknown): SourceSearchResult | null {
+  const record = value as Record<string, unknown> | undefined;
+  if (!record || !Array.isArray(record.items) || !Array.isArray(record.searches)) return null;
+  const items: WebSourceItem[] = [];
+  for (const raw of record.items) {
+    const item = raw as Record<string, unknown>;
+    if (!item || typeof item.url !== "string" || typeof item.title !== "string") continue;
+    items.push({
+      url: item.url,
+      title: item.title,
+      host: typeof item.host === "string" ? item.host : "",
+      kind: (typeof item.kind === "string" ? item.kind : "other") as WebSourceKind,
+      why: typeof item.why === "string" ? item.why : "",
+      gist: typeof item.gist === "string" ? item.gist : "",
+      level: (typeof item.level === "string" ? item.level : null) as WebSourceItem["level"],
+      volume: (item.volume ?? { kind: null }) as WebSourceVolume,
+      author: typeof item.author === "string" ? item.author : null,
+      node_ids: strings(item.node_ids),
+      priority_reason: typeof item.priority_reason === "string" ? item.priority_reason : null,
+      use_advice: typeof item.use_advice === "string" ? item.use_advice : null,
+      time_fit: typeof item.time_fit === "string" ? item.time_fit : null,
+    });
+  }
+  const searches: WebSearchRun[] = [];
+  for (const raw of record.searches) {
+    const search = raw as Record<string, unknown>;
+    if (!search || typeof search.query !== "string") continue;
+    searches.push({
+      query: search.query,
+      category: (search.category ?? "general") as WebSearchRun["category"],
+      language: (search.language ?? "ru") as WebSearchRun["language"],
+      node_ids: strings(search.node_ids),
+      found: count(search.found),
+    });
+  }
+  const candidates: WebCandidateLink[] = [];
+  for (const raw of Array.isArray(record.candidates) ? record.candidates : []) {
+    const link = raw as Record<string, unknown>;
+    if (!link || typeof link.url !== "string") continue;
+    candidates.push({
+      url: link.url,
+      title: typeof link.title === "string" ? link.title : link.url,
+      host: typeof link.host === "string" ? link.host : "",
+      opened: Boolean(link.opened),
+    });
+  }
+  return {
+    summary: typeof record.summary === "string" ? record.summary : "",
+    plan_reply: typeof record.plan_reply === "string" ? record.plan_reply : undefined,
+    searches,
+    items,
+    candidates,
+    candidate_count: count(record.candidate_count),
+    hidden_attached: count(record.hidden_attached),
+    hidden_seen: count(record.hidden_seen),
+    unresponsive_engines: strings(record.unresponsive_engines),
+    follow_ups: strings(record.follow_ups),
+  };
+}
+
 function toolResultPayload(value: unknown): ToolResultPayload | null {
   const record = value as Record<string, unknown>;
   if (
@@ -149,14 +226,57 @@ function toolResultPayload(value: unknown): ToolResultPayload | null {
       result: { items },
     };
   }
-  // Будущие output_kind (source_search_results и т.п.) распознаются позже —
-  // сейчас такие Tools вообще не запускаются (недоступны в registry).
+  if (record.output_kind === "source_search_results") {
+    const result = sourceSearchResult(record.result);
+    if (!result) return null;
+    return {
+      tool_key: record.tool_key,
+      output_kind: record.output_kind,
+      state: record.state,
+      query,
+      result,
+    };
+  }
   return {
     tool_key: record.tool_key,
     output_kind: record.output_kind,
     state: record.state,
     query,
     result: (record.result as Record<string, unknown>) ?? {},
+  };
+}
+
+const OPERATION_STATES = new Set<ProgramChatOperationState>(["pending", "applied", "conflicted"]);
+
+function programChatOperation(value: unknown): ProgramChatOperationView | null {
+  const record = value as Record<string, unknown>;
+  if (!record || typeof record.op !== "string") return null;
+  const children = Array.isArray(record.children)
+    ? record.children.map(programChatOperation).filter((item): item is ProgramChatOperationView => item !== null)
+    : undefined;
+  return { ...record, rationale: typeof record.rationale === "string" ? record.rationale : "", children } as ProgramChatOperationView;
+}
+
+function programChatDiffPayload(value: unknown): ProgramChatDiffPayload | null {
+  const record = value as Record<string, unknown>;
+  if (!record || !Array.isArray(record.operations)) return null;
+  const operations = record.operations
+    .map(programChatOperation)
+    .filter((item): item is ProgramChatOperationView => item !== null);
+  const rawStates = Array.isArray(record.operation_states) ? record.operation_states : [];
+  const operation_states = operations.map((_op, index) => {
+    const value = rawStates[index];
+    return OPERATION_STATES.has(value as ProgramChatOperationState)
+      ? (value as ProgramChatOperationState)
+      : "pending";
+  });
+  return {
+    summary: typeof record.summary === "string" ? record.summary : "",
+    pros: Array.isArray(record.pros) ? record.pros.filter((item): item is string => typeof item === "string") : [],
+    cons: Array.isArray(record.cons) ? record.cons.filter((item): item is string => typeof item === "string") : [],
+    operations,
+    operation_states,
+    rejected: Boolean(record.rejected),
   };
 }
 
@@ -173,6 +293,29 @@ export function parsePayload(message: ChatMessageRead): ParsedPayload {
     const tool = toolResultPayload(message.payload);
     return tool ? { kind: "tool_result", data: tool } : { kind: "unknown" };
   }
+  if (message.payload_kind === "program_diff") {
+    const diff = programChatDiffPayload(message.payload);
+    return diff ? { kind: "program_diff", data: diff } : { kind: "unknown" };
+  }
   if (message.payload_kind === "none") return { kind: "none" };
   return { kind: "unknown" };
+}
+
+/**
+ * Источники ответа из снимка сообщения. Старые записи могут не иметь части
+ * полей или хранить мусор — такие элементы пропускаются, а не роняют ленту.
+ */
+export function retrievalSources(message: ChatMessageRead): ChatRetrievalSource[] {
+  const raw = message.context_snapshot.retrieval_sources;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((item): item is ChatRetrievalSource => {
+    if (!item || typeof item !== "object") return false;
+    const record = item as Record<string, unknown>;
+    return typeof record.id === "string" && typeof record.material === "string" && typeof record.text === "string";
+  }).map((item) => ({
+    ...item,
+    material_id: typeof item.material_id === "string" ? item.material_id : "",
+    locator: typeof item.locator === "string" ? item.locator : "",
+    page: typeof item.page === "number" ? item.page : null,
+  }));
 }

@@ -3,8 +3,7 @@ import type {
   LibraryMaterialDetailRead,
   MaterialPageRead,
   MaterialRevisionRead,
-  ParserMode,
-  ProcessingScope,
+  LibraryProcessingCommand,
 } from "../../api/materials";
 import { LibraryMaterialFilePanel } from "./LibraryMaterialFilePanel";
 import { LibraryProcessingPanel } from "./LibraryProcessingPanel";
@@ -30,22 +29,23 @@ interface LibraryMaterialInspectorProps {
   onTabChange: (tab: InspectorTab) => void;
   onSelectRevision: (revision: number | null) => void;
   onCompareRevision: (revision: number | null) => void;
-  onStart: (command: {
-    parser_mode: ParserMode;
-    scope: ProcessingScope;
-    page_from?: number;
-    page_to?: number;
-  }) => void;
+  onStart: (command: LibraryProcessingCommand) => void;
+  onImagesQueued?: () => void;
   onControl: (action: "pause" | "resume" | "retry" | "cancel") => void;
   onTypstBuild: (downloadPackages: boolean, entrypoint?: string) => void;
   onTypstAddFile: (file: File, targetPath: string) => void;
   onEditPage: () => void;
   onCleanupPage: () => void;
+  onRemoveTimestamps: () => void;
+  onFindHeaderFooter: () => void;
   onConfirmPageReview: () => void;
+  onIndexMaterial: () => void;
   onRestore: (revision: number) => void;
   onAddToProject: () => void;
   onRefreshSource: () => void;
   onDelete: () => void;
+  subjects: string[];
+  onSaveMetadata: (command: { display_name?: string; subject?: string | null }) => Promise<boolean>;
 }
 
 /**
@@ -66,16 +66,22 @@ export function LibraryMaterialInspector({
   onSelectRevision,
   onCompareRevision,
   onStart,
+  onImagesQueued,
   onControl,
   onTypstBuild,
   onTypstAddFile,
   onEditPage,
   onCleanupPage,
+  onRemoveTimestamps,
+  onFindHeaderFooter,
   onConfirmPageReview,
+  onIndexMaterial,
   onRestore,
   onAddToProject,
   onRefreshSource,
   onDelete,
+  subjects,
+  onSaveMetadata,
 }: LibraryMaterialInspectorProps) {
   return (
     <aside className="library-inspector" aria-label="Обработка, версии и файл">
@@ -108,7 +114,11 @@ export function LibraryMaterialInspector({
               onTypstAddFile={onTypstAddFile}
               onEditPage={onEditPage}
               onCleanupPage={onCleanupPage}
+              onRemoveTimestamps={onRemoveTimestamps}
+              onFindHeaderFooter={onFindHeaderFooter}
               onConfirmPageReview={onConfirmPageReview}
+              onIndexMaterial={onIndexMaterial}
+              onImagesQueued={onImagesQueued}
             />
           </Tabs.Content>
           <Tabs.Content value="revisions">
@@ -130,6 +140,8 @@ export function LibraryMaterialInspector({
               onAddToProject={onAddToProject}
               onRefreshSource={onRefreshSource}
               onDelete={onDelete}
+              subjects={subjects}
+              onSaveMetadata={onSaveMetadata}
             />
           </Tabs.Content>
         </div>

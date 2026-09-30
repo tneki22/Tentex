@@ -8,6 +8,7 @@ import {
 import { FileText, LibraryBig, RotateCcw, UploadCloud, X } from "lucide-react";
 import type { ExamMaterialSlot, MaterialRead } from "../../api/materials";
 import { Button, Card, SegmentedTabs } from "../../components/ui";
+import { ProjectFileUploadStatus } from "../materials/ProjectFileUploadStatus";
 
 export type ExamMaterialInputMode = "files" | "text";
 
@@ -24,7 +25,7 @@ interface ExamMaterialUploadPanelProps {
   multiple?: boolean;
   text: string;
   onTextChange: (text: string) => void;
-  onFiles: (files: File[]) => Promise<void>;
+  onFiles: (files: File[], onProgress: (name: string, percent: number) => void) => Promise<void>;
   onChooseLibrary?: () => void;
   onRemove: (material: MaterialRead) => Promise<void>;
   onRetry?: (material: MaterialRead) => Promise<void>;
@@ -69,20 +70,25 @@ export function ExamMaterialUploadPanel({
 }: ExamMaterialUploadPanelProps) {
   const inputId = useId();
   const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<{ name: string; progress: number } | null>(null);
   const [error, setError] = useState("");
   const atLimit = !multiple && materials.length > 0;
 
   async function addFiles(fileList: FileList | null) {
-    if (!fileList || fileList.length === 0 || atLimit) return;
+    if (!fileList || fileList.length === 0 || atLimit || uploading) return;
     const selected = Array.from(fileList);
     setUploading(true);
     setError("");
     try {
-      await onFiles(multiple ? selected : selected.slice(0, 1));
+      setUploadStatus({ name: selected[0].name, progress: 0 });
+      await onFiles(multiple ? selected : selected.slice(0, 1), (name, progress) => {
+        setUploadStatus({ name, progress });
+      });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Не удалось загрузить файл");
     } finally {
       setUploading(false);
+      setUploadStatus(null);
     }
   }
 
@@ -124,7 +130,7 @@ export function ExamMaterialUploadPanel({
               <UploadCloud size={24} aria-hidden="true" />
               <span>
                 <b>{uploading ? "Загружаем…" : "Перетащите файлы сюда"}</b>
-                <small>PDF, DOCX, TXT, MD или изображения — до 100 МБ и 500 страниц</small>
+                <small>PDF, DOCX, TXT, MD или изображения — до 200 МБ</small>
               </span>
               <div className="material-entry-actions">
                 <label className="secondary-button" htmlFor={inputId}>Выбрать файлы</label>
@@ -148,6 +154,8 @@ export function ExamMaterialUploadPanel({
               />
             </div>
           )}
+
+          {uploadStatus && <ProjectFileUploadStatus {...uploadStatus} />}
 
           {materials.length > 0 && (
             <div className="wizard-file-list" aria-live="polite">

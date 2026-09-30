@@ -3,7 +3,7 @@ import type { BackgroundJobStartRead } from "./backgroundJobs";
 export type ProjectStatus = "draft" | "active" | "archived" | "completed";
 export type WorkspaceVariant = "exam" | "textbook";
 export type TemplateKey = "exam" | "textbook" | "free";
-export type ModuleKey = "plan" | "lessons" | "cards" | "repetitions" | "oral_answers" | "sql";
+export type ModuleKey = "plan" | "lesson_planning" | "lessons" | "cards" | "repetitions" | "oral_answers";
 export type GoalPurpose = "exam" | "work" | "interview" | "interest";
 export type GoalScope = "whole" | "goal";
 export type StartingLevel = "beginner" | "familiar" | "refreshing";
@@ -13,6 +13,8 @@ export type ExamFormat = "questions" | "questions_tasks" | "tickets" | "unknown"
 export type NodeType = "section" | "topic" | "subpoint";
 export type ExamKind = "question" | "task" | "ticket";
 export type GoalRole = "target" | "prerequisite" | "related";
+/** Вид источника, который ИИ советует искать для темы без материала. */
+export type MaterialKindHint = "textbook" | "lecture" | "article" | "video" | "problems";
 export type ProjectIconName =
   | "graduation-cap"
   | "book-open"
@@ -112,8 +114,19 @@ export interface ProgramNodeRead {
   needs_material: boolean;
   is_archived: boolean;
   origin_kind: "manual" | "import" | "outline" | "pass1" | "catalog" | "model";
+  basis_kind: "outline" | "custom";
   origin_note: string | null;
   origin_material_id: string | null;
+  /** Подсказка ИИ, где искать материал темы без опоры в источниках. */
+  material_search_queries: string[];
+  material_kind: MaterialKindHint | null;
+  source_page_ranges: Array<{
+    material_id: string;
+    source_name_snapshot: string;
+    outline_item_key: string;
+    page_from: number;
+    page_to: number;
+  }>;
   created_at: string;
   updated_at: string;
 }
@@ -469,18 +482,49 @@ function errorPayload(payload: unknown, status: number): {
   return { message: `Запрос завершился с ошибкой ${status}`, code: null, context: {} };
 }
 
+/* При старте стека Vite-прокси уже слушает порт, а API ещё поднимается: прокси
+   отвечает 502 без тела. Это не ошибка приложения, а «подождите», поэтому
+   безопасные GET повторяются, пока экран показывает загрузку. Ошибки AI-шлюза
+   тоже бывают 502–504, но приходят с JSON и кодом — их не повторяем. */
+const API_STARTING_STATUSES = new Set([502, 503, 504]);
+const API_STARTING_RETRY_DELAYS_MS = [400, 800, 1600, 3200, 5000];
+
+function pause(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   // FormData сам проставляет multipart-границу: свой Content-Type её ломает.
   if (typeof init.body === "string") headers.set("Content-Type", "application/json");
-  const response = await fetch(path, { ...init, headers });
-  const payload: unknown = response.status === 204 ? null : await response.json().catch(() => null);
-  if (!response.ok) {
+  const isRead = (init.method ?? "GET").toUpperCase() === "GET";
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetch(path, { ...init, headers });
+    const payload: unknown = response.status === 204 ? null : await response.json().catch(() => null);
+    if (response.ok) return payload as T;
+    const retryDelay = API_STARTING_RETRY_DELAYS_MS[attempt];
+    if (isRead && payload === null && API_STARTING_STATUSES.has(response.status) && retryDelay !== undefined) {
+      await pause(retryDelay, init.signal);
+      continue;
+    }
     const error = errorPayload(payload, response.status);
     throw new ProjectApiError(response.status, error.message, error.code, error.context);
   }
-  return payload as T;
 }
 
 const projectPath = (projectId: string): string => `/api/projects/${encodeURIComponent(projectId)}`;
@@ -494,6 +538,19 @@ export const listProjects = (signal?: AbortSignal): Promise<ProjectSummary[]> =>
 
 export const listProjectStats = (signal?: AbortSignal): Promise<ProjectStats[]> =>
   request("/api/projects/stats", { signal });
+
+export interface RecentStudyItem {
+  project_id: string;
+  project_name: string;
+  template_key: "exam" | "textbook" | "free";
+  kind: "lesson" | "question";
+  item_id: string;
+  title: string;
+  happened_at: string;
+}
+
+export const listRecentStudy = (signal?: AbortSignal): Promise<RecentStudyItem[]> =>
+  request("/api/projects/recent-study", { signal });
 
 export const saveProjectOrder = (projectIds: string[]): Promise<ProjectSummary[]> =>
   request("/api/projects/order", { method: "PUT", body: JSON.stringify({ project_ids: projectIds }) });
@@ -580,7 +637,7 @@ export const addAnswerAttachment = async (
 export const deleteAnswerAttachment = (
   projectId: string,
   attachmentId: string,
-): Promise<void> => request(
+): Promise<ReferenceAnswerSlot> => request(
   `${projectPath(projectId)}/attachments/${encodeURIComponent(attachmentId)}`,
   { method: "DELETE" },
 );
@@ -715,6 +772,32 @@ export const removeProgramNode = (projectId: string, nodeId: string, revision: n
 
 export const restoreProgramNode = (projectId: string, nodeId: string, revision: number) =>
   revisionCommand("restore", projectId, nodeId, revision);
+
+export interface ProgramOutlineImportItem {
+  outline_item_key: string;
+  level: number;
+  title: string;
+  page: number;
+  selected: boolean;
+}
+
+export const importProgramOutlines = (
+  projectId: string,
+  command: ProgramCommandBase & {
+    sources: Array<{ material_id: string; items: ProgramOutlineImportItem[] }>;
+  },
+): Promise<ProgramChangeResult> => request(`${projectPath(projectId)}/program/import-outlines`, {
+  method: "POST",
+  body: JSON.stringify(command),
+});
+
+export const removeAllProgramNodes = (
+  projectId: string,
+  expectedProgramRevision: number,
+): Promise<ProgramChangeResult> => request(`${projectPath(projectId)}/program/remove-all`, {
+  method: "POST",
+  body: JSON.stringify({ expected_program_revision: expectedProgramRevision }),
+});
 
 export const undoProjectAction = (
   projectId: string,

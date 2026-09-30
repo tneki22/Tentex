@@ -162,11 +162,6 @@ def run() -> None:
             assert restarted_demo["project"]["updated_at"] == demo_updated_at
             assert len(restarted_demo["program"]["nodes"]) == 6
 
-            assert_error(
-                request(server, "POST", "/api/wizard-drafts", {"template_key": "free"}),
-                409,
-                "unsupported_template",
-            )
             status, _ = request(
                 server,
                 "POST",

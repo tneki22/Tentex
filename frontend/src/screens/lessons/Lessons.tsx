@@ -1,83 +1,550 @@
-import { ArrowLeft, ChevronDown, ChevronRight, FilePlus2, GraduationCap, MoreHorizontal, Search, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router";
-import { CostEstimate, OfflineNotice } from "../../components/domain";
-import { Button, Checkbox, ConfirmDialog, Dialog, EmptyState, Field, Menu, StatusBadge } from "../../components/ui";
-import type { WorkspaceNode } from "../workspaceDemo";
-import { resolveWorkspaceProject } from "../workspaceDemo";
-import { LessonDocument } from "./LessonDocument";
-import { createManualLesson, LESSON_DEMOS, lessonCountsForNode, lessonsForTopic } from "./lessonsDemo";
-import type { LessonBlockDemo, LessonDemo } from "./lessonsDemo";
+import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { ArrowLeft, FileDown, FileUp, FolderInput, GraduationCap, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { Link, useParams, useSearchParams } from "react-router";
+import { createLessonFromSearch, createManualLesson, createQuickLesson, editLessonBlocks, getLesson, type FoundPage, type LessonAiPlanRead, type LessonBlockCommand, type LessonProposalRead } from "../../api/lessons";
+import { getBackgroundJobResult, listBackgroundJobs } from "../../api/backgroundJobs";
+import { getProject, ProjectApiError, type ProjectDetail } from "../../api/projects";
+import { ProjectNav } from "../../components/domain/ProjectNav";
+import { Button, EmptyState, ErrorState, IconButton, LoadingState, Menu, PanelResizeHandle } from "../../components/ui";
+import { useLesson, useLessonsOverview } from "../../hooks/useLessons";
+import { buildProgramTree, flattenProgramTree } from "../programTree";
+import { LessonBuildDialog, type PinnedPassage } from "./LessonBuildDialog";
+import { LessonBulkTable } from "./LessonBulkTable";
+import { LessonExportDialog } from "./LessonExportDialog";
+import { LessonImportDialog } from "./LessonImportDialog";
+import { insertPlacement, INSERT_AT_END, type LessonInsertPoint } from "./lessonBlocks";
+import type { PanelTab } from "./LessonMaterialPanel";
+import { LessonSectionOverview } from "./LessonSectionOverview";
+import { LessonSourcesDialog } from "./LessonSourcesDialog";
+import { LessonsTree } from "./LessonsTree";
+import { LessonTopicPane } from "./LessonTopicPane";
+import { errorText, isVisible, STUDY_TYPES } from "./lessonTree";
 
-type BatchAction = "manual" | "ai" | "skip";
-type SavedState = { expanded: string[]; checked: string[]; inspectorOpen: boolean; drafts: LessonDemo[] };
-const flatten = (nodes: WorkspaceNode[]): WorkspaceNode[] => nodes.flatMap((node) => [node, ...flatten(node.children ?? [])]);
-const findNode = (nodes: WorkspaceNode[], id: string) => flatten(nodes).find((node) => node.id === id);
-const studyNodes = (node: WorkspaceNode) => flatten(node.children ?? []).filter((child) => child.type !== "section");
-const labelCount = (draft: number, ready: number) => draft ? `${draft} черновик${draft === 1 ? "" : "а"}` : ready === 0 ? "нет урока" : ready === 1 ? "1 урок" : `${ready} урока`;
+const LAYOUT_KEY = "tentex:lessons-layout";
+const LAST_LESSON_KEY = (projectId: string) => `tentex:lessons-last:${projectId}`;
 
-function cloneDemo(topicId: string, topicTitle: string, projectId: string): LessonDemo {
-  const demo = LESSON_DEMOS[0];
-  return { ...structuredClone(demo), id: crypto.randomUUID(), projectId, topicIds: [topicId], title: `Черновик: ${topicTitle}`, status: "draft", authorship: "model", requiresReview: false };
-}
-
-function findBlock(lesson: LessonDemo, id: string) {
-  for (const section of lesson.document.sections) for (const row of section.rows) {
-    const block = row.blocks.find((item) => item.id === id); if (block) return { row, block };
+function readLastLesson(projectId: string): { topicId: string; lessonId: string | null } | null {
+  try {
+    const value = window.localStorage.getItem(LAST_LESSON_KEY(projectId));
+    return value ? JSON.parse(value) as { topicId: string; lessonId: string | null } : null;
+  } catch {
+    return null;
   }
-  return undefined;
+}
+const LessonMaterialPanel = lazy(() =>
+  import("./LessonMaterialPanel").then((module) => ({ default: module.LessonMaterialPanel })),
+);
+
+interface LessonsLayout {
+  tree: number;
+  panel: number;
+  panelOpen: boolean;
 }
 
+function readLayout(): LessonsLayout {
+  const narrow = typeof window !== "undefined" && window.matchMedia?.("(max-width: 1100px)").matches;
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(LAYOUT_KEY) ?? "null") as Partial<LessonsLayout> | null;
+    return { tree: stored?.tree ?? 300, panel: stored?.panel ?? 360, panelOpen: narrow ? false : stored?.panelOpen ?? true };
+  } catch {
+    return { tree: 300, panel: 360, panelOpen: !narrow };
+  }
+}
+
+const clamp = (value: number, min: number, max: number) => Math.round(Math.min(max, Math.max(min, value)));
+
+/** Раздел «Уроки» — `/projects/:projectId/lessons?topic=&lesson=`. */
 export function Lessons() {
-  const { projectId = "demo" } = useParams(); const project = resolveWorkspaceProject(projectId); const navigate = useNavigate(); const [params, setParams] = useSearchParams();
-  const storageKey = `tentex:lessons:${project.id}`;
-  const stored = useMemo(() => { try { return JSON.parse(localStorage.getItem(storageKey) ?? "null") as SavedState | null; } catch { return null; } }, [storageKey]);
-  const [selectedNodeId, setSelectedNodeId] = useState(params.get("topic") ?? project.nodes[0]?.id ?? "");
-  const [expanded, setExpanded] = useState<string[]>(stored?.expanded ?? project.nodes.filter((node) => node.type === "section").map((node) => node.id));
-  const [checked, setChecked] = useState<string[]>(stored?.checked ?? []); const [drafts, setDrafts] = useState<LessonDemo[]>(stored?.drafts ?? []);
-  const [query, setQuery] = useState(""); const [selectedLessonId, setSelectedLessonId] = useState(params.get("lesson") ?? ""); const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
-  const [inspectorOpen, setInspectorOpen] = useState(stored?.inspectorOpen ?? true); const [deleteBlockId, setDeleteBlockId] = useState<string | null>(null); const [aiStep, setAiStep] = useState<"configure" | "storyboard">("configure"); const [aiOpen, setAiOpen] = useState(false); const [message, setMessage] = useState("");
-  const [actions, setActions] = useState<Record<string, BatchAction>>({}); const [durations, setDurations] = useState<Record<string, number>>({});
-  const allLessons = [...new Map([...LESSON_DEMOS, ...drafts].map((lesson) => [lesson.id, lesson])).values()]; const allNodes = useMemo(() => flatten(project.nodes), [project.nodes]); const selectedNode = findNode(project.nodes, selectedNodeId) ?? project.nodes[0];
-  const topics = allNodes.filter((node) => node.type !== "section"); const selectedTopics = topics.filter((node) => checked.includes(node.id)); const mode = selectedTopics.length >= 2 ? "batch" : selectedNode.type === "section" ? "section" : "single";
-  const topicLessons = selectedNode ? lessonsForTopic(selectedNode.id, allLessons) : []; const selectedLesson = topicLessons.find((lesson) => lesson.id === selectedLessonId) ?? topicLessons[0];
+  const { projectId = "" } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [detail, setDetail] = useState<ProjectDetail | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  const [layout, setLayout] = useState<LessonsLayout>(readLayout);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [rangesKey, setRangesKey] = useState(0);
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  const [insertPoint, setInsertPoint] = useState<LessonInsertPoint>(INSERT_AT_END);
+  /** «Собрать урок с ИИ»: открытый диалог и, если сборка уже идёт, её задача. */
+  const [build, setBuild] = useState<{ open: boolean; jobId: string | null; pinned?: PinnedPassage[] }>({ open: false, jobId: null });
+  /** Готовое предложение «Дополнить урок», открытое из «Фона». */
+  const [proposalJobId, setProposalJobId] = useState<string | null>(null);
+  /** Экспорт и импорт уроков — диалоги из меню в шапке раздела. */
+  const [transfer, setTransfer] = useState<"export" | "import" | null>(null);
+  const [pendingPlans, setPendingPlans] = useState<Array<{ jobId: string; topicId: string; plan: LessonAiPlanRead }>>([]);
+  const lastLesson = useMemo(() => readLastLesson(projectId), [projectId]);
 
-  useEffect(() => { localStorage.setItem(storageKey, JSON.stringify({ expanded, checked, inspectorOpen, drafts })); }, [checked, drafts, expanded, inspectorOpen, storageKey]);
-  useEffect(() => { const next = new URLSearchParams(); if (selectedNodeId) next.set("topic", selectedNodeId); if (selectedLesson) next.set("lesson", selectedLesson.id); setParams(next, { replace: true }); }, [selectedLesson?.id, selectedNodeId, setParams]);
-  if (!project.lessonsEnabled) return <Navigate to={`/projects/${project.id}`} replace />;
+  useEffect(() => {
+    const controller = new AbortController();
+    setError(null);
+    getProject(projectId, controller.signal).then(setDetail).catch((caught) => {
+      if (!controller.signal.aborted) setError(caught);
+    });
+    return () => controller.abort();
+  }, [projectId, attempt]);
 
-  function selectNode(node: WorkspaceNode) { setSelectedNodeId(node.id); if (node.type !== "section") setChecked((current) => current.filter((id) => id !== node.id)); }
-  function toggleChecked(id: string, include: string[]) { setChecked((current) => current.includes(id) ? current.filter((item) => !include.includes(item)) : [...new Set([...current, ...include])]); }
-  function createManual(topic: WorkspaceNode) { const draft = createManualLesson(project.id, topic.id, topic.title); setDrafts((current) => [...current, draft]); setChecked([]); setSelectedNodeId(topic.id); setSelectedLessonId(draft.id); setMessage("Черновик создан локально"); }
-  function createAi(topic: WorkspaceNode) { const draft = cloneDemo(topic.id, topic.title, project.id); setDrafts((current) => [...current, draft]); setChecked([]); setSelectedNodeId(topic.id); setSelectedLessonId(draft.id); setAiOpen(false); setMessage("Прототип: модель не вызывалась"); }
-  function updateLesson(change: (lesson: LessonDemo) => LessonDemo) { if (!selectedLesson) return; setDrafts((current) => current.some((lesson) => lesson.id === selectedLesson.id) ? current.map((lesson) => lesson.id === selectedLesson.id ? change(lesson) : lesson) : [...current, change(structuredClone(selectedLesson))]); }
-  function changeBlock(order: "up" | "down" | "duplicate" | "delete") {
-    if (!selectedLesson || !selectedBlockId) return; updateLesson((lesson) => { const copy = structuredClone(lesson); const found = findBlock(copy, selectedBlockId); if (!found) return lesson; const index = found.row.blocks.findIndex((block) => block.id === selectedBlockId);
-      if (order === "delete") found.row.blocks.splice(index, 1); else if (order === "duplicate") found.row.blocks.splice(index + 1, 0, { ...found.block, id: crypto.randomUUID() } as LessonBlockDemo); else { const target = index + (order === "up" ? -1 : 1); if (target >= 0 && target < found.row.blocks.length) [found.row.blocks[index], found.row.blocks[target]] = [found.row.blocks[target], found.row.blocks[index]]; } return copy; });
-    if (order === "delete") setSelectedBlockId(null);
+  const available = Boolean(detail && detail.project.workspace_variant === "textbook" && detail.project.enabled_modules.includes("lessons"));
+  const overview = useLessonsOverview(projectId, available);
+  const lessons = useMemo(() => overview.data?.lessons ?? [], [overview.data]);
+
+  useEffect(() => {
+    if (!available) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const jobs = await listBackgroundJobs({ projectId, kind: "ai_lesson", pendingReview: true });
+        const results = await Promise.allSettled(jobs.map(async (job) => ({
+          jobId: job.id,
+          topicId: job.program_node_id,
+          result: await getBackgroundJobResult<LessonAiPlanRead | LessonProposalRead>(job.id),
+        })));
+        if (!cancelled) setPendingPlans(results.flatMap((entry) =>
+          entry.status === "fulfilled" && "steps" in entry.value.result
+            && (entry.value.topicId || entry.value.result.program_node_id)
+            ? [{ jobId: entry.value.jobId, topicId: entry.value.topicId ?? entry.value.result.program_node_id, plan: entry.value.result as LessonAiPlanRead }]
+            : [],
+        ));
+      } catch {
+        // Панель «Фон» сохраняет доступ к задачам, если список временно не загрузился.
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 15000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [available, projectId, rangesKey]);
+
+  // Дерево программы (сотни узлов у крупного учебника) рендерится в дереве
+  // синхронно и надолго блокирует коммит — эффект загрузки обзора уроков
+  // ждал бы того же кадра. useDeferredValue отпускает загрузку раньше дерева.
+  const deferredNodes = useDeferredValue(detail?.program.nodes);
+  const treeResult = useMemo(() => {
+    try { return { tree: buildProgramTree(deferredNodes ?? []), error: "" }; }
+    catch (caught) { return { tree: [], error: errorText(caught, "Программа повреждена") }; }
+  }, [deferredNodes]);
+  const flat = useMemo(() => flattenProgramTree(treeResult.tree).filter(isVisible), [treeResult.tree]);
+  const studyNodes = useMemo(() => flat.filter((node) => STUDY_TYPES.has(node.node_type)), [flat]);
+
+  const topicParam = searchParams.get("topic");
+  const lessonParam = searchParams.get("lesson");
+  const panelParam = searchParams.get("panel") === "search" ? "search" : undefined;
+  const buildParam = searchParams.get("build") === "1";
+  const jobParam = searchParams.get("job");
+  const [panelTabRequest, setPanelTabRequest] = useState<{ tab: PanelTab; nonce: number } | null>(null);
+  const active = flat.find((node) => node.id === (topicParam ?? lastLesson?.topicId)) ?? flat.find((node) => STUDY_TYPES.has(node.node_type)) ?? flat[0] ?? null;
+  const requestedLessonId = lessonParam ?? (!topicParam && active?.id === lastLesson?.topicId ? lastLesson?.lessonId : null);
+  const activeLessonId = lessons.find((item) => item.id === requestedLessonId && item.program_node_ids.includes(active?.id ?? ""))?.id
+    ?? lessons.find((item) => item.program_node_ids.includes(active?.id ?? "") && item.status !== "archived")?.id ?? null;
+  useEffect(() => {
+    if (!active || !overview.data) return;
+    try { window.localStorage.setItem(LAST_LESSON_KEY(projectId), JSON.stringify({ topicId: active.id, lessonId: activeLessonId })); }
+    catch { /* выбор остаётся в текущем URL */ }
+  }, [projectId, active?.id, activeLessonId, overview.data]);
+  const panelLesson = useLesson(projectId, activeLessonId);
+  // Страницы открытого урока — для пометки «в уроке» в поиске и на страницах панели.
+  const lessonPages = useMemo(() => {
+    const keys = new Set<string>();
+    for (const block of panelLesson.data?.blocks ?? []) {
+      for (const ref of block.refs) {
+        if (!ref.material_id || ref.role !== "content") continue;
+        for (let page = ref.page_from; page <= ref.page_to; page += 1) keys.add(`${ref.material_id}#${page}`);
+      }
+    }
+    return keys;
+  }, [panelLesson.data]);
+
+  // useLesson уже загружает урок при монтировании; повтор нужен только после правки.
+  useEffect(() => { if (rangesKey > 0) panelLesson.refresh(); }, [rangesKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Ссылка «Искать в материалах проекта» ведёт в поиск панели — скрытую панель
+     она открывает, но сохранённую раскладку не трогает. */
+  useEffect(() => {
+    if (panelParam) setLayout((current) => (current.panelOpen ? current : { ...current, panelOpen: true }));
+  }, [panelParam]);
+
+  /* `?build=1` приходит из пустой вкладки «Урок», `?job=` — из панели «Фон».
+     Оба открывают диалог один раз, после чего параметр снимается с адреса. */
+  useEffect(() => {
+    if (!buildParam && !jobParam) return;
+    if (buildParam && !active) return;
+    setBuild({ open: true, jobId: jobParam });
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("build");
+      next.delete("job");
+      return next;
+    }, { replace: true });
+  }, [buildParam, jobParam, active, setSearchParams]);
+
+  const updateLayout = useCallback((change: (current: LessonsLayout) => LessonsLayout) => {
+    setLayout((current) => {
+      const next = change(current);
+      try { window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(next)); } catch { /* только в памяти */ }
+      return next;
+    });
+  }, []);
+
+  function navigateTo(topicId: string, lessonId: string | null = null) {
+    chooseBlock(null);
+    const next = new URLSearchParams();
+    next.set("topic", topicId);
+    if (lessonId) next.set("lesson", lessonId);
+    setSearchParams(next);
   }
-  function addBlock(type: LessonBlockDemo["type"]) { if (!selectedLesson) return; const id = crypto.randomUUID(); const block: LessonBlockDemo = type === "rich-text" ? { id, type, paragraphs: ["Новая мысль урока."], sourceRefs: [] } : type === "callout" ? { id, type, tone: "neutral", title: "Определение", body: "Короткое определение для темы.", sourceRefs: [] } : type === "image" ? { id, type, alt: "Новый образ для урока", caption: "Подпись изображения.", assetState: "available", sourceRefs: [] } : type === "diagram" ? { id, type, title: "Схема", preview: "шаг 1 → шаг 2 → вывод", alt: "Схема процесса", sourceRefs: [] } : { id, type, activityId: id, dialect: "SQLite", prompt: "Сформулируйте SQL-задачу.", sourceRefs: [] };
-    updateLesson((lesson) => { const copy = structuredClone(lesson); const row = copy.document.sections[0].rows.at(-1)!; if (type === "sql-activity") copy.document.sections[0].rows.push({ id: crypto.randomUUID(), preset: "full-width-practice", blocks: [block] }); else row.blocks.push(block); return copy; }); setSelectedBlockId(id);
+
+  async function createLesson(materialIds?: string[]) {
+    if (!active) return;
+    setBusy(true);
+    setActionError("");
+    try {
+      const result = await createQuickLesson(projectId, active.id, materialIds);
+      setSourcesOpen(false);
+      overview.refresh();
+      setRangesKey((value) => value + 1);
+      navigateTo(active.id, result.lesson.id);
+    } catch (caught) {
+      setActionError(errorText(caught, "Не удалось создать урок"));
+    } finally {
+      setBusy(false);
+    }
   }
-  function prepareBatch() { selectedTopics.forEach((topic) => { if (lessonsForTopic(topic.id, allLessons).length || actions[topic.id] === "skip") return; if (actions[topic.id] === "ai") createAi(topic); else createManual(topic); }); }
-  function selectEmpty(scope: WorkspaceNode[]) { setChecked(scope.filter((node) => lessonsForTopic(node.id, allLessons).length === 0).map((node) => node.id)); }
-  function renderTree(nodes: WorkspaceNode[]) { const normalized = query.trim().toLocaleLowerCase("ru"); return nodes.map((node) => { const children = node.children ?? []; const descendants = studyNodes(node); const ownLessons = lessonsForTopic(node.id, allLessons); const matches = !normalized || node.title.toLocaleLowerCase("ru").includes(normalized) || ownLessons.some((lesson) => lesson.title.toLocaleLowerCase("ru").includes(normalized)); const childContent = renderTree(children); if (!matches && childContent.every((item) => item === null)) return null; const open = normalized !== "" || expanded.includes(node.id); const counts = lessonCountsForNode(node, allLessons); const isSection = node.type === "section";
-    return <div className="lessons-tree-node" key={node.id}>{isSection ? <div className={`lessons-tree-row ${selectedNodeId === node.id ? "is-selected" : ""}`}><button type="button" className="lessons-tree-chevron" onClick={() => setExpanded((current) => current.includes(node.id) ? current.filter((id) => id !== node.id) : [...current, node.id])} aria-label="Раскрыть раздел">{open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button><Checkbox label="" checked={descendants.length > 0 && descendants.every((item) => checked.includes(item.id))} onCheckedChange={() => toggleChecked(node.id, descendants.map((item) => item.id))} /><button type="button" onClick={() => selectNode(node)}>{node.number}. {node.title}</button><small>{labelCount(counts.draft, counts.ready)}</small></div> : <div className={`lessons-tree-row is-topic ${selectedNodeId === node.id ? "is-selected" : ""}`}><span /><Checkbox label="" checked={checked.includes(node.id)} onCheckedChange={() => toggleChecked(node.id, [node.id])} /><button type="button" onClick={() => selectNode(node)}>{node.number}. {node.title}</button><small>{labelCount(counts.draft, counts.ready)}</small></div>}{isSection && open && <div className="lessons-tree-children">{childContent}</div>}</div>;
-  }); }
-  const block = selectedLesson && selectedBlockId ? findBlock(selectedLesson, selectedBlockId)?.block : undefined;
-  return <div className="lessons-screen">
-    <aside className="lessons-tree"><header><Link to={`/projects/${project.id}`} aria-label="К рабочей области"><ArrowLeft size={16} /></Link><strong>{project.name}</strong></header><label className="lessons-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти тему или урок" /></label><nav>{renderTree(project.nodes)}</nav><footer><Link to={`/projects/${project.id}/program?mode=textbook`}>Программа</Link><Link className="is-active" to={`/projects/${project.id}/lessons`}>Уроки <small>3</small></Link><button disabled>Карточки</button></footer></aside>
-    <main className="lessons-main">{message && <p className="lessons-message" role="status">{message}</p>}
-      {mode === "section" && <section className="lessons-overview"><p>Раздел программы</p><h1>{selectedNode.title}</h1><p>{selectedNode.purpose ?? "Выберите тему в дереве или подготовьте уроки для раздела."}</p><div><Button onClick={() => selectEmpty(studyNodes(selectedNode))}>Выбрать темы без уроков</Button><Button variant="secondary" onClick={() => selectEmpty(topics)}>Создавать по порядку</Button></div></section>}
-      {mode === "batch" && <section className="lessons-batch"><header><div><p>Массовое создание</p><h1>{selectedTopics.length} темы</h1></div><Button onClick={prepareBatch}>Подготовить черновики</Button></header><div className="lessons-batch-table">{selectedTopics.map((topic, index) => { const entries = lessonsForTopic(topic.id, allLessons); const created = entries.find((lesson) => lesson.status === "draft"); return <div key={topic.id}><span>{index + 1}</span><strong>{topic.title}</strong><small>{topic.sources.length ? "есть материал" : "нет материала"} · {entries.length ? `${entries.length} урок` : "нет урока"}</small>{created ? <button type="button" onClick={() => { setChecked([]); setSelectedNodeId(topic.id); setSelectedLessonId(created.id); }}>Черновик готов</button> : <><select value={actions[topic.id] ?? "manual"} onChange={(event) => setActions((current) => ({ ...current, [topic.id]: event.target.value as BatchAction }))}><option value="manual">вручную</option><option value="ai">с ИИ</option><option value="skip">пропустить</option></select><input type="number" min="5" value={durations[topic.id] ?? 15} onChange={(event) => setDurations((current) => ({ ...current, [topic.id]: Number(event.target.value) }))} /></>}</div>; })}</div></section>}
-      {mode === "single" && <section className="lessons-single">{!selectedLesson ? <EmptyState title="Для этой темы ещё нет урока" icon={<GraduationCap size={28} />}><p>Создайте черновик вручную или соберите его по storyboard.</p><div><Button onClick={() => createManual(selectedNode)}>Создать вручную</Button><Button variant="secondary" onClick={() => { setAiStep("configure"); setAiOpen(true); }}>Собрать с ИИ</Button></div></EmptyState> : <><header className="lessons-editor-head"><div><p>{selectedNode.title} · {selectedNode.sources.length ? "источники доступны" : "источников пока нет"}</p><select value={selectedLesson.id} onChange={(event) => setSelectedLessonId(event.target.value)}>{topicLessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.title}</option>)}</select></div><div><StatusBadge tone={selectedLesson.status === "draft" ? "warning" : "success"}>{selectedLesson.status === "draft" ? "Черновик" : "Готов"}</StatusBadge><span>Сохранено</span><Button variant="secondary" onClick={() => navigate(`/projects/${project.id}?topic=${selectedNode.id}&tab=lesson&lesson=${selectedLesson.id}`)}>Открыть в Рабочей области</Button><Button onClick={() => updateLesson((lesson) => ({ ...lesson, status: "ready" }))}>Готов</Button></div></header><div className="lessons-editor-fields"><Field label="Название"><input value={selectedLesson.title} onChange={(event) => updateLesson((lesson) => ({ ...lesson, title: event.target.value }))} /></Field><Field label="Цель"><input value={selectedLesson.goal} onChange={(event) => updateLesson((lesson) => ({ ...lesson, goal: event.target.value }))} /></Field><Menu label="Добавить блок" trigger={<Button variant="secondary"><FilePlus2 size={15} />Добавить блок</Button>} items={[{ label: "Текст", onSelect: () => addBlock("rich-text") }, { label: "Определение", onSelect: () => addBlock("callout") }, { label: "Изображение", onSelect: () => addBlock("image") }, { label: "Диаграмма", onSelect: () => addBlock("diagram") }, { label: "SQL-задача", onSelect: () => addBlock("sql-activity") }]} /></div>{selectedBlockId && <div className="lessons-block-actions"><Button variant="ghost" onClick={() => changeBlock("up")}>Вверх</Button><Button variant="ghost" onClick={() => changeBlock("down")}>Вниз</Button><Button variant="ghost" onClick={() => changeBlock("duplicate")}>Дублировать</Button><Button variant="ghost" onClick={() => setDeleteBlockId(selectedBlockId)}>Удалить</Button></div>}<LessonDocument document={selectedLesson.document} mode="editor" selectedBlockId={selectedBlockId} onSelectBlock={setSelectedBlockId} /></>}</section>}
-    </main>
-    {inspectorOpen && <aside className="lessons-inspector"><button type="button" onClick={() => setInspectorOpen(false)}>Скрыть inspector</button>{block ? <><h2>Блок</h2><p>Тип: {block.type}</p><label>Layout preset<select defaultValue="flow"><option>flow</option><option>media-left</option><option>media-right</option><option>two-equal</option><option>wide</option><option>full-width-practice</option></select></label><p>Источники: {block.sourceRefs.length || "нет"}</p><Button disabled>Объяснить проще</Button><Button disabled>Добавить пример</Button><Button disabled>Сделать короче</Button></> : <p>Выберите блок документа.</p>}</aside>}
-    {!inspectorOpen && <button type="button" className="lessons-open-inspector" onClick={() => setInspectorOpen(true)}><MoreHorizontal size={16} />Inspector</button>}
-    <ConfirmDialog open={Boolean(deleteBlockId)} onOpenChange={(open) => !open && setDeleteBlockId(null)} title="Удалить блок?" confirmLabel="Удалить блок" destructive onConfirm={() => changeBlock("delete")}><p>Блок исчезнет из локального черновика.</p></ConfirmDialog>
-    <Dialog open={aiOpen} onOpenChange={setAiOpen} title={aiStep === "configure" ? "Собрать урок с ИИ" : "Storyboard урока"} description="Это mock-сценарий: модель не вызывается." footer={<><Button variant="ghost" onClick={() => setAiOpen(false)}>Отменить</Button>{aiStep === "configure" ? <Button onClick={() => setAiStep("storyboard")}>Дальше</Button> : <Button disabled={!project.modelsEnabled} onClick={() => createAi(selectedNode)}><Sparkles size={15} />Собрать черновик</Button>}</>}>
-      {!project.modelsEnabled && <OfflineNotice reason="disabled" alternative="Создайте урок вручную — это работает офлайн." />}
-      {aiStep === "configure" ? <div className="lessons-ai-form"><p>Темы: {selectedTopics.length ? selectedTopics.map((topic) => topic.title).join(", ") : selectedNode.title}</p><Field label="Цель"><input defaultValue="Объяснить и закрепить ключевое понятие" /></Field><Field label="Сложность"><select defaultValue="basic"><option>intro</option><option>basic</option><option>advanced</option></select></Field><Field label="Длительность"><input type="number" defaultValue="18" /></Field><Checkbox label="Активности" checked onCheckedChange={() => undefined} /><Checkbox label="Медиа" checked onCheckedChange={() => undefined} /><p>Основание: источники проекта / смешанное / знания модели</p></div> : <div className="lessons-storyboard"><p>1. Контекст · текст · flow</p><p>2. Основная идея · определение и изображение · media-left</p><p>3. Проверка · SQL-задача · full-width-practice</p><CostEstimate calls={3} cost={0.06} minutes={1} pricesFrom="05.08.2026" /></div>}
-    </Dialog>
-  </div>;
+
+  async function createManual() {
+    if (!active) return;
+    setBusy(true);
+    setActionError("");
+    try {
+      const result = await createManualLesson(projectId, active.id);
+      overview.refresh();
+      navigateTo(active.id, result.lesson.id);
+    } catch (caught) {
+      setActionError(errorText(caught, "Не удалось создать урок"));
+    } finally { setBusy(false); }
+  }
+
+  /**
+   * Добавление из правой панели: место вставки выбирается явно, а следующий
+   * кусок встаёт за только что добавленным — подряд собранный урок сохраняет
+   * порядок, в котором его собирали.
+   */
+  async function addFromPanel(command: Omit<LessonBlockCommand, "expected_revision">): Promise<boolean> {
+    if (!activeLessonId) return false;
+    setBusy(true);
+    setActionError("");
+    try {
+      const current = await getLesson(projectId, activeLessonId);
+      const result = await editLessonBlocks(projectId, activeLessonId, {
+        ...command, ...insertPlacement(insertPoint, current.blocks),
+        expected_revision: current.revision,
+      });
+      const known = new Set(current.blocks.map((block) => block.id));
+      const added = result.lesson.blocks.find((block) => !known.has(block.id));
+      if (added) chooseInsertPoint({ kind: "after", blockId: added.id });
+      overview.refresh();
+      setRangesKey((value) => value + 1);
+      return true;
+    } catch (caught) {
+      setActionError(errorText(caught, "Не удалось добавить источник"));
+      return false;
+    } finally { setBusy(false); }
+  }
+
+  /**
+   * Несколько кусков из «Предложено» подряд. Место вставки держится локально: состояние
+   * экрана между вызовами не успевает обновиться, и куски встали бы в обратном порядке.
+   */
+  async function addManyFromPanel(
+    commands: Array<Omit<LessonBlockCommand, "expected_revision">>,
+  ): Promise<boolean> {
+    if (!activeLessonId || commands.length === 0) return false;
+    setBusy(true);
+    setActionError("");
+    try {
+      let current = await getLesson(projectId, activeLessonId);
+      let point = insertPoint;
+      for (const command of commands) {
+        const known = new Set(current.blocks.map((block) => block.id));
+        const result = await editLessonBlocks(projectId, activeLessonId, {
+          ...command, ...insertPlacement(point, current.blocks),
+          expected_revision: current.revision,
+        });
+        current = result.lesson;
+        const added = current.blocks.find((block) => !known.has(block.id));
+        if (added) point = { kind: "after", blockId: added.id };
+      }
+      chooseInsertPoint(point);
+      overview.refresh();
+      setRangesKey((value) => value + 1);
+      return true;
+    } catch (caught) {
+      setActionError(errorText(caught, "Не удалось добавить куски"));
+      return false;
+    } finally { setBusy(false); }
+  }
+
+  /** «Урок из найденного»: отмеченные в поиске страницы — новым черновиком или в конец урока. */
+  async function addFound(pages: FoundPage[]): Promise<boolean> {
+    if (!active || pages.length === 0) return false;
+    setBusy(true);
+    setActionError("");
+    try {
+      const current = activeLessonId ? await getLesson(projectId, activeLessonId) : null;
+      const result = await createLessonFromSearch(projectId, {
+        program_node_id: active.id,
+        pages,
+        ...(current ? { lesson_id: current.id, expected_revision: current.revision } : {}),
+      });
+      overview.refresh();
+      setRangesKey((value) => value + 1);
+      navigateTo(active.id, result.lesson.id);
+      return true;
+    } catch (caught) {
+      setActionError(errorText(caught, "Не удалось собрать урок из найденного"));
+      return false;
+    } finally { setBusy(false); }
+  }
+
+  /** Готовый модельный черновик открывается в своей теме, даже если диалог звали из «Фона». */
+  async function openBuilt(lessonId: string) {
+    overview.refresh();
+    setRangesKey((value) => value + 1);
+    try {
+      const lesson = await getLesson(projectId, lessonId);
+      const topicId = lesson.topics[0]?.program_node_id ?? active?.id;
+      if (topicId) navigateTo(topicId, lessonId);
+    } catch (caught) {
+      setActionError(errorText(caught, "Урок собран, но не открылся"));
+    }
+  }
+
+  /** Выбранный блок и место вставки — одно и то же: выбор в уроке виден в панели и наоборот. */
+  function chooseBlock(blockId: string | null) {
+    setSelectedBlockId(blockId);
+    setInsertPoint(blockId ? { kind: "after", blockId } : INSERT_AT_END);
+  }
+
+  function chooseInsertPoint(point: LessonInsertPoint) {
+    setInsertPoint(point);
+    setSelectedBlockId(point.kind === "after" ? point.blockId : null);
+  }
+
+  if (error) {
+    const notFound = error instanceof ProjectApiError && error.status === 404;
+    return <div className="screen screen-error-state"><ErrorState title={notFound ? "Проект не найден" : "Уроки не загрузились"} message={errorText(error, "Не удалось загрузить проект")} /><Button variant="secondary" onClick={() => setAttempt((value) => value + 1)}>Повторить</Button><Link className="secondary-button" to="/projects">К проектам</Link></div>;
+  }
+  if (!detail) return <div className="screen"><LoadingState label="Загружаем проект" placement="page" /></div>;
+
+  const textbook = detail.project.workspace_variant === "textbook";
+  if (!available) {
+    return (
+      <div className="program-screen">
+        <aside className="project-side-panel">
+          <header className="project-side-title"><Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong></header>
+          <ProjectNav projectId={projectId} active="lessons" textbook={textbook} modules={detail.project.enabled_modules} className="project-side-nav" />
+        </aside>
+        <main className="program-main">
+          <EmptyState title="Уроки недоступны в этом проекте" icon={<GraduationCap size={28} />}>
+            <p>{textbook ? "Раздел «Уроки» выключен в параметрах проекта." : "Уроки собираются из учебника: они есть только в учебниковом проекте. В экзаменационном проекте материал читается во вкладке «Источник»."}</p>
+            <Link className="primary-button" to={`/projects/${projectId}`}>В рабочую область</Link>
+          </EmptyState>
+        </main>
+      </div>
+    );
+  }
+
+  const panelToggle = (
+    <IconButton label={layout.panelOpen ? "Скрыть материал для урока" : "Показать материал для урока"} onClick={() => updateLayout((current) => ({ ...current, panelOpen: !current.panelOpen }))}>
+      {layout.panelOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
+    </IconButton>
+  );
+
+  const selectedTopics = flat.filter((node) => selection.has(node.id));
+  let center;
+  let isTopicPane = false;
+  if (treeResult.error) center = <ErrorState title="Программа повреждена" message={treeResult.error} />;
+  else if (!active) {
+    center = (
+      <EmptyState title="Программа пока пуста" icon={<GraduationCap size={28} />}>
+        <p>Уроки собираются по темам программы. Составьте её в разделе «Программа»: из оглавления, вручную или с ИИ.</p>
+        <Link className="primary-button" to={`/projects/${projectId}/program`}>Открыть программу</Link>
+      </EmptyState>
+    );
+  } else if (overview.error) {
+    center = <><ErrorState message={errorText(overview.error, "Уроки не загрузились")} /><Button variant="secondary" onClick={overview.refresh}>Повторить</Button></>;
+  } else if (!overview.data) center = <LoadingState label="Загружаем уроки" />;
+  else if (selectedTopics.length > 0) {
+    center = (
+      <LessonBulkTable
+        projectId={projectId}
+        topics={selectedTopics}
+        lessons={lessons}
+        onClear={() => setSelection(new Set())}
+        onChanged={() => { overview.refresh(); setRangesKey((value) => value + 1); }}
+        onOpenLesson={(nodeId, lessonId) => { setSelection(new Set()); navigateTo(nodeId, lessonId); }}
+      />
+    );
+  }
+  else if (active.node_type === "section") {
+    center = <LessonSectionOverview section={active} lessons={lessons} onOpenTopic={(id) => navigateTo(id)} onSelectTopics={(ids) => setSelection(new Set(ids))} />;
+  } else {
+    center = (
+      <LessonTopicPane
+        projectId={projectId}
+        topic={active}
+        studyNodes={studyNodes}
+        lessons={lessons}
+        lessonId={activeLessonId}
+        pendingPlans={pendingPlans.filter((item) => item.topicId === active.id)}
+        onOpenPlan={(jobId) => setBuild({ open: true, jobId })}
+        busy={busy}
+        onSelectLesson={(id) => navigateTo(active.id, id)}
+        onQuickLesson={() => void createLesson()}
+        onFromSources={() => setSourcesOpen(true)}
+        onManual={() => void createManual()}
+        onBuildWithAi={() => setBuild({ open: true, jobId: null })}
+        onChanged={() => { overview.refresh(); setRangesKey((value) => value + 1); }}
+        refreshKey={rangesKey}
+        selectedBlockId={selectedBlockId}
+        onSelectBlock={chooseBlock}
+        panelToggle={panelToggle}
+        actionError={actionError}
+        proposalJobId={proposalJobId}
+        onFindInMaterials={() => {
+          updateLayout((current) => (current.panelOpen ? current : { ...current, panelOpen: true }));
+          setPanelTabRequest((current) => ({ tab: "search", nonce: (current?.nonce ?? 0) + 1 }));
+        }}
+      />
+    );
+    isTopicPane = true;
+  }
+
+  const columns = layout.panelOpen
+    ? `${layout.tree}px 10px minmax(0, 1fr) 10px ${layout.panel}px`
+    : `${layout.tree}px 10px minmax(0, 1fr)`;
+
+  return (
+    <div className="lessons-screen" style={{ gridTemplateColumns: columns } as CSSProperties}>
+      <aside className="workspace-tree-panel lessons-tree-panel">
+        <header className="workspace-tree-head">
+          <div className="workspace-tree-title is-textbook has-actions">
+            <Link className="workspace-back-button" to={`/projects/${projectId}${active ? `?topic=${active.id}` : ""}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link>
+            <strong>{detail.project.name}</strong>
+            <Menu
+              label="Экспорт и импорт уроков"
+              tooltip="Экспорт и импорт уроков"
+              trigger={<IconButton label="Экспорт и импорт уроков" hideNativeTitle><FolderInput size={15} /></IconButton>}
+              items={[
+                { label: "Экспорт уроков…", icon: <FileDown size={14} />, onSelect: () => setTransfer("export") },
+                { label: "Импорт из файла…", icon: <FileUp size={14} />, onSelect: () => setTransfer("import") },
+              ]}
+            />
+          </div>
+        </header>
+        <LessonsTree
+          tree={treeResult.tree}
+          lessons={lessons}
+          activeNodeId={selectedTopics.length > 0 ? null : active?.id ?? null}
+          selection={selection}
+          onSelectNode={(id) => { setSelection(new Set()); navigateTo(id); }}
+          onSelectionChange={setSelection}
+        />
+        <ProjectNav projectId={projectId} active="lessons" textbook={textbook} modules={detail.project.enabled_modules} />
+      </aside>
+      <PanelResizeHandle
+        className="lessons-resize"
+        label="Изменить ширину дерева тем"
+        value={layout.tree}
+        min={240}
+        max={440}
+        onDelta={(delta) => updateLayout((current) => ({ ...current, tree: clamp(current.tree + delta, 240, 440) }))}
+        onReset={() => updateLayout((current) => ({ ...current, tree: 300 }))}
+      />
+      <main className="lessons-center">
+        {!isTopicPane && (
+          <div className="lessons-center-bar">
+            {actionError && <p className="inline-error" role="alert">{actionError}</p>}
+            {panelToggle}
+          </div>
+        )}
+        {center}
+      </main>
+      {layout.panelOpen && (
+        <>
+          <PanelResizeHandle
+            className="lessons-resize"
+            label="Изменить ширину панели материала"
+            value={layout.panel}
+            /* Уже 320px четыре вкладки панели не помещаются в один ряд и начинают прокручиваться. */
+            min={320}
+            max={560}
+            onDelta={(delta) => updateLayout((current) => ({ ...current, panel: clamp(current.panel - delta, 320, 560) }))}
+            onReset={() => updateLayout((current) => ({ ...current, panel: 360 }))}
+          />
+          <aside className="lessons-panel">
+            <Suspense fallback={<LoadingState label="Открываем материал" />}>
+              <LessonMaterialPanel
+                projectId={projectId}
+                topic={selectedTopics.length > 0 ? null : active}
+                busy={busy}
+                refreshKey={rangesKey}
+                onCreateFromRange={(materialId) => void createLesson([materialId])}
+                lessonId={activeLessonId}
+                lessonPages={lessonPages}
+                blocks={panelLesson.data?.id === activeLessonId ? panelLesson.data.blocks : []}
+                insertPoint={insertPoint}
+                onInsertPointChange={chooseInsertPoint}
+                onAdd={addFromPanel}
+                onAddMany={addManyFromPanel}
+                onBuildWithAi={(items) => setBuild({ open: true, jobId: null, pinned: items })}
+                onUseFound={addFound}
+                initialTab={panelParam}
+                tabRequest={panelTabRequest}
+              />
+            </Suspense>
+          </aside>
+        </>
+      )}
+      <LessonExportDialog
+        projectId={projectId}
+        open={transfer === "export"}
+        onOpenChange={(open) => setTransfer(open ? "export" : null)}
+        lessons={lessons}
+        topics={studyNodes}
+        currentLessonId={activeLessonId}
+      />
+      <LessonImportDialog
+        projectId={projectId}
+        open={transfer === "import"}
+        onOpenChange={(open) => setTransfer(open ? "import" : null)}
+        topics={studyNodes}
+        onImported={() => { overview.refresh(); setRangesKey((value) => value + 1); }}
+        onOpenLesson={(topicId, lessonId) => navigateTo(topicId, lessonId)}
+      />
+      {active && (build.jobId || active.node_type !== "section") && (
+        <LessonBuildDialog
+          open={build.open}
+          onOpenChange={(open) => setBuild((current) => ({ open, jobId: open ? current.jobId : null, pinned: open ? current.pinned : undefined }))}
+          projectId={projectId}
+          topic={active}
+          jobId={build.jobId}
+          pinned={build.pinned}
+          onBuilt={(lessonId) => void openBuilt(lessonId)}
+          onProposal={(jobId, lessonId) => { setProposalJobId(jobId); void openBuilt(lessonId); }}
+        />
+      )}
+      {active && active.node_type !== "section" && (
+        <LessonSourcesDialog
+          projectId={projectId}
+          nodeId={active.id}
+          topicTitle={active.title}
+          open={sourcesOpen}
+          busy={busy}
+          onOpenChange={setSourcesOpen}
+          onCreate={(ids) => void createLesson(ids)}
+        />
+      )}
+    </div>
+  );
 }

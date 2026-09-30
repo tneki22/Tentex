@@ -6,7 +6,10 @@ import {
   ArrowDown,
   ArrowUp,
   GripVertical,
+  Grid2X2,
+  Grid3X3,
   MoreHorizontal,
+  Network,
   RotateCcw,
   Trash2,
 } from "lucide-react";
@@ -20,8 +23,8 @@ import {
   type ProjectStats,
   type ProjectSummary,
 } from "../api/projects";
-import { ProjectChip } from "../components/domain";
-import type { ProjectColor, ProjectIconName } from "../components/domain";
+import { listLibraryMaterials, type LibraryMaterialRead } from "../api/materials";
+import { ProjectChip, type ProjectColor, type ProjectIconName } from "../components/domain/ProjectChip";
 import {
   Button,
   Card,
@@ -96,7 +99,7 @@ function cardStrip(project: ProjectSummary, stats: ProjectStats | undefined): St
     cells.push(sourcesCell(stats.materials));
     return cells;
   }
-  if (project.template_key === "textbook") {
+  if (project.workspace_variant === "textbook") {
     /* «Тем» уже стоит крупной строкой headline — в сводке не дублируем. */
     const cells: StripCell[] = [sourcesCell(stats.materials)];
     if (stats.material_pages !== null) {
@@ -107,7 +110,6 @@ function cardStrip(project: ProjectSummary, stats: ProjectStats | undefined): St
     }
     return cells;
   }
-  /* Свободное изучение приезжает на этапе 7: считать по нему пока нечего. */
   return [];
 }
 
@@ -121,17 +123,33 @@ function urgency(days: number): Urgency {
 }
 
 type ProjectTemplate = {
-  id: "exam" | "textbook";
+  id: "exam" | "textbook" | "free";
   title: string;
   description: string;
   path: string;
   disabled: false;
-} | {
-  id: "free";
-  title: string;
-  description: string;
-  disabled: true;
 };
+
+type ProjectTypeFilter = "all" | "exam" | "textbook" | "free";
+type ProjectView = "cards" | "compact" | "map";
+
+const VIEW_STORAGE_KEY = "tentex:projects:view";
+const PROJECT_VIEWS = [
+  { value: "cards", label: "Крупные карточки", Icon: Grid2X2 },
+  { value: "compact", label: "Компактные карточки", Icon: Grid3X3 },
+  { value: "map", label: "Карта проектов", Icon: Network },
+] as const;
+
+const PROJECT_TYPE_FILTERS: Array<{ value: ProjectTypeFilter; label: string }> = [
+  { value: "all", label: "Все" },
+  { value: "exam", label: "Э" },
+  { value: "textbook", label: "Уч" },
+  { value: "free", label: "СИ" },
+];
+
+function projectType(project: ProjectSummary): Exclude<ProjectTypeFilter, "all"> {
+  return project.template_key === "exam" ? "exam" : project.template_key;
+}
 
 const TEMPLATES: ProjectTemplate[] = [
   {
@@ -151,8 +169,9 @@ const TEMPLATES: ProjectTemplate[] = [
   {
     id: "free",
     title: "Свободное изучение",
-    description: "Без дедлайна, программа из каталога, материалы добавляются позже.",
-    disabled: true,
+    description: "От цели к гибкой программе — с материалами сейчас или позже.",
+    path: "/projects/new?track=free",
+    disabled: false,
   },
 ];
 
@@ -162,6 +181,114 @@ const statusLabel: Record<ProjectSummary["status"], string> = {
   completed: "Завершён",
 };
 
+const mapGroups = [
+  { key: "exam", label: "Подготовка к экзамену", note: "Дедлайн и ответы" },
+  { key: "textbook", label: "Изучение по учебнику", note: "Темы и источники" },
+  { key: "free", label: "Свободное изучение", note: "От цели к программе" },
+] as const;
+
+/** Общий материал связывает проекты только по одному ID Библиотеки. */
+function sharedMaterials(projectId: string, otherId: string, materials: LibraryMaterialRead[]): string[] {
+  return materials
+    .filter((material) => material.usage.some((usage) => usage.project_id === projectId)
+      && material.usage.some((usage) => usage.project_id === otherId))
+    .map((material) => material.display_name);
+}
+
+function mapSummary(project: ProjectSummary, stats: ProjectStats | undefined): string {
+  if (project.template_key === "exam" && project.deadline) {
+    const days = daysUntil(project.deadline);
+    if (days < 0) return "Экзамен прошёл";
+    if (days === 0) return "Экзамен сегодня";
+    return `${days} ${plural(days, "день", "дня", "дней")} до экзамена`;
+  }
+  if (stats?.program_nodes != null) {
+    const nodes = stats.program_nodes;
+    return `${nodes} ${project.template_key === "exam" ? plural(nodes, "вопрос", "вопроса", "вопросов") : plural(nodes, "тема", "темы", "тем")}`;
+  }
+  return "Программа пока не заполнена";
+}
+
+function ProjectActivity({ stats }: { stats?: ProjectStats }) {
+  const activityAt = stats?.last_activity_at;
+  return (
+    <p className="project-map-node-activity">
+      {activityAt
+        ? `Последняя работа — ${dayFormat.format(new Date(activityAt))}`
+        : "Занятий пока не было"}
+    </p>
+  );
+}
+
+function ExamDeadline({ projects }: { projects: ProjectSummary[] }) {
+  const upcoming = projects
+    .filter((project): project is ProjectSummary & { deadline: string } => project.deadline !== null && daysUntil(project.deadline) >= 0)
+    .sort((left, right) => left.deadline.localeCompare(right.deadline))[0];
+  const days = upcoming ? daysUntil(upcoming.deadline) : null;
+
+  return (
+    <div className="project-map-exam">
+      <span className="project-map-exam-label">Ближайший экзамен:</span>
+      {upcoming && days !== null ? (
+        <>
+          <strong className={`project-map-exam-days is-${urgency(days)}`}>
+            {days === 0 ? "Экзамен сегодня" : `${days} ${plural(days, "день", "дня", "дней")}`}
+          </strong>
+          <small>по предмету {upcoming.name}</small>
+        </>
+      ) : (
+        <small>Предстоящих экзаменов нет</small>
+      )}
+    </div>
+  );
+}
+
+/** Карта остаётся полезной по типам, даже когда у проектов нет общих источников. */
+function ProjectMap({ projects, stats, materials, materialLoading, materialError }: {
+  projects: ProjectSummary[];
+  stats: Record<string, ProjectStats>;
+  materials: LibraryMaterialRead[];
+  materialLoading: boolean;
+  materialError: boolean;
+}) {
+  return (
+    <div className="project-map">
+      <p className="project-map-intro">Проекты собраны по способу изучения. Общие материалы отмечены связями между ними.</p>
+      {materialLoading && <p className="project-map-note" role="status">Ищем общие материалы…</p>}
+      {materialError && <p className="project-map-note">Связи по материалам пока недоступны. Проекты можно открыть из групп.</p>}
+      {mapGroups.map((group) => {
+        const members = projects.filter((project) => projectType(project) === group.key);
+        if (members.length === 0) return null;
+        return (
+          <section className={`project-map-group is-${group.key}`} key={group.key}>
+            <div className="project-map-heading">
+              <span className="project-map-index">{String(mapGroups.indexOf(group) + 1).padStart(2, "0")}</span>
+              <div><h2>{group.label}</h2><p>{group.note}</p>{group.key === "exam" && <ExamDeadline projects={members} />}</div>
+              <span className="project-map-count">{members.length}</span>
+            </div>
+            <div className="project-map-nodes">
+              {members.map((project) => {
+                const links = projects.flatMap((other) => other.id === project.id ? [] : sharedMaterials(project.id, other.id, materials).map((name) => ({ id: other.id, name: other.name, material: name })));
+                return (
+                  <article className="project-map-node" key={project.id} style={{ "--proj": `var(--project-color-${color(project.color)})` } as CSSProperties}>
+                    <div className="project-map-node-top"><ProjectChip icon={icon(project.icon)} color={color(project.color)} size="sm" /><Link to={`/projects/${project.id}`}>{project.name}</Link></div>
+                    <div className="project-map-node-meta">{mapSummary(project, stats[project.id])}</div>
+                    <ProjectActivity stats={stats[project.id]} />
+                    {links.length > 0 && <div className="project-map-links" aria-label="Общие материалы">
+                      {links.slice(0, 3).map((link) => <Link key={`${link.id}-${link.material}`} to={`/projects/${link.id}`} title={`Общий материал: ${link.material}`}>↗ {link.name}<small>{link.material}</small></Link>)}
+                      {links.length > 3 && <span>И ещё {links.length - 3}</span>}
+                    </div>}
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * Крупная строка карточки: у экзамена — отсчёт, у учебника — размер программы.
  * Число дней до экзамена красится по срочности (правка пользователя поверх
@@ -169,7 +296,7 @@ const statusLabel: Record<ProjectSummary["status"], string> = {
  * Прошедший срок и незаданная дата остаются фактом без тревожного тона.
  */
 function CardCount({ project, stats }: { project: ProjectSummary; stats?: ProjectStats }) {
-  if (project.template_key === "textbook") {
+  if (project.workspace_variant === "textbook") {
     if (stats?.program_nodes === null || stats?.program_nodes === undefined) return null;
     return (
       <div className="b-count">
@@ -213,32 +340,34 @@ export function Projects() {
   const [archiveCandidate, setArchiveCandidate] = useState<ProjectSummary | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<ProjectSummary | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [typeFilter, setTypeFilter] = useState<ProjectTypeFilter>("all");
+  const [view, setView] = useState<ProjectView>(() => {
+    const saved = localStorage.getItem(VIEW_STORAGE_KEY);
+    return saved === "compact" || saved === "map" ? saved : "cards";
+  });
+  const [mapRequested, setMapRequested] = useState(view === "map");
+  const [mapMaterials, setMapMaterials] = useState<LibraryMaterialRead[]>([]);
+  const [mapMaterialLoading, setMapMaterialLoading] = useState(view === "map");
+  const [mapMaterialError, setMapMaterialError] = useState(false);
   const orderQueueRef = useRef<Promise<void>>(Promise.resolve());
   const orderGenerationRef = useRef(0);
 
   async function load(signal?: AbortSignal) {
     setLoading(true);
     setLoadError("");
-    void loadStats(signal);
     try {
-      setProjects(await listProjects(signal));
+      const [nextProjects, nextStats] = await Promise.all([
+        listProjects(signal),
+        listProjectStats(signal).catch(() => []),
+      ]);
+      if (signal?.aborted) return;
+      setStats(Object.fromEntries(nextStats.map((row) => [row.project_id, row])));
+      setProjects(nextProjects);
     } catch (error) {
       if (signal?.aborted) return;
       setLoadError(error instanceof Error ? error.message : "Не удалось загрузить проекты");
     } finally {
       if (!signal?.aborted) setLoading(false);
-    }
-  }
-
-  /* Сводка грузится отдельно и экран не задерживает: список пришёл — карточки
-     уже видны. Если сводка не доехала, метрик просто нет (FR-P3), а не нули. */
-  async function loadStats(signal?: AbortSignal) {
-    try {
-      const rows = await listProjectStats(signal);
-      if (signal?.aborted) return;
-      setStats(Object.fromEntries(rows.map((row) => [row.project_id, row])));
-    } catch {
-      if (!signal?.aborted) setStats({});
     }
   }
 
@@ -248,10 +377,31 @@ export function Projects() {
     return () => controller.abort();
   }, []);
 
+  useEffect(() => {
+    if (!mapRequested) return;
+    const controller = new AbortController();
+    setMapMaterialLoading(true);
+    void listLibraryMaterials(controller.signal)
+      .then((rows) => { if (!controller.signal.aborted) setMapMaterials(rows); })
+      .catch(() => { if (!controller.signal.aborted) setMapMaterialError(true); })
+      .finally(() => { if (!controller.signal.aborted) setMapMaterialLoading(false); });
+    return () => controller.abort();
+  }, [mapRequested]);
+
   const active = [...projects]
     .filter((project) => project.status === "active")
     .sort((left, right) => left.sort_order - right.sort_order);
+  const visibleActive = active.filter((project) => typeFilter === "all" || projectType(project) === typeFilter);
   const inactive = projects.filter((project) => project.status !== "active");
+
+  function chooseView(next: ProjectView) {
+    setView(next);
+    localStorage.setItem(VIEW_STORAGE_KEY, next);
+    if (next === "map" && !mapRequested) {
+      setMapMaterialLoading(true);
+      setMapRequested(true);
+    }
+  }
 
   function persistOrder(next: ProjectSummary[]) {
     const generation = ++orderGenerationRef.current;
@@ -337,7 +487,7 @@ export function Projects() {
   if (loading) return <div className="screen"><LoadingState label="Загружаем проекты" placement="page" /></div>;
   if (loadError) {
     return (
-      <div className="screen">
+      <div className="screen screen-error-state">
         <ErrorState message={loadError} />
         <Button onClick={() => void load()}>Повторить загрузку</Button>
       </div>
@@ -346,7 +496,7 @@ export function Projects() {
 
   return (
     <div className="screen">
-      <PageHead placement="topbar" title="Проекты" actions={<Link className="primary-button" to="/projects/new">Новый проект</Link>} />
+      <PageHead placement="topbar" title="Проекты" center={<div className="project-view-switch" role="group" aria-label="Вид проектов">{PROJECT_VIEWS.map(({ value, label, Icon }) => <button key={value} type="button" className={view === value ? "is-active" : ""} aria-label={label} aria-pressed={view === value} title={label} onClick={() => chooseView(value)}><Icon size={16} aria-hidden="true" /></button>)}</div>} actions={<div className="projects-topbar-actions"><div className="project-type-filter" aria-label="Тип проекта">{PROJECT_TYPE_FILTERS.map((filter) => <button type="button" key={filter.value} className={typeFilter === filter.value ? "is-active" : ""} aria-pressed={typeFilter === filter.value} title={filter.value === "all" ? "Все проекты" : filter.value === "exam" ? "Подготовка к экзамену" : filter.value === "textbook" ? "Изучение по учебнику" : "Свободное изучение"} onClick={() => setTypeFilter(filter.value)}>{filter.label}</button>)}</div><Link className="primary-button" to="/projects/new">Новый проект</Link></div>} />
 
       {operationError && <p className="inline-error" role="alert">{operationError}</p>}
 
@@ -367,9 +517,13 @@ export function Projects() {
             ))}
           </div>
         </>
+      ) : view === "map" ? (
+        visibleActive.length > 0 ? <ProjectMap projects={visibleActive} stats={stats} materials={mapMaterials} materialLoading={mapMaterialLoading} materialError={mapMaterialError} /> : <p className="dash-filter-empty">В этом типе пока нет активных проектов.</p>
       ) : (
-        <div className="dash-grid">
-          {active.map((project, index) => (
+        <div className={`dash-grid ${view === "compact" ? "is-compact" : ""}`}>
+          {visibleActive.map((project) => {
+            const index = active.findIndex((item) => item.id === project.id);
+            return (
             <article
               className={`dash-card v-b ${draggedId === project.id ? "is-dragging" : ""}`.trim()}
               style={{ "--proj": `var(--project-color-${color(project.color)})` } as CSSProperties}
@@ -381,6 +535,7 @@ export function Projects() {
               <div className="dash-card-id">
                 <ProjectChip icon={icon(project.icon)} color={color(project.color)} />
                 <h2 className="dash-card-name">{project.name}</h2>
+                <span className="dash-project-type" aria-label={projectType(project) === "exam" ? "Экзамен" : projectType(project) === "textbook" ? "Учебник" : "Свободное изучение"}>{PROJECT_TYPE_FILTERS.find((item) => item.value === projectType(project))?.label}</span>
                 <span
                   className="dash-drag-handle"
                   draggable
@@ -444,7 +599,9 @@ export function Projects() {
                 <Link className="primary-button" to={`/projects/${project.id}`}>Продолжить</Link>
               </div>
             </article>
-          ))}
+            );
+          })}
+          {visibleActive.length === 0 && <p className="dash-filter-empty">В этом типе пока нет активных проектов.</p>}
         </div>
       )}
 

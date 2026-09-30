@@ -29,6 +29,17 @@ class BackgroundJobRead(ApiModel):
     # подставляет их отдельным шагом (`registry._read`).
     subject: str = ""
     model_label: str = ""
+    # Тема плана урока: раздел «Уроки» показывает ожидающий план рядом с уроками.
+    program_node_id: UUID | None = None
+    # Детали ИИ-задачи хранятся в checkpoint: не раздуваем общую таблицу
+    # полями, которые нужны только нескольким ролям.
+    page_number: int | None = None
+    source_revision: int | None = None
+    deadline_seconds: int | None = None
+    max_attempts: int | None = None
+    # Что считают `done` и `total`: «страниц» у разбора, «минут» у расшифровки
+    # записи, пусто у задач без счётчика.
+    progress_unit: str = ""
     # Готовое предложение, которое ещё никто не принял и не убрал. Считается
     # реестром по виду задачи и `reviewed_at` (`registry._needs_review`).
     needs_review: bool = False
@@ -40,6 +51,9 @@ class BackgroundJobRead(ApiModel):
     diagnostics: list[str]
     error: str | None
     pause_requested: bool
+    # Для retrieval различаем обычную паузу и просьбу сохранить candidate прямо
+    # сейчас: оба пути используют тот же безопасный чекпоинт воркера.
+    control_action: str | None = None
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None

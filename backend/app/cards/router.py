@@ -6,12 +6,21 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.background.schemas import BackgroundJobStartRead
 from app.cards import service
+from app.cards.generate import (
+    queue_card_generation,
+    review_card_generation,
+    update_card_proposal,
+)
 from app.cards.schemas import (
+    CardBatchReviewRead,
     CardBulkWrite,
     CardCreate,
+    CardGenerateBatchWrite,
     CardListRead,
     CardOverviewRead,
+    CardProposalUpdate,
     CardRead,
     CardSessionCreate,
     CardSessionRead,
@@ -75,6 +84,34 @@ def get_cards(
 def post_card(project_id: UUID, command: CardCreate, session: SessionDependency) -> CardRead:
     """Ручное создание карточки."""
     return service.create_card(session, project_id, command)
+
+
+@router.post("/cards/generate", response_model=BackgroundJobStartRead, status_code=202)
+def post_generate_cards(
+    project_id: UUID, command: CardGenerateBatchWrite, session: SessionDependency,
+) -> BackgroundJobStartRead:
+    """Поставить выбранные вопросы в очередь предложений карточек."""
+    return BackgroundJobStartRead(job_id=queue_card_generation(session, project_id, command))
+
+
+@router.get("/cards/generation-jobs/{job_id}/review", response_model=CardBatchReviewRead)
+def get_card_generation_review(
+    project_id: UUID, job_id: UUID, session: SessionDependency,
+) -> CardBatchReviewRead:
+    """Прочитать ещё не подтверждённые предложения после возврата на экран."""
+    return review_card_generation(session, project_id, job_id)
+
+
+@router.patch(
+    "/cards/generation-jobs/{job_id}/candidates/{unit_id}/{index}",
+    response_model=CardBatchReviewRead,
+)
+def patch_card_generation_candidate(
+    project_id: UUID, job_id: UUID, unit_id: UUID, index: int,
+    command: CardProposalUpdate, session: SessionDependency,
+) -> CardBatchReviewRead:
+    """Запомнить правку или отклонение одного предложения."""
+    return update_card_proposal(session, project_id, job_id, unit_id, index, command)
 
 
 @router.patch("/cards/{card_id}", response_model=CardRead)

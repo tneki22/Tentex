@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
@@ -8,8 +8,16 @@ from sqlalchemy.orm import Session
 from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
 from app.background.schemas import BackgroundJobStartRead
-from app.db import get_session
-from app.materials import ai_cleanup, library, service, typst
+from app.db import get_search_session, get_session
+from app.materials import (
+    ai_cleanup,
+    header_footer,
+    image_descriptions,
+    library,
+    outline_ai,
+    service,
+    typst,
+)
 from app.materials.schemas import (
     ExamCompositeDraftImportResult,
     ExamCompositeDraftImportWrite,
@@ -18,24 +26,35 @@ from app.materials.schemas import (
     ExamProgramImportWrite,
     ExamProgramPreview,
     ExternalMaterialCreate,
+    ImageDescriptionEstimateRead,
+    ImageDescriptionEstimateWrite,
+    ImageDescriptionStart,
+    ImageDescriptionStartRead,
+    ImageInventoryRead,
     LibraryExternalMaterialCreate,
     LibraryMaterialAttachWrite,
     LibraryMaterialDetailRead,
+    LibraryMaterialMetadataRead,
+    LibraryMaterialMetadataUpdate,
     LibraryMaterialRead,
     LibrarySearchResult,
     LibraryTextMaterialCreate,
     MaterialAnswerImportResult,
     MaterialDeletePreview,
+    MaterialOrderWrite,
     MaterialPurpose,
     MaterialRead,
     MaterialRevisionRead,
     MaterialsDeletePreview,
     MaterialsDeleteWrite,
     MaterialUpdate,
+    OutlineDetailRead,
     PageCorrectionRead,
     PageRead,
     PageTextUpdate,
+    ProcessingEstimateRead,
     ProcessingStart,
+    ProcessingTaskRead,
     SourceRefreshResult,
     TextMaterialCreate,
     TypstBuildWrite,
@@ -47,8 +66,17 @@ from app.projects.errors import ProjectDomainError
 from app.projects.schemas import ProgramChangeResult
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+SearchSessionDependency = Annotated[Session, Depends(get_search_session)]
 GatewayDependency = Annotated[ModelGateway, Depends(get_model_gateway)]
 router = APIRouter(prefix="/api", tags=["materials"])
+
+
+@router.get("/materials/{material_id}/processing", response_model=ProcessingTaskRead | None)
+def get_library_processing_task(
+    material_id: UUID, session: SessionDependency
+) -> ProcessingTaskRead | None:
+    """Прогресс и снимок запуска без пересборки полной карточки материала."""
+    return library.read_processing_task(session, material_id)
 
 
 # ── Глобальная Библиотека. Конкретные пути объявляются раньше `/{material_id}`,
@@ -60,15 +88,25 @@ def list_library_materials(session: SessionDependency) -> list[LibraryMaterialRe
     return library.list_library_materials(session)
 
 
+@router.get("/materials/subjects", response_model=list[str])
+def list_library_subjects(session: SessionDependency) -> list[str]:
+    return library.list_library_subjects(session)
+
+
 @router.post(
     "/materials/upload",
     response_model=LibraryMaterialDetailRead,
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def upload_library_material(
-    session: SessionDependency, file: Annotated[UploadFile, File()]
+    session: SessionDependency,
+    file: Annotated[UploadFile, File()],
+    subject: Annotated[str | None, Form()] = None,
+    display_name: Annotated[str | None, Form()] = None,
 ) -> LibraryMaterialDetailRead:
-    return await library.create_library_upload(session, file)
+    return await library.create_library_upload(
+        session, file, subject=subject, display_name=display_name
+    )
 
 
 @router.post(
@@ -81,27 +119,31 @@ async def upload_typst_material(
     files: Annotated[list[UploadFile] | None, File()] = None,
     paths: Annotated[list[str] | None, Form()] = None,
     entrypoint: Annotated[str | None, Form()] = None,
+    subject: Annotated[str | None, Form()] = None,
+    display_name: Annotated[str | None, Form()] = None,
 ) -> TypstStartRead:
     """Принимает один `.typ`, дерево браузера или ZIP и сразу ставит сборку."""
-    display_name: str | None = None
+    source_name: str | None = None
     if input_kind == "zip":
         if file is None:
             raise ProjectDomainError(
                 "Для ZIP нужен файл архива", status=422, code="typst_bundle_invalid"
             )
-        display_name = file.filename
+        source_name = file.filename
         bundle = await typst.bundle_zip(file, entrypoint)
     elif input_kind in {"single", "folder"}:
         selected = files or ([file] if file else [])
         selected_paths = paths or ([file.filename or "main.typ"] if file else [])
         if input_kind == "folder":
-            display_name = typst.folder_display_name(selected_paths)
+            source_name = typst.folder_display_name(selected_paths)
         bundle = await typst.bundle_uploads(selected, selected_paths, entrypoint)
     else:
         raise ProjectDomainError(
             "Тип загрузки Typst не поддерживается", status=422, code="typst_bundle_invalid"
         )
-    _, job = library.create_typst_material(session, bundle, input_kind, display_name)
+    _, job = library.create_typst_material(
+        session, bundle, input_kind, source_name, subject, display_name
+    )
     return TypstStartRead(material_id=job.material_id, job_id=job.id)
 
 
@@ -182,6 +224,15 @@ def create_library_external_material(
     return library.create_library_external(session, command)
 
 
+@router.patch("/materials/{material_id}", response_model=LibraryMaterialMetadataRead)
+def update_library_material_metadata(
+    material_id: UUID,
+    command: LibraryMaterialMetadataUpdate,
+    session: SessionDependency,
+) -> LibraryMaterialMetadataRead:
+    return library.update_library_material_metadata(session, material_id, command)
+
+
 @router.post("/materials/delete-preview", response_model=MaterialsDeletePreview)
 def preview_library_materials_delete(
     command: MaterialsDeleteWrite, session: SessionDependency
@@ -210,6 +261,28 @@ def list_material_revisions(
 
 
 @router.post(
+    "/materials/{material_id}/header-footer/preview",
+    response_model=header_footer.HeaderFooterPreviewRead,
+)
+def preview_library_header_footer(
+    material_id: UUID, session: SessionDependency
+) -> header_footer.HeaderFooterPreviewRead:
+    return header_footer.preview(session, material_id)
+
+
+@router.post(
+    "/materials/{material_id}/header-footer/apply",
+    response_model=header_footer.HeaderFooterApplyRead,
+)
+def apply_library_header_footer(
+    material_id: UUID,
+    command: header_footer.HeaderFooterApplyWrite,
+    session: SessionDependency,
+) -> header_footer.HeaderFooterApplyRead:
+    return header_footer.apply(session, material_id, command)
+
+
+@router.post(
     "/materials/{material_id}/revisions/{revision}/restore",
     response_model=LibraryMaterialDetailRead,
 )
@@ -222,7 +295,7 @@ def restore_material_revision(
 @router.get("/materials/{material_id}/search", response_model=LibrarySearchResult)
 def search_material(
     material_id: UUID,
-    session: SessionDependency,
+    session: SearchSessionDependency,
     q: str = "",
     revision: int | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
@@ -265,9 +338,12 @@ def get_library_page(
 
 @router.get("/materials/{material_id}/pages/{page_number}/image")
 def get_library_page_image(
-    material_id: UUID, page_number: int, session: SessionDependency
+    material_id: UUID, page_number: int, session: SessionDependency, v: str | None = None
 ) -> FileResponse:
-    return FileResponse(library.library_page_image_path(session, material_id, page_number))
+    return FileResponse(
+        library.library_page_image_path(session, material_id, page_number),
+        headers=library.page_image_cache_headers(v, library.raster_token(session, material_id)),
+    )
 
 
 @router.put("/materials/{material_id}/pages/{page_number}", response_model=PageCorrectionRead)
@@ -337,6 +413,45 @@ def get_library_fragment_asset(
     material_id: UUID, fragment_id: UUID, session: SessionDependency
 ) -> FileResponse:
     return FileResponse(library.library_fragment_asset_path(session, material_id, fragment_id))
+
+
+@router.post("/materials/{material_id}/processing-estimate", response_model=ProcessingEstimateRead)
+def estimate_library_processing(
+    material_id: UUID, command: ProcessingStart, session: SessionDependency
+) -> ProcessingEstimateRead:
+    """Оценка запуска без побочных эффектов: страницы, запросы, верхняя цена."""
+    return library.processing_estimate(session, material_id, command)
+
+
+@router.get("/materials/{material_id}/image-descriptions", response_model=ImageInventoryRead)
+def image_inventory(
+    material_id: UUID,
+    session: SessionDependency,
+    provider_id: UUID | None = None,
+    model_id: str | None = None,
+) -> ImageInventoryRead:
+    return image_descriptions.inventory(session, material_id, provider_id, model_id)
+
+
+@router.post(
+    "/materials/{material_id}/image-descriptions/estimate",
+    response_model=ImageDescriptionEstimateRead,
+)
+def estimate_image_descriptions(
+    material_id: UUID, command: ImageDescriptionEstimateWrite, session: SessionDependency
+) -> ImageDescriptionEstimateRead:
+    return image_descriptions.estimate(session, material_id, command)
+
+
+@router.post(
+    "/materials/{material_id}/image-descriptions",
+    response_model=ImageDescriptionStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_image_descriptions(
+    material_id: UUID, command: ImageDescriptionStart, session: SessionDependency
+) -> ImageDescriptionStartRead:
+    return image_descriptions.start(session, material_id, command)
 
 
 @router.post("/materials/{material_id}/processing", response_model=LibraryMaterialDetailRead)
@@ -446,6 +561,13 @@ def import_composite_exam_draft(
     return service.import_composite_exam_draft(session, project_id, command)
 
 
+@router.put("/projects/{project_id}/materials/order", response_model=list[MaterialRead])
+def reorder_project_materials(
+    project_id: UUID, command: MaterialOrderWrite, session: SessionDependency
+) -> list[MaterialRead]:
+    return service.reorder_materials(session, project_id, command)
+
+
 @router.get("/projects/{project_id}/materials/{material_id}", response_model=MaterialRead)
 def get_project_material(
     project_id: UUID, material_id: UUID, session: SessionDependency
@@ -510,6 +632,31 @@ def get_material_page(
     task_id: UUID | None = None,
 ) -> PageRead:
     return service.get_page(session, project_id, material_id, page_number, task_id)
+
+
+@router.post(
+    "/projects/{project_id}/materials/{material_id}/header-footer/preview",
+    response_model=header_footer.HeaderFooterPreviewRead,
+)
+def preview_project_header_footer(
+    project_id: UUID, material_id: UUID, session: SessionDependency
+) -> header_footer.HeaderFooterPreviewRead:
+    service.get_material(session, project_id, material_id)
+    return header_footer.preview(session, material_id)
+
+
+@router.post(
+    "/projects/{project_id}/materials/{material_id}/header-footer/apply",
+    response_model=header_footer.HeaderFooterApplyRead,
+)
+def apply_project_header_footer(
+    project_id: UUID,
+    material_id: UUID,
+    command: header_footer.HeaderFooterApplyWrite,
+    session: SessionDependency,
+) -> header_footer.HeaderFooterApplyRead:
+    service.get_material(session, project_id, material_id)
+    return header_footer.apply(session, material_id, command)
 
 
 @router.post(
@@ -579,8 +726,43 @@ def get_material_page_image(
     material_id: UUID,
     page_number: int,
     session: SessionDependency,
+    v: str | None = None,
 ) -> FileResponse:
-    return FileResponse(service.page_image_path(session, project_id, material_id, page_number))
+    return FileResponse(
+        service.page_image_path(session, project_id, material_id, page_number),
+        headers=library.page_image_cache_headers(v, library.raster_token(session, material_id)),
+    )
+
+
+@router.get(
+    "/projects/{project_id}/materials/{material_id}/outline", response_model=OutlineDetailRead
+)
+def get_material_outline(
+    project_id: UUID,
+    material_id: UUID,
+    session: SessionDependency,
+    source: Literal["auto", "embedded", "printed", "recognized"] = "auto",
+) -> OutlineDetailRead:
+    """Шаг 3 мастера учебника: приоритет `embedded → printed → recognized`.
+
+    Импорт найденного оглавления в программу не реализован — это только
+    извлечение и показ для проверки глазами (Работа 4 плана мастера учебника).
+    """
+    return service.get_outline(session, project_id, material_id, source)
+
+
+@router.post(
+    "/projects/{project_id}/materials/{material_id}/outline/model",
+    response_model=outline_ai.OutlineModelRunRead,
+)
+async def run_material_outline_model(
+    project_id: UUID,
+    material_id: UUID,
+    session: SessionDependency,
+    gateway: GatewayDependency,
+) -> outline_ai.OutlineModelRunRead:
+    """Четвёртый источник — по явной кнопке, когда остальных не хватило."""
+    return await service.run_outline_model(session, gateway, project_id, material_id)
 
 
 @router.get(

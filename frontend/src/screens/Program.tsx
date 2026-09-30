@@ -16,6 +16,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  SearchCheck,
   Sparkles,
   Target,
   Trash2,
@@ -46,8 +47,8 @@ import {
   type ProjectDetail,
   type TargetOutcome,
 } from "../api/projects";
-import { GOAL_LEVELS, GoalLevelPicker, LibraryMaterialPickerDialog, ProjectNav } from "../components/domain";
-import type { GoalLevelValue } from "../components/domain";
+import { GOAL_LEVELS, GoalLevelPicker, LibraryMaterialPickerDialog, ProgramTreePreview, ProjectNav, TextbookProgramEditor } from "../components/domain";
+import type { GoalLevelValue, TextbookProgramView } from "../components/domain";
 import {
   Button,
   ContextMenu,
@@ -71,11 +72,15 @@ import {
   visibleHiddenRoots,
   type ProgramTreeNode,
 } from "./programTree";
+import type { ChatMessageRead } from "../api/chat";
 import { useBindings } from "../hooks/useBindings";
 import { useProjectMaterials } from "../hooks/useProjectMaterials";
+import { ProjectFileUploadStatus } from "./materials/ProjectFileUploadStatus";
 import { usePendingReviewJob } from "../hooks/usePendingReviewJob";
 import { AiGroupingDialog } from "./AiGroupingDialog";
 import { AiImportRepairDialog } from "./AiImportRepairDialog";
+import { TopicMaterialsDialog } from "./program/TopicMaterialsDialog";
+import { lastPendingDiff, ProgramChatWorkspace } from "./workspace/chat/ProgramChatWorkspace";
 
 type AddKind = "section" | "ticket" | "question" | "task" | "topic" | "subpoint";
 type OutlineFilter = "all" | "sections" | "ungrouped";
@@ -110,6 +115,42 @@ function kindLabel(kind: AddKind) {
   }
 }
 
+function originLabel(origin: ProgramNodeRead["origin_kind"]): string {
+  return ({ manual: "вручную", import: "импорт", outline: "оглавление", pass1: "проход 1", catalog: "каталог", model: "ИИ" })[origin];
+}
+
+function recentTime(value: string): string {
+  return new Date(value).toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+const RECENT_BATCH_WINDOW_MS = 10_000;
+const RECENT_BATCH_LIMIT = 8;
+const RECENT_MIN_ROWS = 5;
+
+/** Узлы последнего изменения (одна правка ИИ трогает много узлов за секунды) —
+ * верхние узлы каждой ветки, включая скрытые: убранную тему иначе нигде не видно.
+ * Если правка маленькая, добавляет к ней прошлые видимые узлы. */
+function recentProgramNodes(nodes: ProgramNodeRead[]): Array<{ node: ProgramNodeRead; hidden: boolean }> {
+  const stamped = nodes
+    .filter((node) => !node.is_archived)
+    .map((node) => ({ node, at: Date.parse(node.updated_at) }))
+    .filter((item) => Number.isFinite(item.at))
+    .sort((left, right) => right.at - left.at);
+  if (stamped.length === 0) return [];
+  const newest = stamped[0].at;
+  const batch = stamped.filter((item) => newest - item.at <= RECENT_BATCH_WINDOW_MS);
+  const batchIds = new Set(batch.map((item) => item.node.id));
+  const rows = batch
+    .filter((item) => !item.node.parent_id || !batchIds.has(item.node.parent_id))
+    .slice(0, RECENT_BATCH_LIMIT)
+    .map(({ node }) => ({ node, hidden: !node.is_in_current_program }));
+  const older = stamped
+    .filter((item) => !batchIds.has(item.node.id) && item.node.is_in_current_program)
+    .slice(0, Math.max(0, RECENT_MIN_ROWS - rows.length))
+    .map(({ node }) => ({ node, hidden: false }));
+  return [...rows, ...older];
+}
+
 export function Program() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
@@ -122,6 +163,10 @@ export function Program() {
   const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  const [textbookView, setTextbookView] = useState<TextbookProgramView>("tree");
+  const [textbookMode, setTextbookMode] = useState<"manual" | "ai">("manual");
+  const [aiChatMessages, setAiChatMessages] = useState<ChatMessageRead[]>([]);
+  const lastPendingDiffValue = lastPendingDiff(aiChatMessages);
   const [filter, setFilter] = useState<OutlineFilter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -136,7 +181,11 @@ export function Program() {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const materials = useProjectMaterials(projectId);
-  const bindings = useBindings(detail?.project.workspace_variant === "exam" ? projectId : undefined);
+  // Свободному проекту сводка привязок нужна, чтобы найти темы без материала.
+  const bindings = useBindings(
+    detail?.project.workspace_variant === "exam" || detail?.project.template_key === "free" ? projectId : undefined,
+  );
+  const [topicMaterialsOpen, setTopicMaterialsOpen] = useState(false);
   const bindingsSummaryByNode = useMemo(
     () => new Map(bindings.summary.map((item) => [item.program_node_id, item])),
     [bindings.summary],
@@ -195,12 +244,19 @@ export function Program() {
     }
   }, [detail?.program.nodes]);
   const flat = useMemo(() => flattenProgramTree(treeResult.tree), [treeResult.tree]);
+  const topicsWithoutMaterial = useMemo(() => (
+    detail?.project.template_key === "free" && !bindings.loading
+      ? flat.filter((node) => node.is_in_current_program && !node.is_archived && node.node_type !== "section"
+        && !bindingsSummaryByNode.get(node.id)?.content_fragment_count)
+      : []
+  ), [bindings.loading, bindingsSummaryByNode, detail?.project.template_key, flat]);
   const selected = detail?.program.nodes.find((node) => node.id === selectedId) ?? null;
   const textbook = detail?.project.workspace_variant === "textbook";
+  const recentTextbookNodes = useMemo(() => recentProgramNodes(detail?.program.nodes ?? []), [detail?.program.nodes]);
   const kindOptions: Array<[AddKind, string]> = textbook
     ? [["section", "Раздел"], ["topic", "Тема"], ["subpoint", "Подпункт"]]
     : [["section", "Раздел"], ["ticket", "Билет"], ["question", "Вопрос"], ["task", "Задача"]];
-  const addParentOptions = flat.filter((node) => node.is_in_current_program && !node.is_archived && node.depth < 4);
+  const addParentOptions = flat.filter((node) => node.is_in_current_program && !node.is_archived);
 
   useEffect(() => setTitleDraft(selected?.title ?? ""), [selected?.id, selected?.title]);
 
@@ -415,11 +471,6 @@ export function Program() {
     });
   }
 
-  function subtreeHeight(nodeId: string): number {
-    const children = flat.filter((node) => node.parent_id === nodeId);
-    return children.length ? 1 + Math.max(...children.map((child) => subtreeHeight(child.id))) : 1;
-  }
-
   function duplicate(node: ProgramNodeRead) {
     if (!detail) return;
     const { index } = siblingInfo(node);
@@ -467,13 +518,123 @@ export function Program() {
     }
   }
 
+  async function runTextbookCommand(
+    command: (revision: number) => Promise<ProgramChangeResult>,
+  ): Promise<ProgramChangeResult> {
+    if (!detail) throw new Error("Проект не загружен");
+    setBusy(true);
+    setCommandError("");
+    try {
+      const result = await command(detail.program.revision);
+      acceptResult(result);
+      return result;
+    } catch (error) {
+      if (error instanceof ProjectApiError && error.code === "stale_program_revision") {
+        setConflict(true);
+      }
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading) return <div className="screen"><LoadingState label="Загружаем программу" placement="page" /></div>;
   if (loadError) {
     const notFound = loadError instanceof ProjectApiError && loadError.status === 404;
-    return <div className="screen"><ErrorState title={notFound ? "Проект не найден" : undefined} message={notFound ? "Проверьте адрес или вернитесь к списку проектов." : loadError instanceof Error ? loadError.message : "Не удалось загрузить программу"} /><Button onClick={() => void load()}>Повторить загрузку</Button><Link className="secondary-button" to="/projects">К проектам</Link></div>;
+    return <div className="screen screen-error-state"><ErrorState title={notFound ? "Проект не найден" : undefined} message={notFound ? "Проверьте адрес или вернитесь к списку проектов." : loadError instanceof Error ? loadError.message : "Не удалось загрузить программу"} /><Button onClick={() => void load()}>Повторить загрузку</Button><Link className="secondary-button" to="/projects">К проектам</Link></div>;
   }
   if (!detail) return null;
-  if (treeResult.error) return <div className="screen"><ErrorState title="Программа повреждена" message={treeResult.error} /></div>;
+  if (treeResult.error) return <div className="screen screen-error-state"><ErrorState title="Программа повреждена" message={treeResult.error} /></div>;
+  if (textbook) return (
+    <div className="program-screen">
+      <aside className="project-side-panel">
+        <header className="project-side-title"><Link className="workspace-back-button" to={`/projects/${projectId}`} aria-label="Вернуться в рабочую область"><ArrowLeft size={15} /></Link><strong>{detail.project.name}</strong></header>
+        <section className="project-recent" aria-label="Последние изменения программы">
+          <header><span>Последние изменения</span><small>{recentTextbookNodes.length}</small></header>
+          <div className="project-recent-list">
+            {detail.latest_undoable_action && <p className="program-latest-action">Можно отменить: {detail.latest_undoable_action.target_title}</p>}
+            {recentTextbookNodes.length === 0
+              ? <p className="sidebar-empty">Изменённые узлы появятся здесь.</p>
+              : recentTextbookNodes.map(({ node, hidden }) => hidden ? (
+                // Убранного узла в дереве нет — выбирать его нечем, поэтому не кнопка.
+                <div className="project-recent-item program-recent-node is-removed" key={node.id}>
+                  <span>{node.title}</span>
+                  <small>убрано · {kindLabel(node.node_type)} · {originLabel(node.origin_kind)} · <time dateTime={node.updated_at}>{recentTime(node.updated_at)}</time></small>
+                </div>
+              ) : (
+                <button type="button" className={`project-recent-item program-recent-node ${selectedId === node.id ? "is-active" : ""}`.trim()} key={node.id} onClick={() => setSelectedId(node.id)}>
+                  <span>{node.title}</span>
+                  <small>{kindLabel(node.node_type)} · {originLabel(node.origin_kind)} · <time dateTime={node.updated_at}>{recentTime(node.updated_at)}</time></small>
+                </button>
+              ))}
+          </div>
+        </section>
+        <ProjectNav
+          projectId={projectId}
+          active="program"
+          textbook
+          modules={detail.project.enabled_modules}
+          counts={{
+            program: detail.program.nodes.filter((node) => node.is_in_current_program && !node.is_archived && node.node_type !== "section").length,
+            materials: materials.materials.length,
+          }}
+          className="project-side-nav"
+        />
+      </aside>
+      <main className="program-main">
+        {conflict && <section className="program-plan-notice" role="alert"><span>Программа изменилась в другой вкладке.</span><Button onClick={() => void load()}>Загрузить серверную версию</Button></section>}
+        <TextbookProgramEditor
+          projectId={projectId}
+          projectName={detail.project.name ?? "Программа"}
+          program={detail.program}
+          latestUndoableAction={detail.latest_undoable_action}
+          materials={materials.materials}
+          busy={busy}
+          view={textbookView}
+          onViewChange={setTextbookView}
+          execute={runTextbookCommand}
+          onUndo={undo}
+          mode={textbookMode}
+          selectedNodeId={selectedId}
+          onSelectedNodeChange={setSelectedId}
+          aiContent={<div className="textbook-program-ai-layout">
+              <ProgramChatWorkspace
+                projectId={projectId}
+                program={detail.program}
+                execute={runTextbookCommand}
+                onMessagesChange={setAiChatMessages}
+                variant={detail.project.template_key === "free" ? "free" : "textbook"}
+                outlineSourceName={materials.materials.find((material) => material.outline.length > 0)?.display_name}
+                onSwitchToManual={() => setTextbookMode("manual")}
+              />
+              <ProgramTreePreview
+                program={detail.program}
+                pendingOperations={lastPendingDiffValue?.operations}
+                pendingStates={lastPendingDiffValue?.operation_states}
+              />
+            </div>}
+          renderHeader={(actions) => <PageHead
+            title="Программа"
+            actions={<>
+              <Button variant="ghost" disabled={!actions.canUndo || actions.busy} onClick={() => void actions.undo()}><Undo2 size={15} />Отменить</Button>
+              <SegmentedTabs label="Режим составления программы" value={textbookMode} onChange={setTextbookMode} tabs={[{ value: "manual", label: "Вручную" }, { value: "ai", label: "С ИИ" }]} />
+              {topicsWithoutMaterial.length > 0 && <Button variant="secondary" className="program-materials-chip" onClick={() => setTopicMaterialsOpen(true)}><SearchCheck size={15} />Без материала: {topicsWithoutMaterial.length}</Button>}
+              <Button variant="secondary" disabled={actions.busy} onClick={actions.openImport}><Files size={15} />Импортировать оглавление</Button>
+              <Button variant="ghost" disabled={actions.busy || !actions.hasNodes} onClick={actions.openRemoveAll}><Trash2 size={15} />Удалить все</Button>
+            </>}
+          />}
+        />
+      </main>
+      <TopicMaterialsDialog
+        open={topicMaterialsOpen}
+        onOpenChange={setTopicMaterialsOpen}
+        projectId={projectId}
+        topics={topicsWithoutMaterial}
+        hasProjectMaterials={materials.materials.length > 0}
+        onAttached={() => void materials.refresh()}
+      />
+    </div>
+  );
 
   const currentFlat = flat.filter((node) => node.is_in_current_program && !node.is_archived);
   const filteredTree = filterProgramTree(treeResult.tree, query);
@@ -513,7 +674,7 @@ export function Program() {
   function nodeActions(node: ProgramNodeRead) {
     const info = siblingInfo(node);
     const previous = info.index > 0 ? flat.find((item) => item.id === info.siblings[info.index - 1]?.id) ?? null : null;
-    const canNest = Boolean(previous && previous.depth + subtreeHeight(node.id) <= 4);
+    const canNest = Boolean(previous);
     return (
       <div className="program-row-actions">
         <Button variant="ghost" aria-label="Вверх" disabled={busy || info.index <= 0} onClick={() => move(node, -1)}><ArrowUp size={14} /></Button>
@@ -529,14 +690,14 @@ export function Program() {
     const revision = detail.program.revision;
     const info = siblingInfo(node);
     const previous = info.index > 0 ? flat.find((item) => item.id === info.siblings[info.index - 1]?.id) ?? null : null;
-    const canNest = Boolean(previous && previous.depth + subtreeHeight(node.id) <= 4);
+    const canNest = Boolean(previous);
     return [
       {
         label: "Добавить внутрь",
         icon: <Plus size={14} />,
         items: kindOptions.map(([kind, label]) => ({
           label,
-          disabled: busy || node.depth >= 4,
+          disabled: busy,
           onSelect: () => openAddDialogFromMenu({ kind, parentId: node.id, position: null, placementLabel: `Внутрь «${node.title}»` }),
         })),
       },
@@ -767,8 +928,8 @@ export function Program() {
                 <GoalLevelPicker label="узла" value={(selected.target_level ?? "understanding") as GoalLevelValue} onChange={(target) => void runCommand(setProgramTargetLevel(projectId, selected.id, { expected_program_revision: detail.program.revision, target_level: target as TargetOutcome, include_descendants: true }))} />
                 <section className="program-impact"><h3>Что связано</h3><dl><div><dt>Ответ</dt><dd>Статус доступен на Карте ответов</dd></div><div><dt>Источник списка</dt><dd>{selected.origin_material_id ? materials.materials.find((item) => item.id === selected.origin_material_id)?.display_name ?? "Материал удалён" : "Добавлено вручную"}</dd></div><div><dt>Привязки</dt><dd>{(() => {
                   const summary = bindingsSummaryByNode.get(selected.id);
-                  if (!summary) return "Материал не привязан";
-                  return `${summary.fragment_count} фрагм. из ${summary.material_count} ${summary.material_count === 1 ? "файла" : "файлов"}`;
+                  if (!summary?.content_fragment_count) return "Содержательный материал не привязан";
+                  return `${summary.content_fragment_count} содерж. фрагм. из ${summary.content_material_count} ${summary.content_material_count === 1 ? "файла" : "файлов"}`;
                 })()}</dd></div><div><dt>План</dt><dd>Появится на этапе 9</dd></div></dl></section>
                 <div className="program-inspector-links"><Link to={`/projects/${projectId}?topic=${selected.id}`}>Открыть в рабочей области</Link>{selected.origin_material_id && <Link to={`/projects/${projectId}/materials/${selected.origin_material_id}`}>Открыть материал списка</Link>}<Link to={`/projects/${projectId}/materials`}>Привязки в материалах</Link></div>
                 <div className="program-row-actions"><Button variant="secondary" disabled={busy} onClick={() => duplicate(selected)}><Copy size={15} />Продублировать</Button><Button variant="ghost" disabled={busy} onClick={() => void runCommand(removeProgramNode(projectId, selected.id, detail.program.revision))}><Trash2 size={15} />Убрать из списка</Button></div>
@@ -818,11 +979,12 @@ export function Program() {
               event.target.value = "";
             }}
           />
+          {materials.uploadStatus && <ProjectFileUploadStatus {...materials.uploadStatus} />}
           {examMaterials.length === 0 ? (
             <section className="program-import-empty">
               <Upload size={24} aria-hidden="true" />
               <h3>Список вопросов ещё не загружен</h3>
-              <p>Подойдут PDF, DOCX, текстовый файл или фотография. Ограничение — 100 МБ и 500 страниц.</p>
+              <p>Подойдут PDF, DOCX, текстовый файл или фотография. Ограничение — 200 МБ.</p>
               <div className="material-entry-actions">
                 <Button variant="secondary" disabled={materials.busy} onClick={() => importInput.current?.click()}>
                   Загрузить список вопросов

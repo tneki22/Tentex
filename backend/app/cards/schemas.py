@@ -51,7 +51,70 @@ class CardWrite(Contract):
 
 
 class CardCreate(CardWrite):
-    pass
+    generation_run_id: UUID | None = None
+    generation_candidate_index: int | None = Field(default=None, ge=0, le=5)
+
+    @model_validator(mode="after")
+    def consistent_generation(self) -> Self:
+        if (self.generation_run_id is None) != (self.generation_candidate_index is None):
+            raise ValueError("Для предложения ИИ нужны запуск и номер карточки")
+        return self
+
+
+class CardGenerateWrite(Contract):
+    program_node_id: UUID
+    mode: Literal["connections", "understanding"] = "connections"
+
+
+class CardGenerateBatchWrite(Contract):
+    """Один фоновый запуск для выбранных единиц программы."""
+
+    program_node_ids: list[UUID] = Field(min_length=1)
+    mode: Literal["connections", "understanding"] = "connections"
+
+
+class GeneratedCardRead(Contract):
+    index: int
+    front: str
+    back: str
+    hint: str | None = None
+    source: CardSourceWrite
+    evidence_quote: str
+
+
+class CardGenerateRead(Contract):
+    run_id: UUID
+    candidates: list[GeneratedCardRead]
+
+
+class CardProposalRead(GeneratedCardRead):
+    """Предложение вместе с решением пользователя."""
+
+    status: Literal["pending", "accepted", "rejected"] = "pending"
+
+
+class CardGenerateGroupRead(Contract):
+    """Предложения одного вопроса и запуск модели, который их создал."""
+
+    program_node_id: UUID
+    run_id: UUID
+    candidates: list[CardProposalRead]
+
+
+class CardBatchReviewRead(Contract):
+    """Состояние проверки всей фоновой задачи."""
+
+    groups: list[CardGenerateGroupRead]
+    errors: list[str] = Field(default_factory=list)
+
+
+class CardProposalUpdate(Contract):
+    """Сохранённая правка либо отклонение до записи карточки в Банк."""
+
+    front: str = Field(min_length=1, max_length=20_000)
+    back: str = Field(min_length=1, max_length=50_000)
+    hint: str | None = Field(default=None, max_length=10_000)
+    rejected: bool = False
 
 
 class CardUpdate(Contract):

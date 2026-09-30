@@ -1,15 +1,31 @@
+from collections.abc import Awaitable, Callable
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.ai.dependencies import get_model_gateway
 from app.ai.gateway import ModelGateway
 from app.background.schemas import BackgroundJobStartRead
+from app.chat import common as chat_common
+from app.chat import project_sessions
+from app.chat.common import ChatMessageRead
 from app.db import get_session
-from app.projects import answers, import_repair, preparation_ai, program, program_ai, service
+from app.models import ChatMessage
+from app.projects import (
+    answers,
+    import_repair,
+    material_suggestions,
+    preparation_ai,
+    program,
+    program_ai,
+    program_chat,
+    program_outline,
+    service,
+    source_search_chat,
+)
 from app.projects.schemas import (
     ActionUndoResult,
     ActivateWizardDraft,
@@ -20,6 +36,7 @@ from app.projects.schemas import (
     ProgramMove,
     ProgramNodeCreate,
     ProgramNodeUpdate,
+    ProgramOutlinesImportWrite,
     ProgramRevisionCommand,
     ProgramSwap,
     ProgramTargetLevel,
@@ -29,6 +46,7 @@ from app.projects.schemas import (
     ProjectSettingsWrite,
     ProjectStats,
     ProjectSummary,
+    RecentStudyItem,
     ReferenceAnswerAttachmentRead,
     ReferenceAnswerConfirm,
     ReferenceAnswerImportResult,
@@ -112,6 +130,11 @@ def save_order(command: ProjectOrderWrite, session: SessionDependency) -> list[P
 @projects.get("/stats", response_model=list[ProjectStats])
 def list_stats(session: SessionDependency) -> list[ProjectStats]:
     return service.list_project_stats(session)
+
+
+@projects.get("/recent-study", response_model=list[RecentStudyItem])
+def recent_study(session: SessionDependency) -> list[RecentStudyItem]:
+    return service.list_recent_study(session)
 
 
 @projects.get("/{project_id}", response_model=ProjectDetail)
@@ -219,11 +242,13 @@ def download_answer_attachment(
     return FileResponse(answers.attachment_path(session, project_id, attachment_id))
 
 
-@projects.delete("/{project_id}/attachments/{attachment_id}", status_code=204)
+@projects.delete(
+    "/{project_id}/attachments/{attachment_id}", response_model=ReferenceAnswerSlot
+)
 def remove_answer_attachment(
     project_id: UUID, attachment_id: UUID, session: SessionDependency
-) -> None:
-    answers.delete_attachment(session, project_id, attachment_id)
+) -> ReferenceAnswerSlot:
+    return answers.delete_attachment(session, project_id, attachment_id)
 
 
 @projects.post(
@@ -266,6 +291,26 @@ def create_node(
     return program.create_program_node(session, project_id, command)
 
 
+@projects.post("/{project_id}/program/import-outlines", response_model=ProgramChangeResult)
+def import_program_outlines(
+    project_id: UUID,
+    command: ProgramOutlinesImportWrite,
+    session: SessionDependency,
+) -> ProgramChangeResult:
+    """Импортировать выбранные ветви оглавлений без обращения к модели."""
+    return program_outline.import_outlines(session, project_id, command)
+
+
+@projects.post("/{project_id}/program/remove-all", response_model=ProgramChangeResult)
+def remove_all_program_nodes(
+    project_id: UUID,
+    command: ProgramRevisionCommand,
+    session: SessionDependency,
+) -> ProgramChangeResult:
+    """Вывести все видимые корни из текущей программы одной операцией."""
+    return program.remove_all_program_nodes(session, project_id, command)
+
+
 @projects.post(
     "/{project_id}/program/ai-grouping/preflight",
     response_model=program_ai.ProgramGroupingPreflightRead,
@@ -304,6 +349,186 @@ def apply_program_grouping(
     session: SessionDependency,
 ) -> ProgramChangeResult:
     return program_ai.apply(session, project_id, command)
+
+
+@projects.post(
+    "/{project_id}/material-suggestions",
+    response_model=material_suggestions.MaterialSuggestionsResult,
+)
+async def suggest_library_materials(
+    project_id: UUID,
+    command: material_suggestions.MaterialSuggestionsWrite,
+    session: SessionDependency,
+) -> material_suggestions.MaterialSuggestionsResult:
+    """Материалы Библиотеки под цель или темы проекта: поиск без модели."""
+    return await material_suggestions.suggest_materials(session, project_id, command)
+
+
+ChatSend = Callable[[Session, ModelGateway, UUID, UUID, str], Awaitable[ChatMessage]]
+ChatPreview = Callable[[Session, UUID, UUID], project_sessions.ProjectChatContextPreviewRead]
+
+
+def _register_project_chat(
+    path: str,
+    channel: project_sessions.ProjectChatChannel,
+    preview: ChatPreview,
+    send: ChatSend,
+) -> None:
+    """Ручки сессий проектного чата: история, черновик, контекст, модель и ход.
+
+    Чаты построения программы и поиска в интернете устроены одинаково
+    (`app.chat.project_sessions`) и различаются только контекстом и ходом модели.
+    """
+    base = f"/{{project_id}}/{path}/sessions"
+
+    @projects.get(base, response_model=list[project_sessions.ProjectChatSessionSummary])
+    def list_sessions(
+        project_id: UUID, session: SessionDependency
+    ) -> list[project_sessions.ProjectChatSessionSummary]:
+        return project_sessions.list_session_summaries(session, project_id, channel)
+
+    @projects.post(
+        base,
+        response_model=project_sessions.ProjectChatSessionDetail,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_session(
+        project_id: UUID, session: SessionDependency
+    ) -> project_sessions.ProjectChatSessionDetail:
+        chat = project_sessions.create_session(session, project_id, channel)
+        return project_sessions.get_session_detail(session, project_id, chat.id, channel)
+
+    @projects.get(
+        f"{base}/{{session_id}}", response_model=project_sessions.ProjectChatSessionDetail
+    )
+    def get_session(
+        project_id: UUID, session_id: UUID, session: SessionDependency
+    ) -> project_sessions.ProjectChatSessionDetail:
+        return project_sessions.get_session_detail(session, project_id, session_id, channel)
+
+    @projects.put(
+        f"{base}/{{session_id}}/draft", response_model=project_sessions.ProjectChatSessionDetail
+    )
+    def save_draft(
+        project_id: UUID,
+        session_id: UUID,
+        command: project_sessions.ProjectChatDraftWrite,
+        session: SessionDependency,
+    ) -> project_sessions.ProjectChatSessionDetail:
+        project_sessions.save_draft(session, project_id, session_id, command.text, channel)
+        return project_sessions.get_session_detail(session, project_id, session_id, channel)
+
+    @projects.get(
+        f"{base}/{{session_id}}/context",
+        response_model=project_sessions.ProjectChatContextPreviewRead,
+    )
+    def get_context(
+        project_id: UUID, session_id: UUID, session: SessionDependency
+    ) -> project_sessions.ProjectChatContextPreviewRead:
+        return preview(session, project_id, session_id)
+
+    @projects.put(
+        f"{base}/{{session_id}}/context", response_model=project_sessions.ProjectChatSessionDetail
+    )
+    def update_context(
+        project_id: UUID,
+        session_id: UUID,
+        command: project_sessions.ProjectChatContextWrite,
+        session: SessionDependency,
+    ) -> project_sessions.ProjectChatSessionDetail:
+        project_sessions.update_context(session, project_id, session_id, command, channel)
+        return project_sessions.get_session_detail(session, project_id, session_id, channel)
+
+    @projects.put(
+        f"{base}/{{session_id}}/settings",
+        response_model=project_sessions.ProjectChatSessionDetail,
+    )
+    def update_settings(
+        project_id: UUID,
+        session_id: UUID,
+        command: project_sessions.ProjectChatSettingsWrite,
+        session: SessionDependency,
+    ) -> project_sessions.ProjectChatSessionDetail:
+        project_sessions.update_settings(session, project_id, session_id, command, channel)
+        return project_sessions.get_session_detail(session, project_id, session_id, channel)
+
+    @projects.post(f"{base}/{{session_id}}/messages", response_model=ChatMessageRead)
+    async def post_message(
+        project_id: UUID,
+        session_id: UUID,
+        command: project_sessions.ProjectChatMessageWrite,
+        session: SessionDependency,
+        gateway: GatewayDependency,
+    ) -> ChatMessageRead:
+        message = await send(session, gateway, project_id, session_id, command.text)
+        return chat_common.message_read(message)
+
+
+_register_project_chat(
+    "program-chat", program_chat.CHANNEL, program_chat.context_preview, program_chat.send_message
+)
+_register_project_chat(
+    "source-search-chat",
+    source_search_chat.CHANNEL,
+    source_search_chat.context_preview,
+    source_search_chat.send_message,
+)
+
+
+@projects.post("/{project_id}/source-search-chat/sessions/{session_id}/messages/stream")
+def stream_source_search_message(
+    project_id: UUID,
+    session_id: UUID,
+    command: project_sessions.ProjectChatMessageWrite,
+    session: SessionDependency,
+) -> StreamingResponse:
+    """Ход поиска с этапами в ленте; закрытие соединения — остановка поиска."""
+    # Проект и сессия проверяются до потока: «не найдено» приходит обычным ответом.
+    project_sessions.require_project(session, project_id, source_search_chat.CHANNEL)
+    project_sessions.require_session(session, project_id, session_id, source_search_chat.CHANNEL)
+    return StreamingResponse(
+        source_search_chat.stream_turn(project_id, session_id, command.text),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@projects.post(
+    "/{project_id}/program-chat/sessions/{session_id}/build",
+    response_model=BackgroundJobStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_program_chat_build(
+    project_id: UUID,
+    session_id: UUID,
+    command: program_chat.ProgramChatBuildWrite,
+    session: SessionDependency,
+) -> BackgroundJobStartRead:
+    return program_chat.start_build(session, project_id, session_id, command)
+
+
+@projects.post(
+    "/{project_id}/program-chat/proposals/{message_id}/apply",
+    response_model=ProgramChangeResult,
+)
+def apply_program_chat_proposal(
+    project_id: UUID,
+    message_id: UUID,
+    command: program_chat.ProgramChatApplyWrite,
+    session: SessionDependency,
+) -> ProgramChangeResult:
+    return program_chat.apply_proposal(session, project_id, message_id, command)
+
+
+@projects.post(
+    "/{project_id}/program-chat/proposals/{message_id}/reject",
+    response_model=ChatMessageRead,
+)
+def reject_program_chat_proposal(
+    project_id: UUID, message_id: UUID, session: SessionDependency
+) -> ChatMessageRead:
+    message = program_chat.reject_proposal(session, project_id, message_id)
+    return chat_common.message_read(message)
 
 
 @projects.post(

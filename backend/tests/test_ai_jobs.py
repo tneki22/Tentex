@@ -105,8 +105,12 @@ def test_process_ai_job_deadline_exceeded_fails_with_russian_message(
     finished = session.get(BackgroundJob, job.id)
     assert finished is not None
     assert finished.state == BackgroundJobState.FAILED
-    assert finished.error is not None and "0.05" in finished.error
+    assert finished.error == (
+        "Модель не ответила за 120 секунд. Попробуйте другую модель или повторите."
+    )
     assert finished.lease_owner is None
+    run = session.scalar(select(AiRun).where(AiRun.job_id == job.id))
+    assert run is not None and run.status == "failed" and run.error_code == "ai_timeout"
 
 
 def test_process_ai_job_cancelled_while_running_finishes_as_cancelled(
@@ -178,6 +182,26 @@ def test_completed_job_keeps_result_for_a_returning_screen(
     assert result["suggestion"]["markdown"] == "# Чисто"
     assert result["page_number"] == 1
     assert str(job.id) not in result  # результат, а не эхо задачи
+
+
+def test_cleanup_is_pending_review_and_filters_by_its_page(
+    session: Session, ai_config: str
+) -> None:
+    del ai_config
+    material, source_hash = _material_with_page(session, "a107")
+    job = _cleanup_job(session, material, source_hash)
+    gateway = ModelGateway(session, FakeTransport(completions=[_completion()]))
+    process_ai_job(session, job, gateway)
+
+    visible = registry.list_jobs(
+        session, pending_review=True, material_id=material.id, page_number=1
+    )
+    assert [item.id for item in visible] == [job.id]
+    assert visible[0].needs_review and visible[0].deadline_seconds is None
+    registry.resolve_job(session, job.id)
+    assert not registry.list_jobs(
+        session, pending_review=True, material_id=material.id, page_number=1
+    )
 
 
 def test_result_of_unfinished_job_is_refused_not_invented(

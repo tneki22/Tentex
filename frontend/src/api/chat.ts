@@ -1,13 +1,54 @@
 import type { Schema } from "./preparation";
 import type { PageQuality } from "./materials";
-import { ProjectApiError, request } from "./projects";
+import { ProjectApiError, request, type MaterialKindHint } from "./projects";
 
-export type ChatMessageRole = "user" | "examiner" | "system";
+export type ChatMessageRole = "user" | "examiner" | "system" | "assistant";
 export type ChatStreamState = "complete" | "stopped" | "failed";
-export type ChatPayloadKind = "none" | "answer_form" | "verdict" | "task" | "interactive" | "tool_result";
+export type ChatPayloadKind =
+  | "none" | "answer_form" | "verdict" | "task" | "interactive" | "tool_result" | "program_diff";
 export type ExaminerPersona = "calm_teacher" | "neutral_examiner" | "strict_reviewer";
 export type ExaminerStrictness = "soft" | "normal" | "strict";
-export type ChatMode = "exam" | "study";
+export type ChatMode = "exam" | "study" | "program" | "source_search";
+export type ChatRetrievalScope = "linked_topic" | "topic_project" | "project" | "selected_materials";
+export type ChatKnowledgePolicy = "sources_only" | "allow_model";
+/** Что сделать с найденными местами; название операции не попадает в поисковый запрос. */
+export type ChatOperation = "discuss" | "explain" | "find_evidence" | "compare_sources" | "find_discrepancies";
+
+/** Параметры хода учебного чата: повтор после сбоя отправляет их без изменений. */
+export interface ChatSendOptions {
+  scope: ChatRetrievalScope;
+  knowledgePolicy: ChatKnowledgePolicy;
+  materialIds?: string[];
+  operation?: ChatOperation;
+  /** ID хода: повтор с ним не создаёт вторую реплику. */
+  turnId?: string;
+  /** `request_hash` оценки, которую пользователь подтвердил. */
+  confirmedRequestHash?: string;
+  contextBudgetTokens?: number;
+  rememberBudget?: boolean;
+}
+
+/** Что показать в окне подтверждения хода — `context` ошибки `ai_confirmation_required`. */
+export interface ChatConfirmationDetails {
+  request_hash: string;
+  reasons: string[];
+  model_id: string;
+  provider_label: string;
+  estimated_input_tokens: number;
+  estimated_output_tokens: number;
+  estimated_cost_usd: string | null;
+  estimated_cost_rub: string | null;
+  max_cost_usd: string | null;
+  max_cost_rub: string | null;
+  budget: { limit: number; needed: number; maximum: number | null };
+  manifest: Array<{ kind: string; title: string; tokens: number; included: boolean; truncated: boolean; reason: string | null }>;
+  expanded: {
+    request_hash: string;
+    budget_tokens: number;
+    estimated_cost_usd: string | null;
+    estimated_cost_rub: string | null;
+  } | null;
+}
 export type ChatToolRunState = "queued" | "running" | "succeeded" | "failed";
 export type AttemptOutcome = "passed" | "partial" | "failed" | "unscored";
 export type GradeMethod = "exact_match" | "key_terms" | "sql" | "semantic" | "ai_judge" | "self_assessment";
@@ -16,6 +57,7 @@ export const CONTEXT_FLAG_KEYS = [
   "profile",
   "reference",
   "fragments",
+  "retrieval",
   "attempts",
   "section_memory",
 ] as const;
@@ -32,6 +74,10 @@ export interface AnswerFormPayload {
   ordinal: number;
   submitted_at: string;
   text: string;
+  modality?: "text" | "oral";
+  oral_recording_id?: string;
+  audio_expires_at?: string;
+  speech_metrics?: OralRecordingRead["metrics"];
 }
 
 export interface RubricPointRead {
@@ -39,6 +85,7 @@ export interface RubricPointRead {
   quote: string | null;
   quote_start: number | null;
   quote_end: number | null;
+  source_quote?: string | null;
 }
 
 export interface GradeUsageRead {
@@ -63,6 +110,39 @@ export interface VerdictPayload {
   self_assessment: AttemptOutcome | null;
 }
 
+export interface ProgramChatOperationView {
+  op: "add" | "rename" | "move" | "change_type" | "set_goal" | "set_visibility" | "merge";
+  rationale: string;
+  title?: string | null;
+  node_type?: string;
+  node_id?: string;
+  node_ids?: string[];
+  parent_node_id?: string | null;
+  new_parent_node_id?: string | null;
+  after_node_id?: string | null;
+  /** Поставить первым среди соседей; `after_node_id: null` без него значит «в конец». */
+  at_start?: boolean;
+  is_in_current_program?: boolean;
+  goal_role?: string | null;
+  target_level?: string | null;
+  outline_ref?: { material_id: string; outline_item_key: string } | null;
+  /** Подсказка поиска материала для темы без пункта оглавления (свободный проект). */
+  search_queries?: string[];
+  material_kind?: MaterialKindHint | null;
+  children?: ProgramChatOperationView[];
+}
+
+export type ProgramChatOperationState = "pending" | "applied" | "conflicted";
+
+export interface ProgramChatDiffPayload {
+  summary: string;
+  pros: string[];
+  cons: string[];
+  operations: ProgramChatOperationView[];
+  operation_states: ProgramChatOperationState[];
+  rejected: boolean;
+}
+
 export interface AttemptRead {
   id: string;
   project_id: string;
@@ -74,6 +154,22 @@ export interface AttemptRead {
   strictness: ExaminerStrictness;
   context_snapshot: Record<string, unknown>;
   created_at: string;
+  answer_modality?: "text" | "oral";
+}
+
+export interface OralRecordingRead {
+  id: string;
+  transcript: string;
+  metrics: {
+    duration_ms: number;
+    pace_wpm?: number;
+    time_to_first_word_ms?: number;
+    pause_count?: number;
+    pause_duration_ms?: number;
+    silence_share?: number;
+  };
+  audio_available: boolean;
+  audio_expires_at: string;
 }
 
 export interface GradeRead {
@@ -106,6 +202,7 @@ export interface AttemptSummaryRead {
 export interface AttemptDetailRead {
   attempt: AttemptRead;
   grade: GradeRead | null;
+  oral?: OralRecordingRead | null;
 }
 
 export interface ChatMessageRead {
@@ -129,7 +226,7 @@ export interface ChatMessageRead {
 export interface ChatSessionSummary {
   id: string;
   project_id: string;
-  program_node_id: string;
+  program_node_id: string | null;
   title: string;
   updated_at: string;
   message_count: number;
@@ -139,13 +236,14 @@ export interface ChatSessionSummary {
 export interface ChatSessionDetail {
   id: string;
   project_id: string;
-  program_node_id: string;
+  program_node_id: string | null;
   section_scope_node_id: string | null;
   title: string;
   mode: ChatMode;
   persona: ExaminerPersona;
   strictness: ExaminerStrictness;
   model_override: ChatModelOverride | null;
+  model_parameters: Record<string, unknown>;
   context_flags: ChatContextFlags;
   draft_text: string;
   created_at: string;
@@ -158,6 +256,8 @@ export interface ChatSettingsPatch {
   persona?: ExaminerPersona;
   strictness?: ExaminerStrictness;
   model_override?: ChatModelOverride | null;
+  /** Ездят вместе с моделью: врозь это «рассуждение от прошлой модели». */
+  model_parameters?: Record<string, unknown> | null;
   context_flags?: Partial<ChatContextFlags>;
 }
 
@@ -172,13 +272,14 @@ export interface ManifestEntry {
   included: boolean;
   truncated: boolean;
   bytes: number;
+  chars: number;
   count: number | null;
   reason: string | null;
 }
 
 export interface ChatContextPreview {
   session_id: string;
-  node_id: string;
+  node_id: string | null;
   question: string;
   persona: ExaminerPersona;
   strictness: ExaminerStrictness;
@@ -226,6 +327,68 @@ export interface MaterialSearchResultItem {
   already_bound: boolean;
 }
 
+export type WebSourceKind =
+  | "textbook" | "lecture" | "article" | "video" | "course" | "problems" | "catalog" | "other";
+
+/** Объём найденного источника — из прочитанной страницы или выдачи, не от модели. */
+export interface WebSourceVolume {
+  kind: "html" | "pdf" | "text" | "video" | null;
+  words?: number | null;
+  minutes?: number | null;
+  pages?: number | null;
+  size_bytes?: number | null;
+  file_links?: number;
+  duration?: string | null;
+}
+
+export interface WebSourceItem {
+  url: string;
+  title: string;
+  host: string;
+  kind: WebSourceKind;
+  why: string;
+  gist: string;
+  level: "beginner" | "intermediate" | "advanced" | null;
+  volume: WebSourceVolume;
+  author: string | null;
+  node_ids: string[];
+  priority_reason?: string | null;
+  use_advice?: string | null;
+  time_fit?: string | null;
+}
+
+export interface WebSearchRun {
+  query: string;
+  category: "general" | "videos" | "science";
+  language: "ru" | "en" | "all";
+  node_ids: string[];
+  found: number;
+}
+
+/** Ход чата «Поиск в интернете» (`app/projects/source_search_chat.py`). */
+/** Страница из выдачи поиска — для блока «Процесс поиска». */
+export interface WebCandidateLink {
+  url: string;
+  title: string;
+  host: string;
+  /** Страницу открыли, чтобы узнать объём и начало текста. */
+  opened: boolean;
+}
+
+export interface SourceSearchResult {
+  summary: string;
+  /** Что модель решила искать; у ходов до потока этапов поля нет. */
+  plan_reply?: string;
+  searches: WebSearchRun[];
+  items: WebSourceItem[];
+  candidates?: WebCandidateLink[];
+  candidate_count: number;
+  hidden_attached: number;
+  hidden_seen: number;
+  unresponsive_engines: string[];
+  follow_ups: string[];
+}
+
 export type ToolResultPayload =
   | {
       tool_key: string;
@@ -233,6 +396,13 @@ export type ToolResultPayload =
       state: "succeeded" | "failed";
       query: string;
       result: { items: MaterialSearchResultItem[] };
+    }
+  | {
+      tool_key: string;
+      output_kind: "source_search_results";
+      state: "succeeded" | "failed";
+      query: string;
+      result: SourceSearchResult;
     }
   | {
       tool_key: string;
@@ -245,12 +415,41 @@ export type ToolResultPayload =
 export interface ChatAnswerResult {
   messages: ChatMessageRead[];
   attempt: AttemptRead;
-  grade: GradeRead;
+  grade: GradeRead | null;
+}
+
+/**
+ * Источник ответа из `context_snapshot.retrieval_sources` и кадра `started`.
+ * Поля после `text` появились 27.09.2026 — в старых сообщениях их нет.
+ */
+export interface ChatRetrievalSource {
+  id: string;
+  material: string;
+  material_id: string;
+  locator: string;
+  page: number | null;
+  text: string;
+  page_to?: number | null;
+  typst_path?: string | null;
+  line_from?: number | null;
+  line_to?: number | null;
+  block_title?: string | null;
+  quality?: string | null;
+  warning?: string | null;
+  /** Тот же текст есть и в этих материалах — одно место вместо повтора. */
+  also_in?: string[];
 }
 
 export type ChatStreamEvent =
-  | { type: "started"; messageId: string; runId: string }
+  | {
+      type: "started";
+      messageId: string;
+      userMessageId: string | null;
+      runId: string;
+      sources: ChatRetrievalSource[];
+    }
   | { type: "delta"; text: string }
+  | { type: "reset"; reason: string }
   | {
       type: "completed";
       messageId: string;
@@ -258,7 +457,7 @@ export type ChatStreamEvent =
       usage: Record<string, unknown>;
       cached: boolean;
     }
-  | { type: "error"; code: string; detail: string };
+  | { type: "error"; code: string; detail: string; context: Record<string, unknown> };
 
 const chatPath = (projectId: string): string =>
   `/api/projects/${encodeURIComponent(projectId)}/chat`;
@@ -267,14 +466,14 @@ const attemptsPath = (projectId: string): string =>
 
 export const listChatSessions = (
   projectId: string,
-  nodeId: string,
+  nodeId: string | null,
   signal?: AbortSignal,
 ): Promise<ChatSessionSummary[]> =>
-  request(`${chatPath(projectId)}/sessions?node_id=${encodeURIComponent(nodeId)}`, { signal });
+  request(`${chatPath(projectId)}/sessions${nodeId ? `?node_id=${encodeURIComponent(nodeId)}` : ""}`, { signal });
 
 export const createChatSession = (
   projectId: string,
-  nodeId: string,
+  nodeId: string | null,
 ): Promise<ChatSessionDetail> => request(`${chatPath(projectId)}/sessions`, {
   method: "POST",
   body: JSON.stringify({ program_node_id: nodeId }),
@@ -314,10 +513,10 @@ export const getChatContextPreview = (
 
 export const getChatCapabilities = (
   projectId: string,
-  nodeId: string,
+  nodeId: string | null,
   signal?: AbortSignal,
 ): Promise<ChatCapabilities> =>
-  request(`${chatPath(projectId)}/capabilities?node_id=${encodeURIComponent(nodeId)}`, { signal });
+  request(`${chatPath(projectId)}/capabilities${nodeId ? `?node_id=${encodeURIComponent(nodeId)}` : ""}`, { signal });
 
 export const runChatTool = (
   projectId: string,
@@ -338,6 +537,29 @@ export const submitChatAnswer = (
   `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/answer`,
   { method: "POST", body: JSON.stringify({ text, ...tracking }) },
 );
+
+export const uploadOralDraft = (
+  projectId: string, sessionId: string, audio: Blob, durationMs: number,
+): Promise<OralRecordingRead> => {
+  const body = new FormData();
+  body.append("file", audio, "answer.wav");
+  body.append("duration_ms", String(durationMs));
+  return request(
+    `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/oral-drafts`,
+    { method: "POST", body },
+  );
+};
+
+export const submitOralDraft = (
+  projectId: string, sessionId: string, recordingId: string,
+  text: string, answerMode: "memory" | "supported",
+): Promise<ChatAnswerResult> => request(
+  `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/oral-drafts/${encodeURIComponent(recordingId)}/submit`,
+  { method: "POST", body: JSON.stringify({ text, answer_mode: answerMode }) },
+);
+
+export const oralAudioUrl = (projectId: string, recordingId: string): string =>
+  `/api/projects/${encodeURIComponent(projectId)}/oral-recordings/${encodeURIComponent(recordingId)}/audio`;
 
 export const listAttempts = (
   projectId: string,
@@ -384,9 +606,16 @@ function parseFrame(raw: string): ChatStreamEvent | null {
   if (!event || !data) return null;
   const payload = JSON.parse(data) as Record<string, unknown>;
   if (event === "started") {
-    return { type: "started", messageId: String(payload.message_id), runId: String(payload.run_id) };
+    return {
+      type: "started",
+      messageId: String(payload.message_id),
+      userMessageId: payload.user_message_id ? String(payload.user_message_id) : null,
+      runId: String(payload.run_id),
+      sources: Array.isArray(payload.sources) ? (payload.sources as ChatRetrievalSource[]) : [],
+    };
   }
   if (event === "delta") return { type: "delta", text: String(payload.text ?? "") };
+  if (event === "reset") return { type: "reset", reason: String(payload.reason ?? "") };
   if (event === "completed") {
     return {
       type: "completed",
@@ -397,7 +626,12 @@ function parseFrame(raw: string): ChatStreamEvent | null {
     };
   }
   if (event === "error") {
-    return { type: "error", code: String(payload.code ?? "unknown"), detail: String(payload.detail ?? "") };
+    return {
+      type: "error",
+      code: String(payload.code ?? "unknown"),
+      detail: String(payload.detail ?? ""),
+      context: (payload.context as Record<string, unknown> | undefined) ?? {},
+    };
   }
   return null;
 }
@@ -407,14 +641,33 @@ export async function* streamMessage(
   sessionId: string,
   text: string,
   signal: AbortSignal,
+  retrieval: ChatSendOptions = { scope: "topic_project", knowledgePolicy: "sources_only" },
 ): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch(
     `${chatPath(projectId)}/sessions/${encodeURIComponent(sessionId)}/messages`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }), signal },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        retrieval_scope: retrieval.scope,
+        retrieval_material_ids: retrieval.materialIds ?? [],
+        knowledge_policy: retrieval.knowledgePolicy,
+        operation: retrieval.operation ?? "discuss",
+        client_turn_id: retrieval.turnId ?? null,
+        confirmed_request_hash: retrieval.confirmedRequestHash ?? null,
+        context_budget_tokens: retrieval.contextBudgetTokens ?? null,
+        remember_budget: retrieval.rememberBudget ?? false,
+      }),
+      signal,
+    },
   );
   if (!response.ok || !response.body) {
-    const payload = await response.json().catch(() => null) as { detail?: string; code?: string } | null;
-    throw new ProjectApiError(response.status, payload?.detail ?? "Ответ не получен", payload?.code ?? null);
+    const payload = await response.json().catch(() => null) as
+      { detail?: string; code?: string; context?: Record<string, unknown> } | null;
+    throw new ProjectApiError(
+      response.status, payload?.detail ?? "Ответ не получен", payload?.code ?? null, payload?.context ?? {},
+    );
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

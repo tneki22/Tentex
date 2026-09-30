@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -7,28 +8,44 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.ai.dictation import router as dictation_router
 from app.ai.router import router as ai_router
 from app.background.router import router as background_router
 from app.bindings.router import router as bindings_router
 from app.cards.router import router as cards_router
 from app.config import settings
 from app.conspects.router import router as conspects_router
+from app.coverage.router import router as coverage_router
 from app.db import SessionLocal, upgrade_database
 from app.exam.router import router as exam_router
+from app.lesson_planning.router import router as lesson_planning_router
+from app.lessons.router import router as lessons_router
 from app.logging_config import configure_logging
 from app.materials.router import router as materials_router
+from app.materials.search_router import router as library_search_router
 from app.ocr.router import router as ocr_router
 from app.preparation.router import router as preparation_router
 from app.projects.demo import seed_demo_project
 from app.projects.errors import ProjectDomainError
 from app.projects.router import router as projects_router
+from app.retrieval.router import router as retrieval_router
+from app.retrieval.snapshot import warm_active_snapshot
+from app.storage import maintenance as storage_maintenance
+from app.storage.restore import recover_interrupted_restore
+from app.storage.router import router as storage_router
+from app.system.router import router as system_router
 
 api = APIRouter(prefix="/api")
+
+#: Опрашиваются с фронтенда (BACKGROUND_POLL_MS, STATUS_POLL_MS) или докером
+#: (healthcheck) каждые несколько секунд — успешный ответ по ним на INFO
+#: тонет в них же самих. Ошибки и остальные пути логируются как обычно.
+POLLED_PATHS = frozenset({"/api/health", "/api/background-jobs", "/api/system/status"})
 
 
 @api.get("/health")
 def health() -> dict[str, str]:
-    """Пульс сервера. Фронтенд дёргает его на служебном экране «Состояние»."""
+    """Пульс сервера для healthcheck контейнера. Сводка панели — `/api/system/status`."""
     return {"status": "ok", "service": "tentex-api"}
 
 
@@ -36,6 +53,7 @@ def health() -> dict[str, str]:
 async def lifespan(_: FastAPI):
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
+    recover_interrupted_restore()
     database_existed = settings.database_path.exists()
     upgrade_database()
     if settings.seed_demo_project:
@@ -44,6 +62,7 @@ async def lifespan(_: FastAPI):
             # версиях seed может дозаполнить новые fixture-данные существующего
             # примера, но не воскресит проект, который пользователь удалил.
             seed_demo_project(session, create_if_missing=not database_existed)
+    warm_active_snapshot()
     yield
 
 
@@ -71,6 +90,27 @@ def create_app() -> FastAPI:
         request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
         start = time.perf_counter()
         try:
+            if (
+                storage_maintenance.active()
+                and request.method not in {"GET", "HEAD", "OPTIONS"}
+                # Отмена самой копии должна доходить до реестра. Он проверяет
+                # владельца lock; при restore и для других задач запись запрещена.
+                and not (
+                    request.method == "POST"
+                    and re.fullmatch(
+                        r"/api/background-jobs/[0-9a-fA-F-]{36}/cancel", request.url.path
+                    )
+                    and (storage_maintenance.read_state() or {}).get("operation") == "backup"
+                )
+            ):
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": "Хранилище временно работает в режиме обслуживания",
+                        "code": "maintenance_busy",
+                    },
+                    headers={"Retry-After": "2", "X-Request-ID": request_id},
+                )
             response = await call_next(request)
         except Exception:
             elapsed_ms = (time.perf_counter() - start) * 1000
@@ -92,7 +132,8 @@ def create_app() -> FastAPI:
             )
         elapsed_ms = (time.perf_counter() - start) * 1000
         response.headers["X-Request-ID"] = request_id
-        log.info(
+        log_success = log.debug if request.url.path in POLLED_PATHS else log.info
+        log_success(
             "%s %s -> %s rid=%s %.1fms",
             request.method,
             request.url.path,
@@ -115,15 +156,23 @@ def create_app() -> FastAPI:
 
     app.include_router(api)
     app.include_router(projects_router)
+    app.include_router(coverage_router)
     app.include_router(materials_router)
+    app.include_router(library_search_router)
     app.include_router(bindings_router)
     app.include_router(cards_router)
     app.include_router(conspects_router)
+    app.include_router(lessons_router)
     app.include_router(ai_router)
+    app.include_router(dictation_router)
     app.include_router(ocr_router)
     app.include_router(exam_router)
     app.include_router(background_router)
     app.include_router(preparation_router)
+    app.include_router(lesson_planning_router)
+    app.include_router(retrieval_router)
+    app.include_router(storage_router)
+    app.include_router(system_router)
     return app
 
 

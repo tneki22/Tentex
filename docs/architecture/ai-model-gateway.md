@@ -4,6 +4,11 @@
 глобальные Параметры → ИИ и первые потребители, включая экзаменационный чат и
 судью ответа.
 
+> **Дополнение 22.09.2026.** `material_text_cleanup` исполняется фоновой
+> задачей с общим дедлайном 120 секунд и одним повтором. При дедлайне завершаются
+> и `BackgroundJob`, и связанный `AiRun` (`failed`, `error_code=ai_timeout`);
+> другую модель автоматически не выбираем.
+
 > Структура провайдеров, составная идентичность модели, новые ручки и актуальный экран
 > переработаны 14.08.2026. Текущий контракт: `ai-provider-model-settings.md`.
 
@@ -82,7 +87,9 @@ strict JSON Schema и затем независимо проверяет рез�
 | `exam_chat_reply` | text | streaming | none | да |
 | `exam_answer_judge` | text | structured output | exact | да |
 | `exam_chat_memory` | text | structured output | none | позже |
-| `speech_transcription` | speech | audio transcription | content hash | позже |
+| `speech_transcription` | speech | audio transcription | нет | да |
+| `settings_speech_model_test` | speech (скрытая) | audio transcription | нет | да |
+| `source_web_search` | text | structured output | none | да, только OpenRouter |
 
 Порядок разрешения:
 
@@ -326,6 +333,13 @@ Apply сопоставляет каждый пункт ответа со ста�
 `ai_import_repair` пишет тот же снимок и `created_ids`, что `active_exam_import`, и
 отменяется тем же кодом undo.
 
+## Поиск в сети
+
+Шлюз сам в сети не ищет. Поиск материалов в интернете идёт через локальный SearXNG, а
+модель только планирует запросы и отбирает найденное обычными структурными вызовами
+роли `source_web_search` — `source-search-chat.md`. Прежний плагин `web` OpenRouter
+(`AiTextRequest.web_search_results`, `AiResult.citations`) удалён 24.09.2026.
+
 ## Нормализованные ошибки
 
 | Код | HTTP | Смысл |
@@ -343,8 +357,48 @@ Apply сопоставляет каждый пункт ответа со ста�
 | `ai_timeout` | 504 | локальный timeout |
 | `ai_invalid_structured_output` | 422 | ответ не прошёл Pydantic |
 | `ai_cancelled` | 499 | поток отменён пользователем |
+| `ai_audio_empty` | 422 | пустая запись |
+| `ai_audio_too_large` | 413 | запись больше 20 МБ |
+| `ai_audio_format_unsupported` | 415 | тип файла не аудио, которое мы принимаем |
 
 Provider body и текст исключения наружу не передаются.
+
+## Распознавание речи
+
+`POST /api/ai/transcriptions` (multipart, поле `file`) → `{text, run_id, duration_ms}`.
+Ходит через `ModelGateway.transcribe` роли `speech_transcription`: модель берётся из
+«Параметров ИИ → Для речи», расход попадает в `AiRun`, текст записи в журнал не
+пишется (`response_payload = {}`). Подтверждение стоимости не запрашивается — это явное
+нажатие на микрофон, — а дневной лимит и лимит вызова действуют.
+
+Способ вызова зависит от модели (`is_transcription_model` в `settings.py`):
+
+| Модель | Как зовём |
+|---|---|
+| Whisper и `*-transcribe`, провайдер `openai_compatible` (Groq, OpenAI) | `/audio/transcriptions`, multipart |
+| Они же, профиль `openrouter` | `/audio/transcriptions`, JSON с `input_audio` в base64 |
+| Мультимодальная чат-модель с аудиовходом (Gemini) | `/chat/completions` с частью `input_audio` |
+
+Whisper, добавленный из поиска у провайдера без `architecture` в `/models` (Groq), получает
+вход `audio` по ID (`provider._infer_modalities`); у уже сохранённых это поправила
+миграция `20260920_0051`. Фронтенд всегда шлёт WAV 16 кГц моно (`dictationAudio.ts`):
+webm из Chrome не принимают чат-модели, а WAV понимают все три пути.
+
+### Расшифровка аудиоматериала
+
+Тот же `ModelGateway.transcribe` зовёт разбор материала в режиме «Облако» (`materials/parsers/cloud_asr.py`) под отдельной ролью `material_audio_transcription`: её можно выключить в «Параметрах ИИ → Функции», не отбирая микрофон в чатах, а в журнале расходов видно, что это расшифровка файла. Модель берётся из того же «Для речи». Запись режется на куски ≈5 минут, каждый кусок — один вызов WAV 16 кГц моно; сбой временной природы повторяется с паузами `RETRY_BACKOFF_SECONDS` (набор кодов — `RETRYABLE_PROVIDER_CODES`), лимиты стоимости действуют на каждый вызов. Параметр `timestamps=True` просит время фраз: у Whisper-моделей на `/audio/transcriptions` (Groq, OpenAI) это `response_format="verbose_json"`, а если провайдер формат не принял (400/404/415/422) — повтор обычным `json`; у остальных путей `ProviderTranscription.segments` пуст. Контракт файла и чекпоинтов — `LIBRARY_FILE_PROCESSING.md`, «Аудио».
+
+`Тест` аудиомодели отправляет секунду тишины скрытой ролью `settings_speech_model_test` и
+отвечает `kind: "speech"`; обычной модели по-прежнему задаётся вопрос.
+
+`timestamps=True` теперь запрашивает у поддерживающего Whisper
+`timestamp_granularities=["word", "segment"]` вместе
+с `verbose_json`. Пословные метки возвращаются в `ProviderTranscription.words`;
+при неподдерживаемом формате вызов откатывается к обычной расшифровке, а
+показатели темпа и пауз остаются недоступными.
+
+`usage.include` в chat-запросе — расширение OpenRouter (стоимость), поэтому шлётся только
+профилю `openrouter`: Groq отвечает на неизвестное поле отказом.
 
 ## Проверки
 

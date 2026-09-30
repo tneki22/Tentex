@@ -1,5 +1,5 @@
-# Зависимости приезжают вертикалями: сейчас здесь локальное ядро и шлюз моделей.
-# OCR, эмбеддинги и тяжёлые учебные сценарии остаются на своих этапах (см. PLAN.md).
+# Лёгкие общие зависимости API и worker. Тяжёлые OCR и embedding runtime
+# устанавливаются только в своих образах из requirements-worker/retrieval.txt.
 
 fastapi>=0.136,<0.142
 uvicorn[standard]>=0.46,<0.53
@@ -19,4 +19,9 @@ openai>=2,<3
 # Клиент Hugging Face: оттуда пользователь ставит модели распознавания
 # (см. app/ocr/catalog.py). Чистый Python, тяжёлого за собой не тянет.
 huggingface-hub>=0.34,<2
+sqlite-vec==0.1.9
 cryptography>=46,<47
+# Экспорт уроков: Markdown пояснений разбирается в документ для PDF и LaTeX
+# (`app/lessons/export/markdown_in.py`), формулы `$…$` — плагином dollarmath.
+markdown-it-py>=4,<5
+mdit-py-plugins>=0.6,<1

@@ -5,15 +5,23 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.db import project_write_transaction
-from app.materials.schemas import MaterialPurpose
+from app.materials.schemas import MaterialPurpose, ProcessingStart
 from app.materials.storage import material_path, remove_storage_dir_if_empty
 from app.models import (
+    Activity,
     Attempt,
+    BackgroundJob,
+    BackgroundJobKind,
     ChatSession,
     ConspectImage,
     GoalPassport,
+    GoalScope,
+    Lesson,
     Material,
-    NodeType,
+    MaterialState,
+    ModuleKey,
+    OralRecording,
+    ParserMode,
     ProgramNode,
     Project,
     ProjectMaterial,
@@ -45,6 +53,7 @@ from app.projects.schemas import (
     ProjectSettingsWrite,
     ProjectStats,
     ProjectSummary,
+    RecentStudyItem,
     WizardDraftCreate,
     WizardDraftDetail,
     WizardDraftRead,
@@ -98,10 +107,6 @@ def _project_detail(session: Session, project_id: UUID) -> ProjectDetail:
 
 
 def create_wizard_draft(session: Session, command: WizardDraftCreate) -> WizardDraftDetail:
-    if command.template_key == TemplateKey.FREE:
-        raise ProjectConflictError(
-            "Свободное изучение появится на этапе 7", code="unsupported_template"
-        )
     variant = (
         WorkspaceVariant.EXAM
         if command.template_key == TemplateKey.EXAM
@@ -149,7 +154,7 @@ def get_wizard_draft(session: Session, project_id: UUID) -> WizardDraftDetail:
 def save_wizard_draft(
     session: Session, project_id: UUID, command: WizardDraftWrite
 ) -> WizardDraftDetail:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None:
             raise ProjectNotFoundError()
@@ -203,7 +208,7 @@ def save_wizard_draft(
 
 
 def delete_wizard_draft(session: Session, project_id: UUID, expected_revision: int) -> None:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None:
             raise ProjectNotFoundError("Черновик проекта не найден")
@@ -281,7 +286,8 @@ def _normalize_active_order(session: Session) -> int:
 def activate_wizard_draft(
     session: Session, project_id: UUID, expected_revision: int
 ) -> ProjectDetail:
-    with session.begin():
+    """Активирует черновик, когда его паспорт соответствует типу проекта."""
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None:
             raise ProjectNotFoundError()
@@ -302,13 +308,15 @@ def activate_wizard_draft(
                 context={"current_draft_revision": draft.revision},
             )
         goal_passport = session.get(GoalPassport, project_id)
-        required_goal_fields = (
-            "subject",
-            "purpose",
-            "starting_level",
-            "target_outcome",
-            "study_format",
-        )
+        required_goal_fields = ("purpose", "scope", "starting_level", "target_outcome")
+        if project.template_key != TemplateKey.FREE:
+            required_goal_fields += ("subject",)
+        if project.workspace_variant == WorkspaceVariant.EXAM:
+            required_goal_fields += ("study_format",)
+        if project.template_key == TemplateKey.FREE or (
+            goal_passport is not None and goal_passport.scope == GoalScope.GOAL
+        ):
+            required_goal_fields += ("goal",)
         if project.name is None or not project.name.strip():
             raise ProjectConflictError("Перед активацией укажите название проекта")
         if goal_passport is None or any(
@@ -323,6 +331,33 @@ def activate_wizard_draft(
         project.status_changed_at = now
         project.updated_at = now
         session.execute(delete(WizardDraft).where(WizardDraft.project_id == project_id))
+        if project.workspace_variant == WorkspaceVariant.EXAM:
+            from app.materials import library
+
+            # Ответы могли разобрать ещё в мастере. Тогда автопривязка в воркере
+            # пропустила черновик; запускаем её только после активации и импорта.
+            for link, material in session.execute(
+                select(ProjectMaterial, Material)
+                .join(Material, Material.id == ProjectMaterial.material_id)
+                .where(
+                    ProjectMaterial.project_id == project_id,
+                )
+            ):
+                if MaterialPurpose.REFERENCE_ANSWERS.value not in (link.purposes or []):
+                    continue
+                if material.status == MaterialState.READY:
+                    session.add(BackgroundJob(
+                        kind=BackgroundJobKind.LINK_ANSWERS,
+                        project_id=project_id,
+                        material_id=material.id,
+                        checkpoint={},
+                    ))
+                elif material.status == MaterialState.READY_TO_PROCESS:
+                    # Постановка задачи быстрая, а OCR начнётся уже после commit:
+                    # длинная обработка не блокирует создание проекта.
+                    library.start_processing_core(
+                        session, material.id, ProcessingStart(parser_mode=ParserMode.FAST)
+                    )
         session.flush()
         return _project_detail(session, project_id)
 
@@ -407,10 +442,8 @@ def list_project_stats(session: Session) -> list[ProjectStats]:
     stats: list[ProjectStats] = []
     for item in projects:
         materials, pages = material_counts.get(item.id, (0, None))
-        is_exam = item.template_key == TemplateKey.EXAM
-        is_textbook = item.template_key == TemplateKey.TEXTBOOK
-        # Свободное изучение приезжает на этапе 7: считать по нему нечего, и ноль
-        # вместо метрики был бы неправдой (FR-P3).
+        is_exam = item.workspace_variant == WorkspaceVariant.EXAM
+        is_textbook = item.workspace_variant == WorkspaceVariant.TEXTBOOK
         touched = [
             moment
             for moment in (attempt_activity.get(item.id), chat_activity.get(item.id))
@@ -429,6 +462,59 @@ def list_project_stats(session: Session) -> list[ProjectStats]:
     return stats
 
 
+def list_recent_study(session: Session) -> list[RecentStudyItem]:
+    """Пять последних действительно завершённых уроков или ответов.
+
+    Урок появляется только после явного «Урок пройден», а вопрос — после
+    сохранённой попытки ответа. Создание и простое открытие сюда не попадают.
+    """
+    lesson_rows = session.execute(
+        select(Lesson, Project)
+        .join(Project, Project.id == Lesson.project_id)
+        .where(Project.status == ProjectStatus.ACTIVE, Lesson.completed_at.is_not(None))
+        .order_by(Lesson.completed_at.desc())
+        .limit(5)
+    ).all()
+    attempt_rows = session.execute(
+        select(Attempt, Activity, ProgramNode, Project)
+        .join(Activity, Activity.id == Attempt.activity_id)
+        .join(
+            ProgramNode,
+            (ProgramNode.id == Activity.program_node_id)
+            & (ProgramNode.project_id == Attempt.project_id),
+        )
+        .join(Project, Project.id == Attempt.project_id)
+        .where(Project.status == ProjectStatus.ACTIVE, Project.template_key == TemplateKey.EXAM)
+        .order_by(Attempt.created_at.desc())
+        .limit(5)
+    ).all()
+    items = [
+        RecentStudyItem(
+            project_id=project.id,
+            project_name=project.name or "Без названия",
+            template_key=project.template_key,
+            kind="lesson",
+            item_id=lesson.id,
+            title=lesson.title,
+            happened_at=lesson.completed_at,
+        )
+        for lesson, project in lesson_rows
+    ]
+    items.extend(
+        RecentStudyItem(
+            project_id=project.id,
+            project_name=project.name or "Без названия",
+            template_key=project.template_key,
+            kind="question",
+            item_id=node.id,
+            title=node.title,
+            happened_at=attempt.created_at,
+        )
+        for attempt, _activity, node, project in attempt_rows
+    )
+    return sorted(items, key=lambda item: item.happened_at, reverse=True)[:5]
+
+
 def _latest(moments: list[datetime]) -> datetime | None:
     """Пусто — значит занятий ещё не было. `Project.updated_at` сюда не годится:
     он сдвигается от перестановки карточек мышью."""
@@ -442,7 +528,7 @@ def get_project(session: Session, project_id: UUID) -> ProjectDetail:
 def update_project_settings(
     session: Session, project_id: UUID, command: ProjectSettingsWrite
 ) -> ProjectSettingsResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None or project.status == ProjectStatus.DRAFT:
             raise ProjectNotFoundError()
@@ -456,7 +542,18 @@ def update_project_settings(
         project_data = command.project.model_dump(mode="python", exclude={"enabled_modules"})
         for field, value in project_data.items():
             setattr(project, field, value.value if hasattr(value, "value") else value)
-        project.enabled_modules = [module.value for module in command.project.enabled_modules]
+        new_modules = [module.value for module in command.project.enabled_modules]
+        if (
+            ModuleKey.LESSON_PLANNING.value in new_modules
+            and project.workspace_variant != WorkspaceVariant.TEXTBOOK
+        ):
+            raise ProjectInvariantError("Планирование уроков доступно только в учебниковом проекте")
+        if (
+            ModuleKey.LESSON_PLANNING.value in (project.enabled_modules or [])
+            and ModuleKey.LESSON_PLANNING.value not in new_modules
+        ):
+            project.lesson_planning_disabled_at = now
+        project.enabled_modules = new_modules
         project.updated_at = now
         goal_passport = session.get(GoalPassport, project_id)
         if goal_passport is None:
@@ -493,7 +590,7 @@ def save_project_order(
 
 
 def archive_project(session: Session, project_id: UUID) -> ProjectSummary:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None or project.status == ProjectStatus.DRAFT:
             raise ProjectNotFoundError()
@@ -515,7 +612,7 @@ def archive_project(session: Session, project_id: UUID) -> ProjectSummary:
 
 
 def restore_project(session: Session, project_id: UUID) -> ProjectSummary:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None or project.status == ProjectStatus.DRAFT:
             raise ProjectNotFoundError()
@@ -537,7 +634,7 @@ def restore_project(session: Session, project_id: UUID) -> ProjectSummary:
 
 def delete_project(session: Session, project_id: UUID) -> None:
     """Безвозвратно удаляет живой проект, но не общие файлы библиотеки."""
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None or project.status == ProjectStatus.DRAFT:
             raise ProjectNotFoundError()
@@ -550,6 +647,13 @@ def delete_project(session: Session, project_id: UUID) -> None:
                 select(ConspectImage).where(ConspectImage.project_id == project_id)
             )
         ]
+        oral_audio_paths = [
+            material_path(recording.audio_path)
+            for recording in session.scalars(
+                select(OralRecording).where(OralRecording.project_id == project_id)
+            )
+            if recording.audio_path
+        ]
         # Самоссылка дерева использует RESTRICT, поэтому одного CASCADE от
         # projects недостаточно: сначала удаляем листья, затем сам проект.
         program.delete_program_tree(session, project_id)
@@ -560,7 +664,10 @@ def delete_project(session: Session, project_id: UUID) -> None:
             session.flush()
     for path in conspect_image_paths:
         path.unlink(missing_ok=True)
+    for path in oral_audio_paths:
+        path.unlink(missing_ok=True)
     remove_storage_dir_if_empty(f"conspects/{project_id}")
+    remove_storage_dir_if_empty(f"oral/{project_id}")
 
 
 def save_workspace_state(
@@ -595,12 +702,8 @@ def save_workspace_state(
             raise ProjectInvariantError("Раскладка ссылается на узел другого проекта")
         if command.layout.selected_node_id is not None:
             selected = found[command.layout.selected_node_id]
-            if (
-                selected.node_type not in {NodeType.TOPIC, NodeType.SUBPOINT}
-                or not selected.is_in_current_program
-                or selected.is_archived
-            ):
-                raise ProjectInvariantError("Выбранным может быть только текущий изучаемый узел")
+            if not selected.is_in_current_program or selected.is_archived:
+                raise ProjectInvariantError("Выбранным может быть только текущий узел программы")
         layout = command.layout.model_dump(mode="json")
         layout["expanded_node_ids"] = [
             str(node_id) for node_id in dict.fromkeys(command.layout.expanded_node_ids)

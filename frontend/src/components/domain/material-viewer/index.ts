@@ -7,15 +7,20 @@
  */
 export { DocumentSearchField } from "./DocumentSearchField";
 export { DocumentStage } from "./DocumentStage";
+export { PageFlow } from "./PageFlow";
+export { PageHighlights } from "./PageHighlights";
+export { PageRegion } from "./PageRegion";
 export { PdfOutline } from "./PdfOutline";
 export { StructuredPage, MarkdownTable, highlight } from "./StructuredPage";
 export { TimedTranscript, formatTime } from "./TimedTranscript";
 export { ViewerToolbar, PageNumberInput } from "./ViewerToolbar";
 export type { ViewerToolbarProps } from "./ViewerToolbar";
 export { getMaterialPresentation } from "./sourcePresentation";
+export { MaterialSourceView, MaterialTextView } from "./MaterialSourceView";
 export type {
   MaterialPresentation,
   MaterialPresentationKind,
   MaterialViewMode,
+  PageFlowMode,
   ViewerZoom,
 } from "./types";

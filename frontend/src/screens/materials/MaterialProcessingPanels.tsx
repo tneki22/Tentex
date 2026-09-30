@@ -11,16 +11,18 @@ import {
   type LibraryMaterialDetailRead,
   type MaterialPageRead,
   type MaterialRevisionRead,
-  type ParserMode,
-  type ProcessingScope,
+  type LibraryProcessingCommand,
 } from "../../api/materials";
+import { indexLibraryMaterial } from "../../api/retrieval";
 import { Button, ErrorState, LoadingState } from "../../components/ui";
 import { LibraryProcessingPanel } from "../library/LibraryProcessingPanel";
 import { MaterialRevisionPanel } from "../library/MaterialRevisionPanel";
+import { HeaderFooterDialog } from "../HeaderFooterDialog";
 
 const POLL_MS = 1200;
 
 interface MaterialProcessingPanelsProps {
+  projectId: string;
   materialId: string;
   /** Текущая страница проекта: панель по ней включает правку и подтверждение OCR. */
   page: MaterialPageRead | null;
@@ -39,6 +41,7 @@ interface MaterialProcessingPanelsProps {
  * скачивание исходника и полное удаление остаются в Библиотеке.
  */
 export function MaterialProcessingPanels({
+  projectId,
   materialId,
   page,
   onEditPage,
@@ -51,6 +54,7 @@ export function MaterialProcessingPanels({
   const [busy, setBusy] = useState(false);
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [headerFooterOpen, setHeaderFooterOpen] = useState(false);
 
   /** Родитель пересоздаёт onError на каждый свой рендер (листание страниц и т.п.) —
    * держим актуальный колбэк в ref, чтобы это не меняло identity refresh и не гоняло
@@ -110,12 +114,7 @@ export function MaterialProcessingPanels({
     }
   }, [refresh, onChanged, onError]);
 
-  const start = (command: {
-    parser_mode: ParserMode;
-    scope: ProcessingScope;
-    page_from?: number;
-    page_to?: number;
-  }) => void run(() => startLibraryProcessing(materialId, command));
+  const start = (command: LibraryProcessingCommand) => void run(() => startLibraryProcessing(materialId, command));
 
   const control = (action: "pause" | "resume" | "retry" | "cancel") =>
     void run(() => controlLibraryProcessing(materialId, action));
@@ -163,8 +162,12 @@ export function MaterialProcessingPanels({
         onTypstBuild={buildTypst}
         onTypstAddFile={addTypstFile}
         onEditPage={onEditPage}
-        onCleanupPage={onCleanupPage}
+      onCleanupPage={onCleanupPage}
+      onRemoveTimestamps={() => undefined}
+        onFindHeaderFooter={() => setHeaderFooterOpen(true)}
         onConfirmPageReview={confirmReview}
+        onIndexMaterial={() => void run(() => indexLibraryMaterial(materialId))}
+        onImagesQueued={() => void refresh()}
       />
       <MaterialRevisionPanel
         material={detail}
@@ -173,6 +176,16 @@ export function MaterialProcessingPanels({
         busy={busy}
         onSelect={setSelectedRevision}
         onRestore={restore}
+      />
+      <HeaderFooterDialog
+        open={headerFooterOpen}
+        projectId={projectId}
+        material={{ id: detail.id, display_name: detail.display_name }}
+        onOpenChange={setHeaderFooterOpen}
+        onReload={async () => {
+          await refresh();
+        }}
+        onApplied={() => onChanged()}
       />
     </>
   );

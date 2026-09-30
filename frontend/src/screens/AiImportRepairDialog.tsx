@@ -122,6 +122,7 @@ function QuestionEditor({ item, label, onTitleChange, onKindChange, onSubpointCh
         <ol className="ai-repair-subpoint-list">
           {item.subpoints.map((subpoint, subIndex) => (
             <li key={subIndex}>
+              <span className="ai-repair-subpoint-number">{label}.{subIndex + 1}</span>
               <input value={subpoint} onChange={(event) => onSubpointChange(subIndex, event.target.value)} />
               <IconButton label="Убрать подпункт" onClick={() => onSubpointRemove(subIndex)}><X size={13} /></IconButton>
             </li>
@@ -389,6 +390,13 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
   }
 
   const failure = describeAiFailure(error);
+  const mainCount = nodes.filter((node) => node.node_type === "topic" || node.exam_kind === "ticket").length;
+  const subpointCount = nodes.filter((node) => node.node_type === "subpoint").length;
+  const sourcePositions = new Map(
+    (preflight?.source_context ?? [])
+      .filter((node) => node.node_type === "topic" || node.exam_kind === "ticket")
+      .map((node, index) => [node.id, index + 1]),
+  );
 
   return (
     <>
@@ -407,7 +415,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
       >
         <div className="ai-grouping-flow">
           <section className="ai-grouping-intro">
-            <strong>{nodes.length} пунктов программы</strong>
+            <strong>{mainCount} основных пунктов{subpointCount > 0 ? ` · ${subpointCount} подпунктов` : ""}</strong>
           </section>
 
           <label className="ai-instruction-field">
@@ -422,11 +430,11 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
               <p><strong>Не отправляются:</strong> ответы, ответы пользователя, материалы, привязки, конспекты и попытки.</p>
               {!preflight && <p>Полный состав появится после оценки запроса.</p>}
               <ol className="ai-question-manifest">
-                {(preflight?.source_context ?? []).map((node, index) => (
+                {(preflight?.source_context ?? []).map((node) => (
                   <li key={node.id}>
-                    <code>#{index + 1}</code>
+                    <code>{sourcePositions.has(node.id) ? `#${sourcePositions.get(node.id)}` : "·"}</code>
                     <span>{node.exam_kind === "ticket" ? "Билет" : node.exam_kind === "task" ? "Задача" : node.exam_kind === "question" ? "Вопрос" : node.node_type === "section" ? "Раздел" : node.node_type === "subpoint" ? "Подпункт" : "Тема"}</span>
-                    <strong>{[...node.path, node.title].join(" → ")}</strong>
+                    <strong>{node.title}</strong>
                     <small>{node.id}</small>
                   </li>
                 ))}
@@ -485,7 +493,7 @@ export function AiImportRepairDialog({ open, projectId, nodes, onOpenChange, onA
                         </header>
                         <ol className="ai-repair-item-list">
                           {ticket.items.map((child, childIndex) => (
-                            <QuestionEditor key={childIndex} {...questionEditorProps(ticketIndex, childIndex, child, `${childIndex + 1}`)} />
+                            <QuestionEditor key={childIndex} {...questionEditorProps(ticketIndex, childIndex, child, `${ticketIndex + 1}.${childIndex + 1}`)} />
                           ))}
                         </ol>
                       </li>

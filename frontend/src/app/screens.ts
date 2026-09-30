@@ -1,8 +1,10 @@
 import {
   CalendarDays,
+  BookOpenText,
   Files,
   FileSearch,
   FolderOpen,
+  Globe,
   GraduationCap,
   Layers,
   Library,
@@ -13,15 +15,15 @@ import {
   SlidersHorizontal,
   Sparkles,
   Target,
+  ScanSearch,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 /**
- * Экраны из §21 требований плюс служебная витрина UI-кита: двенадцать проектных,
- * три глобальных (Библиотека, Рабочая область материала, Параметры) и витрина.
- * Маршруты «Покрытие», «Очередь предложений» и «Инбокс» удалены 01.09.2026 —
- * они не имели ни компонента, ни эндпоинта. Аналитический экран здесь один:
- * `coverage-map`, подписанный «Ответы».
+ * Экраны из §21 требований плюс учебниковое Покрытие и служебная витрина UI-кита.
+ * Удалённые 01.09.2026 «Очередь предложений» и «Инбокс» не возвращаются.
+ * `coverage-map` остаётся экзаменационными «Ответами», а `textbook-coverage` —
+ * отдельная поверхность прохода 2.
  * Это единственный список экранов в проекте: навигация, роутинг и заглушки
  * строятся отсюда. Добавляешь экран — добавляешь строку здесь.
  *
@@ -88,6 +90,16 @@ export const SCREENS: ScreenMeta[] = [
     depth: "полностью",
   },
   {
+    id: "textbook-coverage",
+    path: "/projects/:projectId/coverage",
+    navPath: "/projects/:projectId/coverage",
+    title: "Покрытие",
+    summary: "Первичный обзор всех блоков, прогресс, область и диагностические границы.",
+    group: "Проект",
+    icon: ScanSearch,
+    depth: "полностью",
+  },
+  {
     id: "program",
     path: "/projects/:projectId/program",
     navPath: "/projects/:projectId/program",
@@ -133,7 +145,7 @@ export const SCREENS: ScreenMeta[] = [
     path: "/projects/:projectId/session",
     navPath: "/projects/:projectId/session",
     title: "Сессия занятия",
-    summary: "Единый каркас под все виды активностей, включая редактор SQL и разбор ответа.",
+    summary: "Единый каркас под все виды активностей и разбор ответа.",
     group: "Занятия",
     icon: GraduationCap,
     depth: "полностью",
@@ -143,20 +155,30 @@ export const SCREENS: ScreenMeta[] = [
     path: "/projects/:projectId/cards",
     navPath: "/projects/:projectId/cards",
     title: "Карточки",
-    summary: "Банк, фильтры, редактор, режим повторения.",
+    summary: "Банк, фильтры, редактор, режим повторения. Пока только в экзаменационном проекте.",
     group: "Занятия",
     icon: Layers,
-    depth: "эскизом",
+    depth: "полностью",
   },
   {
     id: "plan",
     path: "/projects/:projectId/plan",
     navPath: "/projects/:projectId/plan",
     title: "Моя подготовка",
-    summary: "Календарь до дедлайна: первичный проход, повторения, резерв и прогноз готовности.",
+    summary: "Календарь до дедлайна: первичный проход, повторения, резерв и прогноз готовности. Пока только в экзаменационном проекте.",
     group: "Занятия",
     icon: CalendarDays,
-    depth: "эскизом",
+    depth: "полностью",
+  },
+  {
+    id: "lesson-planning",
+    path: "/projects/:projectId/lesson-planning",
+    navPath: "/projects/:projectId/lesson-planning",
+    title: "Планирование занятий",
+    summary: "Календарь готовых уроков и время за открытыми уроками.",
+    group: "Занятия",
+    icon: CalendarDays,
+    depth: "полностью",
   },
   {
     id: "settings",
@@ -189,6 +211,16 @@ export const SCREENS: ScreenMeta[] = [
     depth: "полностью",
   },
   {
+    id: "library-search",
+    path: "/library/search",
+    navPath: "/library/search",
+    title: "Поиск материалов в интернете",
+    summary: "Самостоятельный чат поиска для Библиотеки без контекста проектов.",
+    group: "Служебное",
+    icon: Globe,
+    depth: "полностью",
+  },
+  {
     id: "setup",
     path: "/setup",
     navPath: "/setup",
@@ -208,6 +240,16 @@ export const SCREENS: ScreenMeta[] = [
     icon: Palette,
     depth: "служебный",
   },
+  {
+    id: "guide",
+    path: "/guide",
+    navPath: "/guide",
+    title: "Руководство пользователя",
+    summary: "Дерево разделов и текст: от первого запуска до настройки ИИ, поиска и хранилища.",
+    group: "Служебное",
+    icon: BookOpenText,
+    depth: "эскизом",
+  },
 ];
 
 export const SCREEN_GROUPS: ScreenGroup[] = ["Проект", "Материал", "Занятия", "Служебное"];
@@ -217,4 +259,3 @@ export function screenById(id: string): ScreenMeta {
   if (!screen) throw new Error(`Экран «${id}» не описан в SCREENS`);
   return screen;
 }
-

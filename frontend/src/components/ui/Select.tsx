@@ -1,11 +1,13 @@
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { Select as RadixSelect } from "radix-ui";
+import type { ReactNode } from "react";
 
 const EMPTY_VALUE = "__tentex_select_empty__";
 
 export interface SelectOption {
   value: string;
   label: string;
+  renderLabel?: ReactNode;
   description?: string;
   disabled?: boolean;
 }
@@ -85,7 +87,7 @@ export function Select({
                 disabled={option.disabled}
               >
                 <span className="select-item-copy">
-                  <RadixSelect.ItemText>{option.label}</RadixSelect.ItemText>
+                  <RadixSelect.ItemText>{option.renderLabel ?? option.label}</RadixSelect.ItemText>
                   {option.description && <small>{option.description}</small>}
                 </span>
                 <RadixSelect.ItemIndicator className="select-indicator">

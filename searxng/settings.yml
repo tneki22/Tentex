@@ -1,0 +1,29 @@
+# Локальный SearXNG для чата «Поиск в интернете» (docs/architecture/source-search-chat.md).
+# Экземпляр частный и слушает только localhost: ограничитель и прокси картинок не нужны.
+# Остальное берётся из настроек SearXNG по умолчанию.
+use_default_settings: true
+
+general:
+  instance_name: "Tentex SearXNG"
+  enable_metrics: false
+
+search:
+  safe_search: 1
+  autocomplete: ""
+  default_lang: "auto"
+  # Tentex читает выдачу в JSON; html оставлен для ручной проверки в браузере.
+  formats:
+    - html
+    - json
+
+server:
+  # Переопределяется переменной SEARXNG_SECRET; ключ защищает только частный экземпляр.
+  secret_key: "tentex-local-searxng"
+  limiter: false
+  image_proxy: false
+  public_instance: false
+
+# Ход чата шлёт до шести запросов разом: с 4 с видеодвижки не успевали ответить.
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 10.0

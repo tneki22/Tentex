@@ -12,16 +12,20 @@ import {
   setAttemptSelfAssessment,
   streamMessage,
   submitChatAnswer,
+  submitOralDraft,
   updateChatSettings,
   type AttemptOutcome,
   type ChatCapabilities,
   type ChatContextPreview,
+  type ChatConfirmationDetails,
+  type ChatSendOptions,
   type ChatMessageRead,
   type ChatSessionDetail,
   type ChatSessionSummary,
   type ChatSettingsPatch,
 } from "../../../api/chat";
 import { ProjectApiError, type ProgramNodeRead } from "../../../api/projects";
+import { activeTurn, trackTurn } from "../../../hooks/inflightChatTurns";
 
 const DRAFT_DEBOUNCE_MS = 800;
 
@@ -29,12 +33,22 @@ export interface StreamFailure {
   code: string;
   detail: string;
   retryText?: string;
+  /** Область, политика и операция хода: «Повторить» отправляет тот же ход. */
+  retrieval?: ChatSendOptions;
+}
+
+/** Ход, ждущий подтверждения цены или объёма контекста. */
+export interface PendingConfirmation {
+  text: string;
+  options: ChatSendOptions;
+  details: ChatConfirmationDetails;
 }
 
 interface UseExamChatOptions {
   projectId: string;
   node: ProgramNodeRead | null;
   onAttemptsChanged?: () => void;
+  projectChat?: boolean;
 }
 
 /**
@@ -45,7 +59,7 @@ interface UseExamChatOptions {
  * `started` и дальше только обновляется по месту (delta → completed), поэтому
  * лента не мигает и `completed` не требует полного перечитывания сессии.
  */
-export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatOptions) {
+export function useExamChat({ projectId, node, onAttemptsChanged, projectChat = false }: UseExamChatOptions) {
   const [urlParams] = useSearchParams();
   const preferredChat = urlParams.get("chat");
   const [sessions, setSessions] = useState<ChatSessionSummary[] | null>(null);
@@ -62,18 +76,21 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
   const [preparing, setPreparing] = useState(false);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [failure, setFailure] = useState<StreamFailure | null>(null);
+  const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [settingsError, setSettingsError] = useState("");
   const [sessionsReloadKey, setSessionsReloadKey] = useState(0);
   const [detailReloadKey, setDetailReloadKey] = useState(0);
 
   const abortRef = useRef<AbortController | null>(null);
+  const activeSessionRef = useRef<string | null>(null);
+  activeSessionRef.current = activeSessionId;
   const loadToken = useRef(0);
   const deltaBuffer = useRef("");
   const flushScheduled = useRef(false);
 
   useEffect(() => {
-    if (!node) {
+    if (!node && !projectChat) {
       setSessions(null);
       setActiveSessionId(null);
       return;
@@ -84,10 +101,10 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
     setSessions(null);
     (async () => {
       try {
-        const list = await listChatSessions(projectId, node.id, controller.signal);
+        const list = await listChatSessions(projectId, node?.id ?? null, controller.signal);
         if (loadToken.current !== token) return;
         if (list.length === 0) {
-          const created = await createChatSession(projectId, node.id);
+          const created = await createChatSession(projectId, node?.id ?? null);
           if (loadToken.current !== token) return;
           setSessions([{
             id: created.id,
@@ -109,17 +126,17 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
       }
     })();
     return () => controller.abort();
-  }, [projectId, node?.id, sessionsReloadKey, preferredChat]);
+  }, [projectId, node?.id, projectChat, sessionsReloadKey, preferredChat]);
 
   useEffect(() => {
-    if (!node) {
+    if (!node && !projectChat) {
       setCapabilities(null);
       return;
     }
     const controller = new AbortController();
-    getChatCapabilities(projectId, node.id, controller.signal).then(setCapabilities).catch(() => undefined);
+    getChatCapabilities(projectId, node?.id ?? null, controller.signal).then(setCapabilities).catch(() => undefined);
     return () => controller.abort();
-  }, [projectId, node?.id]);
+  }, [projectId, node?.id, projectChat]);
 
   function applySessionDetail(value: ChatSessionDetail) {
     setSession(value);
@@ -174,19 +191,81 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft, activeSessionId]);
 
-  async function refreshDetail() {
-    if (!activeSessionId) return;
+  // Ответ строится на сервере, даже если пользователь ушёл с экрана. Вернувшись, он
+  // должен видеть, что модель отвечает, и получить ответ без перезагрузки страницы.
+  useEffect(() => {
+    if (!activeSessionId || abortRef.current) return;
+    const turn = activeTurn(`exam-chat:${projectId}:${activeSessionId}`);
+    if (!turn) return;
+    const sessionId = activeSessionId;
+    setPreparing(true);
+    void turn.done.then(async () => {
+      const fresh = await getChatSession(projectId, sessionId).catch(() => null);
+      if (activeSessionRef.current !== sessionId) return;
+      if (fresh) applySessionDetail(fresh);
+      setPreparing(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, activeSessionId]);
+
+  async function refreshDetail(): Promise<ChatSessionDetail | null> {
+    if (!activeSessionId) return null;
     try {
       const value = await getChatSession(projectId, activeSessionId);
       applySessionDetail(value);
+      return value;
     } catch {
       // Лента останется прежней; следующее действие пользователя попробует снова.
+      return null;
     }
   }
 
   function upsertMessage(message: ChatMessageRead) {
     setMessagesById((current) => ({ ...current, [message.id]: message }));
     setMessageOrder((current) => (current.includes(message.id) ? current : [...current, message.id]));
+  }
+
+  /**
+   * Дописывает в ленту только незнакомые сообщения — так со стороны сервера
+   * приезжает служебная отметка о смене модели, а реплика, которая прямо
+   * сейчас стримится, не затирается своей же недописанной копией с сервера.
+   */
+  function addUnknownMessages(incoming: ChatMessageRead[]) {
+    setMessagesById((current) => {
+      const fresh = incoming.filter((message) => !(message.id in current));
+      if (!fresh.length) return current;
+      const next = { ...current };
+      for (const message of fresh) next[message.id] = message;
+      return next;
+    });
+    setMessageOrder((current) => {
+      const known = new Set(current);
+      const added = incoming.filter((message) => !known.has(message.id));
+      return added.length ? [...current, ...added.map((message) => message.id)] : current;
+    });
+  }
+
+  function removeMessage(id: string) {
+    setMessagesById((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setMessageOrder((current) => current.filter((item) => item !== id));
+  }
+
+  /** Оптимистичная запись получает настоящий ID из кадра `started`. */
+  function renameMessage(from: string, to: string) {
+    if (from === to) return;
+    setMessagesById((current) => {
+      const existing = current[from];
+      if (!existing) return current;
+      const next = { ...current, [to]: { ...existing, id: to } };
+      delete next[from];
+      return next;
+    });
+    setMessageOrder((current) => current.map((id) => (id === from ? to : id)));
   }
 
   function patchMessage(id: string, patch: Partial<ChatMessageRead>) {
@@ -215,11 +294,25 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
     requestAnimationFrame(() => flushDelta(messageId));
   }
 
-  async function sendMessage(retryText?: string) {
+  async function sendMessage(retryText?: string, sendOptions?: ChatSendOptions) {
     const text = (retryText ?? draft).trim();
     if (!activeSessionId || !text || streamingMessageId || preparing) return;
+    // Повтор и подтверждение приходят с тем же ID хода: сервер не создаст
+    // вторую реплику пользователя.
+    const retrieval: ChatSendOptions = {
+      scope: "topic_project",
+      knowledgePolicy: "sources_only",
+      ...sendOptions,
+      turnId: sendOptions?.turnId ?? crypto.randomUUID(),
+    };
     const controller = new AbortController();
     abortRef.current = controller;
+    let finishTurn: (failure: string) => void = () => undefined;
+    trackTurn(`exam-chat:${projectId}:${activeSessionId}`, {
+      text,
+      done: new Promise<string>((resolve) => { finishTurn = resolve; }),
+      abort: () => controller.abort(),
+    });
     setFailure(null);
     setPreparing(true);
     const userId = `pending-user-${Date.now()}`;
@@ -244,9 +337,16 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
     setDraft("");
     let examinerId: string | null = null;
     try {
-      for await (const event of streamMessage(projectId, activeSessionId, text, controller.signal)) {
+      for await (const event of streamMessage(
+        projectId,
+        activeSessionId,
+        text,
+        controller.signal,
+        retrieval,
+      )) {
         if (event.type === "started") {
           examinerId = event.messageId;
+          if (event.userMessageId) renameMessage(userId, event.userMessageId);
           setPreparing(false);
           setStreamingMessageId(examinerId);
           upsertMessage({
@@ -258,7 +358,8 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
             stream_state: "complete",
             payload_kind: "none",
             payload: {},
-            context_snapshot: {},
+            // Источники с первого кадра: ссылки [S3] открываются, пока ответ ещё пишется.
+            context_snapshot: { retrieval_sources: event.sources },
             skill: null,
             ai_run_id: event.runId,
             attempt_id: null,
@@ -269,11 +370,14 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
         } else if (event.type === "delta" && examinerId) {
           deltaBuffer.current += event.text;
           scheduleFlush(examinerId);
+        } else if (event.type === "reset" && examinerId) {
+          deltaBuffer.current = "";
+          patchMessage(examinerId, { text: "" });
         } else if (event.type === "completed") {
           if (examinerId) flushDelta(examinerId);
           upsertMessage(event.message);
         } else if (event.type === "error") {
-          setFailure({ code: event.code, detail: event.detail, retryText: text });
+          setFailure({ code: event.code, detail: event.detail, retryText: text, retrieval });
           if (examinerId) patchMessage(examinerId, { stream_state: "failed" });
         }
       }
@@ -283,24 +387,54 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
           flushDelta(examinerId);
           patchMessage(examinerId, { stream_state: "stopped" });
         }
-      } else if (error instanceof ProjectApiError) {
-        setFailure({ code: error.code ?? "unknown", detail: error.message, retryText: text });
       } else {
-        setFailure({ code: "unknown", detail: "Ответ не получен", retryText: text });
+        // Отказ до кадра started: сервер ход не записал. Оптимистичная реплика
+        // уходит из ленты, а текст возвращается в поле — ничего не теряется.
+        if (!examinerId) {
+          removeMessage(userId);
+          setDraft((current) => current || text);
+        }
+        if (error instanceof ProjectApiError && error.code === "ai_confirmation_required") {
+          setConfirmation({ text, options: retrieval, details: error.context as unknown as ChatConfirmationDetails });
+          return;
+        }
+        setFailure(error instanceof ProjectApiError
+          ? { code: error.code ?? "unknown", detail: error.message, retryText: text, retrieval }
+          : { code: "unknown", detail: "Ответ не получен", retryText: text, retrieval });
       }
     } finally {
       setPreparing(false);
       setStreamingMessageId(null);
       abortRef.current = null;
+      finishTurn("");
     }
   }
 
+  /**
+   * Отправить подтверждённый ход. `expanded` — с пределом, при котором ничего
+   * не сокращается; иначе — сокращённым, как показала оценка.
+   */
+  function confirmSend(expanded: boolean, remember: boolean) {
+    if (!confirmation) return;
+    const { text, options, details } = confirmation;
+    setConfirmation(null);
+    const wider = expanded && details.expanded ? details.expanded : null;
+    void sendMessage(text, {
+      ...options,
+      confirmedRequestHash: wider ? wider.request_hash : details.request_hash,
+      contextBudgetTokens: wider ? wider.budget_tokens : options.contextBudgetTokens,
+      rememberBudget: Boolean(wider) && remember,
+    });
+  }
+
   function stopMessage() {
-    abortRef.current?.abort();
+    if (abortRef.current) abortRef.current.abort();
+    else if (activeSessionId) activeTurn(`exam-chat:${projectId}:${activeSessionId}`)?.abort();
   }
 
   async function submitAnswer(text: string, tracking?: Parameters<typeof submitChatAnswer>[3]) {
-    if (!activeSessionId || !text.trim() || submittingAnswer) return;
+    if (!activeSessionId || !text.trim() || submittingAnswer) return false;
+    const knownMessageIds = new Set(messageOrder);
     setSubmittingAnswer(true);
     try {
       const result = await submitChatAnswer(projectId, activeSessionId, text.trim(), tracking);
@@ -308,15 +442,50 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
       await saveChatDraft(projectId, activeSessionId, "");
       setDraft("");
       onAttemptsChanged?.();
+      return true;
     } catch (error) {
+      // Дорогая ступень может упасть уже после фиксации Attempt. Перечитываем
+      // ленту, чтобы сохранённая форма сразу предложила «Проверить ещё раз».
+      const latest = await refreshDetail();
+      const saved = latest?.messages.some((message) =>
+        message.payload_kind === "answer_form" && !knownMessageIds.has(message.id),
+      ) ?? false;
       setFailure({
         code: error instanceof ProjectApiError ? error.code ?? "unknown" : "unknown",
         detail: error instanceof Error ? error.message : "Ответ не сохранён",
       });
-      // Дорогая ступень может упасть уже после фиксации Attempt. Перечитываем
-      // ленту, чтобы сохранённая форма сразу предложила «Проверить ещё раз».
-      await refreshDetail();
       onAttemptsChanged?.();
+      return saved;
+    } finally {
+      setSubmittingAnswer(false);
+    }
+  }
+
+  async function submitOralAnswer(
+    recordingId: string, text: string, answerMode: "memory" | "supported",
+  ) {
+    if (!activeSessionId || !text.trim() || submittingAnswer) return false;
+    setSubmittingAnswer(true);
+    setFailure(null);
+    try {
+      const result = await submitOralDraft(
+        projectId, activeSessionId, recordingId, text.trim(), answerMode,
+      );
+      for (const message of result.messages) upsertMessage(message);
+      if (!result.grade) {
+        setFailure({
+          code: "oral_check_deferred",
+          detail: "Устный ответ сохранён. Проверка ИИ пока недоступна — попробуйте позже.",
+        });
+      }
+      onAttemptsChanged?.();
+      return true;
+    } catch (error) {
+      setFailure({
+        code: error instanceof ProjectApiError ? error.code ?? "unknown" : "unknown",
+        detail: error instanceof Error ? error.message : "Устный ответ не сохранён",
+      });
+      return false;
     } finally {
       setSubmittingAnswer(false);
     }
@@ -350,8 +519,8 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
   }
 
   async function startNewChat() {
-    if (!node) return;
-    const created = await createChatSession(projectId, node.id);
+    if (!node && !projectChat) return;
+    const created = await createChatSession(projectId, node?.id ?? null);
     setSessions((current) => [
       {
         id: created.id, project_id: created.project_id, program_node_id: created.program_node_id,
@@ -377,6 +546,7 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
     try {
       const updated = await updateChatSettings(projectId, activeSessionId, patch);
       setSession((current) => (current ? { ...current, ...updated, messages: current.messages } : updated));
+      addUnknownMessages(updated.messages);
     } catch (error) {
       setSession(previous);
       setSettingsError(
@@ -411,11 +581,15 @@ export function useExamChat({ projectId, node, onAttemptsChanged }: UseExamChatO
     streamingMessageId,
     sending: preparing || streamingMessageId !== null,
     failure,
+    confirmation,
+    confirmSend,
+    cancelConfirmation: () => setConfirmation(null),
     submittingAnswer,
     settingsError,
     sendMessage,
     stopMessage,
     submitAnswer,
+    submitOralAnswer,
     retryAttempt,
     assessAttempt,
     startNewChat,

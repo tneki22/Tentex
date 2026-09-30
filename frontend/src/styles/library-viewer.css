@@ -197,7 +197,7 @@
 
 .lib-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(0, 240px) auto;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, calc(var(--space-16) * 3)) minmax(0, calc(var(--space-16) * 2.5)) auto;
   align-items: center;
   gap: var(--space-3);
   padding-inline-end: var(--space-3);
@@ -284,9 +284,17 @@
 .lib-row-meta {
   display: flex;
   gap: var(--space-3);
+  overflow: hidden;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   font-size: var(--text-sm);
+}
+
+/* Каждая подпись цельная: с добавлением предмета строка стала длиннее, и без
+   этого «265 страниц» ломалось пополам. Переполнение срезает хвост, а не слова. */
+.lib-row-meta > span {
+  flex: none;
+  white-space: nowrap;
 }
 
 .lib-row-quality {
@@ -296,9 +304,7 @@
   justify-content: flex-end;
 }
 
-/* Один файл может лежать в пяти проектах. Список не переносится и не растит
-   строку: видно первые два проекта, остальные — счётчиком с полным перечнем
-   в подсказке. Иначе кнопка удаления уезжала бы вниз вместе с высотой строки. */
+/* Два проекта делят отведённую колонку; третий заменяет список счётчиком. */
 .lib-row-usage {
   display: flex;
   flex-wrap: nowrap;
@@ -309,11 +315,22 @@
 }
 
 .lib-row-usage a {
+  flex: 1 1 0;
+  min-width: 0;
   overflow: hidden;
   max-width: 100%;
   color: var(--accent);
   white-space: nowrap;
   text-decoration: none;
+  text-overflow: ellipsis;
+}
+
+.lib-row-subject {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--subject-ink);
+  font-size: var(--text-sm);
+  white-space: nowrap;
   text-overflow: ellipsis;
 }
 
@@ -640,12 +657,16 @@
   outline: none;
 }
 
+.viewer-flow-toggle {
+  flex-shrink: 0;
+}
+
 .viewer-search {
   display: flex;
-  flex: 1 1 160px;
+  flex: 1 1 120px;
   align-items: center;
   gap: var(--space-2);
-  min-width: 120px;
+  min-width: 96px;
   height: var(--space-8);
   padding: 0 var(--space-3);
   color: var(--muted);
@@ -878,6 +899,88 @@
   border-radius: var(--radius-sm);
 }
 
+/* Лента: высоту листа задаёт слот, поэтому страница нестандартных пропорций
+   вписывается в него, а не ломает расчёт прокрутки на тысяче страниц. */
+.viewer-sheet.is-fitted,
+.viewer-sheet.is-fitted img {
+  height: 100%;
+}
+
+.viewer-sheet.is-fitted img {
+  object-fit: contain;
+}
+
+/* Пока следующая страница не готова, на экране остаётся предыдущая. Полоса
+   ожидания появляется с задержкой: на прогретой странице подмена укладывается
+   в кадр, и мигать там нечему. */
+.viewer-sheet::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 0;
+  height: 2px;
+  background: linear-gradient(to right, transparent, var(--accent), transparent);
+  border-start-start-radius: var(--radius-sm);
+  border-start-end-radius: var(--radius-sm);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.viewer-sheet.is-pending::after {
+  animation: viewer-sheet-waiting 900ms ease-in-out 200ms infinite;
+}
+
+@keyframes viewer-sheet-waiting {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 0.75; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewer-sheet.is-pending::after {
+    animation: none;
+    opacity: 0.6;
+    transition: opacity var(--ease-fast) 200ms;
+  }
+}
+
+/* position: relative — от него лента считает положение страницы: смещение на
+   верхний отступ иначе пришлось бы измерять, а не знать. Отступы совпадают с
+   постраничным показом, чтобы «вписать страницу» считало одинаково в обоих. */
+.viewer-sheet-scroll.is-stream {
+  position: relative;
+  overscroll-behavior: contain;
+}
+
+.viewer-stream {
+  position: relative;
+}
+
+.viewer-stream-window {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 0;
+  will-change: transform;
+}
+
+.viewer-stream-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Просвет между листами совпадает с SHEET_GAP в PageFlow.tsx: в нём стоит
+     номер страницы, и расхождение сдвигало бы всю ленту. */
+  padding-block-end: 30px;
+}
+
+.viewer-stream-number {
+  position: absolute;
+  inset-block-end: 6px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+  user-select: none;
+}
+
 .viewer-region-layer {
   position: absolute;
   inset: 0;
@@ -990,8 +1093,12 @@
 
 .structured-figure .structured-image { margin: 0; }
 
-/* Шапка подготовленного текста: режим слева, тумблер «фото фрагментов» справа. */
+/* Шапка подготовленного текста: режим слева, тумблер «фото фрагментов» справа.
+   Позиция и z-index выше .viewer-page-edge (2): в режиме «Текст» правая
+   зона перелистывания лежит поверх сцены и перехватывала клик по тумблеру. */
 .viewer-text-controls {
+  position: relative;
+  z-index: 3;
   display: flex;
   gap: var(--space-3);
   align-items: center;
@@ -2008,9 +2115,10 @@
   .lib-row .icon-button { grid-area: 1 / 3; }
 
   .lib-row-usage {
-    grid-area: 2 / 1 / 2 / -1;
-    padding: 0 var(--space-3) var(--space-3);
+    grid-area: 2 / 2 / 3 / 3;
+    padding: 0 var(--space-3);
   }
+  .lib-row-subject { grid-area: 3 / 2 / 4 / 3; padding: 0 var(--space-3) var(--space-3); }
 }
 
 /* На узком экране четыре пилюли в один ряд уже не читаются: разрешаем группе

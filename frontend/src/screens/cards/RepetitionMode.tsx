@@ -58,7 +58,11 @@ function defaultScope(overview: CardOverviewRead): Scope {
 function coverageStatus(overview: CardOverviewRead): string {
   const total = overview.today_units.length;
   if (!overview.program_exists) return "Сначала добавьте вопросы экзамена";
-  if (!overview.plan_exists) return "План подготовки пока не составлен";
+  if (!overview.plan_exists) {
+    return overview.active_card_count
+      ? `Создано ${overview.active_card_count} ${plural(overview.active_card_count, "карточка", "карточки", "карточек")}`
+      : "План подготовки пока не составлен";
+  }
   if (!total) return "На сегодня повторений не запланировано";
   if (!overview.covered_unit_count) {
     return `Для сегодняшних ${total} ${plural(total, "вопроса", "вопросов", "вопросов")} карточек пока нет`;
@@ -172,13 +176,15 @@ export function RepetitionMode(props: RepetitionModeProps) {
           </Button>
         ) : !overview.plan_exists ? (
           <>
-            <p>Здесь появятся карточки по вопросам, которые вы запланируете повторить сегодня.</p>
+            <p>{overview.active_card_count
+              ? "Карточки уже доступны в подборке справа и в сеансе «Все». План нужен для повторений по дням."
+              : "Здесь появятся карточки по вопросам, которые вы запланируете повторить сегодня."}</p>
             <Button variant="secondary" onClick={() => window.location.assign(`/projects/${projectId}/preparation`)}>
               Перейти в «Мою подготовку»
             </Button>
           </>
         ) : !hasToday ? (
-          <p>Можно потренировать сложные, выбранные или все активные карточки.</p>
+          <p>Можно потренировать сложные, выбранные или все карточки.</p>
         ) : null}
       </section>
 
@@ -213,7 +219,7 @@ export function RepetitionMode(props: RepetitionModeProps) {
           <header>
             <div>
               <h3>{selectedToday ? selectedToday.unit.title : "Недавние и сложные"}</h3>
-              <p>{selectedToday ? "Карточки выбранного вопроса." : "Короткая подборка без календарного назначения."}</p>
+              <p>{selectedToday ? "Карточки выбранного вопроса." : "Созданные карточки доступны и без календарного плана."}</p>
             </div>
           </header>
           {laneCards.length ? (
@@ -221,7 +227,7 @@ export function RepetitionMode(props: RepetitionModeProps) {
               {laneCards.map((card) => (
                 <button type="button" key={card.id} onClick={() => onOpenBank(card.id)}>
                   <strong>{card.front}</strong>
-                  <span>{card.source.label}</span>
+                  <span>{card.source.kind === "reference" ? "Готовый ответ" : card.source.label}</span>
                   <small>{card.last_confidence ? `Последняя оценка: ${card.last_confidence}` : "Без оценок"}</small>
                   <ArrowRight size={15} />
                 </button>
@@ -233,7 +239,7 @@ export function RepetitionMode(props: RepetitionModeProps) {
               <Button onClick={() => onCreate(selectedToday.unit.id)}>Создать карточку</Button>
             </EmptyState>
           ) : (
-            <EmptyState title="Карточек пока нет"><p>Создайте первую карточку вручную.</p><Button onClick={() => onCreate(null)}>Создать</Button></EmptyState>
+            <EmptyState title="Карточек пока нет"><p>Создайте карточку вручную или с помощью ИИ.</p><Button onClick={() => onCreate(null)}>Создать</Button></EmptyState>
           )}
         </div>
       </section>
@@ -312,10 +318,10 @@ export function RepetitionMode(props: RepetitionModeProps) {
             onChange={setScope}
             layout="rows"
             options={[
-              { value: "today", title: "На сегодня", description: `${scopeCounts.today} активных карточек по календарю` },
-              { value: "hard", title: "Сложные", description: `${scopeCounts.hard} карточек с последней оценкой 1–2` },
+              { value: "today", title: "На сегодня", description: `${scopeCounts.today} ${plural(scopeCounts.today, "карточка", "карточки", "карточек")} по календарю` },
+              { value: "hard", title: "Сложные", description: `${scopeCounts.hard} ${plural(scopeCounts.hard, "карточка", "карточки", "карточек")} с последней оценкой 1–2` },
               { value: "selected", title: "Выбранные", description: "Вопросы и целые билеты из дерева программы" },
-              { value: "all", title: "Все", description: `${scopeCounts.all} активных карточек по порядку программы` },
+              { value: "all", title: "Все", description: `${scopeCounts.all} ${plural(scopeCounts.all, "карточка", "карточки", "карточек")} по порядку программы` },
             ]}
           />
           {scope === "selected" && (

@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
-import { ArrowLeft, Check, Sparkles, Trash2 } from "lucide-react";
+import type { CSSProperties, ReactNode } from "react";
+import { ArrowLeft, Check, Trash2 } from "lucide-react";
 import { Link } from "react-router";
+import { BrandMark } from "../../app/BrandMark";
 import { Button } from "../../components/ui";
 
 interface WizardChromeProps {
@@ -12,6 +13,8 @@ interface WizardChromeProps {
   onSaveAndExit?: () => void;
   onDiscard?: () => void;
   onBack?: () => void;
+  /** Заменяет подпись «Мастер проектов» на начальном экране выбора пути. */
+  landingAction?: ReactNode;
   children: ReactNode;
 }
 
@@ -25,6 +28,7 @@ export function WizardChrome({
   onSaveAndExit,
   onDiscard,
   onBack,
+  landingAction,
   children,
 }: WizardChromeProps) {
   const isLanding = step === 0;
@@ -51,12 +55,11 @@ export function WizardChrome({
             <span>К проектам</span>
           </Link>
         )}
-        <span className="wizard-brand"><Sparkles size={17} aria-hidden="true" />Tentex</span>
+        <span className="wizard-brand"><BrandMark size={20} />Tentex</span>
         <div className="wizard-topbar-actions">
-          {(isLanding || trackLabel) && (
-            <span className="wizard-step-caption">
-              {isLanding ? "Мастер проектов" : `${trackLabel} — шаг ${step} из ${stepLabels.length}`}
-            </span>
+          {isLanding && landingAction}
+          {!isLanding && trackLabel && (
+            <span className="wizard-step-caption">{`${trackLabel} — шаг ${step} из ${stepLabels.length}`}</span>
           )}
           {onDiscard && (
             <Button variant="ghost" className="wizard-discard" onClick={onDiscard}>
@@ -67,7 +70,13 @@ export function WizardChrome({
       </header>
 
       {!isLanding && (
-        <nav className="wizard-progress" aria-label="Шаги создания проекта">
+        <nav
+          className="wizard-progress"
+          aria-label="Шаги создания проекта"
+          /* Число шагов у веток разное: полоса и колонки считаются от него,
+             иначе трёхшаговый мастер занимает три колонки из пяти и уезжает влево. */
+          style={{ "--wizard-steps": stepLabels.length } as CSSProperties}
+        >
           <span className="wizard-progress-line" aria-hidden="true"><i style={{ width: `${progress}%` }} /></span>
           {stepLabels.map((label, index) => {
             const itemStep = index + 1;

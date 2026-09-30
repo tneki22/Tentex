@@ -29,16 +29,21 @@ import {
 import {
   AnswerMatchStatus,
   CostEstimate,
+  EvidenceInspector,
+  EvidencePassageList,
   GOAL_LEVELS,
   GoalLevelPicker,
   LibraryMaterialPickerDialog,
+  LessonEvidenceDialog,
   MachineMark,
+  MaterialHint,
   MetricList,
   OfflineNotice,
   PAGE_QUALITIES,
   ProjectChip,
   ProviderModelPicker,
   QualityBadge,
+  ResearchLaunchDialog,
   REFERENCE_ANSWER_STATUSES,
   ReferenceAnswerBadge,
   SourceChip,
@@ -51,11 +56,14 @@ import {
 import type { GoalLevelValue, ProjectColor } from "../components/domain";
 import type { AiModelRead, AiModelSelection, AiProviderRead } from "../api/ai";
 import type { AnswersLinkRead } from "../api/bindings";
-import type { LibraryMaterialDetailRead, LibraryMaterialRead } from "../api/materials";
+import type { CoveragePreflight, CoverageRun, EvidenceDetail, TopicEvidence } from "../api/coverage";
+import type { LibraryMaterialDetailRead, LibraryMaterialRead, MaterialRead } from "../api/materials";
 
 const DEMO_LIBRARY_MATERIAL: LibraryMaterialRead = {
   id: "demo-library-material",
   original_name: "Основы реляционных баз данных.pdf",
+  display_name: "Основы реляционных баз данных",
+  subject: "Базы данных",
   media_type: "application/pdf",
   source_kind: "file",
   source_url: null,
@@ -68,6 +76,7 @@ const DEMO_LIBRARY_MATERIAL: LibraryMaterialRead = {
   ocr_low_page_count: 0,
   block_count: 96,
   fragment_count: 832,
+  has_outline: true,
   sha256: "demo",
   created_at: "2026-08-15T00:00:00Z",
   usage: [],
@@ -75,6 +84,84 @@ const DEMO_LIBRARY_MATERIAL: LibraryMaterialRead = {
 
 const loadDemoLibraryMaterials = async () => [DEMO_LIBRARY_MATERIAL];
 const attachDemoLibraryMaterial = async () => ({ ...DEMO_LIBRARY_MATERIAL } as LibraryMaterialDetailRead);
+
+const DEMO_RESEARCH_MATERIAL: MaterialRead = {
+  id: "demo-research-material",
+  original_name: "Операционные системы.pdf",
+  display_name: "Операционные системы",
+  library_display_name: "Операционные системы",
+  project_display_name: null,
+  media_type: "application/pdf",
+  source_kind: "file",
+  presentation_kind: "pdf",
+  source_url: null,
+  retrieved_at: null,
+  size_bytes: 2_400_000,
+  page_count: 184,
+  source_role: "reference",
+  priority: 0,
+  instruction: null,
+  purposes: ["study_source"],
+  exam_slot: null,
+  status: "ready",
+  parser_mode: "fast",
+  active_parse_revision: 1,
+  scan_page_count: 4,
+  ocr_low_page_count: 0,
+  estimated_seconds: null,
+  outline: [],
+  diagnostics: [],
+  error: null,
+  task: null,
+  last_parse: null,
+  used_by_topics: 0,
+  attached_at: "2026-09-18T00:00:00Z",
+  created_at: "2026-09-18T00:00:00Z",
+  updated_at: "2026-09-18T00:00:00Z",
+};
+
+const loadDemoResearchContext = async () => ({
+  programRevision: 7,
+  materials: [DEMO_RESEARCH_MATERIAL],
+});
+
+const demoCoveragePreflight = async (): Promise<CoveragePreflight> => ({
+  fingerprint: "demo-snapshot",
+  snapshot: {
+    sources: [{ id: DEMO_RESEARCH_MATERIAL.id, name: DEMO_RESEARCH_MATERIAL.display_name, source_role: "reference", revision: 1, diagnostics: {} }],
+    context_sources: [],
+  },
+  blocks: 424,
+  blocks_all: 424,
+  blocks_needed: 424,
+  execution_available: true,
+  execution_issue: null,
+  model_roles: {
+    overview: { provider_id: "demo-provider", model_id: "openai/gpt-demo", model_source: "role_override", context_length: 128_000, prompt_version: "verified-07" },
+    research: { provider_id: "demo-provider", model_id: "openai/gpt-demo", model_source: "role_override", context_length: 128_000, prompt_version: "verified-07" },
+  },
+  limits: { max_cost_usd: 1 },
+  packets_at_least: 27,
+  prompt_overhead_tokens: 19_000,
+  packet_input_tokens: 16_000,
+});
+
+const demoCoverageStart = async (): Promise<CoverageRun> => ({
+  id: "demo-run",
+  job_id: "demo-job",
+  state: "queued",
+  execution_generation: 1,
+  stop_reason: null,
+  snapshot: (await demoCoveragePreflight()).snapshot,
+  stale: false,
+  primary: { total: 424, pending: 424, processing: 0, inspected: 0, error: 0 },
+  outcomes: { linked: 0, outside_program: 0, service: 0, mixed_resolved: 0, unresolved: 0 },
+  research: { discovered: 0, finished: 0 },
+  pending_synthesis: 0,
+  costs: { calls: 0, tokens: 0, cost_usd: 0, uncertain_calls: 0 },
+  limits: { max_calls: 82, max_total_tokens: 1_200_000, max_cost_usd: 1 },
+  pause_requested: false,
+});
 
 const DEMO_MATCHED_IDS = Array.from({ length: 42 }, (_, index) => `question-${index + 1}`);
 const DEMO_ANSWER_MATCH_RESULT: AnswersLinkRead = {
@@ -175,6 +262,81 @@ const TYPE_SCALE = [
 const SPACE_SCALE = ["1", "2", "3", "4", "5", "6", "8", "10", "12", "16"] as const;
 const PROJECT_COLORS: ProjectColor[] = [1, 2, 3, 4, 5, 6, 7, 8];
 
+const DEMO_EVIDENCE: EvidenceDetail = {
+  id: "demo-task:demo-block:e1",
+  key: "e1",
+  ref: "demo-fragment",
+  binding_id: "demo-binding",
+  binding_ids: ["demo-binding", "demo-binding-2", "demo-binding-3"],
+  member_ids: ["demo-task:demo-block:e1", "demo-task:demo-block:e2", "demo-task:demo-block:e3"],
+  topic_id: "demo-topic",
+  topic_title: "Взаимная блокировка",
+  material_id: "demo-material",
+  material_name: "Операционные системы.pdf",
+  title: "6.2. Условия возникновения тупика",
+  page_from: 84,
+  page_to: 85,
+  from_fragment_id: "demo-heading",
+  to_fragment_id: "demo-fragment-3",
+  fragment_ids: ["demo-fragment", "demo-fragment-2", "demo-fragment-3"],
+  fragment_count: 3,
+  quote: "Взаимная блокировка возникает, когда процессы циклически ждут ресурсы друг друга. Для неё нужны четыре условия: взаимное исключение, удержание и ожидание…",
+  text: "Взаимная блокировка возникает, когда процессы циклически ждут ресурсы друг друга. Для неё нужны четыре условия: взаимное исключение, удержание и ожидание, отсутствие вытеснения и циклическое ожидание.",
+  description: "Связное объяснение условия циклического ожидания.",
+  roles: ["definition", "explanation"],
+  semantic_kind: "content",
+  status: "confirmed",
+  mechanism: "pass_two",
+  quality: "native",
+  available: true,
+  stale: false,
+  hidden: false,
+  preferred: true,
+  legacy: false,
+  repair: "exact",
+  start: 0,
+  end: 88,
+  original_ref: null,
+  origin: "overview",
+  applied: true,
+  locator: {},
+  linked_topics: [{ topic_id: "demo-other", title: "Предотвращение тупиков" }],
+};
+
+const DEMO_PASSAGES: TopicEvidence = {
+  coverage_revision: 1,
+  topic_id: "demo-topic",
+  topic_title: "Взаимная блокировка",
+  best_evidence_id: DEMO_EVIDENCE.id,
+  starter: [DEMO_EVIDENCE],
+  explanations: [{
+    ...DEMO_EVIDENCE,
+    id: "demo-task:demo-block:e7",
+    title: "Граф распределения ресурсов",
+    quote: "Цикл в графе распределения ресурсов с единичными экземплярами означает тупик.",
+    page_from: 86,
+    page_to: 86,
+    fragment_count: 5,
+    preferred: false,
+  }],
+  practice: [{
+    ...DEMO_EVIDENCE,
+    id: "demo-task:demo-block:e9",
+    title: "Пример: обедающие философы",
+    quote: "Пять философов берут сначала левую вилку — каждый ждёт правую.",
+    roles: ["example", "explanation"],
+    page_from: 88,
+    page_to: 89,
+    fragment_count: 8,
+    quality: "ocr",
+    preferred: false,
+  }],
+  depth: [],
+  mentions: [{ ...DEMO_EVIDENCE, id: "demo-mention", title: "Оглавление", quote: "6.2. Взаимоблокировки … 84", roles: ["reference"], fragment_count: 1, preferred: false }],
+  hidden: [],
+  legacy: [],
+};
+
 type DemoTab = "gaps" | "unsorted";
 type DemoWay = "outline" | "pass1" | "catalog";
 
@@ -204,6 +366,8 @@ export function UiKit() {
   const [dialog, setDialog] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [libraryPicker, setLibraryPicker] = useState(false);
+  const [researchDialog, setResearchDialog] = useState(false);
+  const [lessonEvidenceDialog, setLessonEvidenceDialog] = useState(false);
   const [minutes, setMinutes] = useState("40");
   const [suggested, setSuggested] = useState(true);
   const [selectValue, setSelectValue] = useState<string | null>("openrouter");
@@ -329,6 +493,7 @@ export function UiKit() {
             items={[
               { label: "Переименовать", onSelect: () => undefined },
               { label: "Добавить внутрь", items: [{ label: "Тему", onSelect: () => undefined }, { label: "Подпункт", onSelect: () => undefined }] },
+              { label: "Роль", items: [{ label: "Основной", checked: true }, { label: "Дополнительный", checked: false, onSelect: () => undefined }] },
               { label: "Убрать из программы", icon: <Trash2 size={14} />, onSelect: () => undefined, destructive: true },
             ]}
           />
@@ -376,7 +541,7 @@ export function UiKit() {
                 unit: "блок",
                 done: 640,
                 total: 1500,
-                etaMinutes: 12,
+                etaSeconds: 12 * 60,
                 state: "running",
               }}
               onPause={() => undefined}
@@ -392,7 +557,7 @@ export function UiKit() {
                 unit: "",
                 done: 0,
                 total: 0,
-                etaMinutes: null,
+                etaSeconds: null,
                 state: "running",
               }}
               onCancel={() => undefined}
@@ -405,7 +570,7 @@ export function UiKit() {
                 unit: "",
                 done: 0,
                 total: 0,
-                etaMinutes: null,
+                etaSeconds: null,
                 state: "review",
               }}
               onDismiss={() => undefined}
@@ -418,7 +583,7 @@ export function UiKit() {
             Подтверждение удаления
           </Button>
           <span className="kit-hint" style={{ margin: 0 }}>
-            Палитра поиска — <Kbd>Ctrl K</Kbd> из любого места
+            Палитра поиска — <Kbd>Ctrl X</Kbd> из любого места
           </span>
         </div>
 
@@ -635,7 +800,11 @@ export function UiKit() {
           <SourceChip source={{ kind: "catalog", layer: 1 }} />
           <SourceChip source={{ kind: "import" }} />
           <SourceChip source={{ kind: "manual" }} />
+          <SourceChip source={{ kind: "model" }} />
           <SourceChip source={{ kind: "none" }} />
+        </div>
+        <div className="kit-row" style={{ marginTop: "var(--space-3)" }}>
+          <MaterialHint queries={["градиентный спуск", "обратное распространение ошибки"]} kind="lecture" />
         </div>
         <div className="kit-row" style={{ marginTop: "var(--space-3)" }}>
           <MachineMark origin="проход 2" onUndo={() => undefined} undoLabel="Снять привязку" />
@@ -661,6 +830,38 @@ export function UiKit() {
             step={{ text: "Заниматься — 25 минут", to: "/projects", tone: "accent" }}
           />
         </div>
+      </section>
+
+      <section className="kit-section">
+        <h2>Куски исследованного текста</h2>
+        <p className="kit-hint">
+          Исследование привязывает к теме отдельные фрагменты, а читаются и вставляются
+          в урок куски — подряд идущий текст одного материала от заголовка раздела.
+          Упоминания свёрнуты отдельно; флажки отмечают куски для вставки пачкой.
+        </p>
+        <div className="kit-grid-two">
+          <EvidencePassageList
+            groups={DEMO_PASSAGES}
+            selectedId={DEMO_EVIDENCE.id}
+            secondary
+            onSelect={() => undefined}
+            checkedIds={new Set([DEMO_EVIDENCE.id])}
+            onCheckedChange={() => undefined}
+          />
+          <EvidenceInspector
+            evidence={DEMO_EVIDENCE}
+            onDecision={() => undefined}
+            onAddToLesson={() => setLessonEvidenceDialog(true)}
+          />
+        </div>
+        <LessonEvidenceDialog
+          open={lessonEvidenceDialog}
+          projectId="demo-project"
+          items={[DEMO_EVIDENCE]}
+          topicTitle={DEMO_EVIDENCE.topic_title}
+          preview
+          onOpenChange={setLessonEvidenceDialog}
+        />
       </section>
 
       <section className="kit-section">
@@ -780,6 +981,20 @@ export function UiKit() {
           onAttached={() => undefined}
           loadMaterials={loadDemoLibraryMaterials}
           attachMaterial={attachDemoLibraryMaterial}
+        />
+      </section>
+
+      <section className="kit-section">
+        <h2>Запуск исследования</h2>
+        <p className="kit-hint">Один доменный диалог для мастера, Материалов и Покрытия: область, роли источников, модели и лимит до создания задачи.</p>
+        <Button variant="secondary" onClick={() => setResearchDialog(true)}>Открыть запуск исследования</Button>
+        <ResearchLaunchDialog
+          open={researchDialog}
+          projectId="demo-project"
+          onOpenChange={setResearchDialog}
+          loadContext={loadDemoResearchContext}
+          preflightRequest={demoCoveragePreflight}
+          startRequest={demoCoverageStart}
         />
       </section>
 

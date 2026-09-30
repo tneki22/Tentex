@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.bindings import search as search_module
@@ -20,12 +20,16 @@ from app.bindings.schemas import (
     SearchResultPageRead,
     SearchResultRead,
 )
+from app.db import project_write_transaction
+from app.lessons.refs import transfer_refs_on_revision
 from app.marker_labels import material_image_label
+from app.materials.naming import material_display_name, project_material_display_name
 from app.materials.schemas import MaterialPurpose
 from app.models import (
     Binding,
     BindingMechanism,
     BindingStatus,
+    CoverageDecision,
     Material,
     MaterialBlock,
     MaterialFragment,
@@ -37,7 +41,6 @@ from app.models import (
     ProjectActionLog,
     ProjectMaterial,
     ProjectStatus,
-    WorkspaceVariant,
     utc_now,
 )
 from app.projects.errors import ProjectConflictError, ProjectDomainError, ProjectNotFoundError
@@ -46,17 +49,48 @@ from app.projects.schemas import LatestUndoableAction
 STUDY_NODE_TYPES = {NodeType.TOPIC, NodeType.SUBPOINT}
 ACTIVE_STATUSES = {BindingStatus.MANUAL, BindingStatus.CONFIRMED, BindingStatus.MACHINE}
 QUALITY_RANK = {PageQuality.NATIVE: 0, PageQuality.OCR: 1, PageQuality.OCR_LOW: 2}
+# Привязка служит опорой темы, если текст раскрывает её (`content`) либо человек сам
+# привязал его не через урок. Упоминание называет тему, привязка урока повторяет то, что
+# в урок уже положили: и то и другое нельзя выдавать урокам и чату за материал темы.
+SUPPORT_CLAUSE = or_(
+    Binding.semantic_kind == "content",
+    and_(Binding.status == BindingStatus.MANUAL, Binding.mechanism != BindingMechanism.LESSON),
+)
+
+
+def topic_support(session: Session, project_id: UUID, node_id: UUID) -> list[Binding]:
+    """Активные привязки, на которые тема опирается как на свой материал.
+
+    Общая для ИИ-урока (`lessons.candidates`) и области «Связано с темой» в чате: раньше
+    оба брали любую не снятую привязку, и упоминание в оглавлении втягивало в урок весь
+    блок «Содержание», а урок кормил сам себя своими же привязками. Опора, скрытая
+    человеком («не показывать»), исключается так же, как в «Источнике».
+    """
+    hidden = {
+        row.target_key
+        for row in session.scalars(
+            select(CoverageDecision).where(
+                CoverageDecision.project_id == project_id,
+                CoverageDecision.kind == "hide_evidence",
+            )
+        )
+        if row.payload.get("hidden")
+    }
+    rows = session.scalars(
+        select(Binding).where(
+            Binding.project_id == project_id,
+            Binding.program_node_id == node_id,
+            Binding.status.in_(ACTIVE_STATUSES),
+            SUPPORT_CLAUSE,
+        )
+    )
+    return [binding for binding in rows if str(binding.id) not in hidden]
 
 
 def _require_project(session: Session, project_id: UUID, *, writable: bool) -> Project:
     project = session.get(Project, project_id)
     if project is None or project.status == ProjectStatus.DRAFT:
         raise ProjectNotFoundError()
-    if project.workspace_variant != WorkspaceVariant.EXAM:
-        raise ProjectConflictError(
-            "Привязки доступны только экзаменационным проектам",
-            code="bindings_require_exam_project",
-        )
     if writable and project.status != ProjectStatus.ACTIVE:
         raise ProjectConflictError(
             "Архивный или завершённый проект нельзя изменять",
@@ -94,6 +128,12 @@ def _require_project_material(session: Session, project_id: UUID, material_id: U
 def _record_action(
     session: Session, project: Project, action_type: str, target_title: str, inverse_data: dict
 ) -> None:
+    from app.coverage.decisions import remember_binding_choice
+
+    for binding_id in inverse_data.get("binding_ids", []):
+        binding = session.get(Binding, UUID(binding_id))
+        if binding is not None:
+            remember_binding_choice(session, binding)
     session.add(
         ProjectActionLog(
             project_id=project.id,
@@ -142,14 +182,14 @@ def _fragment_read(
         node_title=node.title if node is not None else "",
         fragment_id=fragment.id,
         material_id=material.id,
-        material_name=material.original_name,
+        material_name=material_display_name(material),
         block_id=binding.block_id,
         page_number=page.page_number,
         text=fragment.text,
         bbox=fragment.bbox,
         element_kind=fragment.element_kind,
         asset_label=(
-            material_image_label(material.id, material.original_name, fragment.asset_path)
+            material_image_label(material.id, material_display_name(material), fragment.asset_path)
             if fragment.element_kind in {"image", "table"} and fragment.asset_path
             else None
         ),
@@ -200,7 +240,7 @@ def _resolve_fragments(
 def create_bindings(
     session: Session, project_id: UUID, command: BindingCreateWrite
 ) -> BindingChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_project(session, project_id, writable=True)
         node = _require_study_node(session, project_id, command.program_node_id)
         fragments = _resolve_fragments(session, project_id, command)
@@ -264,7 +304,7 @@ def create_bindings(
 
 
 def remove_binding(session: Session, project_id: UUID, binding_id: UUID) -> BindingChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_project(session, project_id, writable=True)
         binding = session.get(Binding, binding_id)
         if binding is None or binding.project_id != project_id:
@@ -289,7 +329,7 @@ def remove_binding(session: Session, project_id: UUID, binding_id: UUID) -> Bind
 
 
 def restore_binding(session: Session, project_id: UUID, binding_id: UUID) -> BindingChangeResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_project(session, project_id, writable=True)
         binding = session.get(Binding, binding_id)
         if binding is None or binding.project_id != project_id:
@@ -324,7 +364,7 @@ def remove_bindings_bulk(
     Одна запись в журнале на всю операцию: undo (Ctrl+Z или кнопка в уведомлении)
     возвращает всю пачку разом, тем же механизмом, что и одиночное снятие.
     """
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = _require_project(session, project_id, writable=True)
         material = _require_project_material(session, project_id, command.material_id)
         link = session.get(ProjectMaterial, (project_id, command.material_id))
@@ -357,7 +397,11 @@ def remove_bindings_bulk(
             )
 
         if touched_ids:
-            label = (link.display_name if link else None) or material.original_name
+            label = (
+                project_material_display_name(material, link)
+                if link is not None
+                else material_display_name(material)
+            )
             scope = f", стр. {command.page_number}" if command.page_number is not None else ""
             if command.program_node_id is not None:
                 node = session.get(ProgramNode, command.program_node_id)
@@ -391,6 +435,9 @@ def apply_undo(session: Session, project_id: UUID, action_type: str, data: dict)
             )
         binding.status = target_status
         binding.updated_at = now
+        from app.coverage.decisions import remember_binding_choice
+
+        remember_binding_choice(session, binding)
 
 
 def list_bindings(
@@ -441,17 +488,41 @@ def list_bindings(
 def get_summary(session: Session, project_id: UUID) -> list[NodeBindingSummary]:
     _require_project(session, project_id, writable=False)
     rows = session.execute(
-        select(Binding.program_node_id, Binding.material_id, MaterialFragment.quality)
+        select(
+            Binding.program_node_id,
+            Binding.material_id,
+            MaterialFragment.quality,
+            Binding.semantic_kind,
+            Binding.mechanism,
+        )
         .join(MaterialFragment, MaterialFragment.id == Binding.fragment_id)
         .where(Binding.project_id == project_id, Binding.status.in_(ACTIVE_STATUSES))
     ).all()
     aggregates: dict[UUID, dict] = {}
-    for node_id, material_id, quality in rows:
+    for node_id, material_id, quality, semantic_kind, mechanism in rows:
         entry = aggregates.setdefault(
-            node_id, {"fragment_count": 0, "materials": set(), "worst_quality": None}
+            node_id,
+            {
+                "fragment_count": 0,
+                "materials": set(),
+                "content_fragment_count": 0,
+                "content_materials": set(),
+                "supporting_fragment_count": 0,
+                "worst_quality": None,
+            },
         )
         entry["fragment_count"] += 1
         entry["materials"].add(material_id)
+        # Старые ручные/lesson/outline связи создавались до semantic_kind и остаются
+        # содержательными; PASS_TWO mention/context такими не становятся.
+        content = semantic_kind == "content" or (
+            semantic_kind in {None, "unknown"} and mechanism != BindingMechanism.PASS_TWO
+        )
+        if content:
+            entry["content_fragment_count"] += 1
+            entry["content_materials"].add(material_id)
+        else:
+            entry["supporting_fragment_count"] += 1
         worst = entry["worst_quality"]
         if worst is None or QUALITY_RANK[quality] > QUALITY_RANK[worst]:
             entry["worst_quality"] = quality
@@ -460,6 +531,9 @@ def get_summary(session: Session, project_id: UUID) -> list[NodeBindingSummary]:
             program_node_id=node_id,
             fragment_count=entry["fragment_count"],
             material_count=len(entry["materials"]),
+            content_fragment_count=entry["content_fragment_count"],
+            content_material_count=len(entry["content_materials"]),
+            supporting_fragment_count=entry["supporting_fragment_count"],
             worst_quality=entry["worst_quality"],
         )
         for node_id, entry in aggregates.items()
@@ -563,7 +637,7 @@ def _highlight_reads(highlights: Sequence[search_module.Highlight]) -> list[Sear
 
 
 def reindex_material(session: Session, project_id: UUID, material_id: UUID) -> ReindexResult:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         project = session.get(Project, project_id)
         if project is None:
             raise ProjectNotFoundError()
@@ -617,7 +691,20 @@ def transfer_bindings_on_revision(
     fragments_by_page_old: dict[int, list[MaterialFragment]],
     fragments_by_page_new: dict[int, list[MaterialFragment]],
 ) -> TransferResult:
-    """Р6: вызывается из materials.service.update_page_text в той же транзакции."""
+    """Р6: вызывается из materials.service.update_page_text в той же транзакции.
+
+    Тем же сопоставлением переносятся границы кусков уроков (`lessons.refs`).
+    """
+    mapping: dict[UUID, MaterialFragment] = {}
+    for page_number, olds in fragments_by_page_old.items():
+        news = fragments_by_page_new.get(page_number, [])
+        mapping.update(_match_fragments_on_page(olds, news))
+    transfer_refs_on_revision(
+        session,
+        material_id,
+        mapping,
+        {fragment.id for fragments in fragments_by_page_new.values() for fragment in fragments},
+    )
     bindings = list(
         session.scalars(
             select(Binding).where(
@@ -633,10 +720,6 @@ def transfer_bindings_on_revision(
         for fragments in fragments_by_page_old.values()
         for fragment in fragments
     }
-    mapping: dict[UUID, MaterialFragment] = {}
-    for page_number, olds in fragments_by_page_old.items():
-        news = fragments_by_page_new.get(page_number, [])
-        mapping.update(_match_fragments_on_page(olds, news))
 
     now = utc_now()
     transferred = 0

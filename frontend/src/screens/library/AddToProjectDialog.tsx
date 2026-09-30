@@ -83,6 +83,18 @@ export function AddToProjectDialog({
   }, [open, attachedProjectIds]);
 
   const available = (projects ?? []).filter((project) => !attachedProjectIds.includes(project.id));
+  const selectedProject = projects?.find((project) => project.id === projectId);
+  const allowExamPurposes = selectedProject?.template_key === "textbook";
+  const purposeOptions = allowExamPurposes
+    ? PURPOSES
+    : PURPOSES.filter((item) => item.value === "study_source");
+
+  useEffect(() => {
+    if (!allowExamPurposes && purpose !== "study_source") {
+      setPurpose("study_source");
+      setRole("additional");
+    }
+  }, [allowExamPurposes, purpose]);
 
   async function attach() {
     if (!projectId) return;
@@ -144,7 +156,7 @@ export function AddToProjectDialog({
             <Select
               ariaLabel="Назначение материала"
               value={purpose}
-              options={PURPOSES.map((item) => ({
+              options={purposeOptions.map((item) => ({
                 value: item.value,
                 label: item.label,
                 description: item.description,

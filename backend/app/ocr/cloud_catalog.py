@@ -35,6 +35,11 @@ PAGE_INPUT_TOKENS = 1850
 # Плотная страница учебника с формулами и таблицей в Markdown.
 PAGE_OUTPUT_TOKENS = 1300
 
+# Описание одного выреза: плитка-две картинки, инструкция со схемой ответа,
+# подпись и соседний текст на входе; структурное описание на выходе.
+IMAGE_INPUT_TOKENS = 1600
+IMAGE_OUTPUT_TOKENS = 900
+
 # Контекста меньше не хватит на страницу вместе со схемой ответа.
 MIN_CONTEXT_LENGTH = 32_000
 # Потолок ответа ниже этого обрежет страницу на середине формулы.
@@ -54,21 +59,31 @@ class CloudModelHint:
 # Идентификаторы приведены как у OpenRouter; у прямого подключения к провайдеру
 # они короче, поэтому сравнение идёт по вхождению, а не по равенству.
 RECOMMENDED: tuple[CloudModelHint, ...] = (
+    # Порядок и заметки — по замерам 26.09.2026 на наборе
+    # `scripts/image_eval_manifest.json` (итоги — в плане распознавания изображений).
+    CloudModelHint(
+        "openai/gpt-6-luna",
+        "Выбор по умолчанию: дёшево, быстро и без сбоев; рассуждение выключить.",
+    ),
     CloudModelHint(
         "qwen/qwen3.8-flash",
-        "Дёшево и уверенно читает документы: разумный выбор по умолчанию.",
-    ),
-    CloudModelHint(
-        "qwen/qwen3.7-flash",
-        "Ещё дешевле предыдущей, качество ниже на плотных формулах.",
-    ),
-    CloudModelHint(
-        "google/gemini-3.8-flash",
-        "Лучше всех держит формулы и сложную вёрстку, но дороже остальных.",
+        "Немного дешевле, но втрое медленнее и чаще срывается: лимиты и ответы не по схеме.",
     ),
     CloudModelHint(
         "qwen/qwen3-vl-30b-a3b-instruct",
-        "Специализированная зрительная модель: сильна на таблицах и схемах.",
+        "Описывает схемы неплохо, но на целых страницах зацикливается до потолка ответа.",
+    ),
+    CloudModelHint(
+        "google/gemini-3.8-flash",
+        "Дорогой контроль: в разы дороже, брать для страниц, где дешёвые ошиблись.",
+    ),
+    CloudModelHint(
+        "openrouter/auto",
+        "Автовыбор OpenRouter: для документов выбирает ту же gpt-6-luna, но дороже и медленнее.",
+    ),
+    CloudModelHint(
+        "qwen/qwen3.7-flash",
+        "Дешевле всех, но JSON Schema не гарантирует: ответы чаще уходят на проверку.",
     ),
     CloudModelHint(
         "mistral-small-2603",
@@ -106,6 +121,15 @@ def price_per_page(
     if prompt_price_usd is None or completion_price_usd is None:
         return None
     return prompt_price_usd * PAGE_INPUT_TOKENS + completion_price_usd * PAGE_OUTPUT_TOKENS
+
+
+def price_per_image(
+    prompt_price_usd: Decimal | None, completion_price_usd: Decimal | None
+) -> Decimal | None:
+    """Во что обойдётся описание одного выреза. `None` — цена неизвестна."""
+    if prompt_price_usd is None or completion_price_usd is None:
+        return None
+    return prompt_price_usd * IMAGE_INPUT_TOKENS + completion_price_usd * IMAGE_OUTPUT_TOKENS
 
 
 def verdict(

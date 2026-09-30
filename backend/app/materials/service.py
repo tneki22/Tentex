@@ -3,11 +3,13 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select, union
 from sqlalchemy.orm import Session
 
+from app.ai.gateway import ModelGateway
 from app.bindings.service import delete_project_material_bindings
-from app.materials import library
+from app.db import job_write_transaction, project_write_transaction
+from app.materials import library, outline_ai
 from app.materials.library import (
     PURPOSE_VALUES,
 )
@@ -23,6 +25,8 @@ from app.materials.library import (
 from app.materials.library import (
     task_read as _task_read,
 )
+from app.materials.naming import material_display_name, project_material_display_name
+from app.materials.presentation import presentation_kind
 from app.materials.schemas import (
     ExamCompositeDraftImportResult,
     ExamCompositeDraftImportWrite,
@@ -33,9 +37,12 @@ from app.materials.schemas import (
     ExamProgramPreviewNode,
     ExternalMaterialCreate,
     MaterialAnswerImportResult,
+    MaterialOrderWrite,
+    MaterialParseRead,
     MaterialPurpose,
     MaterialRead,
     MaterialUpdate,
+    OutlineDetailRead,
     PageCorrectionRead,
     PageRead,
     PageTextUpdate,
@@ -45,14 +52,20 @@ from app.materials.schemas import (
 from app.materials.storage import material_path
 from app.models import (
     BackgroundJob,
+    Binding,
+    BindingStatus,
     ExamFormat,
     ExamKind,
     GoalPassport,
     Material,
     MaterialFragment,
     MaterialPage,
+    MaterialRevision,
+    MaterialRevisionOrigin,
     MaterialState,
     NodeType,
+    ProgramNode,
+    ProgramNodeSourcePageRange,
     Project,
     ProjectMaterial,
     ProjectStatus,
@@ -96,14 +109,116 @@ def _link(session: Session, project_id: UUID, material_id: UUID) -> ProjectMater
     return link
 
 
-def _read(link: ProjectMaterial, material: Material, task: BackgroundJob | None) -> MaterialRead:
+def _last_parses(session: Session, materials: list[Material]) -> dict[UUID, MaterialParseRead]:
+    """Последний разбор активной версии каждого материала одним запросом.
+
+    Правка страницы или уборка текста дают новую версию, но режим и модель
+    остаются от разбора, из которого она выросла, — поэтому берётся последняя
+    версия-разбор не новее активной, а не сама активная.
+    """
+    active = {material.id: material.active_parse_revision for material in materials}
+    if not active:
+        return {}
+    rows = session.scalars(
+        select(MaterialRevision)
+        .where(
+            MaterialRevision.material_id.in_(active),
+            MaterialRevision.origin.in_(
+                [MaterialRevisionOrigin.IMPORTED, MaterialRevisionOrigin.PARSE]
+            ),
+        )
+        .order_by(MaterialRevision.revision)
+    )
+    result: dict[UUID, MaterialParseRead] = {}
+    for row in rows:
+        if row.revision > active[row.material_id]:
+            continue
+        scope = row.scope or {}
+        page_model = (scope.get("options") or {}).get("page_model") or {}
+        changed = (row.summary or {}).get("changed_pages")
+        result[row.material_id] = MaterialParseRead(
+            revision=row.revision,
+            parser_mode=row.parser_mode,
+            model_id=page_model.get("model_id"),
+            scope=str(scope.get("kind") or "all"),
+            page_from=scope.get("page_from"),
+            page_to=scope.get("page_to"),
+            parsed_pages=changed if isinstance(changed, int) else None,
+        )
+    return result
+
+
+_ACTIVE_BINDINGS = (BindingStatus.MANUAL, BindingStatus.CONFIRMED, BindingStatus.MACHINE)
+
+
+def _topic_usage(session: Session, project_id: UUID, material_ids: list[UUID]) -> dict[UUID, int]:
+    """Число тем текущей программы, которые опираются на каждый материал.
+
+    Тема считается один раз, как бы она ни была связана с источником: живой
+    привязкой фрагмента, диапазоном страниц или тем, что выросла из его оглавления.
+    """
+    if not material_ids:
+        return {}
+    by_bindings = select(Binding.material_id, Binding.program_node_id).where(
+        Binding.project_id == project_id,
+        Binding.material_id.in_(material_ids),
+        Binding.status.in_(_ACTIVE_BINDINGS),
+    )
+    by_ranges = select(
+        ProgramNodeSourcePageRange.material_id, ProgramNodeSourcePageRange.program_node_id
+    ).where(
+        ProgramNodeSourcePageRange.project_id == project_id,
+        ProgramNodeSourcePageRange.material_id.in_(material_ids),
+    )
+    by_origin = select(ProgramNode.origin_material_id, ProgramNode.id).where(
+        ProgramNode.project_id == project_id,
+        ProgramNode.origin_material_id.in_(material_ids),
+    )
+    links = union(by_bindings, by_ranges, by_origin).subquery()
+    material_col, node_col = links.c
+    rows = session.execute(
+        select(material_col, func.count(func.distinct(node_col)))
+        .join(
+            ProgramNode,
+            (ProgramNode.project_id == project_id) & (ProgramNode.id == node_col),
+        )
+        .where(
+            ProgramNode.node_type.in_([NodeType.TOPIC, NodeType.SUBPOINT]),
+            ProgramNode.is_in_current_program.is_(True),
+            ProgramNode.is_archived.is_(False),
+        )
+        .group_by(material_col)
+    ).all()
+    return {material_id: count for material_id, count in rows}
+
+
+def _read_one(session: Session, link: ProjectMaterial, material: Material) -> MaterialRead:
+    return _read(
+        link,
+        material,
+        _latest_task(session, material.id),
+        _last_parses(session, [material]).get(material.id),
+        _topic_usage(session, link.project_id, [material.id]).get(material.id, 0),
+    )
+
+
+def _read(
+    link: ProjectMaterial,
+    material: Material,
+    task: BackgroundJob | None,
+    last_parse: MaterialParseRead | None = None,
+    used_by_topics: int = 0,
+) -> MaterialRead:
     purposes = [purpose for purpose in link.purposes if purpose in PURPOSE_VALUES]
     return MaterialRead(
         id=material.id,
         original_name=material.original_name,
-        display_name=link.display_name or material.original_name,
+        display_name=project_material_display_name(material, link),
+        library_display_name=material_display_name(material),
+        project_display_name=link.display_name,
         media_type=material.media_type,
         source_kind=material.source_kind,
+        presentation_kind=presentation_kind(material),
         source_url=material.source_url,
         retrieved_at=material.retrieved_at,
         size_bytes=material.size_bytes,
@@ -123,6 +238,8 @@ def _read(link: ProjectMaterial, material: Material, task: BackgroundJob | None)
         diagnostics=material.diagnostics,
         error=material.error,
         task=_task_read(task),
+        last_parse=last_parse,
+        used_by_topics=used_by_topics,
         attached_at=link.created_at,
         created_at=material.created_at,
         updated_at=material.updated_at,
@@ -196,6 +313,17 @@ def _attach(
     return link
 
 
+def _inherit_project_subject(
+    session: Session, project_id: UUID, material: Material
+) -> None:
+    """Заполнить пустой предмет материала из проекта, не меняя уже заданный."""
+    if material.subject:
+        return
+    passport = session.get(GoalPassport, project_id)
+    if passport is not None and passport.subject:
+        material.subject = passport.subject
+
+
 async def upload_material(
     session: Session,
     project_id: UUID,
@@ -211,6 +339,7 @@ async def upload_material(
     with session.begin():
         _project(session, project_id, writable=True)
         material = library.register_uploaded_material(session, uploaded)
+        _inherit_project_subject(session, project_id, material)
         link = _attach(
             session,
             project_id,
@@ -220,7 +349,7 @@ async def upload_material(
             exam_slot=exam_slot,
             duplicate_detail="Этот файл уже добавлен в проект",
         )
-        return _read(link, material, _latest_task(session, material.id))
+        return _read_one(session, link, material)
 
 
 def create_text_material(
@@ -231,6 +360,7 @@ def create_text_material(
     with session.begin():
         _project(session, project_id, writable=True)
         material = library.create_text_material_row(session, command)
+        _inherit_project_subject(session, project_id, material)
         link = _attach(
             session,
             project_id,
@@ -240,7 +370,7 @@ def create_text_material(
             exam_slot=command.exam_slot,
             duplicate_detail="Этот текст уже добавлен в проект",
         )
-        return _read(link, material, _latest_task(session, material.id))
+        return _read_one(session, link, material)
 
 
 def create_external_material(
@@ -251,7 +381,10 @@ def create_external_material(
     session.rollback()
     with session.begin():
         _project(session, project_id, writable=True)
-        material = library.create_external_material_row(session, *fetched)
+        material = library.create_external_material_row(
+            session, *fetched, subject=command.subject
+        )
+        _inherit_project_subject(session, project_id, material)
         link = _attach(
             session,
             project_id,
@@ -261,7 +394,7 @@ def create_external_material(
             exam_slot=command.exam_slot,
             duplicate_detail="Этот источник уже добавлен в проект",
         )
-        return _read(link, material, _latest_task(session, material.id))
+        return _read_one(session, link, material)
 
 
 def list_materials(session: Session, project_id: UUID) -> list[MaterialRead]:
@@ -274,7 +407,42 @@ def list_materials(session: Session, project_id: UUID) -> list[MaterialRead]:
     ).all()
     material_ids = [material.id for _link, material in rows]
     tasks_by_material = _latest_tasks_by_material(session, material_ids)
-    return [_read(link, material, tasks_by_material.get(material.id)) for link, material in rows]
+    parses = _last_parses(session, [material for _link, material in rows])
+    usage = _topic_usage(session, project_id, material_ids)
+    return [
+        _read(
+            link,
+            material,
+            tasks_by_material.get(material.id),
+            parses.get(material.id),
+            usage.get(material.id, 0),
+        )
+        for link, material in rows
+    ]
+
+
+def reorder_materials(
+    session: Session, project_id: UUID, command: MaterialOrderWrite
+) -> list[MaterialRead]:
+    """Порядок строк списка становится приоритетом: верхний источник — 0."""
+    with project_write_transaction(session, project_id):
+        _project(session, project_id, writable=True)
+        links = {
+            link.material_id: link
+            for link in session.scalars(
+                select(ProjectMaterial).where(ProjectMaterial.project_id == project_id)
+            )
+        }
+        if len(set(command.material_ids)) != len(command.material_ids) or set(
+            command.material_ids
+        ) != set(links):
+            raise ProjectConflictError(
+                "Список материалов изменился — обновите экран и повторите",
+                code="material_order_stale",
+            )
+        for priority, material_id in enumerate(command.material_ids):
+            links[material_id].priority = priority
+    return list_materials(session, project_id)
 
 
 def get_material(session: Session, project_id: UUID, material_id: UUID) -> MaterialRead:
@@ -283,13 +451,13 @@ def get_material(session: Session, project_id: UUID, material_id: UUID) -> Mater
     material = session.get(Material, material_id)
     if material is None:
         raise ProjectNotFoundError("Материал не найден")
-    return _read(link, material, _latest_task(session, material.id))
+    return _read_one(session, link, material)
 
 
 def update_material(
     session: Session, project_id: UUID, material_id: UUID, command: MaterialUpdate
 ) -> MaterialRead:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _project(session, project_id, writable=True)
         link = _link(session, project_id, material_id)
         material = session.get(Material, material_id)
@@ -319,11 +487,11 @@ def update_material(
         if command.source_role is not None:
             link.affects_program = command.source_role != SourceRole.REFERENCE
         session.flush()
-        return _read(link, material, _latest_task(session, material.id))
+        return _read_one(session, link, material)
 
 
 def detach_material(session: Session, project_id: UUID, material_id: UUID) -> None:
-    with session.begin():
+    with project_write_transaction(session, project_id):
         _project(session, project_id, writable=True)
         link = _link(session, project_id, material_id)
         delete_project_material_bindings(session, project_id, material_id)
@@ -334,23 +502,23 @@ def start_processing(
     session: Session, project_id: UUID, material_id: UUID, command: ProcessingStart
 ) -> MaterialRead:
     """Проектная обёртка над общим запуском: разбор один на всю установку."""
-    with session.begin():
+    with job_write_transaction(session):
         _project(session, project_id, writable=True)
         link = _link(session, project_id, material_id)
         library.start_processing_core(session, material_id, command)
         material = library.material_or_404(session, material_id)
-        return _read(link, material, _latest_task(session, material_id))
+        return _read_one(session, link, material)
 
 
 def control_task(
     session: Session, project_id: UUID, material_id: UUID, action: str
 ) -> MaterialRead:
-    with session.begin():
+    with job_write_transaction(session):
         _project(session, project_id, writable=True)
         link = _link(session, project_id, material_id)
         library.control_task_core(session, material_id, action)
         material = library.material_or_404(session, material_id)
-        return _read(link, material, _latest_task(session, material_id))
+        return _read_one(session, link, material)
 
 
 def get_page(
@@ -371,6 +539,27 @@ def page_image_path(
     _project(session, project_id, writable=False)
     _link(session, project_id, material_id)
     return library.library_page_image_path(session, material_id, page_number)
+
+
+def get_outline(
+    session: Session, project_id: UUID, material_id: UUID, source: str
+) -> OutlineDetailRead:
+    """Оглавление источника для шага 3 мастера учебника (Работа 4 плана).
+
+    Только извлечение и показ — импорт в настоящую программу не реализован."""
+    _project(session, project_id, writable=False)
+    _link(session, project_id, material_id)
+    material = library.material_or_404(session, material_id)
+    return library.resolve_outline(session, material, source)
+
+
+async def run_outline_model(
+    session: Session, gateway: ModelGateway, project_id: UUID, material_id: UUID
+) -> outline_ai.OutlineModelRunRead:
+    """Четвёртый источник — по явной кнопке пользователя, когда остальных не хватило."""
+    _project(session, project_id, writable=True)
+    _link(session, project_id, material_id)
+    return await outline_ai.run(session, gateway, project_id, material_id)
 
 
 def fragment_asset_path(
@@ -460,7 +649,7 @@ def preview_exam_program(
         )
     return ExamProgramPreview(
         material_id=material.id,
-        material_name=link.display_name or material.original_name,
+        material_name=project_material_display_name(material, link),
         counts={
             "tickets": parsed.tickets,
             "questions": parsed.questions,
@@ -480,7 +669,7 @@ def import_exam_program_from_material(
     command: ExamProgramImportWrite,
 ):
     parsed, material, link = _parsed_exam_from_material(session, project_id, material_id)
-    material_name = link.display_name or material.original_name
+    material_name = project_material_display_name(material, link)
     if command.dedupe_duplicates and parsed.has_duplicates:
         parsed = dedupe_first_occurrence(parsed)
     session.rollback()
@@ -501,7 +690,7 @@ def import_exam_draft_from_material(
     command: ExamProgramDraftImportWrite,
 ):
     parsed, material, link = _parsed_exam_from_material(session, project_id, material_id)
-    material_name = link.display_name or material.original_name
+    material_name = project_material_display_name(material, link)
     if command.dedupe_duplicates and parsed.has_duplicates:
         parsed = dedupe_first_occurrence(parsed)
     session.rollback()
@@ -664,7 +853,7 @@ def import_composite_exam_draft(
             parsed = parse_exam_list(raw_text, kind)
         except ExamImportError as error:
             raise ProjectConflictError(str(error), code="material_exam_parse_failed") from error
-        return parsed, link.display_name or material.original_name
+        return parsed, project_material_display_name(material, link)
 
     question_parsed, question_name = parsed_for(
         command.question_material_id, ExamMaterialSlot.QUESTION_LIST, ExamKind.QUESTION
@@ -727,7 +916,7 @@ def import_answers_from_material(
         )
     )
     raw_text = "\n\n".join(page.text for page in pages if page.text.strip())
-    label = f"{link.display_name or material.original_name} · Материал {material.id}"
+    label = f"{project_material_display_name(material, link)} · Материал {material.id}"
     session.rollback()
     result = answers.import_reference_answers(
         session,
