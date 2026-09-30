@@ -546,6 +546,7 @@
 
 .gd-node .gd-step { fill: var(--ink); font-size: 13.5px; font-weight: 600; text-anchor: middle; }
 .gd-node .gd-title-sm { font-size: 15px; }
+.gd-node .gd-sub-sm { font-size: 11.5px; }
 
 .gd-info rect { fill: color-mix(in srgb, var(--tone-info) 12%, var(--paper)); stroke: var(--tone-info); }
 .gd-accent rect { fill: color-mix(in srgb, var(--accent) 12%, var(--paper)); stroke: var(--accent); }

@@ -269,12 +269,195 @@ function ProgramHub() {
   );
 }
 
+/** Три входа в одну общую Библиотеку и подключение к проекту. */
+function AddPaths() {
+  return (
+    <svg viewBox="0 0 720 300" role="img" aria-label="Материал можно добавить в Библиотеку заранее, в мастере создания проекта или в разделе Материалы проекта; файл хранится в Библиотеке один раз и подключается к проекту с ролью">
+      <defs>
+        <marker id="gd-arrow-a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+
+      <g className="gd-node gd-info">
+        <rect x="8" y="20" width="212" height="70" rx="14" />
+        <text x="114" y="50" className="gd-title gd-title-sm">Библиотека заранее</text>
+        <text x="114" y="71" className="gd-sub">без проекта, когда удобно</text>
+      </g>
+      <g className="gd-node gd-info">
+        <rect x="8" y="115" width="212" height="70" rx="14" />
+        <text x="114" y="145" className="gd-title gd-title-sm">Мастер создания</text>
+        <text x="114" y="166" className="gd-sub">на шаге с материалами</text>
+      </g>
+      <g className="gd-node gd-info">
+        <rect x="8" y="210" width="212" height="70" rx="14" />
+        <text x="114" y="240" className="gd-title gd-title-sm">Материалы проекта</text>
+        <text x="114" y="261" className="gd-sub">кнопка «Добавить материал»</text>
+      </g>
+
+      <g className="gd-node gd-accent">
+        <rect x="290" y="88" width="180" height="124" rx="18" />
+        <text x="380" y="132" className="gd-title">Библиотека</text>
+        <text x="380" y="158" className="gd-sub">файл хранится один раз</text>
+        <text x="380" y="178" className="gd-sub">и разбирается один раз</text>
+      </g>
+
+      <g className="gd-node gd-success">
+        <rect x="560" y="88" width="152" height="124" rx="18" />
+        <text x="636" y="132" className="gd-title">Проект</text>
+        <text x="636" y="158" className="gd-sub">роль и приоритет</text>
+        <text x="636" y="178" className="gd-sub">программа, привязки</text>
+      </g>
+
+      <path d="M224 55 C262 55 262 132 284 132" className="gd-arrow" markerEnd="url(#gd-arrow-a)" />
+      <path d="M224 150 H284" className="gd-arrow" markerEnd="url(#gd-arrow-a)" />
+      <path d="M224 245 C262 245 262 168 284 168" className="gd-arrow" markerEnd="url(#gd-arrow-a)" />
+      <path d="M474 150 H554" className="gd-arrow" markerEnd="url(#gd-arrow-a)" />
+      <text x="514" y="138" className="gd-label gd-label-mid">подключение</text>
+    </svg>
+  );
+}
+
+/** Файл → страницы → элементы → блоки и фрагменты → то, что на них держится. */
+function TextBlocks() {
+  const nodes = [
+    { title: "Файл", a: "PDF, DOCX, фото,", b: "текст, запись", tone: "gd-info" },
+    { title: "Страницы", a: "лист PDF или", b: "весь файл целиком", tone: "gd-info" },
+    { title: "Элементы", a: "заголовки, абзацы,", b: "таблицы, формулы", tone: "gd-accent" },
+    { title: "Блоки", a: "раздел от заголовка", b: "до следующего", tone: "gd-accent" },
+  ];
+  const consumers = ["Поиск", "Привязки к темам", "Чат и цитаты", "Уроки"];
+  return (
+    <svg viewBox="0 0 720 260" role="img" aria-label="Файл делится на страницы, страницы на элементы, элементы складываются в блоки и фрагменты, на которых держатся поиск, привязки к темам, чат и уроки">
+      <defs>
+        <marker id="gd-arrow-b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+
+      {nodes.map((node, index) => {
+        const x = 10 + index * 184;
+        return (
+          <g key={node.title}>
+            <g className={`gd-node ${node.tone}`}>
+              <rect x={x} y="14" width="148" height="80" rx="14" />
+              <text x={x + 74} y="42" className="gd-title gd-title-sm">{node.title}</text>
+              <text x={x + 74} y="64" className="gd-sub gd-sub-sm">{node.a}</text>
+              <text x={x + 74} y="80" className="gd-sub gd-sub-sm">{node.b}</text>
+            </g>
+            {index < nodes.length - 1 && (
+              <path d={`M${x + 152} 54 H${x + 180}`} className="gd-arrow" markerEnd="url(#gd-arrow-b)" />
+            )}
+          </g>
+        );
+      })}
+
+      <text x="10" y="132" className="gd-label">На этих единицах держатся</text>
+      <path d="M636 98 V150 M84 150 H636" className="gd-arrow gd-dashed" />
+      {consumers.map((title, index) => {
+        const x = 10 + index * 184;
+        return (
+          <g key={title}>
+            <path d={`M${x + 74} 150 V172`} className="gd-arrow gd-dashed" markerEnd="url(#gd-arrow-b)" />
+            <g className="gd-node gd-success">
+              <rect x={x} y="176" width="148" height="56" rx="14" />
+              <text x={x + 74} y="210" className="gd-step">{title}</text>
+            </g>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/** Рекомендуемый порядок: быстро и для всех, потом точно и только где нужно. */
+function TwoPasses() {
+  const steps = [
+    { title: "Быстро", a: "все файлы за минуты", b: "на вашем компьютере", tone: "gd-info" },
+    { title: "Оглавление", a: "список вопросов,", b: "карта учебника", tone: "gd-info" },
+    { title: "Программа", a: "проект создан,", b: "материалы в нём", tone: "gd-accent" },
+    { title: "Облако", a: "формулы, таблицы,", b: "схемы, рисунки", tone: "gd-warning" },
+    { title: "Проверка", a: "сравнение", b: "с оригиналом", tone: "gd-success" },
+  ];
+  return (
+    <svg viewBox="0 0 720 170" role="img" aria-label="Сначала быстрый разбор всех файлов даёт оглавление и основу для программы, потом облако точечно читает формулы, таблицы и рисунки, затем проверка сравнением с оригиналом">
+      <defs>
+        <marker id="gd-arrow-p" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      {steps.map((step, index) => {
+        const x = 10 + index * 143;
+        return (
+          <g key={step.title}>
+            <g className={`gd-node ${step.tone}`}>
+              <rect x={x} y="12" width="128" height="86" rx="14" />
+              <text x={x + 64} y="40" className="gd-title gd-title-sm">{step.title}</text>
+              <text x={x + 64} y="64" className="gd-sub gd-sub-sm">{step.a}</text>
+              <text x={x + 64} y="80" className="gd-sub gd-sub-sm">{step.b}</text>
+            </g>
+            {index < steps.length - 1 && (
+              <path d={`M${x + 131} 55 H${x + 140}`} className="gd-arrow" markerEnd="url(#gd-arrow-p)" />
+            )}
+          </g>
+        );
+      })}
+      <path d="M10 118 H401" className="gd-arrow" />
+      <text x="205" y="144" className="gd-label gd-label-mid">Сначала база: быстро и для всех</text>
+      <path d="M439 118 H710" className="gd-arrow" />
+      <text x="574" y="144" className="gd-label gd-label-mid">Потом точность: там, где нужна</text>
+    </svg>
+  );
+}
+
+/** Один ход поиска в интернете. */
+function SearchTurn() {
+  const steps = [
+    { title: "Просьба", a: "вы пишете, что", b: "нужно найти", tone: "gd-info" },
+    { title: "План", a: "модель составляет", b: "до 6 запросов", tone: "gd-accent" },
+    { title: "Поиск", a: "SearXNG ищет,", b: "открывает страницы", tone: "gd-info" },
+    { title: "Отбор", a: "модель выбирает", b: "до 10 источников", tone: "gd-accent" },
+    { title: "Карточки", a: "ссылка, суть,", b: "чем полезно", tone: "gd-success" },
+  ];
+  return (
+    <svg viewBox="0 0 720 170" role="img" aria-label="Ход поиска: просьба, план запросов от модели, поиск и чтение страниц, отбор источников моделью, карточки с ссылками">
+      <defs>
+        <marker id="gd-arrow-q" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      {steps.map((step, index) => {
+        const x = 10 + index * 143;
+        return (
+          <g key={step.title}>
+            <g className={`gd-node ${step.tone}`}>
+              <rect x={x} y="12" width="128" height="86" rx="14" />
+              <text x={x + 64} y="40" className="gd-title gd-title-sm">{step.title}</text>
+              <text x={x + 64} y="64" className="gd-sub gd-sub-sm">{step.a}</text>
+              <text x={x + 64} y="80" className="gd-sub gd-sub-sm">{step.b}</text>
+            </g>
+            {index < steps.length - 1 && (
+              <path d={`M${x + 131} 55 H${x + 140}`} className="gd-arrow" markerEnd="url(#gd-arrow-q)" />
+            )}
+          </g>
+        );
+      })}
+      <path d="M217 102 V120 H503 V102" className="gd-arrow gd-dashed" />
+      <text x="360" y="146" className="gd-label gd-label-mid">два вызова модели · обычно 20–60 секунд</text>
+    </svg>
+  );
+}
+
 const DIAGRAMS: Record<string, () => ReactNode> = {
   overview: Overview,
   structure: Structure,
   transfer: Transfer,
   wizard: Wizard,
   "program-hub": ProgramHub,
+  "add-paths": AddPaths,
+  "text-blocks": TextBlocks,
+  "two-passes": TwoPasses,
+  "search-turn": SearchTurn,
 };
 
 export function GuideDiagram({ name }: { name: string }) {

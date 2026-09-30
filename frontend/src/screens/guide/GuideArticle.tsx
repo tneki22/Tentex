@@ -19,6 +19,7 @@ import {
   Files,
   FolderOpen,
   FolderPlus,
+  Globe,
   GraduationCap,
   HardDrive,
   Image as ImageIcon,
@@ -46,6 +47,9 @@ import {
   Target,
   Timer,
   Upload,
+  Video,
+  Zap,
+  Eye,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -60,7 +64,7 @@ const CARD_ICONS: Record<string, LucideIcon> = {
   Archive, BookOpen, Bot, BrainCircuit, CalendarDays, Cloud, Coins, Compass, Cpu, Database, Download, FilePenLine,
   FilePlus2, FileText, Files, FolderOpen, FolderPlus, GraduationCap, HardDrive, Image: ImageIcon, KeyRound, Layers,
   Library, Link2, ListChecks, ListTree, MessagesSquare, Mic, NotebookPen, Package, Route, ScanSearch, ScanText, Search,
-  Settings, Share2, ShieldCheck, Sparkles, Target, Timer, Upload,
+  Settings, Share2, ShieldCheck, Sparkles, Target, Timer, Upload, Globe, Video, Zap, Eye,
 };
 
 const CALLOUTS: Record<CalloutTone, { icon: LucideIcon; title: string }> = {
