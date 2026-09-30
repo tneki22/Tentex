@@ -1016,7 +1016,7 @@ export interface LibraryProcessingCommand {
   image_mode?: OcrImageMode | null;
   description_provider_id?: string | null;
   description_model_id?: string | null;
-  /** Потолок суммы запуска, обычно верхняя оценка. */
+  /** Потолок суммы запуска; без него сервер применяет быстрый лимит. */
   max_cost_usd?: string | null;
   confirm_unknown_price?: boolean;
 }

@@ -282,9 +282,7 @@ export function LibraryProcessingPanel({
     };
   }
 
-  // Облачный запуск оценивает сервер по самим страницам: сколько уйдёт
-  // целиком, сколько изображений, и верхнюю цену с потолком ответа. Эта же
-  // верхняя цена становится пределом запуска.
+  // Подробная оценка необязательна для запуска и идёт отдельно от него.
   const estimateKey = mode === "cloud" && !isAudio && !rangeInvalid && material.capabilities.can_run_ocr
     ? JSON.stringify(runCommand())
     : null;
@@ -717,7 +715,11 @@ export function LibraryProcessingPanel({
                   ? ` · до ${estimate.requests_upper} запр. · обычно ${usdLabel(estimate.cost_typical_usd)}, не дороже ${usdLabel(estimate.cost_upper_usd)}`
                   : ` · до ${estimate.requests_upper} запр. · цена модели неизвестна`
               )}
-              {mode === "cloud" && !estimate && estimateKey && " · считаем стоимость…"}
+            </p>
+          )}
+          {mode === "cloud" && !estimate && estimateKey && (
+            <p className="inspector-note">
+              Можно запускать сразу. Пока стоимость не посчитана, предел запуска — $10.
             </p>
           )}
           {mode === "cloud" && estimate && estimate.notes.length > 0 && (
@@ -725,11 +727,11 @@ export function LibraryProcessingPanel({
               {estimate.notes.map((note) => <li key={note}>{note}</li>)}
             </ul>
           )}
-          {mode === "cloud" && estimate && !estimate.price_known && (
+          {mode === "cloud" && (!estimate || !estimate.price_known) && (
             <Checkbox
               checked={confirmUnknown}
               onCheckedChange={setConfirmUnknown}
-              label="Запустить без оценки цены"
+              label="Разрешить запуск, если тариф модели неизвестен"
               disabled={busy}
             />
           )}
@@ -739,10 +741,10 @@ export function LibraryProcessingPanel({
             onClick={() => {
               const command = runCommand();
               if (!command) return;
-              onStart(mode === "cloud" && estimate
+              onStart(mode === "cloud"
                 ? {
                   ...command,
-                  max_cost_usd: estimate.cost_upper_usd,
+                  max_cost_usd: estimate?.cost_upper_usd ?? null,
                   confirm_unknown_price: confirmUnknown,
                 }
                 : command);

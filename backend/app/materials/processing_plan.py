@@ -5,14 +5,15 @@
 настроек не меняют ход уже начатого запуска.
 
 Оценка — верхняя, а не средняя: каждый вызов считается с потолком ответа
-своей роли, изображение — плитками выреза. Она же становится пределом суммы
-запуска (`app.ai.job_budget`), если человек не задал свой. Неизвестная цена
-не превращается в ноль: запуск с такой моделью требует явного согласия.
+своей роли, изображение — плитками выреза. Запуск не ждёт анализа страниц:
+без готовой оценки использует отдельный быстрый предел по числу страниц и
+ценам каталога. Неизвестная цена требует явного согласия.
 """
 
 from __future__ import annotations
 
 import math
+import os
 import shutil
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -68,14 +69,17 @@ IMAGE_TYPICAL_OUTPUT = 900
 IMAGE_TILES_UPPER = 4
 # Доля текстовых страниц, где обычно есть формулы на транскрипцию.
 REGION_TYPICAL_SHARE = Decimal("0.3")
-# Запас попыток сверх оценённых вызовов: один повтор на каждый и два сверху.
-CALLS_RETRY_FACTOR = 2
+# Запас попыток сверх расчёта по страницам.
 CALLS_SLACK = 4
 # Векторные схемы находит разметчик уже при разборе; заранее на каждую
 # текстовую страницу закладывается доля описания.
 VECTOR_PICTURE_ALLOWANCE = Decimal("0.3")
 # Нижняя граница суммы предела, чтобы нулевая оценка не запрещала всё.
 MIN_BUDGET_USD = Decimal("0.01")
+# Без подробной оценки ограничиваем каждый запуск и числом попыток, и суммой.
+# На страницу допускаем несколько пачек вырезов, описаний и повторов.
+QUICK_CALLS_PER_PAGE = 20
+QUICK_MAX_COST_USD = Decimal("10")
 
 
 @dataclass(frozen=True)
@@ -179,6 +183,12 @@ def _tiles(width_px: float, height_px: float) -> int:
     return max(1, math.ceil(width_px / TILE_PX) * math.ceil(height_px / TILE_PX))
 
 
+def _lower_estimate_priority() -> None:
+    """Фоновая диагностика уступает процессор разбору и ответам приложения."""
+    if hasattr(os, "nice"):
+        os.nice(10)
+
+
 @lru_cache(maxsize=32)
 def _cached_pdf_shape(
     path: Path, size: int, modified_ns: int, pages: tuple[int, ...],
@@ -187,7 +197,10 @@ def _cached_pdf_shape(
     """Диагностика живёт вне API-процесса: PyMuPDF задерживает его потоки."""
     global _shape_executor
     if _shape_executor is None:
-        _shape_executor = ProcessPoolExecutor(max_workers=1, mp_context=get_context("spawn"))
+        _shape_executor = ProcessPoolExecutor(
+            max_workers=1, mp_context=get_context("spawn"),
+            initializer=_lower_estimate_priority,
+        )
     return _shape_executor.submit(
         _calculate_pdf_shape, path, pages, strategy, raster_scale
     ).result()
@@ -402,22 +415,34 @@ def estimate(
 
 
 def run_budget(
-    command: ProcessingStart, plan: ProcessingEstimateRead
+    session: Session, command: ProcessingStart, pages: int, image_mode: str
 ) -> dict[str, Any] | None:
-    """Предел суммы и вызовов облачного запуска; `None` — у локального его нет."""
+    """Быстрый предел облачного запуска без чтения содержимого файла."""
     if command.parser_mode != ParserMode.CLOUD:
         return None
-    if not plan.price_known and not command.confirm_unknown_price:
+    page_selection = page_model(session)
+    page_price = _price(session, page_selection)
+    image_price = (
+        _price(session, description_model(session, command))
+        if image_mode == "describe" else page_price
+    )
+    price_known = page_price is not None and image_price is not None
+    if not price_known and not command.confirm_unknown_price:
         raise ProjectConflictError(
             "Цена модели неизвестна: подтвердите запуск без оценки стоимости",
             code="ai_price_unknown",
-            context={"model_id": plan.page_model_id},
+            context={"model_id": page_selection.model_id if page_selection else None},
         )
-    max_cost = command.max_cost_usd or plan.cost_upper_usd
+    max_calls = pages * QUICK_CALLS_PER_PAGE + CALLS_SLACK
+    max_cost = command.max_cost_usd
+    if max_cost is None and price_known:
+        # Предел без оценки намеренно широкий: реальные вызовы резервируют свой
+        # собственный максимум, а общий потолок защищает от бесконечного расхода.
+        max_cost = QUICK_MAX_COST_USD
     if max_cost is not None:
         max_cost = max(max_cost, MIN_BUDGET_USD)
     return budget_state(
         max_cost_usd=max_cost,
-        max_calls=plan.requests_upper * CALLS_RETRY_FACTOR + CALLS_SLACK,
+        max_calls=max_calls,
         allow_unknown_price=command.confirm_unknown_price,
     )

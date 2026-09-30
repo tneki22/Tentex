@@ -1805,10 +1805,12 @@ def start_processing_core(
     options = processing_plan.run_options(session, material, command)
     budget = None
     if command.parser_mode == ParserMode.CLOUD and material.source_kind != MaterialSourceKind.AUDIO:
-        # Предел суммы и вызовов проверяется до постановки: неизвестная цена
-        # без согласия и модель без картинок останавливают запуск здесь.
-        plan = processing_plan.estimate(session, material, command, pages)
-        budget = processing_plan.run_budget(command, plan)
+        # Постановка не ждёт диагностики PDF. Цена проверяется по каталогу,
+        # а отдельная оценка продолжает считаться в фоне.
+        image_mode = processing_plan.params_from_options(
+            options, ocr_settings.runtime_params(session)
+        ).images_for(command.parser_mode.value)
+        budget = processing_plan.run_budget(session, command, len(pages), image_mode)
     revision = revision_registry.max_revision(session, material_id) + 1
     scope: dict[str, Any] = {"kind": command.scope}
     if command.scope == "range":

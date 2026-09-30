@@ -130,7 +130,7 @@ class ProcessingStart(ApiModel):
     # Модель описаний изображений; по умолчанию — модель страниц.
     description_provider_id: UUID | None = None
     description_model_id: str | None = Field(default=None, max_length=200)
-    # Потолок суммы запуска (обычно верхняя оценка из `.../processing/estimate`).
+    # Потолок суммы запуска; без него действует быстрый лимит без чтения файла.
     max_cost_usd: Decimal | None = Field(default=None, gt=0, le=1000)
     # Модель без цены в каталоге (локальная, автовыбор) запускается только явно.
     confirm_unknown_price: bool = False
