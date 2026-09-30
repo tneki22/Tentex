@@ -421,6 +421,7 @@ export function SearchSettingsSection({
             <div>
               <h2>Модели</h2>
               <p>Локальные модели скачиваются с Hugging Face. Произвольный код репозитория не запускается.</p>
+              <p>Рекомендуем модели из этого списка; стандартный выбор — Multilingual E5 Base, проверенная в Tentex.</p>
             </div>
           </header>
           <div className="retrieval-model-list">
