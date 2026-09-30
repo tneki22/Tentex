@@ -14,6 +14,8 @@ type BackgroundId = typeof BACKGROUNDS[number]["id"];
 type Preference = { id: BackgroundId; intensity: number; motion: boolean; photo: string };
 const DEFAULT: Preference = { id: "plain", intensity: 12, motion: false, photo: "" };
 const KEY = "tentex:background";
+/** Полный диапазон прозрачности: от скрытого фона до исходной насыщенности. */
+export const BACKGROUND_INTENSITY = { min: 0, max: 100 } as const;
 
 function readPreference(): Preference {
   try {
@@ -23,7 +25,9 @@ function readPreference(): Preference {
       && value.photo.length < 1_500_000 ? value.photo : "";
     return {
       id: value.id === "photo" && !photo ? "plain" : value.id,
-      intensity: Number.isFinite(value.intensity) ? Math.max(5, Math.min(20, value.intensity)) : 12,
+      intensity: Number.isFinite(value.intensity)
+        ? Math.max(BACKGROUND_INTENSITY.min, Math.min(BACKGROUND_INTENSITY.max, value.intensity))
+        : DEFAULT.intensity,
       motion: value.motion === true,
       photo,
     };

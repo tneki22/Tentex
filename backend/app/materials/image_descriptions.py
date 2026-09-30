@@ -20,14 +20,14 @@
 from __future__ import annotations
 
 import logging
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import replace
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.ai.job_budget import JobBudget, budget_state
 from app.ai.roles import get_role_spec
@@ -83,10 +83,20 @@ EXCLUDED_ROLES = frozenset({"service", "decorative"})
 # ── Роль изображений ревизии ────────────────────────────────────────────────
 
 
-def _revision_pages(session: Session, material_id: UUID, revision: int) -> list[MaterialPage]:
+def _revision_pages(
+    session: Session, material_id: UUID, revision: int, *, inventory_only: bool = False,
+) -> list[MaterialPage]:
+    query = select(MaterialPage)
+    if inventory_only:
+        # Растровый инвентарь не использует markdown/plain text страницы;
+        # их дублирование в ORM особенно дорого у тысячестраничных книг.
+        query = query.options(load_only(
+            MaterialPage.id, MaterialPage.page_number, MaterialPage.width,
+            MaterialPage.height, MaterialPage.elements,
+        ))
     return list(
         session.scalars(
-            select(MaterialPage)
+            query
             .where(MaterialPage.material_id == material_id, MaterialPage.revision == revision)
             .order_by(MaterialPage.page_number)
         )
@@ -96,7 +106,7 @@ def _revision_pages(session: Session, material_id: UUID, revision: int) -> list[
 def _header_footer_images(pages: list[MaterialPage]) -> set[tuple[int, int]]:
     """Изображения из найденных серий колонтитулов: (страница, индекс элемента)."""
     result: set[tuple[int, int]] = set()
-    for candidate in header_footer.detect(pages):
+    for candidate in header_footer.detect(pages, images_only=True):
         for occurrence in candidate.occurrences:
             if occurrence.image_hash is None:
                 continue
@@ -179,15 +189,21 @@ def revision_image_summary(session: Session, material_id: UUID, revision: int) -
 # ── Инвентарь и оценка ──────────────────────────────────────────────────────
 
 
-def _fragment_ids(session: Session, page: MaterialPage) -> list[UUID]:
-    """ID фрагментов-изображений страницы в порядке элементов."""
-    return list(
-        session.scalars(
-            select(MaterialFragment.id)
-            .where(MaterialFragment.page_id == page.id, MaterialFragment.element_kind == "image")
-            .order_by(MaterialFragment.sort_order)
-        )
+def _image_fragment_ids(
+    session: Session, material_id: UUID, revision: int,
+) -> dict[UUID, list[UUID]]:
+    """ID изображений всей ревизии одним запросом, в прежнем порядке элементов."""
+    rows = session.execute(
+        select(MaterialFragment.page_id, MaterialFragment.id)
+        .join(MaterialPage, MaterialPage.id == MaterialFragment.page_id)
+        .where(MaterialPage.material_id == material_id, MaterialPage.revision == revision,
+               MaterialFragment.element_kind == "image")
+        .order_by(MaterialFragment.page_id, MaterialFragment.sort_order)
     )
+    result: dict[UUID, list[UUID]] = defaultdict(list)
+    for page_id, fragment_id in rows:
+        result[page_id].append(fragment_id)
+    return result
 
 
 def _candidate(
@@ -277,13 +293,16 @@ def inventory(
     targets: list[ImageCandidateRead] = []
     doubtful: list[ImageCandidateRead] = []
     excluded: list[ImageCandidateRead] = []
-    pages = _revision_pages(session, material_id, material.active_parse_revision)
+    pages = _revision_pages(
+        session, material_id, material.active_parse_revision, inventory_only=True,
+    )
     classified = _classified(pages)
+    fragments = _image_fragment_ids(session, material_id, material.active_parse_revision)
     for page in pages:
         elements = classified[page.page_number][0]
         if not any(item.kind == "image" for item in elements):
             continue
-        fragment_ids = iter(_fragment_ids(session, page))
+        fragment_ids = iter(fragments.get(page.id, []))
         for index, element in enumerate(elements):
             if element.kind != "image":
                 continue

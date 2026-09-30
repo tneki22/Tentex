@@ -1,3 +1,0 @@
-# Preserve the exact bytes accepted by Archify and recorded in the receipt.
-research-overview.html -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
-research-overview.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

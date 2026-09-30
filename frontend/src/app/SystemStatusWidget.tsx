@@ -6,6 +6,7 @@ import {
   Bot,
   CircleCheck,
   CircleHelp,
+  Cpu,
   HardDrive,
   Info,
   OctagonAlert,
@@ -25,6 +26,7 @@ import {
   type StatusLevel,
   type SystemStatusItem,
   type SystemStorage,
+  type SystemResources,
 } from "../api/system";
 import { useSystemStatus } from "../hooks/useSystemStatus";
 
@@ -207,6 +209,28 @@ interface SystemStatusWidgetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onOpenBackgroundJobs: () => void;
+}
+
+/** Компактная сумма с расшифровкой; отсутствующий сервер не превращается в ноль. */
+function ResourceRow({ resources }: { resources: SystemResources | null }) {
+  const memory = resources?.memory_bytes;
+  const cpu = resources?.cpu_percent;
+  const breakdown = resources?.services.map((service) =>
+    `${service.service}: ${formatBytes(service.memory_bytes)} · CPU ${service.cpu_percent?.toLocaleString("ru-RU", { maximumFractionDigits: 1 }) ?? "—"}%`
+  ) ?? [];
+  const missing = resources?.missing_services ?? [];
+  const title = [
+    "API, фоновые задачи и модели поиска, включая дочерние процессы. Без web, SearXNG и браузера.",
+    "CPU 100% = одно ядро. Свежий снимок при открытии панели; затем сводка обновляется в фоне.",
+    ...breakdown,
+    ...(missing.length ? [`Нет измерения: ${missing.join(", ")}`] : []),
+  ].join("\n");
+  return <div className="status-resources" title={title}>
+    <Cpu size={15} aria-hidden="true" />
+    <span>Серверы{missing.length > 0 && resources?.services.length ? " (часть)" : ""}</span>
+    <span>ОЗУ <b>{memory == null ? "—" : formatBytes(memory)}</b></span>
+    <span>CPU <b>{cpu == null ? "—" : `${cpu.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`}</b></span>
+  </div>;
 }
 
 /**
@@ -402,6 +426,7 @@ export function SystemStatusWidget({ open, onOpenChange, onOpenBackgroundJobs }:
           )}
         </div>
 
+        <ResourceRow resources={status?.resources ?? null} />
         <footer className="status-foot">
           <span className="status-foot-icon"><Bot size={15} aria-hidden="true" /></span>
           <span>Бот ещё в разработке</span>

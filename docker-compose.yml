@@ -1,11 +1,12 @@
-# API, worker, model service retrieval, SearXNG и Vite работают отдельными процессами.
+# API, worker, model service retrieval, SearXNG и готовый web — отдельные сервисы.
+# Для автоперезагрузки: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 # Данные (SQLite и файловое хранилище) лежат в ./data на хосте — контейнер их не уносит.
 
 services:
   api:
     build: ./backend
     ports:
-      - "${TENTEX_API_PORT:-8000}:8000"
+      - "127.0.0.1:${TENTEX_API_PORT:-8000}:8000"
     volumes:
       - ./backend:/app
       - ./data:/data
@@ -72,14 +73,10 @@ services:
     restart: unless-stopped
 
   web:
-    build: ./frontend
+    build:
+      context: ./frontend
+      target: runtime
     ports:
-      - "${TENTEX_WEB_PORT:-5173}:5173"
-    volumes:
-      - ./frontend:/app
-      # node_modules берём из образа: на хосте лежат бинарники под Windows.
-      - /app/node_modules
-    environment:
-      TENTEX_API_URL: http://api:8000
+      - "127.0.0.1:${TENTEX_WEB_PORT:-5173}:5173"
     depends_on:
       - api

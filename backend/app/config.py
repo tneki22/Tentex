@@ -47,12 +47,29 @@ class Settings(BaseSettings):
     worker_cloud_concurrency: int = Field(default=2, ge=1, le=32)
     worker_ai_concurrency: int = Field(default=8, ge=1, le=32)
     retrieval_model_url: str = "http://retrieval-model:8010"
+    # Оценка хранит маленький результат, а не процесс с разобранным PDF.
+    pdf_estimate_idle_seconds: float = Field(default=60, gt=0)
+    # Серия обработок переиспользует OCR. После десяти минут без работы
+    # дочерний процесс возвращает всю нативную память системе.
+    worker_process_idle_seconds: float = Field(default=600, gt=0)
+    # 0 сохраняет быстрый поиск: холодная загрузка E5 занимает около 15 с.
+    # Положительное значение включает выгрузку в отдельном процессе для машин
+    # с малой памятью, с повторным прогревом после заданного простоя.
+    retrieval_model_idle_seconds: float = Field(default=0, ge=0)
+    # Просмотр сохраняет открытые PDF при листании, затем отпускает документы.
+    pdf_preview_idle_seconds: float = Field(default=600, gt=0)
+    # Два небольших счётчика cgroup; сбор не обращается к БД или моделям.
+    resource_sample_seconds: float = Field(default=5, ge=1, le=10)
     # Постоянные SQLite-соединения API. 0 — новое соединение на каждую сессию:
     # так работает воркер, чтобы после восстановления копии ни одно соединение
     # не держало подменённый файл. У API пул сохраняет кэш страниц между
     # запросами; на bind mount с Windows повторное чтение из кэша в десятки раз
     # быстрее чтения с диска. `restore` сам закрывает пул перед подменой.
     sqlite_pool_size: int = Field(default=0, ge=0, le=32)
+    # Общий пул обслуживает карточки/списки, а не полный проход индекса.
+    # Поисковым соединениям оставляем прежние 64 МиБ для bind mount Windows.
+    sqlite_cache_kib: int = Field(default=16384, ge=1024)
+    sqlite_search_cache_kib: int = Field(default=65536, ge=1024)
     # Локальный SearXNG чата «Поиск в интернете». В Docker api ходит в сервис
     # `searxng`; при запуске бэкенда на хосте — в порт, проброшенный на localhost.
     searxng_url: str = "http://localhost:8888"

@@ -200,7 +200,7 @@ def _same_line(
     return vertical <= LINE_VERTICAL_TOLERANCE and gap <= LINE_GAP_TOLERANCE
 
 
-def page_occurrences(page: MaterialPage) -> list[Occurrence]:
+def page_occurrences(page: MaterialPage, *, images_only: bool = False) -> list[Occurrence]:
     """Собрать цельные строки-кандидаты из элементов одной страницы."""
     text_items: dict[str, list[tuple[int, dict[str, object], Bbox]]] = {
         "header": [],
@@ -208,6 +208,8 @@ def page_occurrences(page: MaterialPage) -> list[Occurrence]:
     }
     result: list[Occurrence] = []
     for index, item in enumerate(page.elements):
+        if images_only and item.get("kind") != "image":
+            continue
         box = _bbox(item)
         zone = _zone(box) if box else None
         if zone is None or box is None or box[3] - box[1] > MAX_ELEMENT_HEIGHT:
@@ -274,8 +276,14 @@ def _matches(left: Occurrence, right: Occurrence) -> bool:
         None,
         _normalized_text(left.text or ""),
         _normalized_text(right.text or ""),
-    ).ratio()
-    return similarity >= TEXT_SIMILARITY
+    )
+    # Эти две оценки — верхние границы ratio: отсекают заведомо разные строки
+    # без дорогого поиска совпадающих подстрок, сохраняя те же группы и порог.
+    return (
+        similarity.real_quick_ratio() >= TEXT_SIMILARITY
+        and similarity.quick_ratio() >= TEXT_SIMILARITY
+        and similarity.ratio() >= TEXT_SIMILARITY
+    )
 
 
 def _series_coverage(occurrences: list[Occurrence], parity: int | None) -> float:
@@ -299,11 +307,14 @@ def _page_number_sequence(occurrences: list[Occurrence]) -> bool:
     return bool(offsets) and offsets.most_common(1)[0][1] / len(occurrences) >= MIN_SERIES_COVERAGE
 
 
-def detect(pages: list[MaterialPage]) -> list[Candidate]:
+def detect(pages: list[MaterialPage], *, images_only: bool = False) -> list[Candidate]:
     """Найти устойчивые повторяющиеся строки, номера и изображения."""
     if len(pages) < 3:
         return []
-    occurrences = [item for page in pages for item in page_occurrences(page)]
+    # Изображения не сопоставляются с текстом в _matches. Инвентарю картинок
+    # не нужен квадратичный перебор всех текстовых строк тысячеcтраничной книги.
+    occurrences = [item for page in pages
+                   for item in page_occurrences(page, images_only=images_only)]
     groups: list[list[Occurrence]] = []
     for occurrence in occurrences:
         group = next((items for items in groups if _matches(items[0], occurrence)), None)

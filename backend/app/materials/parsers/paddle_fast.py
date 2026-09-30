@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
@@ -55,11 +56,8 @@ class _Line:
 
 
 def available() -> bool:
-    try:
-        import paddleocr  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    """Проверка установки не импортирует OCR ради страницы с готовым текстом."""
+    return find_spec("paddleocr") is not None
 
 
 def _get_engine(
