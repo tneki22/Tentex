@@ -524,7 +524,7 @@ export function AppLayout() {
               </button>
             }
           >
-            <p className="sidebar-empty">Покрытие появится после привязок на этапе 8</p>
+            <p className="sidebar-empty">В разработке</p>
           </Popover>
 
           <Disclosure className="sidebar-recent" summary="Последние занятия">
