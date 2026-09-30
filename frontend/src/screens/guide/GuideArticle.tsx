@@ -52,6 +52,10 @@ import {
   Video,
   Zap,
   Eye,
+  Flag,
+  BarChart3,
+  History,
+  Wand2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -67,6 +71,7 @@ const CARD_ICONS: Record<string, LucideIcon> = {
   FilePlus2, FileText, Files, FolderOpen, FolderPlus, GraduationCap, HardDrive, Image: ImageIcon, KeyRound, Layers,
   Library, Link2, ListChecks, ListTree, MessagesSquare, Mic, NotebookPen, Package, Route, ScanSearch, ScanText, Search,
   Settings, Share2, ShieldCheck, Sparkles, Target, Timer, Upload, Globe, Video, Zap, Eye, PanelsTopLeft, UserRound,
+  Lightbulb, Flag, BarChart3, History, Wand2,
 };
 
 const CALLOUTS: Record<CalloutTone, { icon: LucideIcon; title: string }> = {

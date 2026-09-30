@@ -629,6 +629,193 @@ function ResearchFlow() {
   );
 }
 
+/** Три способа собрать урок и что происходит дальше. */
+function LessonPaths() {
+  const paths = [
+    { title: "Быстрый урок", sub: "по оглавлению, без модели", y: 16 },
+    { title: "Вручную", sub: "страницы, текст, медиа", y: 96 },
+    { title: "С ИИ", sub: "план, шаги, задания", y: 176 },
+  ];
+  return (
+    <svg viewBox="0 0 720 300" role="img" aria-label="Урок можно собрать быстро по оглавлению, вручную или с ИИ; получается черновик, его переводят в статус Готов, а читают и проходят в рабочей области; готовый урок можно дополнить ИИ и выгрузить в файл">
+      <defs>
+        <marker id="gd-arrow-lp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      {paths.map((path) => (
+        <g key={path.title} className="gd-node gd-info">
+          <rect x="8" y={path.y} width="200" height="64" rx="14" />
+          <text x="108" y={path.y + 28} className="gd-title gd-title-sm">{path.title}</text>
+          <text x="108" y={path.y + 47} className="gd-sub gd-sub-sm">{path.sub}</text>
+        </g>
+      ))}
+      <g className="gd-node gd-accent">
+        <rect x="272" y="82" width="170" height="112" rx="18" />
+        <text x="357" y="124" className="gd-title">Урок</text>
+        <text x="357" y="148" className="gd-sub">сначала черновик,</text>
+        <text x="357" y="166" className="gd-sub">потом «Готов»</text>
+      </g>
+      <g className="gd-node gd-success">
+        <rect x="506" y="82" width="206" height="112" rx="18" />
+        <text x="609" y="124" className="gd-title">Рабочая область</text>
+        <text x="609" y="148" className="gd-sub">читать, задания,</text>
+        <text x="609" y="166" className="gd-sub">«Урок пройден»</text>
+      </g>
+      <path d="M212 48 C244 48 240 120 266 120" className="gd-arrow" markerEnd="url(#gd-arrow-lp)" />
+      <path d="M212 128 H266" className="gd-arrow" markerEnd="url(#gd-arrow-lp)" />
+      <path d="M212 208 C244 208 240 152 266 152" className="gd-arrow" markerEnd="url(#gd-arrow-lp)" />
+      <path d="M446 138 H500" className="gd-arrow" markerEnd="url(#gd-arrow-lp)" />
+      <path d="M357 198 V234 M357 234 H609 M609 234 V198" className="gd-arrow gd-dashed" />
+      <text x="483" y="262" className="gd-label gd-label-mid">по пути: «Дополнить с ИИ» · «Добавить практику» · экспорт</text>
+    </svg>
+  );
+}
+
+/** Как собирается урок с ИИ: что делается локально, а что зовёт модель. */
+function LessonAiFlow() {
+  const steps = [
+    { title: "Область", a: "паспорт урока,", b: "тема, уровень", tone: "gd-info" },
+    { title: "Куски", a: "оглавление,", b: "опоры, поиск", tone: "gd-info" },
+    { title: "План", a: "понятия и шаги", b: "(один вызов)", tone: "gd-warning" },
+    { title: "Шаги", a: "по вызову на", b: "каждый шаг", tone: "gd-warning" },
+    { title: "Рецензент", a: "глазами", b: "новичка", tone: "gd-warning" },
+    { title: "Задания", a: "4 или 8,", b: "с ключами", tone: "gd-warning" },
+  ];
+  return (
+    <svg viewBox="0 0 720 190" role="img" aria-label="Сначала без модели собираются паспорт урока и куски материала, затем модель составляет план, пишет шаги, рецензирует и добавляет задания; результат становится новым черновиком">
+      <defs>
+        <marker id="gd-arrow-la" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      {steps.map((step, index) => {
+        const x = 6 + index * 118;
+        return (
+          <g key={step.title}>
+            <g className={`gd-node ${step.tone}`}>
+              <rect x={x} y="12" width="106" height="86" rx="14" />
+              <text x={x + 53} y="40" className="gd-title gd-title-sm">{step.title}</text>
+              <text x={x + 53} y="64" className="gd-sub gd-sub-sm">{step.a}</text>
+              <text x={x + 53} y="80" className="gd-sub gd-sub-sm">{step.b}</text>
+            </g>
+            {index < steps.length - 1 && (
+              <path d={`M${x + 109} 55 H${x + 115}`} className="gd-arrow" markerEnd="url(#gd-arrow-la)" />
+            )}
+          </g>
+        );
+      })}
+      <path d="M12 106 V116 H230 V106" className="gd-arrow gd-dashed" />
+      <text x="121" y="140" className="gd-label gd-label-mid">без модели, бесплатно</text>
+      <path d="M248 106 V116 H714 V106" className="gd-arrow gd-dashed" />
+      <text x="481" y="140" className="gd-label gd-label-mid">вызовы модели: число и цена видны до запуска</text>
+      <text x="360" y="176" className="gd-label gd-label-mid">на выходе новый черновик: вы проверяете его и нажимаете «Готов»</text>
+    </svg>
+  );
+}
+
+/** Из чего состоит экран «Моя подготовка». */
+function PrepScreen() {
+  const tiles = ["Время", "Вопросы", "Сданные ответы"];
+  const tabs = ["Календарь подготовки", "История", "Аналитика"];
+  return (
+    <svg viewBox="0 0 720 372" role="img" aria-label="Экран Моей подготовки сверху вниз: шапка со статусами и кнопкой Начать день, баннер экзамена, три карточки сводки, очередь на сегодня, периоды подготовки и три вкладки: календарь, история, аналитика; слева последние события и достижения">
+      <rect x="6" y="6" width="708" height="360" rx="20" className="gd-frame" />
+      <g className="gd-node gd-info">
+        <rect x="18" y="18" width="150" height="336" rx="14" />
+        <text x="93" y="50" className="gd-title gd-title-sm">Слева</text>
+        <text x="93" y="86" className="gd-step">Последние</text>
+        <text x="93" y="104" className="gd-step">события</text>
+        <text x="93" y="150" className="gd-step">Твои первые</text>
+        <text x="93" y="168" className="gd-step">шаги · 5</text>
+        <text x="93" y="228" className="gd-sub gd-sub-sm">разделы проекта</text>
+        <text x="93" y="246" className="gd-sub gd-sub-sm">Материалы · Ответы</text>
+        <text x="93" y="264" className="gd-sub gd-sub-sm">Моя подготовка</text>
+        <text x="93" y="282" className="gd-sub gd-sub-sm">Карточки</text>
+      </g>
+      <g className="gd-node gd-accent">
+        <rect x="182" y="18" width="522" height="46" rx="12" />
+        <text x="443" y="46" className="gd-step">Шапка: статусы плана · «Начать день» · «Распределить вопросы»</text>
+      </g>
+      <g className="gd-node gd-warning">
+        <rect x="182" y="74" width="522" height="42" rx="12" />
+        <text x="443" y="100" className="gd-step">Баннер экзамена: дата · дней осталось · времени на подготовку</text>
+      </g>
+      {tiles.map((tile, index) => (
+        <g key={tile} className="gd-node gd-info">
+          <rect x={182 + index * 178} y="126" width="166" height="70" rx="12" />
+          <text x={265 + index * 178} y="156" className="gd-title gd-title-sm">{tile}</text>
+          <text x={265 + index * 178} y="177" className="gd-sub gd-sub-sm">7 или 14 дней</text>
+        </g>
+      ))}
+      <g className="gd-node gd-success">
+        <rect x="182" y="206" width="522" height="42" rx="12" />
+        <text x="443" y="232" className="gd-step">Сегодня: вопросы и билеты на день</text>
+      </g>
+      <g className="gd-node gd-accent">
+        <rect x="182" y="258" width="522" height="38" rx="12" />
+        <text x="443" y="282" className="gd-step">Периоды подготовки: блоки от сегодня до экзамена</text>
+      </g>
+      {tabs.map((tab, index) => (
+        <g key={tab} className="gd-node gd-success">
+          <rect x={182 + index * 178} y="306" width="166" height="48" rx="12" />
+          <text x={265 + index * 178} y="335" className="gd-sub gd-sub-sm">{tab}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+/** Откуда берутся карточки и что с ними происходит при повторении. */
+function CardsFlow() {
+  const paths = [
+    { title: "Вручную", sub: "обе стороны и источник", y: 16 },
+    { title: "Из фрагмента", sub: "«В карточку» в Материалах", y: 88 },
+    { title: "С помощью ИИ", sub: "предложения на проверку", y: 160 },
+  ];
+  const grades = ["Не вспомнил", "Частично", "Вспомнил", "Легко"];
+  return (
+    <svg viewBox="0 0 720 300" role="img" aria-label="Карточку создают вручную, из фрагмента материала или с помощью ИИ; все они попадают в Банк, из Банка идут в сеанс повторения, где вы оцениваете себя от Не вспомнил до Легко; оценки попадают в аналитику и подборку Сложные">
+      <defs>
+        <marker id="gd-arrow-cf" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M1 1 L9 5 L1 9" className="gd-arrow-head" />
+        </marker>
+      </defs>
+      {paths.map((path) => (
+        <g key={path.title} className="gd-node gd-info">
+          <rect x="8" y={path.y} width="200" height="58" rx="14" />
+          <text x="108" y={path.y + 25} className="gd-title gd-title-sm">{path.title}</text>
+          <text x="108" y={path.y + 44} className="gd-sub gd-sub-sm">{path.sub}</text>
+        </g>
+      ))}
+      <g className="gd-node gd-accent">
+        <rect x="282" y="62" width="150" height="100" rx="18" />
+        <text x="357" y="104" className="gd-title">Банк</text>
+        <text x="357" y="128" className="gd-sub">все карточки</text>
+        <text x="357" y="146" className="gd-sub gd-sub-sm">поиск, правка, фильтры</text>
+      </g>
+      <g className="gd-node gd-warning">
+        <rect x="506" y="62" width="206" height="100" rx="18" />
+        <text x="609" y="104" className="gd-title">Сеанс</text>
+        <text x="609" y="128" className="gd-sub">на сегодня · сложные</text>
+        <text x="609" y="146" className="gd-sub">выбранные · все</text>
+      </g>
+      <path d="M212 45 C246 45 244 100 276 100" className="gd-arrow" markerEnd="url(#gd-arrow-cf)" />
+      <path d="M212 117 H276" className="gd-arrow" markerEnd="url(#gd-arrow-cf)" />
+      <path d="M212 189 C246 189 244 134 276 134" className="gd-arrow" markerEnd="url(#gd-arrow-cf)" />
+      <path d="M436 112 H500" className="gd-arrow" markerEnd="url(#gd-arrow-cf)" />
+      <path d="M609 166 V186 H493 V204" className="gd-arrow" markerEnd="url(#gd-arrow-cf)" />
+      {grades.map((grade, index) => (
+        <g key={grade} className="gd-node gd-success">
+          <rect x={282 + index * 108} y="208" width="98" height="40" rx="10" />
+          <text x={331 + index * 108} y="233" className="gd-sub gd-sub-sm">{grade}</text>
+        </g>
+      ))}
+      <text x="497" y="274" className="gd-label gd-label-mid">ваши оценки идут в аналитику и подборку «Сложные»</text>
+    </svg>
+  );
+}
+
 const DIAGRAMS: Record<string, () => ReactNode> = {
   overview: Overview,
   structure: Structure,
@@ -643,6 +830,10 @@ const DIAGRAMS: Record<string, () => ReactNode> = {
   workspace: WorkspaceLayout,
   bindings: BindingFlow,
   research: ResearchFlow,
+  "lesson-paths": LessonPaths,
+  "lesson-ai": LessonAiFlow,
+  "prep-screen": PrepScreen,
+  "cards-flow": CardsFlow,
 };
 
 export function GuideDiagram({ name }: { name: string }) {
