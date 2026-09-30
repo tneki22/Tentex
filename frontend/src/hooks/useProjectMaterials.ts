@@ -24,7 +24,7 @@ export function useProjectMaterials(projectId: string | undefined) {
   const [busy, setBusy] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{ name: string; progress: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Опрос раз в 1200 мс и явные refresh() (после привязки из Библиотеки и
+  // Опрос и явные refresh() (после привязки из Библиотеки и
   // т.п.) могут завершиться не в том порядке, в котором были запущены:
   // ответ на устаревший запрос не должен переписывать более свежий список.
   const requestIdRef = useRef(0);
@@ -62,8 +62,17 @@ export function useProjectMaterials(projectId: string | undefined) {
 
   useEffect(() => {
     if (!hasActiveTask) return;
-    const timer = window.setInterval(() => void refresh(), 1200);
-    return () => window.clearInterval(timer);
+    const controller = new AbortController();
+    let timer: number;
+    const poll = async () => {
+      await refresh(controller.signal);
+      if (!controller.signal.aborted) timer = window.setTimeout(poll, 1200);
+    };
+    timer = window.setTimeout(poll, 1200);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
   }, [hasActiveTask, refresh]);
 
   const mutate = useCallback(async <T,>(operation: () => Promise<T>): Promise<T | null> => {

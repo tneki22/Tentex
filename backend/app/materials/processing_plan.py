@@ -13,9 +13,15 @@
 from __future__ import annotations
 
 import math
+import shutil
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import lru_cache
+from multiprocessing import get_context
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Lock
 from typing import Any
 
 import pymupdf as fitz
@@ -43,6 +49,10 @@ from app.projects.errors import ProjectConflictError, ProjectDomainError
 # Сколько страниц диагностируется для оценки. Больше — дольше ответ API на
 # книге в тысячу страниц без выигрыша в точности: остальное экстраполируется.
 MAX_SAMPLED_PAGES = 60
+# Один и тот же диалог может запросить оценку несколько раз. Диагностика PDF
+# дорогая, поэтому одинаковые запросы делят результат, а не читают файл параллельно.
+_shape_lock = Lock()
+_shape_executor: ProcessPoolExecutor | None = None
 # Токены инструкции со схемой ответа у одного вызова (текст, без картинки).
 PAGE_PROMPT_TOKENS = 900
 REGION_PROMPT_TOKENS = 600
@@ -169,18 +179,46 @@ def _tiles(width_px: float, height_px: float) -> int:
     return max(1, math.ceil(width_px / TILE_PX) * math.ceil(height_px / TILE_PX))
 
 
-def _pdf_shape(path: Path, pages: list[int], params: OcrRuntimeParams) -> _Shape:
+@lru_cache(maxsize=32)
+def _cached_pdf_shape(
+    path: Path, size: int, modified_ns: int, pages: tuple[int, ...],
+    strategy: str, raster_scale: float,
+) -> _Shape:
+    """Диагностика живёт вне API-процесса: PyMuPDF задерживает его потоки."""
+    global _shape_executor
+    if _shape_executor is None:
+        _shape_executor = ProcessPoolExecutor(max_workers=1, mp_context=get_context("spawn"))
+    return _shape_executor.submit(
+        _calculate_pdf_shape, path, pages, strategy, raster_scale
+    ).result()
+
+
+def _calculate_pdf_shape(
+    path: Path, pages: tuple[int, ...], strategy: str, raster_scale: float
+) -> _Shape:
     """Диагноз выборки выбранных страниц PDF, экстраполированный на все."""
-    whole_by_strategy = params.cloud_strategy == "page"
+    # Случайное чтение PDF через bind mount Windows в разы медленнее: у 30 МБ
+    # файла четыре страницы занимали около минуты вместо долей секунды.
+    with TemporaryDirectory(prefix="tentex-estimate-") as temporary:
+        local_path = Path(temporary) / "source.pdf"
+        shutil.copyfile(path, local_path)
+        return _local_pdf_shape(local_path, pages, strategy, raster_scale)
+
+
+def _local_pdf_shape(
+    path: Path, pages: tuple[int, ...], strategy: str, raster_scale: float
+) -> _Shape:
+    """Читать страницы с локального диска процесса оценки."""
+    whole_by_strategy = strategy == "page"
     step = max(1, math.ceil(len(pages) / MAX_SAMPLED_PAGES))
     sample = pages[::step]
     with fitz.open(path) as document:
-        repeated = repeated_image_xrefs(document)
+        repeated: frozenset[int] | None = None
         whole = text = suspicious = images = batches = 0
         page_tokens = 0
         for number in sample:
             page = document[number - 1]
-            dpi = 150.0 * params.raster_scale
+            dpi = 150.0 * raster_scale
             page_tokens = max(
                 page_tokens,
                 _tiles(page.rect.width / 72 * dpi, page.rect.height / 72 * dpi)
@@ -192,7 +230,7 @@ def _pdf_shape(path: Path, pages: list[int], params: OcrRuntimeParams) -> _Shape
             goes_whole = (
                 whole_by_strategy
                 or route == "scan"
-                or (route in {"partial", "broken"} and params.cloud_strategy == "auto")
+                or (route in {"partial", "broken"} and strategy == "auto")
             )
             suspicious += route in {"partial", "broken"}
             if goes_whole:
@@ -201,6 +239,8 @@ def _pdf_shape(path: Path, pages: list[int], params: OcrRuntimeParams) -> _Shape
             text += 1
             zones = find_zones(page)
             batches += max(1, math.ceil(len(zones) / MAX_REGIONS_PER_REQUEST))
+            if repeated is None:
+                repeated = repeated_image_xrefs(document)
             images += sum(
                 1
                 for info in page.get_image_info(xrefs=True)
@@ -218,6 +258,17 @@ def _pdf_shape(path: Path, pages: list[int], params: OcrRuntimeParams) -> _Shape
         sampled=step > 1,
         region_calls=round(batches * factor),
     )
+
+
+def _pdf_shape(path: Path, pages: list[int], params: OcrRuntimeParams) -> _Shape:
+    """Повторные запросы к неизменившемуся PDF используют один диагноз."""
+    stat = path.stat()
+    # lru_cache защищает словарь, но не сливает одновременные cache miss.
+    with _shape_lock:
+        return _cached_pdf_shape(
+            path, stat.st_size, stat.st_mtime_ns, tuple(pages),
+            params.cloud_strategy, params.raster_scale,
+        )
 
 
 def _side_ok(bbox: object) -> bool:
