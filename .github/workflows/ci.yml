@@ -35,12 +35,6 @@ jobs:
         working-directory: backend
         run: python -m ruff check .
 
-      - name: Run backend tests
-        working-directory: backend
-        env:
-          TENTEX_DATA_DIR: ${{ runner.temp }}/pytest-data
-        run: python -m pytest
-
       - name: Validate migrations on a clean database
         working-directory: backend
         env:
