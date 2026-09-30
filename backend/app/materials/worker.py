@@ -64,6 +64,7 @@ from app.process_pool import IdleProcessPool
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.storage import maintenance as storage_maintenance
 from app.system import diagnostics
+from app.system.resources import ResourceSampler
 
 log = logging.getLogger("tentex.worker")
 
@@ -105,6 +106,9 @@ LOCAL_JOB_KINDS = frozenset(
         BackgroundJobKind.STORAGE_CLEANUP,
     }
 )
+HEAVY_AI_JOB_KINDS = frozenset({
+    BackgroundJobKind.RETRIEVAL_INDEX, BackgroundJobKind.RETRIEVAL_EXHAUSTIVE,
+})
 
 
 def _worker_id() -> str:
@@ -911,7 +915,7 @@ def _fill_slots(
     pool: ThreadPoolExecutor,
     active: dict[WorkerLane, set[Future[None]]],
     capacities: dict[WorkerLane, int],
-    process_pools: dict[WorkerLane, IdleProcessPool] | None = None,
+    process_pools: dict[str, IdleProcessPool] | None = None,
 ) -> bool:
     """Взять задачи только для свободных слотов каждой полосы."""
     claimed = False
@@ -920,7 +924,8 @@ def _fill_slots(
             job = _claim_one(lane)
             if job is None:
                 break
-            executor = (process_pools or {}).get(lane, pool)
+            key = "retrieval" if job.kind in HEAVY_AI_JOB_KINDS else lane
+            executor = (process_pools or {}).get(key, pool)
             active[lane].add(executor.submit(_process_claimed_job, job))
             claimed = True
     return claimed
@@ -937,6 +942,12 @@ def run_pool(capacities: dict[WorkerLane, int]) -> None:
             max_workers=capacities[lane], initializer=configure_logging,
         ) for lane in ("local", "cloud")
     }
+    # Индексирование и исчерпывающий проход создают большой снимок корпуса.
+    # Они занимают прежние AI-слоты, но не удерживают их аллокаторы в supervisor.
+    process_pools["retrieval"] = IdleProcessPool(
+        idle_seconds=settings.worker_process_idle_seconds,
+        max_workers=capacities["ai"], initializer=configure_logging,
+    )
     try:
         _run_pool(capacities, active, process_pools)
     finally:
@@ -946,7 +957,7 @@ def run_pool(capacities: dict[WorkerLane, int]) -> None:
 
 def _run_pool(
     capacities: dict[WorkerLane, int], active: dict[WorkerLane, set[Future[None]]],
-    process_pools: dict[WorkerLane, IdleProcessPool],
+    process_pools: dict[str, IdleProcessPool],
 ) -> None:
     """Опрос очереди остаётся в лёгком процессе; heartbeat задачи живёт с работой."""
     next_schedule_check = next_pulse = next_oral_cleanup = 0.0
@@ -1001,13 +1012,18 @@ def main() -> None:
     if args.once:
         run_once()
         return
-    run_pool(
-        {
-            "local": settings.worker_local_concurrency,
-            "cloud": settings.worker_cloud_concurrency,
-            "ai": settings.worker_ai_concurrency,
-        }
-    )
+    sampler = ResourceSampler("worker")
+    sampler.start()
+    try:
+        run_pool(
+            {
+                "local": settings.worker_local_concurrency,
+                "cloud": settings.worker_cloud_concurrency,
+                "ai": settings.worker_ai_concurrency,
+            }
+        )
+    finally:
+        sampler.close()
 
 
 if __name__ == "__main__":

@@ -52,6 +52,7 @@ from app.projects.demo import DEMO_PROJECT_ID
 from app.storage import maintenance
 from app.storage import service as storage_service
 from app.system import diagnostics
+from app.system.resources import resource_summary
 from app.system.schemas import (
     StatusCommand,
     StatusLevel,
@@ -865,6 +866,7 @@ def system_status(session: Session) -> SystemStatusRead:
         attention_count=len(attention),
         items=items,
         storage=facts.read if facts is not None else None,
+        resources=resource_summary(),
     )
 
 

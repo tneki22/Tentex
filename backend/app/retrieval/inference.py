@@ -1,14 +1,17 @@
-"""Локальный inference: веса и нативные библиотеки живут только в дочернем процессе."""
+"""Локальный inference с ограниченными кэшами и общей холодной загрузкой весов."""
 
 from __future__ import annotations
 
 from functools import lru_cache
+from threading import Lock
 from typing import Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.retrieval.local_models import model_path, validate_model_id
+
+_model_load_lock = Lock()
 
 
 class EmbeddingWrite(BaseModel):
@@ -37,7 +40,7 @@ class InternalEmbeddingWrite(BaseModel):
 
 
 @lru_cache(maxsize=2)
-def _embedding_model(model_id: str):
+def _cached_embedding_model(model_id: str):
     path = model_path(validate_model_id(model_id))
     if not path.is_dir():
         raise FileNotFoundError(f"Модель {model_id} не установлена")
@@ -49,7 +52,7 @@ def _embedding_model(model_id: str):
 
 
 @lru_cache(maxsize=1)
-def _reranker(model_id: str):
+def _cached_reranker(model_id: str):
     """Прогретый CrossEncoder без загрузок из сети и без выполнения remote code."""
     path = model_path(validate_model_id(model_id))
     if not path.is_dir():
@@ -66,7 +69,7 @@ def _reranker(model_id: str):
 
 
 @lru_cache(maxsize=2)
-def _transformer_model(model_id: str):
+def _cached_transformer_model(model_id: str):
     path = model_path(validate_model_id(model_id))
     if not path.is_dir():
         raise FileNotFoundError(f"Модель {model_id} не установлена")
@@ -81,14 +84,31 @@ def _transformer_model(model_id: str):
     return tokenizer, model
 
 
+def _embedding_model(model_id: str):
+    with _model_load_lock:
+        return _cached_embedding_model(model_id)
+
+
+def _reranker(model_id: str):
+    with _model_load_lock:
+        return _cached_reranker(model_id)
+
+
+def _transformer_model(model_id: str):
+    # lru_cache допускает несколько одновременных вычислений холодного ключа.
+    # Замок снаружи кэша исключает двойную загрузку весов; inference параллелен.
+    with _model_load_lock:
+        return _cached_transformer_model(model_id)
+
+
 def model_cache_state() -> dict[str, object]:
     """Число весов в текущем дочернем процессе, без изменения кэшей."""
     return {
         "status": "ok",
         "service": "tentex-retrieval-model",
-        "loaded_embedding_models": _embedding_model.cache_info().currsize,
-        "loaded_transformer_models": _transformer_model.cache_info().currsize,
-        "loaded_rerankers": _reranker.cache_info().currsize,
+        "loaded_embedding_models": _cached_embedding_model.cache_info().currsize,
+        "loaded_transformer_models": _cached_transformer_model.cache_info().currsize,
+        "loaded_rerankers": _cached_reranker.cache_info().currsize,
     }
 
 

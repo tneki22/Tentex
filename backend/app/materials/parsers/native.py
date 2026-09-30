@@ -125,10 +125,11 @@ def inspect(path: Path) -> tuple[int, int, int, list[str]]:
             document = fitz.open(path)
         except Exception as error:
             raise ValueError("PDF повреждён или не читается") from error
-        if document.needs_pass:
-            raise PermissionError("PDF защищён паролем")
-        scan_pages = sum(not page.get_text("text").strip() for page in document)
-        return len(document), scan_pages, max(1, len(document) - scan_pages + scan_pages * 3), []
+        with document:
+            if document.needs_pass:
+                raise PermissionError("PDF защищён паролем")
+            scan_pages = sum(not page.get_text("text").strip() for page in document)
+            return len(document), scan_pages, max(1, len(document) + scan_pages * 2), []
     if suffix in {".jpg", ".jpeg", ".png"}:
         with Image.open(path) as image:
             image.verify()
@@ -137,7 +138,10 @@ def inspect(path: Path) -> tuple[int, int, int, list[str]]:
         Document(path)
         return 1, 0, 1, []
     if suffix in {".txt", ".md"}:
-        path.read_text(encoding="utf-8-sig")
+        # Проверяем кодировку потоково: большой TXT не нужен целиком для осмотра.
+        with path.open(encoding="utf-8-sig") as source:
+            while source.read(64 * 1024):
+                pass
         return 1, 0, 1, []
     if suffix in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:
         return 1, 0, 60, ["audio_transcription_required"]

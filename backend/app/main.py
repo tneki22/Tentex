@@ -33,6 +33,7 @@ from app.retrieval.snapshot import warm_active_snapshot
 from app.storage import maintenance as storage_maintenance
 from app.storage.restore import recover_interrupted_restore
 from app.storage.router import router as storage_router
+from app.system.resources import ResourceSampler
 from app.system.router import router as system_router
 
 api = APIRouter(prefix="/api")
@@ -52,9 +53,12 @@ def health() -> dict[str, str]:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """Прогреть индекс и закрыть дочернюю PDF-диагностику вместе с сервером."""
+    from app.materials.file_inspection import inspection_pool
+    from app.materials.library import clear_open_documents
     from app.materials.processing_plan import _shape_executor
 
     _shape_executor.start()
+    inspection_pool.start()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     recover_interrupted_restore()
@@ -67,10 +71,15 @@ async def lifespan(_: FastAPI):
             # примера, но не воскресит проект, который пользователь удалил.
             seed_demo_project(session, create_if_missing=not database_existed)
     warm_active_snapshot()
+    sampler = ResourceSampler("api")
+    sampler.start()
     try:
         yield
     finally:
+        sampler.close()
         _shape_executor.close()
+        inspection_pool.close()
+        clear_open_documents()
 
 
 def create_app() -> FastAPI:

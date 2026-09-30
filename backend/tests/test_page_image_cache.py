@@ -164,3 +164,19 @@ def test_open_document_cache_survives_requests_and_notices_replacement(
     source.write_bytes((tmp_path / "other.pdf").read_bytes())
 
     assert library._open_document(source) is not first
+
+
+def test_idle_preview_releases_cache_without_closing_active_renderer(session, monkeypatch):
+    """Таймер отпускает кэш, а активный рендер владеет своей ссылкой на документ."""
+    import time
+
+    material = _pdf_material(session, "a9")
+    monkeypatch.setattr(library.settings, "pdf_preview_idle_seconds", 0.05)
+    entry = library._open_document(material_path(material.storage_path))
+    deadline = time.monotonic() + 2
+    while library._OPEN_DOCUMENTS and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not library._OPEN_DOCUMENTS
+    assert not entry.document.is_closed
+    assert entry.document[0].get_pixmap().width > 0
+    library.clear_open_documents()

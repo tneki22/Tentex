@@ -12,6 +12,7 @@ from app.retrieval.inference import (
     RerankWrite,
     run_inference,
 )
+from app.system.resources import ResourceSampler
 
 _pool = IdleProcessPool(idle_seconds=settings.retrieval_model_idle_seconds)
 _loaded: dict[str, object] = {}
@@ -21,9 +22,12 @@ _loaded: dict[str, object] = {}
 async def lifespan(_: FastAPI):
     """Остановка сервера закрывает inference-процесс вместе с его кэшами."""
     _pool.start()
+    sampler = ResourceSampler("retrieval-model")
+    sampler.start()
     try:
         yield
     finally:
+        sampler.close()
         _pool.close()
 
 

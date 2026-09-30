@@ -9,11 +9,36 @@ import hashlib
 import json
 import statistics
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 POLL_PATH = "/api/background-jobs?active_only=true&pending_review=true&failed_only=true"
 READ_PATHS = ("/api/materials", "/api/projects", POLL_PATH, "/api/system/status")
+
+
+def deep_paths(base: str) -> list[str]:
+    """Тяжёлые чтения всех проектов и пяти самых больших материалов без записи БД."""
+    def read(path: str):
+        with urllib.request.urlopen(base + path, timeout=180) as response:
+            return json.load(response)
+
+    paths = ["/api/projects/stats"]
+    for project in read("/api/projects"):
+        prefix = f"/api/projects/{project['id']}"
+        paths.extend(prefix + suffix for suffix in (
+            "", "/materials", "/coverage-map", "/coverage/overview",
+            "/coverage/topics", "/coverage/issues", "/coverage/blocks",
+            "/preparation", "/preparation/queue", "/lessons/overview",
+        ))
+    materials = sorted(read("/api/materials"), key=lambda item: item.get("page_count") or 0)
+    for material in materials[-5:]:
+        prefix = f"/api/materials/{material['id']}"
+        paths.extend(prefix + suffix for suffix in (
+            "", "/pages/1", "/search?q=формула", "/image-descriptions",
+        ))
+    return paths
 
 
 def measure(url: str, *, payload: dict | None, repeats: int) -> dict:
@@ -43,19 +68,32 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api", default="http://localhost:8000")
     parser.add_argument("--query", action="append", default=[])
+    parser.add_argument("--strategy", action="append", choices=("lexical", "semantic", "hybrid"))
     parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--deep", action="store_true", help="Все проекты и крупные материалы")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.repeats < 1:
         parser.error("--repeats должен быть положительным")
     base = args.api.rstrip("/")
-    report = {path: measure(base + path, payload=None, repeats=args.repeats) for path in READ_PATHS}
+    paths = (*READ_PATHS, *deep_paths(base)) if args.deep else READ_PATHS
+    report = {}
+    for path in paths:
+        try:
+            report[path] = measure(
+                base + urllib.parse.quote(path, safe="/?=&"), payload=None, repeats=args.repeats,
+            )
+        except urllib.error.HTTPError as error:
+            report[path] = {"status": error.code}
     for query in args.query:
-        report[query] = measure(
-            base + "/api/retrieval/search",
-            payload={"query": query, "scope": "library", "strategy": "hybrid", "limit": 5},
-            repeats=args.repeats,
-        )
+        strategies = args.strategy or ["hybrid"]
+        for strategy in strategies:
+            key = query if len(strategies) == 1 else f"{strategy}: {query}"
+            report[key] = measure(
+                base + "/api/retrieval/search",
+                payload={"query": query, "scope": "library", "strategy": strategy, "limit": 5},
+                repeats=args.repeats,
+            )
     serialized = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -41,6 +41,20 @@ export interface SystemStatus {
   attention_count: number;
   items: SystemStatusItem[];
   storage: SystemStorage | null;
+  resources: SystemResources | null;
+}
+
+/** Working set контейнеров серверов. CPU 100% соответствует одному ядру. */
+export interface SystemResources {
+  memory_bytes: number | null;
+  cpu_percent: number | null;
+  services: {
+    service: "api" | "worker" | "retrieval-model";
+    sampled_at: string;
+    memory_bytes: number;
+    cpu_percent: number | null;
+  }[];
+  missing_services: string[];
 }
 
 export interface SystemProbe {

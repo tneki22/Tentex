@@ -14,13 +14,16 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import RLock
 
 import pymupdf as fitz
 
+from app.materials.file_inspection import inspection_pool
 from app.materials.outline_titles import GENERAL_TITLE_RE, TOPIC_TITLE_RE
 
 log = logging.getLogger("tentex.materials.outline")
@@ -319,7 +322,17 @@ def _cached_printed_outline(
     path: Path, page_count: int, modified_ns: int, size: int
 ) -> tuple[list[dict[str, object]], list[int]] | None:
     """Кэшировать также отсутствие оглавления; stat входит в ключ снимка."""
-    return _scan_printed_outline(path, page_count)
+    return inspection_pool.submit(_local_printed_outline, path, page_count).result()
+
+
+def _local_printed_outline(
+    path: Path, page_count: int,
+) -> tuple[list[dict[str, object]], list[int]] | None:
+    """Полсотни страниц проверяются локально, а память MuPDF остаётся вне API."""
+    with TemporaryDirectory(prefix="tentex-outline-") as temporary:
+        local = Path(temporary) / "source.pdf"
+        shutil.copyfile(path, local)
+        return _scan_printed_outline(local, page_count)
 
 
 def _scan_printed_outline(
