@@ -367,6 +367,21 @@ def best_image_region(box: Box, candidates: Sequence[Box]) -> int | None:
     return _best(box, candidates, pieces=True)
 
 
+def _image_grid_box(box: Box, grids: Sequence[Box]) -> Box | None:
+    """Рамки узлов векторной схемы, которую модель вернула изображением.
+
+    Прямоугольные узлы без кривых похожи на сетки таблиц. Их объединяет
+    только область самой модели; соседние схемы страницы сюда не попадают.
+    """
+    wide = _expanded(box)
+    matched = [grid for grid in grids
+               if _intersection(wide, grid) >= 0.5 * _area(grid)]
+    if not matched:
+        return None
+    combined = union_boxes(matched)
+    return combined if _similar(box, combined) else None
+
+
 def snap_to_layer(parsed: ParsedPage, geometry: PageGeometry) -> ParsedPage:
     """Рамки элементов модели — по слою; пропущенное моделью — из слоя."""
     elements = list(parsed.elements)
@@ -399,6 +414,9 @@ def snap_to_layer(parsed: ParsedPage, geometry: PageGeometry) -> ParsedPage:
                 owners[index] = found
                 used_figures.add(found)
                 elements[index] = _snapped_image(element, figures[found])
+                snapped += 1
+            elif (grid_box := _image_grid_box(element.bbox, geometry.grids)) is not None:
+                elements[index] = _snapped_image(element, grid_box)
                 snapped += 1
             continue
         if element.kind == "table":

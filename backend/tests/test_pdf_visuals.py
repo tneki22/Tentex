@@ -285,3 +285,20 @@ def test_connected_vector_frames_do_not_merge_separate_raster_illustrations():
     snapped = page_geometry.snap_to_layer(answer, geometry)
     assert len([item for item in snapped.elements if item.kind == "image"]) == 2
     document.close()
+
+
+def test_model_image_of_vector_nodes_snaps_to_their_frames_instead_of_the_footer():
+    document, page = _page()
+    _prose(page)
+    first, second = fitz.Rect(50, 500, 200, 560), fitz.Rect(270, 500, 450, 560)
+    for rect in (first, second):
+        page.draw_rect(rect)
+    page.draw_line((210, 530), (260, 530))
+    geometry = page_geometry.page_geometry(page, [])
+    answer = ParsedPage(1, 500, 700, "", "", "ocr", (
+        ParsedElement("image", IMAGE_PLACEHOLDER, (0.1, 535 / 700, 0.9, 595 / 700)),
+    ))
+    snapped = page_geometry.snap_to_layer(answer, geometry)
+    image = next(item for item in snapped.elements if item.kind == "image")
+    assert image.bbox == (0.1, 500 / 700, 0.9, 560 / 700)
+    document.close()
