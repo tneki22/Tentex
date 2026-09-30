@@ -5,5 +5,14 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-../data/
+data/
+output/
+tests/
+scripts/
 .env
+.env.*
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.key
+installation.secret

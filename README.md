@@ -212,7 +212,7 @@ npm run dev:web
 
 ```bash
 cd backend
-python -m pip install -r requirements-worker.txt
+python -m pip install -r requirements-worker.txt -r requirements-retrieval.txt
 cd ..
 npm run dev
 ```
