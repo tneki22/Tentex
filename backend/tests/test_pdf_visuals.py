@@ -302,3 +302,14 @@ def test_model_image_of_vector_nodes_snaps_to_their_frames_instead_of_the_footer
     image = next(item for item in snapped.elements if item.kind == "image")
     assert image.bbox == (0.1, 500 / 700, 0.9, 560 / 700)
     document.close()
+
+
+def test_recognized_formula_is_not_recovered_again_as_a_vector_picture():
+    geometry = page_geometry.PageGeometry(
+        (), (), ((0.4, 0.7, 0.9, 0.8),), (), (), (),
+    )
+    answer = ParsedPage(1, 500, 700, "", "", "ocr", (
+        ParsedElement("formula", "$$a_1b_1+a_2b_2$$", (0.4, 0.77, 0.9, 0.87)),
+    ))
+    snapped = page_geometry.snap_to_layer(answer, geometry)
+    assert [item.kind for item in snapped.elements] == ["formula"]

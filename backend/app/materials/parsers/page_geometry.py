@@ -460,10 +460,14 @@ def _missed_from_layer(
     """
     added: list[ParsedElement] = []
     boxes = [element.bbox for element in elements]
+    represented = [
+        _expanded(element.bbox) if element.kind in {"formula", "table"} else element.bbox
+        for element in elements
+    ]
     for index, figure in enumerate(geometry.figures):
         if index in used_figures:
             continue
-        if any(_intersection(figure, box) >= 0.5 * _area(figure) for box in boxes):
+        if any(_intersection(figure, box) >= 0.5 * _area(figure) for box in represented):
             continue  # модель прочитала его таблицей или формулой
         added.append(
             ParsedElement(
