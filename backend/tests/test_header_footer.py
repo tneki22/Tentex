@@ -91,6 +91,39 @@ def test_detects_repeated_text_numbers_missing_edges_and_ocr_typo() -> None:
     assert found["page_number"] == [[2, 3, 4, 5, 6]]
 
 
+def test_image_classification_skips_text_and_keeps_the_same_series(tmp_path, monkeypatch):
+    """Изображения дают те же серии без сравнения текстовых колонтитулов."""
+    from app.materials import header_footer
+
+    monkeypatch.setattr(header_footer, "_average_hash", lambda _: 42)
+    pages = [page(number, [
+        element(f"Глава {number}", [0.1, 0.03, 0.35, 0.055]),
+        element("[image]", [0.6, 0.03, 0.7, 0.055], kind="image", asset_path="logo.png"),
+        element(str(number), [0.48, 0.94, 0.52, 0.97]),
+    ]) for number in range(1, 12)]
+    expected = [candidate for candidate in detect(pages)
+                if candidate.occurrences[0].image_hash is not None]
+    monkeypatch.setattr(header_footer, "SequenceMatcher", lambda *_: pytest.fail("text compared"))
+    assert detect(pages, images_only=True) == expected
+
+
+def test_quick_rejection_keeps_the_exact_text_threshold():
+    """Разная длина, OCR-опечатки и похожий алфавит сохраняют исходное решение."""
+    from difflib import SequenceMatcher
+
+    from app.materials import header_footer as hf
+
+    strings = ["Колонтитул главы", "Колонтнтул главы", "Другая тема",
+               "абв " * 100, "бва " * 100, "Глава первая", "Глава вторая"]
+    for left in strings:
+        for right in strings:
+            expected = SequenceMatcher(None, hf._normalized_text(left),
+                                       hf._normalized_text(right)).ratio() >= hf.TEXT_SIMILARITY
+            a = hf.Occurrence(1, "header", (0,), (0.1, 0.01, 0.3, 0.04), left)
+            b = hf.Occurrence(2, "header", (0,), (0.1, 0.01, 0.3, 0.04), right)
+            assert hf._matches(a, b) == expected
+
+
 def test_detects_even_odd_templates_and_chapter_changes() -> None:
     pages = []
     for number in range(1, 9):

@@ -39,7 +39,10 @@ def test_printed_outline_cache_isolated_and_invalidated(
         calls.append((source, page_count))
         return found
 
-    monkeypatch.setattr(outline, "_scan_printed_outline", scan)
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(outline.inspection_pool, "submit", lambda fn, *args:
+                        SimpleNamespace(result=lambda: scan(*args)))
     first = find_printed_outline(path, 1)
     if first:
         first[0][0]["title"] = "Changed by caller"

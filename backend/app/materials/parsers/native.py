@@ -32,6 +32,7 @@ from app.materials.parsers import (
     inline_formulas,
     paddle_fast,
     page_geometry,
+    pdf_visuals,
     raster,
     reading_order,
 )
@@ -124,10 +125,11 @@ def inspect(path: Path) -> tuple[int, int, int, list[str]]:
             document = fitz.open(path)
         except Exception as error:
             raise ValueError("PDF повреждён или не читается") from error
-        if document.needs_pass:
-            raise PermissionError("PDF защищён паролем")
-        scan_pages = sum(not page.get_text("text").strip() for page in document)
-        return len(document), scan_pages, max(1, len(document) - scan_pages + scan_pages * 3), []
+        with document:
+            if document.needs_pass:
+                raise PermissionError("PDF защищён паролем")
+            scan_pages = sum(not page.get_text("text").strip() for page in document)
+            return len(document), scan_pages, max(1, len(document) + scan_pages * 2), []
     if suffix in {".jpg", ".jpeg", ".png"}:
         with Image.open(path) as image:
             image.verify()
@@ -136,7 +138,10 @@ def inspect(path: Path) -> tuple[int, int, int, list[str]]:
         Document(path)
         return 1, 0, 1, []
     if suffix in {".txt", ".md"}:
-        path.read_text(encoding="utf-8-sig")
+        # Проверяем кодировку потоково: большой TXT не нужен целиком для осмотра.
+        with path.open(encoding="utf-8-sig") as source:
+            while source.read(64 * 1024):
+                pass
         return 1, 0, 1, []
     if suffix in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:
         return 1, 0, 60, ["audio_transcription_required"]
@@ -282,17 +287,6 @@ def _text_only_meta(meta: ImageMeta, text: str | None, confidence: float | None,
     return replace(meta, processing="text_only")
 
 
-def _image_xref(bbox: Sequence[float], boxes: Sequence[tuple[fitz.Rect, int]]) -> int | None:
-    """xref встроенного растра по его рамке на странице."""
-    rect = fitz.Rect(bbox)
-    best, best_overlap = None, 0.0
-    for box, xref in boxes:
-        overlap = (rect & box).get_area() / max(1e-6, rect.get_area())
-        if overlap > best_overlap:
-            best, best_overlap = xref, overlap
-    return best if best_overlap >= 0.8 else None
-
-
 def _image_element(
     block: dict,
     page: fitz.Page,
@@ -369,9 +363,8 @@ def _native_pdf_page(
     params: OcrRuntimeParams | None = None,
     repeated_xrefs: frozenset[int] = frozenset(),
 ) -> ParsedPage:
-    raw = page.get_text("dict", sort=True)
+    raw = page.get_text("dict", sort=True, flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES)
     blocks = raw.get("blocks", [])
-    xref_boxes = _xref_boxes(page) if repeated_xrefs else []
     text_blocks = [block for block in blocks if block.get("type") == 0]
     all_lines = [line for block in text_blocks for line in _block_lines(block)]
     if not all_lines:
@@ -381,22 +374,7 @@ def _native_pdf_page(
     heading_size = body_size * HEADING_SIZE_RATIO
 
     elements: list[ParsedElement] = []
-    for index, block in enumerate(blocks):
-        if block.get("type") == 1:
-            if owner:
-                image = _image_element(
-                    block,
-                    page,
-                    page_number,
-                    owner,
-                    index,
-                    run_ocr=ocr_images,
-                    params=params,
-                    repeated=_image_xref(block["bbox"], xref_boxes) in repeated_xrefs,
-                )
-                if image is not None:
-                    elements.append(image)
-            continue
+    for block in blocks:
         for group in _group_lines(_block_lines(block), heading_size):
             text = reduce(_join_wrapped, (line.text for line in group))
             if not text.strip():
@@ -417,6 +395,19 @@ def _native_pdf_page(
                 )
             )
 
+    if owner:
+        for index, region in enumerate(pdf_visuals.raster_regions(page)):
+            box = _normalized_bbox(region.rect, page.rect.width, page.rect.height)
+            data = raster.region_image(page, box)
+            image = _image_element(
+                {"bbox": tuple(region.rect), "image": data, "ext": "png"},
+                page, page_number, owner, index, run_ocr=ocr_images, params=params,
+                repeated=bool(region.xrefs & repeated_xrefs),
+            )
+            if image is not None:
+                elements.append(image)
+        elements = list(_in_reading_order(elements))
+
     # Картинка в plain-тексте была бы шумом: она попадает и в поиск, и в эталон.
     plain = "\n".join(element.text for element in elements if element.kind != "image")
     markdown = _markdown(elements)
@@ -431,17 +422,6 @@ def _native_pdf_page(
         tuple(elements),
         diagnostics,
     )
-
-
-def _xref_boxes(page: fitz.Page) -> list[tuple[fitz.Rect, int]]:
-    try:
-        return [
-            (fitz.Rect(info["bbox"]), int(info["xref"]))
-            for info in page.get_image_info(xrefs=True)
-            if info.get("xref")
-        ]
-    except (RuntimeError, ValueError):
-        return []
 
 
 def repeated_image_xrefs(document: fitz.Document) -> frozenset[int]:
@@ -958,6 +938,7 @@ def _text_layer_page(
     # Схему разметчик теперь отдаёт сам (`picture`), а встроенный растр приходит
     # из текстового слоя. На одной и той же иллюстрации это два описания одного
     # объекта: без проверки перекрытия страница получала бы двойной фрагмент.
+    parsed = _reconcile_layout_images(page, parsed, legacy.elements, owner)
     layout_pictures = tuple(
         element.bbox for element in parsed.elements if element.kind in {"image", "formula"}
     )
@@ -986,6 +967,46 @@ def _text_layer_page(
         quality=quality,
         elements=elements,
         confidence=confidence,
+    )
+
+
+def _reconcile_layout_images(
+    page: fitz.Page, parsed: ParsedPage, native: Sequence[ParsedElement], owner: str,
+) -> ParsedPage:
+    """Часть растра от разметчика и весь видимый растр — один составной рисунок.
+
+Рамка сохраняет и векторное обрамление разметчика, и сам растр. После
+изменения рамки вырез обязательно снимается заново с оригинала страницы.
+    """
+    regions = [element.bbox for element in native if element.kind == "image"]
+    elements = list(parsed.elements)
+    owners: dict[int, int] = {}
+    for index, element in enumerate(elements):
+        if element.kind != "image":
+            continue
+        found = page_geometry.best_image_region(element.bbox, regions)
+        if found is None:
+            continue
+        owners[index] = found
+        box = page_geometry.union_boxes((element.bbox, regions[found]))
+        elements[index] = replace(element, bbox=box, asset_path=None)
+    elements = page_geometry.merge_image_regions(elements, owners)
+    lines = pdf_visuals.text_lines(page)
+    elements = [
+        element for element in elements
+        if not (
+            element.kind == "image"
+            and not any(_bbox_overlap(region, element.bbox) >= 0.6 for region in regions)
+            and pdf_visuals.is_backdrop(
+                fitz.Rect(element.bbox[0] * page.rect.width, element.bbox[1] * page.rect.height,
+                          element.bbox[2] * page.rect.width, element.bbox[3] * page.rect.height),
+                lines,
+            )
+        )
+    ]
+    updated = replace(parsed, elements=tuple(elements))
+    return _attach_region_assets(
+        updated, owner, lambda box: raster.region_image(page, box), "layout"
     )
 
 
@@ -1651,7 +1672,7 @@ CLOUD_PAGE_ROUTES = frozenset({"scan", "cloud_page"})
 
 def _page_route(
     diagnosis: TextLayerDiagnosis, mode: ParserMode, params: OcrRuntimeParams,
-    cloud: bool, whole_page: bool,
+    cloud: bool, whole_page: bool, *, unmapped_graphics: bool = False,
 ) -> PageRoute:
     """Ветка разбора страницы по диагнозу слоя, режиму и стратегии запуска."""
     if diagnosis.route == "blank" and not whole_page:
@@ -1660,7 +1681,7 @@ def _page_route(
         return "scan"
     if diagnosis.suspicious and mode == ParserMode.FAST:
         return "local_ocr"
-    if diagnosis.suspicious and cloud and params.cloud_strategy == "auto":
+    if (diagnosis.suspicious or unmapped_graphics) and cloud and params.cloud_strategy == "auto":
         return "cloud_page"
     return "layer"
 
@@ -1736,8 +1757,17 @@ def _pdf_pages(
         for ahead in upcoming:
             if ahead not in routes:
                 found = diagnose(document[ahead])
+                unmapped = (
+                    mode == ParserMode.CLOUD and params.cloud_strategy == "auto"
+                    and found.route == "text" and pdf_visuals.has_unmapped_graphics(document[ahead])
+                )
+                if unmapped:
+                    found = replace(found, reasons=(*found.reasons, "vector_content_unmapped"))
                 routes[ahead] = (
-                    found, _page_route(found, mode, params, recognizer is not None, whole_page)
+                    found, _page_route(
+                        found, mode, params, recognizer is not None, whole_page,
+                        unmapped_graphics=unmapped,
+                    )
                 )
         diagnosis, route = routes[page_index]
         page = document[page_index]

@@ -9,6 +9,7 @@
 существующие связи при смене ревизии через общий `transfer_bindings_on_revision`.
 """
 
+import asyncio
 import hashlib
 import os
 import re
@@ -43,6 +44,7 @@ from app.db import job_write_transaction
 from app.materials import processing_plan
 from app.materials import revisions as revision_registry
 from app.materials.external import fetch_web_page, fetch_youtube_transcript
+from app.materials.file_inspection import inspect_upload
 from app.materials.image_meta import (
     element_meta,
     meta_from_json,
@@ -54,7 +56,7 @@ from app.materials.naming import material_display_name, project_material_display
 from app.materials.outline import find_printed_outline
 from app.materials.outline_titles import GENERAL_TITLE_RE, TOPIC_TITLE_RE
 from app.materials.parsers.base import ImageMeta, ParsedElement, ParsedPage
-from app.materials.parsers.native import extract_outline, inspect, parse_text_page
+from app.materials.parsers.native import parse_text_page
 from app.materials.presentation import (
     MaterialPresentationKind,
     presentation_kind,
@@ -147,6 +149,7 @@ PAGE_IMAGE_QUALITY = 88
 OPEN_DOCUMENT_LIMIT = 3
 _OPEN_DOCUMENTS: "OrderedDict[str, _OpenDocument]" = OrderedDict()
 _OPEN_DOCUMENTS_GUARD = threading.Lock()
+_OPEN_DOCUMENTS_TIMER: threading.Timer | None = None
 
 
 # ── Материал и его вид ──────────────────────────────────────────────────────
@@ -1019,6 +1022,7 @@ def _open_document(source: Path) -> _OpenDocument:
     signature = (str(source), stat.st_size, stat.st_mtime)
     key = str(source)
     with _OPEN_DOCUMENTS_GUARD:
+        _schedule_document_expiry()
         entry = _OPEN_DOCUMENTS.get(key)
         if entry is not None and entry.signature == signature:
             _OPEN_DOCUMENTS.move_to_end(key)
@@ -1031,6 +1035,38 @@ def _open_document(source: Path) -> _OpenDocument:
             # рисующий поток: явный close() здесь уронил бы чужую отрисовку.
             _OPEN_DOCUMENTS.popitem(last=False)
         return entry
+
+
+def _schedule_document_expiry() -> None:
+    """Вызывается под guard: листание сохраняет прогрев, простой освобождает PDF."""
+    global _OPEN_DOCUMENTS_TIMER
+    if _OPEN_DOCUMENTS_TIMER is not None:
+        _OPEN_DOCUMENTS_TIMER.cancel()
+    timer = threading.Timer(settings.pdf_preview_idle_seconds, _expire_open_documents)
+    timer.daemon = True
+    _OPEN_DOCUMENTS_TIMER = timer
+    timer.start()
+
+
+def _expire_open_documents() -> None:
+    global _OPEN_DOCUMENTS_TIMER
+    with _OPEN_DOCUMENTS_GUARD:
+        if _OPEN_DOCUMENTS_TIMER is not threading.current_thread():
+            return
+        _OPEN_DOCUMENTS_TIMER = None
+        # Рисующий поток держит собственную ссылку. Явный close здесь мог бы
+        # закрыть его документ посреди рендера, поэтому отпускаем только кэш.
+        _OPEN_DOCUMENTS.clear()
+
+
+def clear_open_documents() -> None:
+    """Закрытие lifespan освобождает кэш и отменяет таймер просмотра."""
+    global _OPEN_DOCUMENTS_TIMER
+    with _OPEN_DOCUMENTS_GUARD:
+        if _OPEN_DOCUMENTS_TIMER is not None:
+            _OPEN_DOCUMENTS_TIMER.cancel()
+            _OPEN_DOCUMENTS_TIMER = None
+        _OPEN_DOCUMENTS.clear()
 
 
 def drop_page_images(material_id: UUID) -> None:
@@ -1211,15 +1247,6 @@ def _scan_revision(
 # ── Создание общего материала и подключение к проекту ───────────────────────
 
 
-def _inspect_file(path: Path) -> tuple[int, int, int, list[str]]:
-    try:
-        return inspect(path)
-    except PermissionError as error:
-        raise ProjectDomainError(str(error), status=422, code="material_encrypted") from error
-    except (ValueError, OSError) as error:
-        raise ProjectDomainError(str(error), status=422, code="material_corrupt") from error
-
-
 def _existing_or_new(
     session: Session,
     *,
@@ -1299,7 +1326,12 @@ async def store_uploaded_file(upload: UploadFile) -> UploadedFile:
     держать её открытой на время загрузки стомегабайтного PDF нельзя."""
     sha256, storage_path, size, original_name, media_type = await store_upload(upload)
     path = material_path(storage_path)
-    page_count, scan_pages, estimate, diagnostics = _inspect_file(path)
+    inspected = await inspect_upload(path)
+    page_count, scan_pages, estimate, diagnostics = inspected["counts"]
+    # Карточка загруженного файла читает печатное оглавление. Прогреваем его
+    # до транзакции и вне event loop, чтобы сборка ответа уже брала маленький кэш.
+    if path.suffix.lower() == ".pdf":
+        await asyncio.to_thread(find_printed_outline, path, page_count)
     return UploadedFile(
         sha256=sha256,
         storage_path=storage_path,
@@ -1310,7 +1342,7 @@ async def store_uploaded_file(upload: UploadFile) -> UploadedFile:
         scan_page_count=scan_pages,
         estimated_seconds=estimate,
         diagnostics=diagnostics,
-        outline=extract_outline(path),
+        outline=inspected["outline"],
     )
 
 

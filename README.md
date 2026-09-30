@@ -41,10 +41,22 @@ cd .. && npm run dev
 Рекомендуемый полный запуск — контейнеры: worker-образ уже содержит зависимости OCR и Typst 0.15.1.
 
 ```bash
-docker compose up
+docker compose up --build -d
 ```
 
 Фронтенд — http://localhost:5173, API — http://localhost:8000, документация API — http://localhost:8000/docs.
+
+Обычный контейнерный запуск отдаёт готовую сборку интерфейса и не включает
+автоперезагрузку API. Для разработки с автоперезагрузкой:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+После изменения фронтенда в обычном запуске пересоберите web:
+`docker compose up -d --build web`. Память тяжёлых обработчиков, настройки
+выгрузки и результаты измерений — в
+[`docs/architecture/resource-usage.md`](docs/architecture/resource-usage.md).
 
 ## Проверка
 

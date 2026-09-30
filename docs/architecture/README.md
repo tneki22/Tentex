@@ -9,6 +9,7 @@
 | Подсистема | Актуальный документ | Проверка |
 | --- | --- | --- |
 | Ядро данных | `stage-2-core.md` | `check_stage2.py` |
+| Память, процессы и контейнерный запуск | `resource-usage.md` | профильные pytest, `scripts/profile_resources.py`, Docker/Playwright |
 | Проекты и Программа | `stage-3-live-projects.md` | `check_stage3.py` |
 | Эталонные ответы | `stage-4-reference-answers.md` | `check_stage4.py` |
 | Конвейер материалов | `stage-5-material-pipeline.md`; практический сквозной guide — `../../LIBRARY_FILE_PROCESSING.md` | `check_stage5.py` |
@@ -33,6 +34,7 @@
 | Фоновые операции | `background-jobs.md` | pytest |
 | Хранилище, резервные копии и перенос проектов | `storage-backups.md` | pytest (`test_storage_backups.py`), `check_storage_backups.py` |
 | Сводка «Состояние», журнал сбоев и пульс воркера | `system-status.md` | pytest (`test_system_status.py`) |
+| Потребление ресурсов и результаты комплексного аудита | `resource-usage.md`, `resource-audit.md` | pytest, живые замеры из отчётов |
 | Проход 2: данные, публикация и жизненный цикл | `coverage-pass-two.md` | pytest (`test_coverage*.py`), `check_coverage.py` |
 | Моя подготовка: текущие данные, расчёты, экран и интеграции | `my-preparation.md` | профильные pytest, миграции, typecheck/build |
 | Моя подготовка: инвентарь текущих и совместимых функций | `my-preparation-functions.md` | — |

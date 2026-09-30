@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 #: `danger` — серьёзный сбой, `warning` — замечание, `unknown` — проверить не
 #: удалось, `info` — нейтральная настройка, `ok` — проверено и работает.
@@ -61,6 +61,24 @@ class SystemStorageRead(ApiModel):
     retention_days: int | None
 
 
+class ResourceServiceRead(ApiModel):
+    """Working set всего контейнера и CPU, включая процессы OCR/диагностики."""
+
+    service: Literal["api", "worker", "retrieval-model"]
+    sampled_at: AwareDatetime
+    memory_bytes: int = Field(ge=0)
+    cpu_percent: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
+class SystemResourcesRead(ApiModel):
+    """Сумма только измеренных серверов; пропуски сохраняются явно."""
+
+    memory_bytes: int | None
+    cpu_percent: float | None
+    services: list[ResourceServiceRead]
+    missing_services: list[str]
+
+
 class SystemStatusRead(ApiModel):
     checked_at: datetime
     overall: StatusOverall
@@ -68,6 +86,7 @@ class SystemStatusRead(ApiModel):
     attention_count: int
     items: list[SystemStatusItem]
     storage: SystemStorageRead | None
+    resources: SystemResourcesRead | None = None
 
 
 class SystemProbeRead(ApiModel):

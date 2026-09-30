@@ -1,8 +1,11 @@
+"""SQLite и транзакции: общий кэш страниц меньше отдельного поискового кэша."""
+
 import logging
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import partial
 from uuid import UUID
 
 from alembic import command
@@ -30,9 +33,6 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-#: Кэш страниц одного постоянного соединения API. Соединение сбрасывает его
-#: само, как только другой процесс записал в WAL, поэтому устаревших данных нет.
-POOLED_CACHE_KIB = 65536
 #: Постоянные соединения поиска. Пачка GET экрана разбирает общий пул, и поиск
 #: попадал на соединение с холодным кэшем: первый поиск на нём 3 с вместо 0,3 с
 #: (чтение с bind-mount). Свой маленький пул держит индекс кусков прогретым.
@@ -73,7 +73,10 @@ search_engine = (
 SearchSessionLocal = sessionmaker(bind=search_engine, expire_on_commit=False)
 
 
-def configure_sqlite(dbapi_connection: object, _: object) -> None:
+def configure_sqlite(
+    dbapi_connection: object, _: object, *, cache_kib: int | None = None,
+) -> None:
+    """Кэш страниц ограничен ролью соединения; WAL и mmap одинаковы для всех."""
     previous_autocommit = dbapi_connection.autocommit
     dbapi_connection.autocommit = True
     try:
@@ -90,7 +93,7 @@ def configure_sqlite(dbapi_connection: object, _: object) -> None:
             # Обычный файловый ввод-вывод работает.
             cursor.execute("PRAGMA mmap_size=0")
             if settings.sqlite_pool_size:
-                cursor.execute(f"PRAGMA cache_size=-{POOLED_CACHE_KIB}")
+                cursor.execute(f"PRAGMA cache_size=-{cache_kib or settings.sqlite_cache_kib}")
         finally:
             cursor.close()
     finally:
@@ -98,7 +101,13 @@ def configure_sqlite(dbapi_connection: object, _: object) -> None:
 
 
 for _engine in {engine, search_engine}:
-    event.listen(_engine, "connect", configure_sqlite)
+    event.listen(
+        _engine, "connect", partial(
+            configure_sqlite,
+            cache_kib=(settings.sqlite_search_cache_kib if _engine is search_engine
+                       else settings.sqlite_cache_kib),
+        ),
+    )
 
 
 def get_session() -> Iterator[Session]:

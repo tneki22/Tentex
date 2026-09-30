@@ -54,6 +54,31 @@ def test_pdf_shape_samples_and_reuses_diagnosis(tmp_path, monkeypatch):
     assert len(submitted) == 1
 
 
+def test_pdf_estimate_survives_process_shutdown(tmp_path):
+    """Кэш результата остаётся после выгрузки процесса, повтор не будит его."""
+    from app.process_pool import IdleProcessPool
+
+    path = tmp_path / "empty.pdf"
+    with pymupdf.open() as document:
+        document.new_page()
+        document.save(path)
+    pool = IdleProcessPool(idle_seconds=0.05)
+    old_pool = processing_plan._shape_executor
+    processing_plan._shape_executor = pool
+    processing_plan._cached_pdf_shape.cache_clear()
+    try:
+        params = OcrRuntimeParams()
+        first = processing_plan._pdf_shape(path, [1], params)
+        pool.close()
+        assert not pool.loaded
+        assert processing_plan._pdf_shape(path, [1], params) == first
+        assert not pool.loaded
+    finally:
+        pool.close()
+        processing_plan._shape_executor = old_pool
+        processing_plan._cached_pdf_shape.cache_clear()
+
+
 def test_quick_budget_does_not_need_pdf_estimate(monkeypatch):
     """Быстрый лимит известной модели не запускает диагностику страниц."""
     selection = SimpleNamespace(model_id="vision")
