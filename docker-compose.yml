@@ -6,7 +6,7 @@ services:
   api:
     build: ./backend
     ports:
-      - "${TENTEX_API_PORT:-8000}:8000"
+      - "127.0.0.1:${TENTEX_API_PORT:-8000}:8000"
     volumes:
       - ./backend:/app
       - ./data:/data
@@ -77,6 +77,6 @@ services:
       context: ./frontend
       target: runtime
     ports:
-      - "${TENTEX_WEB_PORT:-5173}:5173"
+      - "127.0.0.1:${TENTEX_WEB_PORT:-5173}:5173"
     depends_on:
       - api

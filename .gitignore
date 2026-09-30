@@ -22,6 +22,8 @@ dist/
 # --- Данные приложения ---
 # База и файловое хранилище живут рядом с приложением и в git не едут
 data/
+.tentex-launcher/
+/docs/plans/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
