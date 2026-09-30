@@ -15,11 +15,9 @@ from __future__ import annotations
 import math
 import os
 import shutil
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from decimal import Decimal
 from functools import lru_cache
-from multiprocessing import get_context
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Lock
@@ -31,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.ai.job_budget import budget_state
 from app.ai.roles import get_role_spec
 from app.ai.schemas import AiModelSelection
+from app.config import settings
 from app.materials.parsers.cloud_vlm import (
     IMAGE_PROMPT_VERSION,
     IMAGE_ROLE,
@@ -45,6 +44,7 @@ from app.materials.storage import material_path
 from app.models import AiModelCatalogEntry, AiSettings, Material, MaterialSourceKind, ParserMode
 from app.ocr.engines import OcrRuntimeParams
 from app.ocr.settings import runtime_params
+from app.process_pool import IdleProcessPool
 from app.projects.errors import ProjectConflictError, ProjectDomainError
 
 # Сколько страниц диагностируется для оценки. Больше — дольше ответ API на
@@ -53,7 +53,6 @@ MAX_SAMPLED_PAGES = 60
 # Один и тот же диалог может запросить оценку несколько раз. Диагностика PDF
 # дорогая, поэтому одинаковые запросы делят результат, а не читают файл параллельно.
 _shape_lock = Lock()
-_shape_executor: ProcessPoolExecutor | None = None
 # Токены инструкции со схемой ответа у одного вызова (текст, без картинки).
 PAGE_PROMPT_TOKENS = 900
 REGION_PROMPT_TOKENS = 600
@@ -189,18 +188,17 @@ def _lower_estimate_priority() -> None:
         os.nice(10)
 
 
+_shape_executor = IdleProcessPool(
+    idle_seconds=settings.pdf_estimate_idle_seconds, initializer=_lower_estimate_priority,
+)
+
+
 @lru_cache(maxsize=32)
 def _cached_pdf_shape(
     path: Path, size: int, modified_ns: int, pages: tuple[int, ...],
     strategy: str, raster_scale: float,
 ) -> _Shape:
     """Диагностика живёт вне API-процесса: PyMuPDF задерживает его потоки."""
-    global _shape_executor
-    if _shape_executor is None:
-        _shape_executor = ProcessPoolExecutor(
-            max_workers=1, mp_context=get_context("spawn"),
-            initializer=_lower_estimate_priority,
-        )
     return _shape_executor.submit(
         _calculate_pdf_shape, path, pages, strategy, raster_scale
     ).result()

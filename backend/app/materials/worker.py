@@ -1,3 +1,5 @@
+"""Очередь с полосами: supervisor и AI-потоки, выгружаемые процессы local/cloud."""
+
 import argparse
 import hashlib
 import logging
@@ -58,6 +60,7 @@ from app.models import (
     utc_now,
 )
 from app.ocr import settings as ocr_settings
+from app.process_pool import IdleProcessPool
 from app.projects.errors import ProjectConflictError, ProjectNotFoundError
 from app.storage import maintenance as storage_maintenance
 from app.system import diagnostics
@@ -908,6 +911,7 @@ def _fill_slots(
     pool: ThreadPoolExecutor,
     active: dict[WorkerLane, set[Future[None]]],
     capacities: dict[WorkerLane, int],
+    process_pools: dict[WorkerLane, IdleProcessPool] | None = None,
 ) -> bool:
     """Взять задачи только для свободных слотов каждой полосы."""
     claimed = False
@@ -916,7 +920,8 @@ def _fill_slots(
             job = _claim_one(lane)
             if job is None:
                 break
-            active[lane].add(pool.submit(_process_claimed_job, job))
+            executor = (process_pools or {}).get(lane, pool)
+            active[lane].add(executor.submit(_process_claimed_job, job))
             claimed = True
     return claimed
 
@@ -924,10 +929,28 @@ def _fill_slots(
 def run_pool(capacities: dict[WorkerLane, int]) -> None:
     """Постоянно заполнять независимые слоты локальных, облачных и AI-задач."""
     active: dict[WorkerLane, set[Future[None]]] = {lane: set() for lane in WORKER_LANES}
-    next_schedule_check = 0.0
-    next_pulse = 0.0
-    next_oral_cleanup = 0.0
-    with ThreadPoolExecutor(max_workers=sum(capacities.values()), thread_name_prefix="job") as pool:
+    # Разбор PDF/OCR загружает нативные библиотеки на сотни мегабайт. Полосы
+    # сохраняют свою параллельность и прогрев, но могут полностью выгрузиться.
+    process_pools = {
+        lane: IdleProcessPool(
+            idle_seconds=settings.worker_process_idle_seconds,
+            max_workers=capacities[lane], initializer=configure_logging,
+        ) for lane in ("local", "cloud")
+    }
+    try:
+        _run_pool(capacities, active, process_pools)
+    finally:
+        for process_pool in process_pools.values():
+            process_pool.close()
+
+
+def _run_pool(
+    capacities: dict[WorkerLane, int], active: dict[WorkerLane, set[Future[None]]],
+    process_pools: dict[WorkerLane, IdleProcessPool],
+) -> None:
+    """Опрос очереди остаётся в лёгком процессе; heartbeat задачи живёт с работой."""
+    next_schedule_check = next_pulse = next_oral_cleanup = 0.0
+    with ThreadPoolExecutor(max_workers=capacities["ai"], thread_name_prefix="job") as pool:
         while True:
             now = time.monotonic()
             if now >= next_pulse:
@@ -959,7 +982,7 @@ def run_pool(capacities: dict[WorkerLane, int]) -> None:
                     log.warning("oral audio cleanup delayed: %s", error)
                 next_oral_cleanup = now + 3600
             _reap_finished(active)
-            if _fill_slots(pool, active, capacities):
+            if _fill_slots(pool, active, capacities, process_pools):
                 continue
             pending = set().union(*active.values())
             if pending:

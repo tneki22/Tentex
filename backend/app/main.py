@@ -51,6 +51,10 @@ def health() -> dict[str, str]:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    """Прогреть индекс и закрыть дочернюю PDF-диагностику вместе с сервером."""
+    from app.materials.processing_plan import _shape_executor
+
+    _shape_executor.start()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     recover_interrupted_restore()
@@ -63,7 +67,10 @@ async def lifespan(_: FastAPI):
             # примера, но не воскресит проект, который пользователь удалил.
             seed_demo_project(session, create_if_missing=not database_existed)
     warm_active_snapshot()
-    yield
+    try:
+        yield
+    finally:
+        _shape_executor.close()
 
 
 def create_app() -> FastAPI:

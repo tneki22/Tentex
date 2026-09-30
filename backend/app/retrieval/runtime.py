@@ -1,179 +1,72 @@
-from __future__ import annotations
+"""HTTP-сервис моделей: healthcheck не загружает веса и не мешает их выгрузке."""
 
-from functools import lru_cache
-from typing import Literal
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
 
-from app.retrieval.local_models import model_path, validate_model_id
+from app.config import settings
+from app.process_pool import IdleProcessPool
+from app.retrieval.inference import (
+    EmbeddingWrite,
+    InternalEmbeddingWrite,
+    RerankWrite,
+    run_inference,
+)
 
-app = FastAPI(title="Tentex retrieval model service", version="0.1.0")
-
-
-class EmbeddingWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    model: str = Field(min_length=3, max_length=300)
-    input: str | list[str]
-    encoding_format: Literal["float"] = "float"
-
-
-class RerankWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    model: str = Field(min_length=3, max_length=300)
-    query: str
-    documents: list[str] = Field(min_length=1, max_length=100)
+_pool = IdleProcessPool(idle_seconds=settings.retrieval_model_idle_seconds)
+_loaded: dict[str, object] = {}
 
 
-class InternalEmbeddingWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    model: str = Field(min_length=3, max_length=300)
-    input: list[str] = Field(min_length=1, max_length=512)
-    pooling: Literal["mean", "cls", "last_token"] = "mean"
-    normalize: bool = True
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Остановка сервера закрывает inference-процесс вместе с его кэшами."""
+    _pool.start()
+    try:
+        yield
+    finally:
+        _pool.close()
 
 
-@lru_cache(maxsize=2)
-def _embedding_model(model_id: str):
-    from sentence_transformers import SentenceTransformer
-
-    path = model_path(validate_model_id(model_id))
-    if not path.is_dir():
-        raise FileNotFoundError(f"Модель {model_id} не установлена")
-    return SentenceTransformer(
-        str(path), trust_remote_code=False, local_files_only=True, device="cpu"
-    )
-
-
-@lru_cache(maxsize=1)
-def _reranker(model_id: str):
-    import torch
-    from sentence_transformers import CrossEncoder
-
-    path = model_path(validate_model_id(model_id))
-    if not path.is_dir():
-        raise FileNotFoundError(f"Модель {model_id} не установлена")
-    # Qwen3 Reranker хранится в bfloat16; на CPU без аппаратного bf16 это в 4 раза
-    # медленнее float32 (≈ 5 с против 1,2 с на кусок).
-    return CrossEncoder(
-        str(path), trust_remote_code=False, local_files_only=True, device="cpu",
-        model_kwargs={"dtype": torch.float32},
-    )
-
-
-@lru_cache(maxsize=2)
-def _transformer_model(model_id: str):
-    from transformers import AutoModel, AutoTokenizer
-
-    path = model_path(validate_model_id(model_id))
-    if not path.is_dir():
-        raise FileNotFoundError(f"Модель {model_id} не установлена")
-    tokenizer = AutoTokenizer.from_pretrained(
-        str(path), trust_remote_code=False, local_files_only=True
-    )
-    model = AutoModel.from_pretrained(
-        str(path), trust_remote_code=False, local_files_only=True
-    ).eval()
-    return tokenizer, model
+app = FastAPI(title="Tentex retrieval model service", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/health")
 def health() -> dict[str, object]:
+    """Показывать загруженные модели без обращения к inference-процессу."""
+    loaded = _loaded if settings.retrieval_model_idle_seconds == 0 or _pool.loaded else {}
     return {
-        "status": "ok",
-        "service": "tentex-retrieval-model",
-        "loaded_embedding_models": _embedding_model.cache_info().currsize,
-        "loaded_transformer_models": _transformer_model.cache_info().currsize,
-        "loaded_rerankers": _reranker.cache_info().currsize,
+        "status": "ok", "service": "tentex-retrieval-model",
+        "loaded_embedding_models": loaded.get("loaded_embedding_models", 0),
+        "loaded_transformer_models": loaded.get("loaded_transformer_models", 0),
+        "loaded_rerankers": loaded.get("loaded_rerankers", 0),
     }
+
+
+def _infer(operation: str, command: EmbeddingWrite | InternalEmbeddingWrite | RerankWrite) -> dict:
+    """Держать прогретые модели на протяжении серии запросов, включая индексирование."""
+    global _loaded
+    if settings.retrieval_model_idle_seconds == 0:
+        result, _loaded = run_inference(operation, command)
+    else:
+        result, _loaded = _pool.submit(run_inference, operation, command).result()
+    if "error_status" in result:
+        raise HTTPException(status_code=result["error_status"], detail=result["error_detail"])
+    return result
 
 
 @app.post("/v1/embeddings")
-def embeddings(command: EmbeddingWrite) -> dict[str, object]:
-    texts = [command.input] if isinstance(command.input, str) else command.input
-    try:
-        vectors = _embedding_model(command.model).encode(
-            texts,
-            batch_size=min(64, max(1, len(texts))),
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-        )
-    except (FileNotFoundError, ValueError) as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-    return {
-        "object": "list",
-        "model": command.model,
-        "data": [
-            {"object": "embedding", "index": index, "embedding": vector.tolist()}
-            for index, vector in enumerate(vectors)
-        ],
-        "usage": {
-            "prompt_tokens": sum(len(text.split()) for text in texts),
-            "total_tokens": 0,
-        },
-    }
+def embeddings(command: EmbeddingWrite) -> dict:
+    """OpenAI-совместимые embeddings с прежним форматом ответа."""
+    return _infer("embeddings", command)
 
 
 @app.post("/embed")
-def internal_embeddings(command: InternalEmbeddingWrite) -> dict[str, object]:
-    """Безопасный Transformers runtime для ручных HF-профилей без remote code."""
-    try:
-        import torch
-        from torch.nn import functional
-
-        tokenizer, model = _transformer_model(command.model)
-        encoded = tokenizer(
-            command.input,
-            padding=True,
-            truncation=True,
-            max_length=min(int(getattr(tokenizer, "model_max_length", 512)), 8192),
-            return_tensors="pt",
-        )
-        with torch.no_grad():
-            hidden = model(**encoded).last_hidden_state
-        mask = encoded["attention_mask"]
-        if command.pooling == "cls":
-            pooled = hidden[:, 0]
-        elif command.pooling == "last_token" and bool(mask[:, -1].all()):
-            # Токенизатор Qwen3 дополняет слева: последний токен у всех на месте -1.
-            pooled = hidden[:, -1]
-        elif command.pooling == "last_token":
-            indices = mask.sum(dim=1).sub(1).clamp_min(0)
-            pooled = hidden[torch.arange(hidden.shape[0]), indices]
-        else:
-            weights = mask.unsqueeze(-1).to(hidden.dtype)
-            pooled = (hidden * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1)
-        if command.normalize:
-            pooled = functional.normalize(pooled, p=2, dim=1)
-    except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-    vectors = pooled.cpu().tolist()
-    return {"model": command.model, "dimension": len(vectors[0]), "vectors": vectors}
+def internal_embeddings(command: InternalEmbeddingWrite) -> dict:
+    """Transformers-профили с прежними pooling и нормализацией."""
+    return _infer("embed", command)
 
 
 @app.post("/rerank")
-def rerank(command: RerankWrite) -> dict[str, object]:
-    """Оценки — вероятность «документ отвечает на запрос» у любого reranker.
-
-    Классификатор (BGE) по умолчанию отдаёт сигмоиду, Qwen3 Reranker — разность
-    логитов «yes» и «no». Общая сигмоида приводит обе шкалы к вероятности, и
-    порог отказа 0,5 не зависит от модели.
-    """
-    from torch import nn
-
-    try:
-        scores = _reranker(command.model).predict(
-            [(command.query, document) for document in command.documents],
-            activation_fn=nn.Sigmoid(),
-        )
-    except (FileNotFoundError, ValueError) as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-    return {
-        "model": command.model,
-        "results": [
-            {"index": index, "score": float(score)}
-            for index, score in sorted(
-                enumerate(scores), key=lambda item: float(item[1]), reverse=True
-            )
-        ],
-    }
+def rerank(command: RerankWrite) -> dict:
+    """Ранжировать той же моделью и сигмоидой в отдельном процессе."""
+    return _infer("rerank", command)

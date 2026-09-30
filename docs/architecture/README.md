@@ -9,6 +9,7 @@
 | Подсистема | Актуальный документ | Проверка |
 | --- | --- | --- |
 | Ядро данных | `stage-2-core.md` | `check_stage2.py` |
+| Память, процессы и контейнерный запуск | `resource-usage.md` | профильные pytest, `scripts/profile_resources.py`, Docker/Playwright |
 | Проекты и Программа | `stage-3-live-projects.md` | `check_stage3.py` |
 | Эталонные ответы | `stage-4-reference-answers.md` | `check_stage4.py` |
 | Конвейер материалов | `stage-5-material-pipeline.md`; практический сквозной guide — `../../LIBRARY_FILE_PROCESSING.md` | `check_stage5.py` |

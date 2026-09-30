@@ -108,6 +108,13 @@ BM25 остаётся исходным фрагментом. Это сохран
 
 ## Контракты
 
+Постоянная локальная модель сохраняет быстрый повторный поиск. По умолчанию
+веса остаются в сервисе до его остановки: холодная загрузка E5 занимает около
+15 секунд. Опциональная настройка `TENTEX_RETRIEVAL_MODEL_IDLE_SECONDS` включает
+ленивый inference-процесс с полной выгрузкой после простоя. `/health` не
+загружает веса и не продлевает их жизнь. Детали —
+[`resource-usage.md`](resource-usage.md).
+
 - `EmbeddingBackend`: локальный internal service или OpenAI-compatible `/embeddings`;
 - `SqliteVecIndex`: закреплённый `sqlite-vec 0.1.9`, filtered exact cosine;
 - `HybridRetriever`: lexical, semantic и hybrid, области и RRF;
