@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="416" viewBox="0 0 1200 416" role="img" aria-labelledby="title desc">
+  <title id="title">Tentex — единая среда для обучения</title>
+  <desc id="desc">Свои материалы. Своя программа. Свой темп. Схематичный маршрут от страницы источника к теме, уроку и практике.</desc>
+  <defs>
+    <linearGradient id="paper-edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38414e"/>
+      <stop offset="1" stop-color="#232a34"/>
+    </linearGradient>
+    <clipPath id="canvas"><rect width="1200" height="416" rx="24"/></clipPath>
+  </defs>
+  <g clip-path="url(#canvas)">
+    <rect width="1200" height="416" fill="#0d1016"/>
+    <path d="M0 400H1200" stroke="#7b95ff" stroke-width="3"/>
+    <g id="identity" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
+      <path d="M60 48h24m-12-12v24" stroke="#7b95ff" stroke-width="3" stroke-linecap="round"/>
+      <text x="100" y="55" fill="#b4bdca" font-size="20" font-weight="600" letter-spacing="2">ЛИЧНАЯ СРЕДА ОБУЧЕНИЯ</text>
+      <text x="56" y="171" fill="#e8ecf2" font-size="112" font-weight="750" letter-spacing="-5">Tentex<tspan fill="#7b95ff">.</tspan></text>
+      <text x="60" y="236" fill="#e8ecf2" font-size="40" font-weight="600" letter-spacing="-0.7">Свои материалы. Своя программа.</text>
+      <text x="60" y="287" fill="#7b95ff" font-size="40" font-weight="600" letter-spacing="-0.7">Свой темп.</text>
+      <text x="60" y="361" fill="#b4bdca" font-size="23">Экзамен<tspan fill="#5d6879">  /  </tspan>Учебник<tspan fill="#5d6879">  /  </tspan>Свободное изучение</text>
+    </g>
+    <g id="learning-route" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
+      <path d="M970 79v-8c0-9 7-16 16-16h125c9 0 16 7 16 16v137" fill="#141920" stroke="#232a34" stroke-width="2"/>
+      <rect x="941" y="77" width="164" height="178" rx="16" fill="#1a2029" stroke="url(#paper-edge)" stroke-width="2"/>
+      <path d="M965 107h62m-62 18h115m-115 18h100m-100 18h114" stroke="#5d6879" stroke-width="5" stroke-linecap="round"/>
+      <rect x="961" y="181" width="124" height="46" rx="8" fill="#7b95ff" fill-opacity="0.14"/>
+      <path d="M973 195h80m-80 15h57" stroke="#7b95ff" stroke-width="4" stroke-linecap="round"/>
+      <path d="M941 204h-53c-10 0-18 8-18 18v88m0-44h47m-47 44h47" fill="none" stroke="#38414e" stroke-width="2.5"/>
+      <circle cx="941" cy="204" r="5" fill="#7b95ff"/>
+      <circle cx="870" cy="266" r="5" fill="#7b95ff"/>
+      <circle cx="870" cy="310" r="5" fill="#57ce79"/>
+      <text x="925" y="274" fill="#e8ecf2" font-size="24" font-weight="600">Урок</text>
+      <text x="925" y="318" fill="#b4bdca" font-size="24">Практика</text>
+      <text x="963" y="362" fill="#8792a3" font-size="20">От источника к теме</text>
+    </g>
+  </g>
+</svg>
