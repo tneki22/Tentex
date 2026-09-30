@@ -52,6 +52,17 @@ import {
   Video,
   Zap,
   Eye,
+  Flag,
+  BarChart3,
+  History,
+  Wand2,
+  Activity,
+  Gauge,
+  Palette,
+  RefreshCw,
+  Server,
+  SlidersHorizontal,
+  Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -67,6 +78,7 @@ const CARD_ICONS: Record<string, LucideIcon> = {
   FilePlus2, FileText, Files, FolderOpen, FolderPlus, GraduationCap, HardDrive, Image: ImageIcon, KeyRound, Layers,
   Library, Link2, ListChecks, ListTree, MessagesSquare, Mic, NotebookPen, Package, Route, ScanSearch, ScanText, Search,
   Settings, Share2, ShieldCheck, Sparkles, Target, Timer, Upload, Globe, Video, Zap, Eye, PanelsTopLeft, UserRound,
+  Lightbulb, Flag, BarChart3, History, Wand2, Activity, Gauge, Palette, RefreshCw, Server, SlidersHorizontal, Wrench, OctagonAlert,
 };
 
 const CALLOUTS: Record<CalloutTone, { icon: LucideIcon; title: string }> = {
@@ -91,7 +103,12 @@ function picture(alt: string, src: string, key: string): ReactNode {
   return <img key={key} className="guide-image" src={url} alt={alt} loading="lazy" />;
 }
 
-const MARKDOWN_OPTIONS: MarkdownOptions = { renderImage: picture };
+/** Ссылки внутри приложения (`/guide?…`, `/setup?…`) открываются в этой же вкладке, внешние — в новой. */
+function link(href: string, children: ReactNode, key: string): ReactNode | null {
+  return href.startsWith("/") ? <Link key={key} to={href}>{children}</Link> : null;
+}
+
+const MARKDOWN_OPTIONS: MarkdownOptions = { renderImage: picture, renderLink: link };
 
 function Prose({ text }: { text: string }) {
   return <MarkdownView className="guide-md" text={text} options={MARKDOWN_OPTIONS} />;

@@ -7,6 +7,8 @@ export interface MarkdownOptions {
   renderCitation?: (id: string, key: string) => ReactNode;
   /** Картинка `![alt](url)`; по умолчанию — подпись вместо картинки. */
   renderImage?: (alt: string, url: string, key: string) => ReactNode;
+  /** Ссылка `[текст](url)`; `null` — обычная ссылка в новой вкладке. */
+  renderLink?: (href: string, children: ReactNode, key: string) => ReactNode | null;
 }
 
 const MATH_CACHE_LIMIT = 400;
@@ -72,10 +74,12 @@ function inlineNodes(nodes: Inline[], prefix: string, options: MarkdownOptions):
         return <code key={key}>{node.text}</code>;
       case "math":
         return <MathNode key={key} tex={node.tex} display={node.display} className={node.display ? "md-math-display is-inline" : undefined} />;
-      case "link":
-        return SAFE_URL.test(node.href)
-          ? <a key={key} href={node.href} target="_blank" rel="noopener noreferrer">{inlineNodes(node.children, key, options)}</a>
-          : <span key={key}>{inlineNodes(node.children, key, options)}</span>;
+      case "link": {
+        if (!SAFE_URL.test(node.href)) return <span key={key}>{inlineNodes(node.children, key, options)}</span>;
+        const children = inlineNodes(node.children, key, options);
+        return options.renderLink?.(node.href, children, key)
+          ?? <a key={key} href={node.href} target="_blank" rel="noopener noreferrer">{children}</a>;
+      }
       case "image":
         return options.renderImage
           ? options.renderImage(node.alt, node.url, key)
