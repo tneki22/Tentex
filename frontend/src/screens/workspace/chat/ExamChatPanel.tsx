@@ -481,6 +481,7 @@ export function ExamChatPanel({ projectId, node, onAttemptsChanged, onAnsweringC
               modes={chat.capabilities?.modes ?? []}
               currentMode={chat.session.mode}
               onModeChange={(mode) => void chat.updateSettings({ mode })}
+              showModeIndicator={!studyOnly}
               sending={chat.sending}
             />
           )}

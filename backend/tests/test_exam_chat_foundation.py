@@ -10,6 +10,7 @@ from conftest import (
     link_material,
     make_exam_project,
     make_material,
+    make_textbook_project,
     make_topic_node,
 )
 from sqlalchemy import select
@@ -102,6 +103,25 @@ def test_study_mode_can_be_enabled_for_exam_chat(session: Session) -> None:
     )
 
     assert updated.mode == ChatMode.STUDY
+    assert updated.model_parameters["max_output_tokens"] == 4000
+
+
+def test_study_depth_patch_persists_without_model_change(session: Session) -> None:
+    project = make_textbook_project(session)
+    topic = make_topic_node(session, project, title="Глубина объяснения")
+    chat = chat_service.create_session(session, project.id, topic.id)
+    assert chat.model_parameters["max_output_tokens"] == 4000
+
+    updated = chat_service.update_settings(
+        session, project.id, chat.id,
+        ChatSettingsWrite(model_parameters={"max_output_tokens": 1000}),
+    )
+
+    assert updated.model_parameters["max_output_tokens"] == 1000
+    assert updated.model_override is None
+    assert chat_service.get_session_detail(
+        session, project.id, chat.id
+    ).model_parameters["max_output_tokens"] == 1000
 
 
 def test_unknown_model_override_rejected(session: Session) -> None:
@@ -223,10 +243,10 @@ def test_profile_included_in_context_and_persona_changes_prompt_not_reference(
 
 def test_study_prompt_uses_depth_without_examiner_persona() -> None:
     short = build_chat_reply_prompt(
-        ExaminerPersona.STRICT_REVIEWER, ExaminerStrictness.STRICT, ChatMode.STUDY, 700
+        ExaminerPersona.STRICT_REVIEWER, ExaminerStrictness.STRICT, ChatMode.STUDY, 1000
     )
     long = build_chat_reply_prompt(
-        ExaminerPersona.CALM_TEACHER, ExaminerStrictness.SOFT, ChatMode.STUDY, 3000
+        ExaminerPersona.CALM_TEACHER, ExaminerStrictness.SOFT, ChatMode.STUDY, 4000
     )
     assert "Ответь сжато" in short
     assert "Разбери тему по шагам" in long

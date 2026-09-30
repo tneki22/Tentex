@@ -9,6 +9,20 @@ function answer(id: string, text: string) {
   ]);
 }
 
+test("в учебном чате нет выбора режима, а глубина предлагает новые пределы", async ({ page }) => {
+  await installChatStub(page);
+  await page.goto(`${BASE}/projects/${PROJECT}`);
+
+  await expect(page.getByRole("group", { name: "Режим чата" })).toHaveCount(0);
+  await page.getByRole("button", { name: /Глубина ответа/ }).click();
+  await expect(page.locator(".chat-depth-options button")).toHaveText([
+    "КраткоСуть и ключевые выводы · до 1000 токенов",
+    "ОбычноОбъяснение с примерами · до 2000 токенов",
+    "ПодробноШаги, связи и ограничения · до 4000 токенов",
+  ]);
+  await page.screenshot({ path: "test-results/chat-study-controls.png" });
+});
+
 test("кнопка операции уходит полем operation, а не словами в тексте, и сбрасывается после отправки", async ({ page }) => {
   const stub = await installChatStub(page, { onSend: () => ({ sse: answer("a1", "Сравнение [S1]") }) });
   await page.goto(`${BASE}/projects/${PROJECT}`);

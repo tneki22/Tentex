@@ -2,8 +2,9 @@ from app.models import ChatMode, ExaminerPersona, ExaminerStrictness
 
 CHAT_REPLY_PROMPT_VERSION = "chat-reply-v4"  # совпадает с app/ai/roles.py
 ANSWER_JUDGE_PROMPT_VERSION = "answer-judge-v2"  # совпадает с app/ai/roles.py
-STUDY_SHORT_MAX_TOKENS = 700  # пресет «Кратко» в ChatHeader
-STUDY_DETAILED_MIN_TOKENS = 3000  # пресет «Подробно» и значение роли по умолчанию
+STUDY_SHORT_MAX_TOKENS = 1000  # пресет «Кратко» в ChatHeader
+STUDY_DETAILED_MIN_TOKENS = 4000  # пресет «Подробно» в ChatHeader
+STUDY_LEGACY_DEFAULT_TOKENS = 3000  # старые чаты без сохранённого параметра
 
 # Слой base (AI-CHATS.md §7.2): язык, недоверие к данным, запрет HTML/JSX и
 # выдуманных источников — общее для любого режима и навыка чата.
@@ -98,7 +99,7 @@ def build_chat_reply_prompt(
 ) -> str:
     """Глубина учебного объяснения не влияет на отдельную проверку ответа."""
     if mode == ChatMode.STUDY:
-        limit = max_output_tokens or STUDY_DETAILED_MIN_TOKENS
+        limit = max_output_tokens or STUDY_LEGACY_DEFAULT_TOKENS
         if limit <= STUDY_SHORT_MAX_TOKENS:
             depth = "Ответь сжато: ключевая мысль, несколько опорных пунктов и вывод."
         elif limit >= STUDY_DETAILED_MIN_TOKENS:

@@ -87,6 +87,7 @@ async def _run_turn(
     monkeypatch: pytest.MonkeyPatch,
     fake: FakeTransport,
     text: str = "Что такое 2НФ?",
+    depth_tokens: int | None = None,
 ) -> tuple[object, Frames]:
     project = make_exam_project(session)
     topic = make_topic_node(session, project, title="Нормальные формы")
@@ -94,6 +95,11 @@ async def _run_turn(
     chat_service.update_settings(
         session, project.id, chat.id, ChatSettingsWrite(mode=ChatMode.STUDY)
     )
+    if depth_tokens is not None:
+        chat_service.update_settings(
+            session, project.id, chat.id,
+            ChatSettingsWrite(model_parameters={"max_output_tokens": depth_tokens}),
+        )
     monkeypatch.setattr("app.ai.gateway.production_transport", lambda db, modality: fake)
     monkeypatch.setattr(
         chat_router, "SessionLocal", sessionmaker(bind=session.bind, expire_on_commit=False)
@@ -104,6 +110,19 @@ async def _run_turn(
     )
     frames = _frames([chunk async for chunk in response.body_iterator])
     return chat, frames
+
+
+@pytest.mark.asyncio
+async def test_selected_depth_reaches_the_model_request(
+    session: Session, ai_config: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del ai_config
+    _stub_retrieval(monkeypatch, [])
+    fake = FakeTransport(streams=[[ProviderStreamEvent(delta="Объяснение")]])
+
+    await _run_turn(session, monkeypatch, fake, depth_tokens=2000)
+
+    assert fake.stream_requests[0]["max_output_tokens"] == 2000
 
 
 @pytest.mark.asyncio

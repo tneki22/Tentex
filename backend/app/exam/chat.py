@@ -16,6 +16,7 @@ from app.exam.context import (
     build_context,
     section_scope,
 )
+from app.exam.prompts import STUDY_DETAILED_MIN_TOKENS
 from app.exam.schemas import (
     CapabilityRead,
     ChatCapabilitiesRead,
@@ -148,6 +149,8 @@ def create_session(session: Session, project_id: UUID, node_id: UUID | None) -> 
         selection, parameters = seed_from_preset(
             session, role=CHAT_PARAMETERS_ROLE, required=REQUIRED_MODEL_CAPABILITIES
         )
+        if project.workspace_variant != WorkspaceVariant.EXAM and parameters is None:
+            parameters = {"max_output_tokens": STUDY_DETAILED_MIN_TOKENS}
         chat = ChatSession(
             project_id=project_id,
             program_node_id=node_id,
@@ -238,6 +241,8 @@ def update_settings(
         chat = _require_session(session, project_id, chat_id)
         if "mode" in fields and command.mode is not None:
             chat.mode = command.mode
+            if chat.mode == ChatMode.STUDY and not chat.model_parameters:
+                chat.model_parameters = {"max_output_tokens": STUDY_DETAILED_MIN_TOKENS}
         if "persona" in fields and command.persona is not None:
             chat.persona = command.persona
         if "strictness" in fields and command.strictness is not None:
@@ -260,6 +265,12 @@ def update_settings(
                 )
             chat_common.apply_model_choice(
                 session, chat, selection=snapshot, parameters=parameters
+            )
+            if chat.mode == ChatMode.STUDY and parameters is None:
+                chat.model_parameters = {"max_output_tokens": STUDY_DETAILED_MIN_TOKENS}
+        elif "model_parameters" in fields and command.model_parameters is not None:
+            chat.model_parameters = validate_role_parameters(
+                CHAT_PARAMETERS_ROLE, command.model_parameters
             )
         if "context_flags" in fields and command.context_flags is not None:
             unknown = set(command.context_flags) - CONTEXT_FLAG_KEYS
